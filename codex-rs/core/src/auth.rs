@@ -1154,10 +1154,18 @@ impl AuthManager {
         let _ = self.replace_external_auth_refresher(Some(refresher));
     }
 
+    pub fn replace_forced_chatgpt_workspace_id(
+        &self,
+        workspace_id: Option<String>,
+    ) -> Option<String> {
+        self.forced_chatgpt_workspace_id
+            .write()
+            .ok()
+            .and_then(|mut guard| std::mem::replace(&mut guard, workspace_id))
+    }
+
     pub fn set_forced_chatgpt_workspace_id(&self, workspace_id: Option<String>) {
-        if let Ok(mut guard) = self.forced_chatgpt_workspace_id.write() {
-            *guard = workspace_id;
-        }
+        let _ = self.replace_forced_chatgpt_workspace_id(workspace_id);
     }
 
     pub fn forced_chatgpt_workspace_id(&self) -> Option<String> {

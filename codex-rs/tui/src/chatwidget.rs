@@ -560,6 +560,7 @@ pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
     thread_scoped_op_tx: Option<UnboundedSender<ThreadScopedOp>>,
+    app_server_thread_id: Option<ThreadId>,
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
@@ -636,6 +637,7 @@ pub(crate) struct ChatWidget {
     pending_status_indicator_restore: bool,
     suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
+    current_turn_id: Option<String>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
     frame_requester: FrameRequester,
@@ -3311,6 +3313,7 @@ impl ChatWidget {
             frame_requester: frame_requester.clone(),
             codex_op_tx,
             thread_scoped_op_tx: Some(thread_scoped_op_tx),
+            app_server_thread_id: None,
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
                 app_event_tx,
@@ -3365,6 +3368,7 @@ impl ChatWidget {
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
             thread_id: None,
+            current_turn_id: None,
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
@@ -3442,6 +3446,8 @@ impl ChatWidget {
     pub(crate) fn new_with_op_sender(
         common: ChatWidgetInit,
         codex_op_tx: UnboundedSender<Op>,
+        thread_scoped_op_tx: Option<UnboundedSender<ThreadScopedOp>>,
+        app_server_thread_id: Option<ThreadId>,
     ) -> Self {
         let ChatWidgetInit {
             config,
@@ -3497,7 +3503,8 @@ impl ChatWidget {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
-            thread_scoped_op_tx: None,
+            thread_scoped_op_tx,
+            app_server_thread_id,
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
                 app_event_tx,
@@ -3552,6 +3559,7 @@ impl ChatWidget {
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
             thread_id: None,
+            current_turn_id: None,
             thread_name: None,
             forked_from: None,
             saw_plan_update_this_turn: false,
@@ -3676,6 +3684,7 @@ impl ChatWidget {
             frame_requester: frame_requester.clone(),
             codex_op_tx,
             thread_scoped_op_tx: None,
+            app_server_thread_id: None,
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
                 app_event_tx,
@@ -3730,6 +3739,7 @@ impl ChatWidget {
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
             thread_id: None,
+            current_turn_id: None,
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
@@ -4993,6 +5003,7 @@ impl ChatWidget {
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TurnStarted(event) => {
+                self.current_turn_id = Some(event.turn_id.clone());
                 if !is_resume_initial_replay {
                     self.apply_turn_started_context_window(event.model_context_window);
                     self.on_task_started();
@@ -5000,7 +5011,10 @@ impl ChatWidget {
             }
             EventMsg::TurnComplete(TurnCompleteEvent {
                 last_agent_message, ..
-            }) => self.on_task_complete(last_agent_message, from_replay),
+            }) => {
+                self.current_turn_id = None;
+                self.on_task_complete(last_agent_message, from_replay);
+            }
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
@@ -5030,15 +5044,18 @@ impl ChatWidget {
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
+                    self.current_turn_id = None;
                     self.on_interrupted_turn(ev.reason);
                 }
                 TurnAbortReason::Replaced => {
+                    self.current_turn_id = None;
                     self.submit_pending_steers_after_interrupt = false;
                     self.pending_steers.clear();
                     self.refresh_pending_input_preview();
                     self.on_error("Turn aborted: replaced by a new task".to_owned())
                 }
                 TurnAbortReason::ReviewEnded => {
+                    self.current_turn_id = None;
                     self.on_interrupted_turn(ev.reason);
                 }
             },
@@ -5083,7 +5100,10 @@ impl ChatWidget {
                     force_reload: true,
                 });
             }
-            EventMsg::ShutdownComplete => self.on_shutdown_complete(),
+            EventMsg::ShutdownComplete => {
+                self.current_turn_id = None;
+                self.on_shutdown_complete();
+            }
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
             EventMsg::DeprecationNotice(ev) => self.on_deprecation_notice(ev),
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
@@ -8442,6 +8462,22 @@ impl ChatWidget {
         crate::session_log::log_outbound_op(&op);
         if matches!(&op, Op::Review { .. }) && !self.bottom_pane.is_task_running() {
             self.bottom_pane.set_task_running(true);
+        }
+        if let (Some(thread_id), Some(thread_scoped_op_tx)) =
+            (self.app_server_thread_id, self.thread_scoped_op_tx.as_ref())
+        {
+            let interrupt_turn_id = matches!(&op, Op::Interrupt)
+                .then(|| self.current_turn_id.clone())
+                .flatten();
+            if let Err(e) = thread_scoped_op_tx.send(ThreadScopedOp {
+                thread_id,
+                op,
+                interrupt_turn_id,
+            }) {
+                tracing::error!("failed to submit thread-scoped op: {e}");
+                return false;
+            }
+            return true;
         }
         if let Err(e) = self.codex_op_tx.send(op) {
             tracing::error!("failed to submit op: {e}");

@@ -778,34 +778,6 @@ mod tests {
         start_test_client_with_capacity(session_source, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY).await
     }
 
-    async fn start_test_client_with_thread_manager(
-        session_source: SessionSource,
-        thread_manager: Arc<ThreadManager>,
-    ) -> InProcessClientHandle {
-        let args = InProcessStartArgs {
-            arg0_paths: Arg0DispatchPaths::default(),
-            config: Arc::new(build_test_config().await),
-            thread_manager: Some(thread_manager),
-            cli_overrides: Vec::new(),
-            loader_overrides: LoaderOverrides::default(),
-            cloud_requirements: CloudRequirementsLoader::default(),
-            feedback: CodexFeedback::new(),
-            config_warnings: Vec::new(),
-            session_source,
-            enable_codex_api_key_env: false,
-            initialize: InitializeParams {
-                client_info: ClientInfo {
-                    name: "codex-in-process-test".to_string(),
-                    title: None,
-                    version: "0.0.0".to_string(),
-                },
-                capabilities: None,
-            },
-            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-        };
-        start(args).await.expect("in-process runtime should start")
-    }
-
     #[tokio::test]
     async fn in_process_start_initializes_and_handles_typed_v2_request() {
         let client = start_test_client(SessionSource::Cli).await;
@@ -883,12 +855,14 @@ mod tests {
 
     #[tokio::test]
     async fn in_process_shutdown_restores_shared_auth_refresher() {
-        let config = build_test_config().await;
+        let mut config = build_test_config().await;
+        config.forced_chatgpt_workspace_id = Some("workspace-during".to_string());
         let auth_manager = AuthManager::shared(
             config.codex_home.clone(),
             false,
             config.cli_auth_credentials_store_mode,
         );
+        auth_manager.set_forced_chatgpt_workspace_id(Some("workspace-before".to_string()));
         let thread_manager = Arc::new(ThreadManager::new(
             config.codex_home.clone(),
             auth_manager.clone(),
@@ -900,10 +874,38 @@ mod tests {
         ));
 
         assert!(!auth_manager.has_external_auth_refresher());
+        assert_eq!(
+            auth_manager.forced_chatgpt_workspace_id(),
+            Some("workspace-before".to_string())
+        );
 
-        let client =
-            start_test_client_with_thread_manager(SessionSource::Cli, thread_manager).await;
+        let args = InProcessStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(config),
+            thread_manager: Some(thread_manager),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            initialize: InitializeParams {
+                client_info: ClientInfo {
+                    name: "codex-in-process-test".to_string(),
+                    title: None,
+                    version: "0.0.0".to_string(),
+                },
+                capabilities: None,
+            },
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        };
+        let client = start(args).await.expect("in-process runtime should start");
         assert!(auth_manager.has_external_auth_refresher());
+        assert_eq!(
+            auth_manager.forced_chatgpt_workspace_id(),
+            Some("workspace-during".to_string())
+        );
 
         client
             .shutdown()
@@ -911,6 +913,10 @@ mod tests {
             .expect("in-process runtime should shutdown cleanly");
 
         assert!(!auth_manager.has_external_auth_refresher());
+        assert_eq!(
+            auth_manager.forced_chatgpt_workspace_id(),
+            Some("workspace-before".to_string())
+        );
     }
 
     #[test]

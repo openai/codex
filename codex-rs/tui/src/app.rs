@@ -1608,13 +1608,26 @@ impl App {
         self.active_thread_rx = Some(receiver);
 
         let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
-        let codex_op_tx = if let Some(thread) = live_thread {
-            crate::chatwidget::spawn_op_forwarder(thread)
-        } else {
-            let (tx, _rx) = unbounded_channel();
-            tx
-        };
-        self.chat_widget = ChatWidget::new_with_op_sender(init, codex_op_tx);
+        let (codex_op_tx, thread_scoped_op_tx, app_server_thread_id) =
+            if let Some(thread) = live_thread {
+                if self.active_session_events_via_app_server
+                    && let Some(thread_scoped_op_tx) = self.primary_app_server_op_tx.clone()
+                {
+                    let (tx, _rx) = unbounded_channel();
+                    (tx, Some(thread_scoped_op_tx), Some(thread_id))
+                } else {
+                    (crate::chatwidget::spawn_op_forwarder(thread), None, None)
+                }
+            } else {
+                let (tx, _rx) = unbounded_channel();
+                (tx, None, None)
+            };
+        self.chat_widget = ChatWidget::new_with_op_sender(
+            init,
+            codex_op_tx,
+            thread_scoped_op_tx,
+            app_server_thread_id,
+        );
         self.sync_active_agent_label();
 
         self.reset_for_thread_switch(tui)?;
