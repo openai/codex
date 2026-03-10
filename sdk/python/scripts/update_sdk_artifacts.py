@@ -10,15 +10,12 @@ import shutil
 import stat
 import subprocess
 import sys
-import tarfile
 import tempfile
 import types
 import typing
-import urllib.request
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, get_args, get_origin
+from typing import Any, Callable, Sequence, get_args, get_origin
 
 
 def repo_root() -> Path:
@@ -27,6 +24,10 @@ def repo_root() -> Path:
 
 def sdk_root() -> Path:
     return repo_root() / "sdk" / "python"
+
+
+def python_runtime_root() -> Path:
+    return repo_root() / "sdk" / "python-runtime"
 
 
 def schema_bundle_path() -> Path:
@@ -48,24 +49,12 @@ def _is_windows() -> bool:
     return platform.system().lower().startswith("win")
 
 
-def pinned_bin_path() -> Path:
-    name = "codex.exe" if _is_windows() else "codex"
-    return sdk_root() / "bin" / name
+def runtime_binary_name() -> str:
+    return "codex.exe" if _is_windows() else "codex"
 
 
-def bundled_platform_bin_path(platform_key: str) -> Path:
-    exe = "codex.exe" if platform_key.startswith("windows") else "codex"
-    return sdk_root() / "src" / "codex_app_server" / "bin" / platform_key / exe
-
-
-PLATFORMS: dict[str, tuple[list[str], list[str]]] = {
-    "darwin-arm64": (["darwin", "apple-darwin", "macos"], ["aarch64", "arm64"]),
-    "darwin-x64": (["darwin", "apple-darwin", "macos"], ["x86_64", "amd64", "x64"]),
-    "linux-arm64": (["linux", "unknown-linux", "musl", "gnu"], ["aarch64", "arm64"]),
-    "linux-x64": (["linux", "unknown-linux", "musl", "gnu"], ["x86_64", "amd64", "x64"]),
-    "windows-arm64": (["windows", "pc-windows", "win", "msvc", "gnu"], ["aarch64", "arm64"]),
-    "windows-x64": (["windows", "pc-windows", "win", "msvc", "gnu"], ["x86_64", "amd64", "x64"]),
-}
+def staged_runtime_bin_path(root: Path) -> Path:
+    return root / "src" / "codex_cli_bin" / "bin" / runtime_binary_name()
 
 
 def run(cmd: list[str], cwd: Path) -> None:
@@ -76,136 +65,99 @@ def run_python_module(module: str, args: list[str], cwd: Path) -> None:
     run([sys.executable, "-m", module, *args], cwd)
 
 
-def platform_tokens() -> tuple[list[str], list[str]]:
-    sys_name = platform.system().lower()
-    machine = platform.machine().lower()
-
-    if sys_name == "darwin":
-        os_tokens = ["darwin", "apple-darwin", "macos"]
-    elif sys_name == "linux":
-        os_tokens = ["linux", "unknown-linux", "musl", "gnu"]
-    elif sys_name.startswith("win"):
-        os_tokens = ["windows", "pc-windows", "win", "msvc", "gnu"]
-    else:
-        raise RuntimeError(f"Unsupported OS: {sys_name}")
-
-    if machine in {"arm64", "aarch64"}:
-        arch_tokens = ["aarch64", "arm64"]
-    elif machine in {"x86_64", "amd64"}:
-        arch_tokens = ["x86_64", "amd64", "x64"]
-    else:
-        raise RuntimeError(f"Unsupported architecture: {machine}")
-
-    return os_tokens, arch_tokens
-
-
-def pick_release(channel: str) -> dict[str, Any]:
-    releases = json.loads(
-        subprocess.check_output(["gh", "api", "repos/openai/codex/releases?per_page=50"], text=True)
+def current_sdk_version() -> str:
+    match = re.search(
+        r'^version = "([^"]+)"$',
+        (sdk_root() / "pyproject.toml").read_text(),
+        flags=re.MULTILINE,
     )
-    if channel == "stable":
-        candidates = [r for r in releases if not r.get("prerelease") and not r.get("draft")]
-    else:
-        candidates = [r for r in releases if r.get("prerelease") and not r.get("draft")]
-    if not candidates:
-        raise RuntimeError(f"No {channel} release found")
-    return candidates[0]
+    if match is None:
+        raise RuntimeError("Could not determine Python SDK version from pyproject.toml")
+    return match.group(1)
 
 
-def pick_asset(release: dict[str, Any], os_tokens: list[str], arch_tokens: list[str]) -> dict[str, Any]:
-    scored: list[tuple[int, dict[str, Any]]] = []
-    for asset in release.get("assets", []):
-        name = (asset.get("name") or "").lower()
-
-        # Accept only primary codex cli artifacts.
-        if not (name.startswith("codex-") or name == "codex"):
-            continue
-        if name.startswith("codex-responses") or name.startswith("codex-command-runner") or name.startswith("codex-windows-sandbox") or name.startswith("codex-npm"):
-            continue
-        if not (name.endswith(".tar.gz") or name.endswith(".zip")):
-            continue
-
-        os_score = sum(1 for t in os_tokens if t in name)
-        arch_score = sum(1 for t in arch_tokens if t in name)
-        if os_score == 0 or arch_score == 0:
-            continue
-
-        score = os_score * 10 + arch_score
-        scored.append((score, asset))
-
-    if not scored:
-        raise RuntimeError("Could not find matching codex CLI asset for this platform")
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return scored[0][1]
-
-
-def download(url: str, out: Path) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": "codex-python-sdk-updater"})
-    with urllib.request.urlopen(req) as resp, out.open("wb") as f:
-        shutil.copyfileobj(resp, f)
-
-
-def extract_codex_binary(archive: Path, out_bin: Path) -> None:
-    with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
-        if archive.name.endswith(".tar.gz"):
-            with tarfile.open(archive, "r:gz") as tar:
-                tar.extractall(tmp)
-        elif archive.name.endswith(".zip"):
-            with zipfile.ZipFile(archive) as zf:
-                zf.extractall(tmp)
+def _copy_package_tree(src: Path, dst: Path) -> None:
+    if dst.exists():
+        if dst.is_dir():
+            shutil.rmtree(dst)
         else:
-            raise RuntimeError(f"Unsupported archive format: {archive}")
-
-        preferred_names = {"codex.exe", "codex"}
-        candidates = [
-            p for p in tmp.rglob("*") if p.is_file() and (p.name.lower() in preferred_names or p.name.lower().startswith("codex-"))
-        ]
-        if not candidates:
-            raise RuntimeError("No codex binary found in release archive")
-
-        candidates.sort(key=lambda p: (p.name.lower() not in preferred_names, p.name.lower()))
-
-        out_bin.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(candidates[0], out_bin)
-        if not _is_windows():
-            out_bin.chmod(out_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-
-def _download_asset_to_binary(release: dict[str, Any], os_tokens: list[str], arch_tokens: list[str], out_bin: Path) -> None:
-    asset = pick_asset(release, os_tokens, arch_tokens)
-    print(f"Asset: {asset.get('name')} -> {out_bin}")
-    with tempfile.TemporaryDirectory() as td:
-        archive = Path(td) / (asset.get("name") or "codex-release.tar.gz")
-        download(asset["browser_download_url"], archive)
-        extract_codex_binary(archive, out_bin)
+            dst.unlink()
+    shutil.copytree(
+        src,
+        dst,
+        ignore=shutil.ignore_patterns(
+            ".venv",
+            ".venv2",
+            ".pytest_cache",
+            "__pycache__",
+            "build",
+            "dist",
+            "*.pyc",
+        ),
+    )
 
 
-def update_binary(channel: str) -> None:
-    if shutil.which("gh") is None:
-        raise RuntimeError("GitHub CLI (`gh`) is required to download release binaries")
-
-    release = pick_release(channel)
-    os_tokens, arch_tokens = platform_tokens()
-    print(f"Release: {release.get('tag_name')} ({channel})")
-
-    # refresh current platform in bundled runtime location
-    current_key = next((k for k, v in PLATFORMS.items() if v == (os_tokens, arch_tokens)), None)
-    out = bundled_platform_bin_path(current_key) if current_key else pinned_bin_path()
-    _download_asset_to_binary(release, os_tokens, arch_tokens, out)
-    print(f"Pinned binary updated: {out}")
+def _rewrite_project_version(pyproject_text: str, version: str) -> str:
+    updated, count = re.subn(
+        r'^version = "[^"]+"$',
+        f'version = "{version}"',
+        pyproject_text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count != 1:
+        raise RuntimeError("Could not rewrite project version in pyproject.toml")
+    return updated
 
 
-def bundle_all_platform_binaries(channel: str) -> None:
-    if shutil.which("gh") is None:
-        raise RuntimeError("GitHub CLI (`gh`) is required to download release binaries")
+def _rewrite_sdk_runtime_dependency(pyproject_text: str, runtime_version: str) -> str:
+    match = re.search(r"^dependencies = \[(.*?)\]$", pyproject_text, flags=re.MULTILINE)
+    if match is None:
+        raise RuntimeError(
+            "Could not find dependencies array in sdk/python/pyproject.toml"
+        )
 
-    release = pick_release(channel)
-    print(f"Release: {release.get('tag_name')} ({channel})")
-    for platform_key, (os_tokens, arch_tokens) in PLATFORMS.items():
-        _download_asset_to_binary(release, os_tokens, arch_tokens, bundled_platform_bin_path(platform_key))
-    print("Bundled all platform binaries.")
+    raw_items = [item.strip() for item in match.group(1).split(",") if item.strip()]
+    raw_items = [item for item in raw_items if "codex-cli-bin" not in item]
+    raw_items.append(f'"codex-cli-bin=={runtime_version}"')
+    replacement = "dependencies = [\n  " + ",\n  ".join(raw_items) + ",\n]"
+    return pyproject_text[: match.start()] + replacement + pyproject_text[match.end() :]
+
+
+def stage_python_sdk_package(
+    staging_dir: Path, sdk_version: str, runtime_version: str
+) -> Path:
+    _copy_package_tree(sdk_root(), staging_dir)
+    sdk_bin_dir = staging_dir / "src" / "codex_app_server" / "bin"
+    if sdk_bin_dir.exists():
+        shutil.rmtree(sdk_bin_dir)
+
+    pyproject_path = staging_dir / "pyproject.toml"
+    pyproject_text = pyproject_path.read_text()
+    pyproject_text = _rewrite_project_version(pyproject_text, sdk_version)
+    pyproject_text = _rewrite_sdk_runtime_dependency(pyproject_text, runtime_version)
+    pyproject_path.write_text(pyproject_text)
+    return staging_dir
+
+
+def stage_python_runtime_package(
+    staging_dir: Path, runtime_version: str, binary_path: Path
+) -> Path:
+    _copy_package_tree(python_runtime_root(), staging_dir)
+
+    pyproject_path = staging_dir / "pyproject.toml"
+    pyproject_path.write_text(
+        _rewrite_project_version(pyproject_path.read_text(), runtime_version)
+    )
+
+    out_bin = staged_runtime_bin_path(staging_dir)
+    out_bin.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(binary_path, out_bin)
+    if not _is_windows():
+        out_bin.chmod(
+            out_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        )
+    return staging_dir
 
 
 def _flatten_string_enum_one_of(definition: dict[str, Any]) -> bool:
@@ -242,6 +194,208 @@ def _flatten_string_enum_one_of(definition: dict[str, Any]) -> bool:
     return True
 
 
+DISCRIMINATOR_KEYS = ("type", "method", "mode", "state", "status", "role", "reason")
+
+
+def _to_pascal_case(value: str) -> str:
+    parts = re.split(r"[^0-9A-Za-z]+", value)
+    compact = "".join(part[:1].upper() + part[1:] for part in parts if part)
+    return compact or "Value"
+
+
+def _string_literal(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    const = value.get("const")
+    if isinstance(const, str):
+        return const
+
+    enum = value.get("enum")
+    if isinstance(enum, list) and enum and len(enum) == 1 and isinstance(enum[0], str):
+        return enum[0]
+    return None
+
+
+def _enum_literals(value: Any) -> list[str] | None:
+    if not isinstance(value, dict):
+        return None
+    enum = value.get("enum")
+    if (
+        not isinstance(enum, list)
+        or not enum
+        or not all(isinstance(item, str) for item in enum)
+    ):
+        return None
+    return list(enum)
+
+
+def _literal_from_property(props: dict[str, Any], key: str) -> str | None:
+    return _string_literal(props.get(key))
+
+
+def _variant_definition_name(base: str, variant: dict[str, Any]) -> str | None:
+    # datamodel-code-generator invents numbered helper names for inline union
+    # branches unless they carry a stable, unique title up front. We derive
+    # those titles from the branch discriminator or other identifying shape.
+    props = variant.get("properties")
+    if isinstance(props, dict):
+        for key in DISCRIMINATOR_KEYS:
+            literal = _literal_from_property(props, key)
+            if literal is None:
+                continue
+            pascal = _to_pascal_case(literal)
+            if base == "ClientRequest":
+                return f"{pascal}Request"
+            if base == "ServerRequest":
+                return f"{pascal}ServerRequest"
+            if base == "ClientNotification":
+                return f"{pascal}ClientNotification"
+            if base == "ServerNotification":
+                return f"{pascal}ServerNotification"
+            if base == "EventMsg":
+                return f"{pascal}EventMsg"
+            return f"{pascal}{base}"
+
+        if len(props) == 1:
+            key = next(iter(props))
+            pascal = _string_literal(props[key])
+            return f"{_to_pascal_case(pascal or key)}{base}"
+
+    required = variant.get("required")
+    if (
+        isinstance(required, list)
+        and len(required) == 1
+        and isinstance(required[0], str)
+    ):
+        return f"{_to_pascal_case(required[0])}{base}"
+
+    enum_literals = _enum_literals(variant)
+    if enum_literals is not None:
+        if len(enum_literals) == 1:
+            return f"{_to_pascal_case(enum_literals[0])}{base}"
+        return f"{base}Value"
+
+    return None
+
+
+def _variant_collision_key(
+    base: str, variant: dict[str, Any], generated_name: str
+) -> str:
+    parts = [f"base={base}", f"generated={generated_name}"]
+    props = variant.get("properties")
+    if isinstance(props, dict):
+        for key in DISCRIMINATOR_KEYS:
+            literal = _literal_from_property(props, key)
+            if literal is not None:
+                parts.append(f"{key}={literal}")
+        if len(props) == 1:
+            parts.append(f"only_property={next(iter(props))}")
+
+    required = variant.get("required")
+    if (
+        isinstance(required, list)
+        and len(required) == 1
+        and isinstance(required[0], str)
+    ):
+        parts.append(f"required_only={required[0]}")
+
+    enum_literals = _enum_literals(variant)
+    if enum_literals is not None:
+        parts.append(f"enum={'|'.join(enum_literals)}")
+
+    return "|".join(parts)
+
+
+def _set_discriminator_titles(props: dict[str, Any], owner: str) -> None:
+    for key in DISCRIMINATOR_KEYS:
+        prop = props.get(key)
+        if not isinstance(prop, dict):
+            continue
+        if _string_literal(prop) is None or "title" in prop:
+            continue
+        prop["title"] = f"{owner}{_to_pascal_case(key)}"
+
+
+def _annotate_variant_list(variants: list[Any], base: str | None) -> None:
+    seen = {
+        variant["title"]
+        for variant in variants
+        if isinstance(variant, dict) and isinstance(variant.get("title"), str)
+    }
+
+    for variant in variants:
+        if not isinstance(variant, dict):
+            continue
+
+        variant_name = variant.get("title")
+        generated_name = _variant_definition_name(base, variant) if base else None
+        if generated_name is not None and (
+            not isinstance(variant_name, str)
+            or "/" in variant_name
+            or variant_name != generated_name
+        ):
+            # Titles like `Thread/startedNotification` sanitize poorly in
+            # Python, and envelope titles like `ErrorNotification` collide
+            # with their payload model names. Rewrite them before codegen so
+            # we get `ThreadStartedServerNotification` instead of `...1`.
+            if generated_name in seen and variant_name != generated_name:
+                raise RuntimeError(
+                    "Variant title naming collision detected: "
+                    f"{_variant_collision_key(base or '<root>', variant, generated_name)}"
+                )
+            variant["title"] = generated_name
+            seen.add(generated_name)
+            variant_name = generated_name
+
+        if isinstance(variant_name, str):
+            props = variant.get("properties")
+            if isinstance(props, dict):
+                _set_discriminator_titles(props, variant_name)
+
+        _annotate_schema(variant, base)
+
+
+def _annotate_schema(value: Any, base: str | None = None) -> None:
+    if isinstance(value, list):
+        for item in value:
+            _annotate_schema(item, base)
+        return
+
+    if not isinstance(value, dict):
+        return
+
+    owner = value.get("title")
+    props = value.get("properties")
+    if isinstance(owner, str) and isinstance(props, dict):
+        _set_discriminator_titles(props, owner)
+
+    one_of = value.get("oneOf")
+    if isinstance(one_of, list):
+        # Walk nested unions recursively so every inline branch gets the same
+        # title normalization treatment before we hand the bundle to Python
+        # codegen.
+        _annotate_variant_list(one_of, base)
+
+    any_of = value.get("anyOf")
+    if isinstance(any_of, list):
+        _annotate_variant_list(any_of, base)
+
+    definitions = value.get("definitions")
+    if isinstance(definitions, dict):
+        for name, schema in definitions.items():
+            _annotate_schema(schema, name if isinstance(name, str) else base)
+
+    defs = value.get("$defs")
+    if isinstance(defs, dict):
+        for name, schema in defs.items():
+            _annotate_schema(schema, name if isinstance(name, str) else base)
+
+    for key, child in value.items():
+        if key in {"oneOf", "anyOf", "definitions", "$defs"}:
+            continue
+        _annotate_schema(child, base)
+
+
 def _normalized_schema_bundle_text() -> str:
     schema = json.loads(schema_bundle_path().read_text())
     definitions = schema.get("definitions", {})
@@ -249,6 +403,9 @@ def _normalized_schema_bundle_text() -> str:
         for definition in definitions.values():
             if isinstance(definition, dict):
                 _flatten_string_enum_one_of(definition)
+    # Normalize the schema into something datamodel-code-generator can map to
+    # stable class names instead of anonymous numbered helpers.
+    _annotate_schema(schema)
     return json.dumps(schema, indent=2, sort_keys=True) + "\n"
 
 
@@ -274,20 +431,34 @@ def generate_v2_all() -> None:
                 "--output-model-type",
                 "pydantic_v2.BaseModel",
                 "--target-python-version",
-                "3.10",
+                "3.11",
+                "--use-standard-collections",
+                "--enum-field-as-literal",
+                "one",
+                "--field-constraints",
+                "--use-default-kwarg",
                 "--snake-case-field",
                 "--allow-population-by-field-name",
+                # Once the schema prepass has assigned stable titles, tell the
+                # generator to prefer those titles as the emitted class names.
+                "--use-title-as-name",
+                "--use-annotated",
                 "--use-union-operator",
-                "--reuse-model",
                 "--disable-timestamp",
-                "--use-double-quotes",
+                # Keep the generated file formatted deterministically so the
+                # checked-in artifact only changes when the schema does.
+                "--formatters",
+                "ruff-format",
             ],
             cwd=sdk_root(),
         )
     _normalize_generated_timestamps(out_path)
 
+
 def _notification_specs() -> list[tuple[str, str]]:
-    server_notifications = json.loads((schema_root_dir() / "ServerNotification.json").read_text())
+    server_notifications = json.loads(
+        (schema_root_dir() / "ServerNotification.json").read_text()
+    )
     one_of = server_notifications.get("oneOf", [])
     generated_source = (
         sdk_root() / "src" / "codex_app_server" / "generated" / "v2_all.py"
@@ -311,7 +482,10 @@ def _notification_specs() -> list[tuple[str, str]]:
         if not isinstance(ref, str) or not ref.startswith("#/definitions/"):
             continue
         class_name = ref.split("/")[-1]
-        if f"class {class_name}(" not in generated_source and f"{class_name} =" not in generated_source:
+        if (
+            f"class {class_name}(" not in generated_source
+            and f"{class_name} =" not in generated_source
+        ):
             # Skip schema variants that are not emitted into the generated v2 surface.
             continue
         specs.append((method, class_name))
@@ -321,7 +495,13 @@ def _notification_specs() -> list[tuple[str, str]]:
 
 
 def generate_notification_registry() -> None:
-    out = sdk_root() / "src" / "codex_app_server" / "generated" / "notification_registry.py"
+    out = (
+        sdk_root()
+        / "src"
+        / "codex_app_server"
+        / "generated"
+        / "notification_registry.py"
+    )
     specs = _notification_specs()
     class_names = sorted({class_name for _, class_name in specs})
 
@@ -359,6 +539,7 @@ def _normalize_generated_timestamps(root: Path) -> None:
         if normalized != content:
             py_file.write_text(normalized)
 
+
 FIELD_ANNOTATION_OVERRIDES: dict[str, str] = {
     # Keep public API typed without falling back to `Any`.
     "config": "JsonObject",
@@ -372,6 +553,14 @@ class PublicFieldSpec:
     py_name: str
     annotation: str
     required: bool
+
+
+@dataclass(frozen=True)
+class CliOps:
+    generate_types: Callable[[], None]
+    stage_python_sdk_package: Callable[[Path, str, str], Path]
+    stage_python_runtime_package: Callable[[Path, str, Path], Path]
+    current_sdk_version: Callable[[], str]
 
 
 def _annotation_to_source(annotation: Any) -> str:
@@ -410,7 +599,9 @@ def _camel_to_snake(name: str) -> str:
     return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", head).lower()
 
 
-def _load_public_fields(module_name: str, class_name: str, *, exclude: set[str] | None = None) -> list[PublicFieldSpec]:
+def _load_public_fields(
+    module_name: str, class_name: str, *, exclude: set[str] | None = None
+) -> list[PublicFieldSpec]:
     exclude = exclude or set()
     module = importlib.import_module(module_name)
     model = getattr(module, class_name)
@@ -442,16 +633,16 @@ def _kw_signature_lines(fields: list[PublicFieldSpec]) -> list[str]:
     return lines
 
 
-def _model_arg_lines(fields: list[PublicFieldSpec], *, indent: str = "            ") -> list[str]:
+def _model_arg_lines(
+    fields: list[PublicFieldSpec], *, indent: str = "            "
+) -> list[str]:
     return [f"{indent}{field.wire_name}={field.py_name}," for field in fields]
 
 
 def _replace_generated_block(source: str, block_name: str, body: str) -> str:
     start_tag = f"    # BEGIN GENERATED: {block_name}"
     end_tag = f"    # END GENERATED: {block_name}"
-    pattern = re.compile(
-        rf"(?s){re.escape(start_tag)}\n.*?\n{re.escape(end_tag)}"
-    )
+    pattern = re.compile(rf"(?s){re.escape(start_tag)}\n.*?\n{re.escape(end_tag)}")
     replacement = f"{start_tag}\n{body.rstrip()}\n{end_tag}"
     updated, count = pattern.subn(replacement, source, count=1)
     if count != 1:
@@ -717,23 +908,89 @@ def generate_types() -> None:
     generate_public_api_flat_methods()
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Single SDK maintenance entrypoint")
-    parser.add_argument("--channel", choices=["stable", "alpha"], default="stable")
-    parser.add_argument("--types-only", action="store_true", help="Regenerate types only (skip binary update)")
-    parser.add_argument(
-        "--bundle-all-platforms",
-        action="store_true",
-        help="Download and bundle codex binaries for all supported OS/arch targets",
-    )
-    args = parser.parse_args()
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    if not args.types_only:
-        if args.bundle_all_platforms:
-            bundle_all_platform_binaries(args.channel)
-        else:
-            update_binary(args.channel)
-    generate_types()
+    subparsers.add_parser(
+        "generate-types", help="Regenerate Python protocol-derived types"
+    )
+
+    stage_sdk_parser = subparsers.add_parser(
+        "stage-sdk",
+        help="Stage a releasable SDK package pinned to a runtime version",
+    )
+    stage_sdk_parser.add_argument(
+        "staging_dir",
+        type=Path,
+        help="Output directory for the staged SDK package",
+    )
+    stage_sdk_parser.add_argument(
+        "--runtime-version",
+        required=True,
+        help="Pinned codex-cli-bin version for the staged SDK package",
+    )
+    stage_sdk_parser.add_argument(
+        "--sdk-version",
+        help="Version to write into the staged SDK package (defaults to sdk/python current version)",
+    )
+
+    stage_runtime_parser = subparsers.add_parser(
+        "stage-runtime",
+        help="Stage a releasable runtime package for the current platform",
+    )
+    stage_runtime_parser.add_argument(
+        "staging_dir",
+        type=Path,
+        help="Output directory for the staged runtime package",
+    )
+    stage_runtime_parser.add_argument(
+        "runtime_binary",
+        type=Path,
+        help="Path to the codex binary to package for this platform",
+    )
+    stage_runtime_parser.add_argument(
+        "--runtime-version",
+        required=True,
+        help="Version to write into the staged runtime package",
+    )
+    return parser
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    return build_parser().parse_args(list(argv) if argv is not None else None)
+
+
+def default_cli_ops() -> CliOps:
+    return CliOps(
+        generate_types=generate_types,
+        stage_python_sdk_package=stage_python_sdk_package,
+        stage_python_runtime_package=stage_python_runtime_package,
+        current_sdk_version=current_sdk_version,
+    )
+
+
+def run_command(args: argparse.Namespace, ops: CliOps) -> None:
+    if args.command == "generate-types":
+        ops.generate_types()
+    elif args.command == "stage-sdk":
+        ops.generate_types()
+        ops.stage_python_sdk_package(
+            args.staging_dir,
+            args.sdk_version or ops.current_sdk_version(),
+            args.runtime_version,
+        )
+    elif args.command == "stage-runtime":
+        ops.stage_python_runtime_package(
+            args.staging_dir,
+            args.runtime_version,
+            args.runtime_binary.resolve(),
+        )
+
+
+def main(argv: Sequence[str] | None = None, ops: CliOps | None = None) -> None:
+    args = parse_args(argv)
+    run_command(args, ops or default_cli_ops())
     print("Done.")
 
 
