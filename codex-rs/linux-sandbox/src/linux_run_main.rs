@@ -114,6 +114,12 @@ pub fn run_main() -> ! {
         file_system_sandbox_policy,
         network_sandbox_policy,
     );
+    let use_bwrap_sandbox = should_use_bwrap_sandbox(
+        use_bwrap_sandbox,
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
+        &sandbox_policy_cwd,
+    );
 
     // Inner stage: apply seccomp/no_new_privs after bubblewrap has already
     // established the filesystem view.
@@ -226,6 +232,17 @@ fn resolve_sandbox_policies(
 
     match (sandbox_policy, split_policies) {
         (Some(sandbox_policy), Some((file_system_sandbox_policy, network_sandbox_policy))) => {
+            let derived_legacy_policy = file_system_sandbox_policy
+                .to_legacy_sandbox_policy(network_sandbox_policy, sandbox_policy_cwd)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "split sandbox policies require direct runtime enforcement and cannot be paired with legacy sandbox policy: {err}"
+                    )
+                });
+            assert_eq!(
+                derived_legacy_policy, sandbox_policy,
+                "legacy sandbox policy must match split sandbox policies"
+            );
             EffectiveSandboxPolicies {
                 sandbox_policy,
                 file_system_sandbox_policy,
@@ -260,6 +277,17 @@ fn ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec: bool, use_bwrap_san
     if apply_seccomp_then_exec && !use_bwrap_sandbox {
         panic!("--apply-seccomp-then-exec requires --use-bwrap-sandbox");
     }
+}
+
+fn should_use_bwrap_sandbox(
+    use_bwrap_sandbox: bool,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    sandbox_policy_cwd: &Path,
+) -> bool {
+    use_bwrap_sandbox
+        || file_system_sandbox_policy
+            .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd)
 }
 
 fn run_bwrap_with_proc_fallback(

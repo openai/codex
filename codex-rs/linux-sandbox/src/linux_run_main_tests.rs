@@ -7,6 +7,8 @@ use codex_protocol::protocol::NetworkSandboxPolicy;
 #[cfg(test)]
 use codex_protocol::protocol::SandboxPolicy;
 #[cfg(test)]
+use codex_utils_absolute_path::AbsolutePathBuf;
+#[cfg(test)]
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -105,6 +107,60 @@ fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
 fn proxy_only_mode_takes_precedence_over_full_network_policy() {
     let mode = bwrap_network_mode(NetworkSandboxPolicy::Enabled, true);
     assert_eq!(mode, BwrapNetworkMode::ProxyOnly);
+}
+
+#[test]
+fn split_only_filesystem_policy_forces_bwrap_usage() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let docs = temp_dir.path().join("docs");
+    std::fs::create_dir_all(&docs).expect("create docs");
+    let docs = AbsolutePathBuf::from_absolute_path(&docs).expect("absolute docs");
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Special {
+                value: codex_protocol::permissions::FileSystemSpecialPath::CurrentWorkingDirectory,
+            },
+            access: codex_protocol::permissions::FileSystemAccessMode::Write,
+        },
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
+            access: codex_protocol::permissions::FileSystemAccessMode::Read,
+        },
+    ]);
+
+    assert!(should_use_bwrap_sandbox(
+        false,
+        &policy,
+        NetworkSandboxPolicy::Restricted,
+        temp_dir.path(),
+    ));
+}
+
+#[test]
+fn root_write_read_only_carveout_forces_bwrap_usage() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let docs = temp_dir.path().join("docs");
+    std::fs::create_dir_all(&docs).expect("create docs");
+    let docs = AbsolutePathBuf::from_absolute_path(&docs).expect("absolute docs");
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Special {
+                value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+            },
+            access: codex_protocol::permissions::FileSystemAccessMode::Write,
+        },
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
+            access: codex_protocol::permissions::FileSystemAccessMode::Read,
+        },
+    ]);
+
+    assert!(should_use_bwrap_sandbox(
+        false,
+        &policy,
+        NetworkSandboxPolicy::Restricted,
+        temp_dir.path(),
+    ));
 }
 
 #[test]
@@ -237,6 +293,20 @@ fn resolve_sandbox_policies_rejects_partial_split_policies() {
             Some(SandboxPolicy::new_read_only_policy()),
             Some(FileSystemSandboxPolicy::default()),
             None,
+        )
+    });
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn resolve_sandbox_policies_rejects_mismatched_legacy_and_split_inputs() {
+    let result = std::panic::catch_unwind(|| {
+        resolve_sandbox_policies(
+            Path::new("/tmp"),
+            Some(SandboxPolicy::new_read_only_policy()),
+            Some(FileSystemSandboxPolicy::unrestricted()),
+            Some(NetworkSandboxPolicy::Enabled),
         )
     });
 

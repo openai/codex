@@ -10,6 +10,7 @@
 //! - seccomp + `PR_SET_NO_NEW_PRIVS` applied in-process, and
 //! - bubblewrap used to construct the filesystem view before exec.
 use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::path::Path;
@@ -258,98 +259,74 @@ fn create_filesystem_args(
         args
     };
     let mut preserved_files = Vec::new();
-
-    for writable_root in &writable_roots {
-        let root = writable_root.root.as_path();
-        args.push("--bind".to_string());
-        args.push(path_to_string(root));
-        args.push(path_to_string(root));
-    }
-
-    // Re-apply read-only subpaths after the writable binds so they win.
     let allowed_write_paths: Vec<PathBuf> = writable_roots
         .iter()
         .map(|writable_root| writable_root.root.as_path().to_path_buf())
         .collect();
 
-    for subpath in collect_read_only_subpaths(&writable_roots) {
-        if let Some(symlink_path) = find_symlink_in_path(&subpath, &allowed_write_paths) {
-            args.push("--ro-bind".to_string());
-            args.push("/dev/null".to_string());
-            args.push(path_to_string(&symlink_path));
-            continue;
+    let unreadable_paths: HashSet<PathBuf> = unreadable_roots
+        .iter()
+        .map(|path| path.as_path().to_path_buf())
+        .collect();
+    let mut sorted_writable_roots = writable_roots;
+    sorted_writable_roots.sort_by_key(|writable_root| path_depth(writable_root.root.as_path()));
+
+    for writable_root in &sorted_writable_roots {
+        let root = writable_root.root.as_path();
+        args.push("--bind".to_string());
+        args.push(path_to_string(root));
+        args.push(path_to_string(root));
+
+        let mut read_only_subpaths: Vec<PathBuf> = writable_root
+            .read_only_subpaths
+            .iter()
+            .map(|path| path.as_path().to_path_buf())
+            .filter(|path| !unreadable_paths.contains(path))
+            .collect();
+        read_only_subpaths.sort_by_key(|path| path_depth(path));
+        for subpath in read_only_subpaths {
+            append_read_only_subpath_args(&mut args, &subpath, &allowed_write_paths);
         }
 
-        if !subpath.exists() {
-            // Keep this in the per-subpath loop: each protected subpath can have
-            // a different first missing component that must be blocked
-            // independently (for example, `/repo/.git` vs `/repo/.codex`).
-            if let Some(first_missing_component) = find_first_non_existent_component(&subpath)
-                && is_within_allowed_write_paths(&first_missing_component, &allowed_write_paths)
-            {
-                args.push("--ro-bind".to_string());
-                args.push("/dev/null".to_string());
-                args.push(path_to_string(&first_missing_component));
-            }
-            continue;
-        }
-
-        if is_within_allowed_write_paths(&subpath, &allowed_write_paths) {
-            args.push("--ro-bind".to_string());
-            args.push(path_to_string(&subpath));
-            args.push(path_to_string(&subpath));
+        let mut nested_unreadable_roots: Vec<PathBuf> = unreadable_roots
+            .iter()
+            .filter(|path| path.as_path().starts_with(root))
+            .map(|path| path.as_path().to_path_buf())
+            .collect();
+        nested_unreadable_roots.sort_by_key(|path| path_depth(path));
+        for unreadable_root in nested_unreadable_roots {
+            append_unreadable_root_args(
+                &mut args,
+                &mut preserved_files,
+                &unreadable_root,
+                &allowed_write_paths,
+            )?;
         }
     }
 
-    if !unreadable_roots.is_empty() {
-        // Apply explicit deny carveouts after all readable and writable mounts
-        // so they win even when the broader baseline includes `/` or a writable
-        // parent path.
-        let null_file = File::open("/dev/null")?;
-        let null_fd = null_file.as_raw_fd().to_string();
-        for unreadable_root in unreadable_roots {
-            let unreadable_root = unreadable_root.as_path();
-            if unreadable_root.is_dir() {
-                // Bubblewrap cannot bind `/dev/null` over a directory, so mask
-                // denied directories by overmounting them with an empty tmpfs
-                // and then remounting that tmpfs read-only.
-                args.push("--perms".to_string());
-                args.push("000".to_string());
-                args.push("--tmpfs".to_string());
-                args.push(path_to_string(unreadable_root));
-                args.push("--remount-ro".to_string());
-                args.push(path_to_string(unreadable_root));
-                continue;
-            }
-
-            // For files, bind a stable null-file payload over the original path
-            // so later reads do not expose host contents. `--ro-bind-data`
-            // expects a live fd number, so keep the backing file open until we
-            // exec bubblewrap below.
-            args.push("--perms".to_string());
-            args.push("000".to_string());
-            args.push("--ro-bind-data".to_string());
-            args.push(null_fd.clone());
-            args.push(path_to_string(unreadable_root));
-        }
-        preserved_files.push(null_file);
+    let mut rootless_unreadable_roots: Vec<PathBuf> = unreadable_roots
+        .iter()
+        .filter(|path| {
+            !allowed_write_paths
+                .iter()
+                .any(|root| path.as_path().starts_with(root))
+        })
+        .map(|path| path.as_path().to_path_buf())
+        .collect();
+    rootless_unreadable_roots.sort_by_key(|path| path_depth(path));
+    for unreadable_root in rootless_unreadable_roots {
+        append_unreadable_root_args(
+            &mut args,
+            &mut preserved_files,
+            &unreadable_root,
+            &allowed_write_paths,
+        )?;
     }
 
     Ok(BwrapArgs {
         args,
         preserved_files,
     })
-}
-
-/// Collect unique read-only subpaths across all writable roots.
-fn collect_read_only_subpaths(writable_roots: &[WritableRoot]) -> Vec<PathBuf> {
-    let mut subpaths: BTreeSet<PathBuf> = BTreeSet::new();
-    for writable_root in writable_roots {
-        for subpath in &writable_root.read_only_subpaths {
-            subpaths.insert(subpath.as_path().to_path_buf());
-        }
-    }
-    subpaths.into_iter().collect()
 }
 
 /// Validate that writable roots exist before constructing mounts.
@@ -371,6 +348,91 @@ fn ensure_mount_targets_exist(writable_roots: &[WritableRoot]) -> Result<()> {
 
 fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
+}
+
+fn path_depth(path: &Path) -> usize {
+    path.components().count()
+}
+
+fn append_read_only_subpath_args(
+    args: &mut Vec<String>,
+    subpath: &Path,
+    allowed_write_paths: &[PathBuf],
+) {
+    if let Some(symlink_path) = find_symlink_in_path(subpath, allowed_write_paths) {
+        args.push("--ro-bind".to_string());
+        args.push("/dev/null".to_string());
+        args.push(path_to_string(&symlink_path));
+        return;
+    }
+
+    if !subpath.exists() {
+        if let Some(first_missing_component) = find_first_non_existent_component(subpath)
+            && is_within_allowed_write_paths(&first_missing_component, allowed_write_paths)
+        {
+            args.push("--ro-bind".to_string());
+            args.push("/dev/null".to_string());
+            args.push(path_to_string(&first_missing_component));
+        }
+        return;
+    }
+
+    if is_within_allowed_write_paths(subpath, allowed_write_paths) {
+        args.push("--ro-bind".to_string());
+        args.push(path_to_string(subpath));
+        args.push(path_to_string(subpath));
+    }
+}
+
+fn append_unreadable_root_args(
+    args: &mut Vec<String>,
+    preserved_files: &mut Vec<File>,
+    unreadable_root: &Path,
+    allowed_write_paths: &[PathBuf],
+) -> Result<()> {
+    if let Some(symlink_path) = find_symlink_in_path(unreadable_root, allowed_write_paths) {
+        args.push("--ro-bind".to_string());
+        args.push("/dev/null".to_string());
+        args.push(path_to_string(&symlink_path));
+        return Ok(());
+    }
+
+    if !unreadable_root.exists() {
+        if let Some(first_missing_component) = find_first_non_existent_component(unreadable_root)
+            && is_within_allowed_write_paths(&first_missing_component, allowed_write_paths)
+        {
+            args.push("--ro-bind".to_string());
+            args.push("/dev/null".to_string());
+            args.push(path_to_string(&first_missing_component));
+        }
+        return Ok(());
+    }
+
+    if unreadable_root.is_dir() {
+        args.push("--perms".to_string());
+        args.push("000".to_string());
+        args.push("--tmpfs".to_string());
+        args.push(path_to_string(unreadable_root));
+        args.push("--remount-ro".to_string());
+        args.push(path_to_string(unreadable_root));
+        return Ok(());
+    }
+
+    let null_file = if let Some(file) = preserved_files.first() {
+        file
+    } else {
+        preserved_files.push(File::open("/dev/null")?);
+        preserved_files
+            .first()
+            .expect("preserved_files must contain /dev/null")
+    };
+    let null_fd = null_file.as_raw_fd().to_string();
+    args.push("--perms".to_string());
+    args.push("000".to_string());
+    args.push("--ro-bind-data".to_string());
+    args.push(null_fd);
+    args.push(path_to_string(unreadable_root));
+    Ok(())
 }
 
 /// Returns true when `path` is under any allowed writable root.
@@ -651,6 +713,60 @@ mod tests {
             args.args.windows(3).any(|window| {
                 window == ["--ro-bind", blocked_str.as_str(), blocked_str.as_str()]
             })
+        );
+    }
+
+    #[test]
+    fn split_policy_reenables_nested_writable_subpaths_after_read_only_parent() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let writable_root = temp_dir.path().join("workspace");
+        let docs = writable_root.join("docs");
+        let docs_public = docs.join("public");
+        std::fs::create_dir_all(&docs_public).expect("create docs/public");
+        let writable_root =
+            AbsolutePathBuf::from_absolute_path(&writable_root).expect("absolute writable root");
+        let docs = AbsolutePathBuf::from_absolute_path(&docs).expect("absolute docs");
+        let docs_public =
+            AbsolutePathBuf::from_absolute_path(&docs_public).expect("absolute docs/public");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: writable_root.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: docs.clone() },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: docs_public.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+        ]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let docs_str = path_to_string(docs.as_path());
+        let docs_public_str = path_to_string(docs_public.as_path());
+        let docs_ro_index = args
+            .args
+            .windows(3)
+            .position(|window| window == ["--ro-bind", docs_str.as_str(), docs_str.as_str()])
+            .expect("docs should be remounted read-only");
+        let docs_public_rw_index = args
+            .args
+            .windows(3)
+            .position(|window| {
+                window == ["--bind", docs_public_str.as_str(), docs_public_str.as_str()]
+            })
+            .expect("docs/public should be rebound writable");
+
+        assert!(
+            docs_ro_index < docs_public_rw_index,
+            "expected read-only parent remount before nested writable bind: {:#?}",
+            args.args
         );
     }
 
