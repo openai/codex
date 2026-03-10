@@ -273,6 +273,25 @@ impl OutgoingMessageSender {
         self.take_request_callback(id).await.is_some()
     }
 
+    pub(crate) async fn cancel_all_requests(&self, error: Option<JSONRPCErrorError>) {
+        let entries = {
+            let mut request_id_to_callback = self.request_id_to_callback.lock().await;
+            request_id_to_callback
+                .drain()
+                .map(|(_, entry)| entry)
+                .collect::<Vec<_>>()
+        };
+
+        if let Some(error) = error {
+            for entry in entries {
+                if let Err(err) = entry.callback.send(Err(error.clone())) {
+                    let request_id = entry.request.id();
+                    warn!("could not notify callback for {request_id:?} due to: {err:?}");
+                }
+            }
+        }
+    }
+
     async fn take_request_callback(
         &self,
         id: &RequestId,

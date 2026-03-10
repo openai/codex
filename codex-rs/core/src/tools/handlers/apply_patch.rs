@@ -18,6 +18,7 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
@@ -30,7 +31,10 @@ use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 pub struct ApplyPatchHandler;
@@ -59,6 +63,31 @@ fn file_paths_for_action(action: &ApplyPatchAction) -> Vec<AbsolutePathBuf> {
 
 fn to_abs_path(cwd: &Path, path: &Path) -> Option<AbsolutePathBuf> {
     AbsolutePathBuf::resolve_path_against_base(path, cwd).ok()
+}
+
+fn write_permissions_for_paths(file_paths: &[AbsolutePathBuf]) -> Option<PermissionProfile> {
+    let write_paths = file_paths
+        .iter()
+        .map(|path| {
+            path.parent()
+                .unwrap_or_else(|| path.clone())
+                .into_path_buf()
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(AbsolutePathBuf::from_absolute_path)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+
+    let permissions = (!write_paths.is_empty()).then_some(PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(write_paths),
+        }),
+        ..Default::default()
+    })?;
+
+    crate::sandboxing::normalize_additional_permissions(permissions).ok()
 }
 
 #[async_trait]
@@ -119,6 +148,12 @@ impl ToolHandler for ApplyPatchHandler {
                     InternalApplyPatchInvocation::DelegateToExec(apply) => {
                         let changes = convert_apply_patch_to_protocol(&apply.action);
                         let file_paths = file_paths_for_action(&apply.action);
+                        let effective_additional_permissions = apply_granted_turn_permissions(
+                            session.as_ref(),
+                            crate::sandboxing::SandboxPermissions::UseDefault,
+                            write_permissions_for_paths(&file_paths),
+                        )
+                        .await;
                         let emitter =
                             ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                         let event_ctx = ToolEventCtx::new(
@@ -134,6 +169,12 @@ impl ToolHandler for ApplyPatchHandler {
                             file_paths,
                             changes,
                             exec_approval_requirement: apply.exec_approval_requirement,
+                            sandbox_permissions: effective_additional_permissions
+                                .sandbox_permissions,
+                            additional_permissions: effective_additional_permissions
+                                .additional_permissions,
+                            permissions_preapproved: effective_additional_permissions
+                                .permissions_preapproved,
                             timeout_ms: None,
                             codex_exe: turn.codex_linux_sandbox_exe.clone(),
                         };
@@ -222,6 +263,12 @@ pub(crate) async fn intercept_apply_patch(
                 InternalApplyPatchInvocation::DelegateToExec(apply) => {
                     let changes = convert_apply_patch_to_protocol(&apply.action);
                     let approval_keys = file_paths_for_action(&apply.action);
+                    let effective_additional_permissions = apply_granted_turn_permissions(
+                        session.as_ref(),
+                        crate::sandboxing::SandboxPermissions::UseDefault,
+                        write_permissions_for_paths(&approval_keys),
+                    )
+                    .await;
                     let emitter = ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                     let event_ctx = ToolEventCtx::new(
                         session.as_ref(),
@@ -236,6 +283,11 @@ pub(crate) async fn intercept_apply_patch(
                         file_paths: approval_keys,
                         changes,
                         exec_approval_requirement: apply.exec_approval_requirement,
+                        sandbox_permissions: effective_additional_permissions.sandbox_permissions,
+                        additional_permissions: effective_additional_permissions
+                            .additional_permissions,
+                        permissions_preapproved: effective_additional_permissions
+                            .permissions_preapproved,
                         timeout_ms,
                         codex_exe: turn.codex_linux_sandbox_exe.clone(),
                     };

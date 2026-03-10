@@ -827,6 +827,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b52af3cb4058c895d37317bb27508dccc8e5f2d39454016b297bf4a400597b8"
 dependencies = [
  "axum-core",
+ "base64 0.22.1",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -845,8 +846,10 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_urlencoded",
+ "sha1",
  "sync_wrapper",
  "tokio",
+ "tokio-tungstenite",
  "tower",
  "tower-layer",
  "tower-service",
@@ -1441,6 +1444,7 @@ dependencies = [
  "futures",
  "owo-colors",
  "pretty_assertions",
+ "reqwest",
  "rmcp",
  "serde",
  "serde_json",
@@ -1456,6 +1460,24 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wiremock",
+]
+
+[[package]]
+name = "codex-app-server-client"
+version = "0.0.0"
+dependencies = [
+ "codex-app-server",
+ "codex-app-server-protocol",
+ "codex-arg0",
+ "codex-core",
+ "codex-feedback",
+ "codex-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
 ]
 
 [[package]]
@@ -1899,10 +1921,13 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
+ "codex-app-server-client",
+ "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-arg0",
  "codex-cloud-requirements",
  "codex-core",
+ "codex-feedback",
  "codex-otel",
  "codex-protocol",
  "codex-utils-absolute-path",

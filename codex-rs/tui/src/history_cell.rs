@@ -2215,15 +2215,18 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
 
 pub(crate) fn new_image_generation_call(
     call_id: String,
-    status: String,
     revised_prompt: Option<String>,
+    saved_to: Option<String>,
 ) -> PlainHistoryCell {
     let detail = revised_prompt.unwrap_or_else(|| call_id.clone());
 
-    let lines: Vec<Line<'static>> = vec![
-        vec!["• ".dim(), "Generated Image".bold()].into(),
-        vec!["  └ ".dim(), format!("{status}: {detail}").dim()].into(),
+    let mut lines: Vec<Line<'static>> = vec![
+        vec!["• ".dim(), "Generated Image:".bold()].into(),
+        vec!["  └ ".dim(), detail.dim()].into(),
     ];
+    if let Some(saved_to) = saved_to {
+        lines.push(vec!["  └ ".dim(), format!("Saved to: {saved_to}").dim()].into());
+    }
 
     PlainHistoryCell { lines }
 }
