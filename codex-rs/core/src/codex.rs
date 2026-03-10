@@ -3328,12 +3328,14 @@ impl Session {
             )
             .into_text(),
         );
-        let image_output_dir = default_image_generation_output_dir();
-        developer_sections.push(format!(
-            "Generated images are saved to {} as {} by default.",
-            image_output_dir.display(),
-            image_output_dir.join("<image_id>.png").display(),
-        ));
+        if turn_context.features.enabled(Feature::ImageGeneration) {
+            let image_output_dir = default_image_generation_output_dir();
+            developer_sections.push(format!(
+                "Generated images are saved to {} as {} by default.",
+                image_output_dir.display(),
+                image_output_dir.join("<image_id>.png").display(),
+            ));
+        }
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
             developer_sections.push(developer_instructions.to_string());
         }

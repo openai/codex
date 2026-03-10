@@ -3118,7 +3118,11 @@ async fn build_initial_context_uses_previous_realtime_state() {
 
 #[tokio::test]
 async fn build_initial_context_describes_default_image_save_location() {
-    let (session, turn_context) = make_session_and_context().await;
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context
+        .features
+        .enable(Feature::ImageGeneration)
+        .expect("enable image generation feature");
 
     let initial_context = session.build_initial_context(&turn_context).await;
     let developer_texts = developer_input_texts(&initial_context);
@@ -3133,6 +3137,21 @@ async fn build_initial_context_describes_default_image_save_location() {
             .iter()
             .any(|text| text.contains(expected_text.as_str())),
         "expected initial context to describe the default image save location, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_omits_default_image_save_location_when_disabled() {
+    let (session, turn_context) = make_session_and_context().await;
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context);
+
+    assert!(
+        !developer_texts
+            .iter()
+            .any(|text| text.contains("Generated images are saved to")),
+        "expected initial context to omit image save instructions when image generation is disabled, got {developer_texts:?}"
     );
 }
 
