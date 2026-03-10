@@ -1437,6 +1437,12 @@ impl App {
             }
         }
 
+        if matches!(event.msg, EventMsg::ShutdownComplete)
+            && Some(thread_id) != self.primary_thread_id
+        {
+            self.mark_agent_picker_thread_closed(thread_id);
+        }
+
         self.enqueue_thread_event(thread_id, event).await
     }
 
@@ -4518,6 +4524,41 @@ mod tests {
         .await?;
 
         assert_eq!(app.chat_widget.pending_thread_approvals().len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn routed_child_shutdown_marks_agent_picker_thread_closed() -> Result<()> {
+        let mut app = make_test_app().await;
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000071").expect("valid thread");
+        let child_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000072").expect("valid thread");
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(main_thread_id);
+        app.thread_event_channels
+            .insert(main_thread_id, ThreadEventChannel::new(1));
+        app.thread_event_channels
+            .insert(child_thread_id, ThreadEventChannel::new(1));
+        app.upsert_agent_picker_thread(main_thread_id, Some("main".to_string()), None, false);
+        app.upsert_agent_picker_thread(child_thread_id, Some("child".to_string()), None, false);
+
+        app.handle_routed_thread_event(
+            child_thread_id,
+            Event {
+                id: "child-shutdown".to_string(),
+                msg: EventMsg::ShutdownComplete,
+            },
+        )
+        .await?;
+
+        assert_eq!(
+            app.agent_picker_threads
+                .get(&child_thread_id)
+                .map(|entry| entry.is_closed),
+            Some(true)
+        );
         Ok(())
     }
 

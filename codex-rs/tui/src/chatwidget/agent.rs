@@ -531,24 +531,20 @@ fn note_primary_legacy_event(
     pending_server_requests: &mut PendingServerRequests,
 ) -> bool {
     let event_thread_id = conversation_id.unwrap_or(session_id);
-    if event_thread_id != session_id {
-        return false;
-    }
-
-    let session_id = session_id.to_string();
+    let event_thread_id_string = event_thread_id.to_string();
 
     match &event.msg {
         EventMsg::TurnStarted(payload) => {
-            current_turn_ids.insert(session_id.clone(), payload.turn_id.clone());
+            current_turn_ids.insert(event_thread_id_string.clone(), payload.turn_id.clone());
         }
         EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) => {
-            current_turn_ids.remove(&session_id);
-            pending_server_requests.clear_turn_scoped(&session_id);
+            current_turn_ids.remove(&event_thread_id_string);
+            pending_server_requests.clear_turn_scoped(&event_thread_id_string);
         }
         _ => {}
     }
 
-    matches!(event.msg, EventMsg::ShutdownComplete)
+    event_thread_id == session_id && matches!(event.msg, EventMsg::ShutdownComplete)
 }
 
 async fn finalize_in_process_shutdown<Shutdown>(
@@ -2968,6 +2964,31 @@ async fn run_in_process_agent_loop(
                                     &notification.request_id,
                                 );
                             }
+                            ServerNotification::ThreadClosed(notification) => {
+                                let Ok(closed_thread_id) =
+                                    ThreadId::from_string(&notification.thread_id)
+                                else {
+                                    send_warning_event(
+                                        &app_event_tx,
+                                        format!(
+                                            "thread/closed carried invalid thread id `{}`",
+                                            notification.thread_id
+                                        ),
+                                    );
+                                    continue;
+                                };
+                                current_turn_ids.remove(&notification.thread_id);
+                                pending_server_requests.clear_turn_scoped(&notification.thread_id);
+                                if closed_thread_id != session_id {
+                                    app_event_tx.send(AppEvent::ThreadEvent {
+                                        thread_id: closed_thread_id,
+                                        event: Event {
+                                            id: String::new(),
+                                            msg: EventMsg::ShutdownComplete,
+                                        },
+                                    });
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -3604,6 +3625,10 @@ mod tests {
             Some(&"primary-turn".to_string())
         );
         assert_eq!(
+            current_turn_ids.get(&child_thread_id.to_string()),
+            Some(&"child-turn".to_string())
+        );
+        assert_eq!(
             pending_server_requests.exec_approvals.len(),
             1,
             "child turn start should not clear primary exec approvals"
@@ -3649,6 +3674,7 @@ mod tests {
             current_turn_ids.get(&session_id.to_string()),
             Some(&"primary-turn".to_string())
         );
+        assert_eq!(current_turn_ids.get(&child_thread_id.to_string()), None);
         assert_eq!(
             pending_server_requests.exec_approvals.len(),
             1,
