@@ -1,5 +1,9 @@
 use anyhow::Result;
+use codex_core::ThreadConfigSnapshot;
+use codex_core::config::AgentRoleConfig;
 use codex_core::features::Feature;
+use codex_protocol::ThreadId;
+use codex_protocol::openai_models::ReasoningEffort;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -13,6 +17,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -25,6 +30,12 @@ const TURN_0_FORK_PROMPT: &str = "seed fork context";
 const TURN_1_PROMPT: &str = "spawn a child and continue";
 const TURN_2_NO_WAIT_PROMPT: &str = "follow up without wait";
 const CHILD_PROMPT: &str = "child: do work";
+const INHERITED_MODEL: &str = "gpt-5.2-codex";
+const INHERITED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::XHigh;
+const REQUESTED_MODEL: &str = "gpt-5.1";
+const REQUESTED_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::Low;
+const ROLE_MODEL: &str = "gpt-5.1-codex-max";
+const ROLE_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::High;
 
 fn body_contains(req: &wiremock::Request, text: &str) -> bool {
     let is_zstd = req
@@ -176,6 +187,72 @@ async fn setup_turn_one_with_spawned_child(
     Ok((test, spawned_id))
 }
 
+async fn spawn_child_and_capture_snapshot(
+    server: &MockServer,
+    spawn_args: serde_json::Value,
+    configure_test: impl FnOnce(
+        core_test_support::test_codex::TestCodexBuilder,
+    ) -> core_test_support::test_codex::TestCodexBuilder,
+) -> Result<ThreadConfigSnapshot> {
+    let spawn_args = serde_json::to_string(&spawn_args)?;
+
+    mount_sse_once_match(
+        server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-turn1-1"),
+            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_completed("resp-turn1-1"),
+        ]),
+    )
+    .await;
+
+    let child_request_log = mount_sse_once_match(
+        server,
+        |req: &wiremock::Request| {
+            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("resp-child-1"),
+            ev_assistant_message("msg-child-1", "child done"),
+            ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+
+    let _turn1_followup = mount_sse_once_match(
+        server,
+        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-turn1-2"),
+            ev_assistant_message("msg-turn1-2", "parent done"),
+            ev_completed("resp-turn1-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = configure_test(test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        config.model = Some(INHERITED_MODEL.to_string());
+        config.model_reasoning_effort = Some(INHERITED_REASONING_EFFORT);
+    }));
+    let test = builder.build(server).await?;
+    test.submit_turn(TURN_1_PROMPT).await?;
+
+    let _ = wait_for_requests(&child_request_log).await?;
+    let spawned_id = wait_for_spawned_thread_id(&test).await?;
+    let thread_id = ThreadId::from_string(&spawned_id)?;
+    Ok(test
+        .thread_manager
+        .get_thread(thread_id)
+        .await?
+        .config_snapshot()
+        .await)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn subagent_notification_is_included_without_wait() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -313,6 +390,75 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
     };
     assert_eq!(content, Some(FORKED_SPAWN_AGENT_OUTPUT_MESSAGE));
     assert_ne!(success, Some(false));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agent_requested_model_and_reasoning_override_inherited_settings_without_role()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let child_snapshot = spawn_child_and_capture_snapshot(
+        &server,
+        json!({
+            "message": CHILD_PROMPT,
+            "model": REQUESTED_MODEL,
+            "reasoning_effort": REQUESTED_REASONING_EFFORT,
+        }),
+        |builder| builder,
+    )
+    .await?;
+
+    assert_eq!(child_snapshot.model, REQUESTED_MODEL);
+    assert_eq!(
+        child_snapshot.reasoning_effort,
+        Some(REQUESTED_REASONING_EFFORT)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let child_snapshot = spawn_child_and_capture_snapshot(
+        &server,
+        json!({
+            "message": CHILD_PROMPT,
+            "agent_type": "custom",
+            "model": REQUESTED_MODEL,
+            "reasoning_effort": REQUESTED_REASONING_EFFORT,
+        }),
+        |builder| {
+            builder.with_config(|config| {
+                let role_path = config.codex_home.join("custom-role.toml");
+                std::fs::write(
+                    &role_path,
+                    format!(
+                        "model = \"{ROLE_MODEL}\"\nmodel_reasoning_effort = \"{}\"\n",
+                        ROLE_REASONING_EFFORT
+                    ),
+                )
+                .expect("write role config");
+                config.agent_roles.insert(
+                    "custom".to_string(),
+                    AgentRoleConfig {
+                        description: Some("Custom role".to_string()),
+                        config_file: Some(role_path),
+                        nickname_candidates: None,
+                    },
+                );
+            })
+        },
+    )
+    .await?;
+
+    assert_eq!(child_snapshot.model, ROLE_MODEL);
+    assert_eq!(child_snapshot.reasoning_effort, Some(ROLE_REASONING_EFFORT));
 
     Ok(())
 }
