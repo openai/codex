@@ -207,6 +207,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     message,
+                    true,
                 )
                 .await
             }
@@ -609,7 +610,7 @@ fn prepare_arc_request_action(
     invocation: &McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> serde_json::Value {
-    let request = build_guardian_mcp_tool_review_request(invocation, metadata);
+    let request = build_guardian_mcp_tool_review_request("arc-monitor", invocation, metadata);
     guardian_approval_request_to_json(&request)
 }
 
