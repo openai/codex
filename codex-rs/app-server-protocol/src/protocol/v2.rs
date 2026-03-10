@@ -4120,6 +4120,7 @@ pub enum ThreadItem {
         /// The duration of the command execution in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
+        approval: Option<ItemApprovalState>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4127,6 +4128,7 @@ pub enum ThreadItem {
         id: String,
         changes: Vec<FileUpdateChange>,
         status: PatchApplyStatus,
+        approval: Option<ItemApprovalState>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4141,6 +4143,7 @@ pub enum ThreadItem {
         /// The duration of the MCP tool call in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
+        approval: Option<ItemApprovalState>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4198,18 +4201,6 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    /// UNSTABLE: Guardian assessment items may evolve as the app UI settles.
-    GuardianAssessment {
-        id: String,
-        status: GuardianAssessmentStatus,
-        #[ts(type = "number | null")]
-        risk_score: Option<u8>,
-        risk_level: Option<GuardianRiskLevel>,
-        rationale: Option<String>,
-        action: Option<JsonValue>,
-    },
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
     EnteredReviewMode { id: String, review: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4234,7 +4225,6 @@ impl ThreadItem {
             | ThreadItem::WebSearch { id, .. }
             | ThreadItem::ImageView { id, .. }
             | ThreadItem::ImageGeneration { id, .. }
-            | ThreadItem::GuardianAssessment { id, .. }
             | ThreadItem::EnteredReviewMode { id, .. }
             | ThreadItem::ExitedReviewMode { id, .. }
             | ThreadItem::ContextCompaction { id, .. } => id,
@@ -4243,43 +4233,99 @@ impl ThreadItem {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// UNSTABLE: Guardian assessment status values are part of the evolving app UI surface.
-pub enum GuardianAssessmentStatus {
+pub enum ItemApprovalStatus {
+    Pending,
+    Approved,
+    Declined,
+    Cancelled,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ItemApprovalPendingKind {
+    ManualRequest,
+    AutomaticReview,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ItemApprovalResolvedBy {
+    User,
+    Automatic,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum AutomaticApprovalReviewStatus {
     InProgress,
     Approved,
     Denied,
 }
 
-impl From<CoreGuardianAssessmentStatus> for GuardianAssessmentStatus {
-    fn from(value: CoreGuardianAssessmentStatus) -> Self {
-        match value {
-            CoreGuardianAssessmentStatus::InProgress => Self::InProgress,
-            CoreGuardianAssessmentStatus::Approved => Self::Approved,
-            CoreGuardianAssessmentStatus::Denied => Self::Denied,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export_to = "v2/")]
-/// UNSTABLE: Guardian risk labels are part of the evolving app UI surface.
-pub enum GuardianRiskLevel {
+pub enum RiskLevel {
     Low,
     Medium,
     High,
 }
 
-impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
-    fn from(value: CoreGuardianRiskLevel) -> Self {
+impl From<CoreRiskLevel> for RiskLevel {
+    fn from(value: CoreRiskLevel) -> Self {
         match value {
-            CoreGuardianRiskLevel::Low => Self::Low,
-            CoreGuardianRiskLevel::Medium => Self::Medium,
-            CoreGuardianRiskLevel::High => Self::High,
+            CoreRiskLevel::Low => Self::Low,
+            CoreRiskLevel::Medium => Self::Medium,
+            CoreRiskLevel::High => Self::High,
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AutomaticApprovalReview {
+    pub status: AutomaticApprovalReviewStatus,
+    #[ts(type = "number | null")]
+    pub risk_score: Option<u8>,
+    pub risk_level: Option<RiskLevel>,
+    pub rationale: Option<String>,
+}
+
+impl AutomaticApprovalReview {
+    pub(crate) fn from_core_review_status(
+        status: CoreAutomaticReviewStatus,
+        risk_score: Option<u8>,
+        risk_level: Option<CoreRiskLevel>,
+        rationale: Option<String>,
+    ) -> Self {
+        let status = match status {
+            CoreAutomaticReviewStatus::InProgress => AutomaticApprovalReviewStatus::InProgress,
+            CoreAutomaticReviewStatus::Approved => AutomaticApprovalReviewStatus::Approved,
+            CoreAutomaticReviewStatus::Denied => AutomaticApprovalReviewStatus::Denied,
+        };
+        Self {
+            status,
+            risk_score,
+            risk_level: risk_level.map(Into::into),
+            rationale,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ItemApprovalState {
+    pub status: ItemApprovalStatus,
+    pub pending_kind: Option<ItemApprovalPendingKind>,
+    pub resolved_by: Option<ItemApprovalResolvedBy>,
+    pub automatic_review: Option<AutomaticApprovalReview>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4456,6 +4502,7 @@ pub enum McpToolCallStatus {
     InProgress,
     Completed,
     Failed,
+    Declined,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4717,6 +4764,15 @@ pub struct ItemStartedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ItemCompletedNotification {
+    pub item: ThreadItem,
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ItemUpdatedNotification {
     pub item: ThreadItem,
     pub thread_id: String,
     pub turn_id: String,

@@ -1,3 +1,4 @@
+use crate::protocol::v2::AutomaticApprovalReview;
 use crate::protocol::v2::CollabAgentState;
 use crate::protocol::v2::CollabAgentTool;
 use crate::protocol::v2::CollabAgentToolCallStatus;
@@ -6,8 +7,10 @@ use crate::protocol::v2::CommandExecutionStatus;
 use crate::protocol::v2::DynamicToolCallOutputContentItem;
 use crate::protocol::v2::DynamicToolCallStatus;
 use crate::protocol::v2::FileUpdateChange;
-use crate::protocol::v2::GuardianAssessmentStatus;
-use crate::protocol::v2::GuardianRiskLevel;
+use crate::protocol::v2::ItemApprovalPendingKind;
+use crate::protocol::v2::ItemApprovalResolvedBy;
+use crate::protocol::v2::ItemApprovalState;
+use crate::protocol::v2::ItemApprovalStatus;
 use crate::protocol::v2::McpToolCallError;
 use crate::protocol::v2::McpToolCallResult;
 use crate::protocol::v2::McpToolCallStatus;
@@ -20,6 +23,7 @@ use crate::protocol::v2::TurnError;
 use crate::protocol::v2::TurnStatus;
 use crate::protocol::v2::UserInput;
 use crate::protocol::v2::WebSearchAction;
+use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
@@ -30,6 +34,7 @@ use codex_protocol::protocol::ContextCompactedEvent;
 use codex_protocol::protocol::DynamicToolCallResponseEvent;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::GuardianAssessmentEvent;
@@ -41,6 +46,7 @@ use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
+use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadRolledBackEvent;
@@ -52,6 +58,7 @@ use codex_protocol::protocol::ViewImageToolCallEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -109,6 +116,10 @@ impl ThreadHistoryBuilder {
             .or_else(|| self.turns.last().cloned())
     }
 
+    pub fn item_snapshot(&self, turn_id: Option<&str>, item_id: &str) -> Option<ThreadItem> {
+        self.find_item(turn_id, item_id).cloned()
+    }
+
     pub fn has_active_turn(&self) -> bool {
         self.current_turn.is_some()
     }
@@ -132,6 +143,7 @@ impl ThreadHistoryBuilder {
             EventMsg::WebSearchEnd(payload) => self.handle_web_search_end(payload),
             EventMsg::ExecCommandBegin(payload) => self.handle_exec_command_begin(payload),
             EventMsg::ExecCommandEnd(payload) => self.handle_exec_command_end(payload),
+            EventMsg::ExecApprovalRequest(payload) => self.handle_exec_approval_request(payload),
             EventMsg::ApplyPatchApprovalRequest(payload) => {
                 self.handle_apply_patch_approval_request(payload)
             }
@@ -145,6 +157,8 @@ impl ThreadHistoryBuilder {
             }
             EventMsg::McpToolCallBegin(payload) => self.handle_mcp_tool_call_begin(payload),
             EventMsg::McpToolCallEnd(payload) => self.handle_mcp_tool_call_end(payload),
+            EventMsg::RequestUserInput(payload) => self.handle_request_user_input(payload),
+            EventMsg::ElicitationRequest(payload) => self.handle_elicitation_request(payload),
             EventMsg::ViewImageToolCall(payload) => self.handle_view_image_tool_call(payload),
             EventMsg::ImageGenerationBegin(payload) => self.handle_image_generation_begin(payload),
             EventMsg::ImageGenerationEnd(payload) => self.handle_image_generation_end(payload),
@@ -330,6 +344,10 @@ impl ThreadHistoryBuilder {
             .cloned()
             .map(CommandAction::from)
             .collect();
+        let approval = approved_on_item_start(
+            self.existing_item_approval(Some(payload.turn_id.as_str()), &payload.call_id)
+                .as_ref(),
+        );
         let item = ThreadItem::CommandExecution {
             id: payload.call_id.clone(),
             command,
@@ -340,6 +358,7 @@ impl ThreadHistoryBuilder {
             aggregated_output: None,
             exit_code: None,
             duration_ms: None,
+            approval,
         };
         self.upsert_item_in_turn_id(&payload.turn_id, item);
     }
@@ -360,6 +379,11 @@ impl ThreadHistoryBuilder {
             .cloned()
             .map(CommandAction::from)
             .collect();
+        let approval = resolved_item_approval(
+            self.existing_item_approval(Some(payload.turn_id.as_str()), &payload.call_id)
+                .as_ref(),
+            status == CommandExecutionStatus::Declined,
+        );
         let item = ThreadItem::CommandExecution {
             id: payload.call_id.clone(),
             command,
@@ -370,6 +394,7 @@ impl ThreadHistoryBuilder {
             aggregated_output,
             exit_code: Some(payload.exit_code),
             duration_ms: Some(duration_ms),
+            approval,
         };
         // Command completions can arrive out of order. Unified exec may return
         // while a PTY is still running, then emit ExecCommandEnd later from a
@@ -379,11 +404,36 @@ impl ThreadHistoryBuilder {
         self.upsert_item_in_turn_id(&payload.turn_id, item);
     }
 
+    fn handle_exec_approval_request(&mut self, payload: &ExecApprovalRequestEvent) {
+        let command = shlex::try_join(payload.command.iter().map(String::as_str))
+            .unwrap_or_else(|_| payload.command.join(" "));
+        let command_actions = payload
+            .parsed_cmd
+            .iter()
+            .cloned()
+            .map(CommandAction::from)
+            .collect();
+        let item = ThreadItem::CommandExecution {
+            id: payload.call_id.clone(),
+            command,
+            cwd: payload.cwd.clone(),
+            process_id: None,
+            status: CommandExecutionStatus::InProgress,
+            command_actions,
+            aggregated_output: None,
+            exit_code: None,
+            duration_ms: None,
+            approval: Some(pending_manual_approval_state()),
+        };
+        self.upsert_item_in_turn_id(&payload.turn_id, item);
+    }
+
     fn handle_apply_patch_approval_request(&mut self, payload: &ApplyPatchApprovalRequestEvent) {
         let item = ThreadItem::FileChange {
             id: payload.call_id.clone(),
             changes: convert_patch_changes(&payload.changes),
             status: PatchApplyStatus::InProgress,
+            approval: Some(pending_manual_approval_state()),
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -393,10 +443,15 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_patch_apply_begin(&mut self, payload: &PatchApplyBeginEvent) {
+        let approval = approved_on_item_start(
+            self.existing_item_approval(Some(payload.turn_id.as_str()), &payload.call_id)
+                .as_ref(),
+        );
         let item = ThreadItem::FileChange {
             id: payload.call_id.clone(),
             changes: convert_patch_changes(&payload.changes),
             status: PatchApplyStatus::InProgress,
+            approval,
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -407,10 +462,16 @@ impl ThreadHistoryBuilder {
 
     fn handle_patch_apply_end(&mut self, payload: &PatchApplyEndEvent) {
         let status: PatchApplyStatus = (&payload.status).into();
+        let approval = resolved_item_approval(
+            self.existing_item_approval(Some(payload.turn_id.as_str()), &payload.call_id)
+                .as_ref(),
+            status == PatchApplyStatus::Declined,
+        );
         let item = ThreadItem::FileChange {
             id: payload.call_id.clone(),
             changes: convert_patch_changes(&payload.changes),
             status,
+            approval,
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -463,6 +524,8 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_mcp_tool_call_begin(&mut self, payload: &McpToolCallBeginEvent) {
+        let approval =
+            approved_on_item_start(self.existing_item_approval(None, &payload.call_id).as_ref());
         let item = ThreadItem::McpToolCall {
             id: payload.call_id.clone(),
             server: payload.invocation.server.clone(),
@@ -476,6 +539,7 @@ impl ThreadHistoryBuilder {
             result: None,
             error: None,
             duration_ms: None,
+            approval,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -483,6 +547,13 @@ impl ThreadHistoryBuilder {
     fn handle_mcp_tool_call_end(&mut self, payload: &McpToolCallEndEvent) {
         let status = if payload.is_success() {
             McpToolCallStatus::Completed
+        } else if payload
+            .result
+            .as_ref()
+            .err()
+            .is_some_and(|message| is_declined_mcp_tool_call_message(message))
+        {
+            McpToolCallStatus::Declined
         } else {
             McpToolCallStatus::Failed
         };
@@ -502,6 +573,10 @@ impl ThreadHistoryBuilder {
                 }),
             ),
         };
+        let approval = resolved_item_approval(
+            self.existing_item_approval(None, &payload.call_id).as_ref(),
+            status == McpToolCallStatus::Declined,
+        );
         let item = ThreadItem::McpToolCall {
             id: payload.call_id.clone(),
             server: payload.invocation.server.clone(),
@@ -515,8 +590,29 @@ impl ThreadHistoryBuilder {
             result,
             error,
             duration_ms,
+            approval,
         };
         self.upsert_item_in_current_turn(item);
+    }
+
+    fn handle_request_user_input(&mut self, payload: &RequestUserInputEvent) {
+        self.update_mcp_tool_call_approval(
+            Some(payload.turn_id.as_str()),
+            &payload.call_id,
+            pending_manual_approval_state(),
+        );
+    }
+
+    fn handle_elicitation_request(&mut self, payload: &ElicitationRequestEvent) {
+        let request_id = payload.id.to_string();
+        let Some(call_id) = request_id.strip_prefix("mcp_tool_call_approval_") else {
+            return;
+        };
+        self.update_mcp_tool_call_approval(
+            payload.turn_id.as_deref(),
+            call_id,
+            pending_manual_approval_state(),
+        );
     }
 
     fn handle_view_image_tool_call(&mut self, payload: &ViewImageToolCallEvent) {
@@ -548,19 +644,29 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_guardian_assessment(&mut self, payload: &GuardianAssessmentEvent) {
-        let item = ThreadItem::GuardianAssessment {
-            id: payload.id.clone(),
-            status: GuardianAssessmentStatus::from(payload.status),
-            risk_score: payload.risk_score,
-            risk_level: payload.risk_level.map(GuardianRiskLevel::from),
-            rationale: payload.rationale.clone(),
-            action: payload.action.clone(),
-        };
-        if payload.turn_id.is_empty() {
-            self.upsert_item_in_current_turn(item);
-        } else {
-            self.upsert_item_in_turn_id(&payload.turn_id, item);
+        let approval = automatic_approval_state(payload);
+        let turn_id = (!payload.turn_id.is_empty()).then_some(payload.turn_id.as_str());
+        if self.find_item(turn_id, &payload.id).is_none()
+            && let Some(action) = payload.action.as_ref()
+            && let Some(item) =
+                thread_item_from_guardian_assessment_action(&payload.id, action, approval.clone())
+        {
+            if let Some(turn_id) = turn_id {
+                self.upsert_item_in_turn_id(turn_id, item);
+            } else {
+                self.upsert_item_in_current_turn(item);
+            }
+            return;
         }
+        self.update_item_approval(
+            turn_id,
+            &payload.id,
+            approval,
+            matches!(
+                payload.status,
+                codex_protocol::protocol::GuardianAssessmentStatus::Denied
+            ),
+        );
     }
 
     fn handle_collab_agent_spawn_begin(
@@ -992,6 +1098,128 @@ impl ThreadHistoryBuilder {
         upsert_turn_item(&mut turn.items, item);
     }
 
+    fn existing_item_approval(
+        &self,
+        turn_id: Option<&str>,
+        item_id: &str,
+    ) -> Option<ItemApprovalState> {
+        self.find_item(turn_id, item_id)
+            .and_then(thread_item_approval)
+            .cloned()
+    }
+
+    fn find_item(&self, turn_id: Option<&str>, item_id: &str) -> Option<&ThreadItem> {
+        if let Some(turn_id) = turn_id {
+            if let Some(turn) = self.current_turn.as_ref()
+                && turn.id == turn_id
+            {
+                return turn.items.iter().find(|item| item.id() == item_id);
+            }
+
+            return self
+                .turns
+                .iter()
+                .find(|turn| turn.id == turn_id)
+                .and_then(|turn| turn.items.iter().find(|item| item.id() == item_id));
+        }
+
+        self.current_turn
+            .as_ref()
+            .and_then(|turn| turn.items.iter().find(|item| item.id() == item_id))
+            .or_else(|| {
+                self.turns
+                    .iter()
+                    .rev()
+                    .find_map(|turn| turn.items.iter().find(|item| item.id() == item_id))
+            })
+    }
+
+    fn update_mcp_tool_call_approval(
+        &mut self,
+        turn_id: Option<&str>,
+        item_id: &str,
+        approval: ItemApprovalState,
+    ) {
+        self.update_item_approval(turn_id, item_id, approval, false);
+    }
+
+    fn update_item_approval(
+        &mut self,
+        turn_id: Option<&str>,
+        item_id: &str,
+        approval: ItemApprovalState,
+        mark_declined: bool,
+    ) {
+        let update = |item: &mut ThreadItem| match item {
+            ThreadItem::CommandExecution {
+                status,
+                approval: existing_approval,
+                ..
+            } => {
+                if mark_declined {
+                    *status = CommandExecutionStatus::Declined;
+                }
+                *existing_approval = Some(approval);
+            }
+            ThreadItem::FileChange {
+                status,
+                approval: existing_approval,
+                ..
+            } => {
+                if mark_declined {
+                    *status = PatchApplyStatus::Declined;
+                }
+                *existing_approval = Some(approval);
+            }
+            ThreadItem::McpToolCall {
+                status,
+                approval: existing_approval,
+                ..
+            } => {
+                if mark_declined {
+                    *status = McpToolCallStatus::Declined;
+                }
+                *existing_approval = Some(approval);
+            }
+            _ => {}
+        };
+
+        if let Some(turn_id) = turn_id {
+            if let Some(turn) = self.current_turn.as_mut()
+                && turn.id == turn_id
+                && let Some(item) = turn.items.iter_mut().find(|item| item.id() == item_id)
+            {
+                update(item);
+                return;
+            }
+
+            if let Some(turn) = self.turns.iter_mut().find(|turn| turn.id == turn_id)
+                && let Some(item) = turn.items.iter_mut().find(|item| item.id() == item_id)
+            {
+                update(item);
+                return;
+            }
+            return;
+        }
+
+        if let Some(turn) = self.current_turn.as_mut()
+            && let Some(item) = turn.items.iter_mut().find(|item| item.id() == item_id)
+        {
+            update(item);
+            return;
+        }
+
+        if let Some(turn) = self
+            .turns
+            .iter_mut()
+            .rev()
+            .find(|turn| turn.items.iter().any(|item| item.id() == item_id))
+            && let Some(item) = turn.items.iter_mut().find(|item| item.id() == item_id)
+        {
+            update(item);
+        }
+    }
+
     fn next_item_id(&mut self) -> String {
         let id = format!("item-{}", self.next_item_index);
         self.next_item_index += 1;
@@ -1098,10 +1326,313 @@ fn upsert_turn_item(items: &mut Vec<ThreadItem>, item: ThreadItem) {
         .iter_mut()
         .find(|existing_item| existing_item.id() == item.id())
     {
-        *existing_item = item;
+        *existing_item = preserve_existing_approval(existing_item, item);
         return;
     }
     items.push(item);
+}
+
+fn preserve_existing_approval(existing_item: &ThreadItem, item: ThreadItem) -> ThreadItem {
+    match (existing_item, item) {
+        (
+            ThreadItem::CommandExecution {
+                approval: existing_approval,
+                ..
+            },
+            ThreadItem::CommandExecution {
+                id,
+                command,
+                cwd,
+                process_id,
+                status,
+                command_actions,
+                aggregated_output,
+                exit_code,
+                duration_ms,
+                approval,
+            },
+        ) => ThreadItem::CommandExecution {
+            id,
+            command,
+            cwd,
+            process_id,
+            status,
+            command_actions,
+            aggregated_output,
+            exit_code,
+            duration_ms,
+            approval: approval.or_else(|| existing_approval.clone()),
+        },
+        (
+            ThreadItem::FileChange {
+                approval: existing_approval,
+                ..
+            },
+            ThreadItem::FileChange {
+                id,
+                changes,
+                status,
+                approval,
+            },
+        ) => ThreadItem::FileChange {
+            id,
+            changes,
+            status,
+            approval: approval.or_else(|| existing_approval.clone()),
+        },
+        (
+            ThreadItem::McpToolCall {
+                approval: existing_approval,
+                ..
+            },
+            ThreadItem::McpToolCall {
+                id,
+                server,
+                tool,
+                status,
+                arguments,
+                result,
+                error,
+                duration_ms,
+                approval,
+            },
+        ) => ThreadItem::McpToolCall {
+            id,
+            server,
+            tool,
+            status,
+            arguments,
+            result,
+            error,
+            duration_ms,
+            approval: approval.or_else(|| existing_approval.clone()),
+        },
+        (_, item) => item,
+    }
+}
+
+fn thread_item_approval(item: &ThreadItem) -> Option<&ItemApprovalState> {
+    match item {
+        ThreadItem::CommandExecution { approval, .. }
+        | ThreadItem::FileChange { approval, .. }
+        | ThreadItem::McpToolCall { approval, .. } => approval.as_ref(),
+        ThreadItem::UserMessage { .. }
+        | ThreadItem::AgentMessage { .. }
+        | ThreadItem::Plan { .. }
+        | ThreadItem::Reasoning { .. }
+        | ThreadItem::DynamicToolCall { .. }
+        | ThreadItem::CollabAgentToolCall { .. }
+        | ThreadItem::WebSearch { .. }
+        | ThreadItem::ImageView { .. }
+        | ThreadItem::ImageGeneration { .. }
+        | ThreadItem::EnteredReviewMode { .. }
+        | ThreadItem::ExitedReviewMode { .. }
+        | ThreadItem::ContextCompaction { .. } => None,
+    }
+}
+
+fn pending_manual_approval_state() -> ItemApprovalState {
+    ItemApprovalState {
+        status: ItemApprovalStatus::Pending,
+        pending_kind: Some(ItemApprovalPendingKind::ManualRequest),
+        resolved_by: None,
+        automatic_review: None,
+    }
+}
+
+fn approved_on_item_start(existing: Option<&ItemApprovalState>) -> Option<ItemApprovalState> {
+    match existing {
+        Some(ItemApprovalState {
+            status: ItemApprovalStatus::Pending,
+            pending_kind: Some(ItemApprovalPendingKind::ManualRequest),
+            ..
+        }) => Some(ItemApprovalState {
+            status: ItemApprovalStatus::Approved,
+            pending_kind: None,
+            resolved_by: Some(ItemApprovalResolvedBy::User),
+            automatic_review: None,
+        }),
+        Some(existing) => Some(existing.clone()),
+        None => None,
+    }
+}
+
+fn resolved_item_approval(
+    existing: Option<&ItemApprovalState>,
+    declined: bool,
+) -> Option<ItemApprovalState> {
+    match existing {
+        Some(ItemApprovalState {
+            status: ItemApprovalStatus::Pending,
+            pending_kind: Some(ItemApprovalPendingKind::ManualRequest),
+            ..
+        }) => Some(ItemApprovalState {
+            status: if declined {
+                ItemApprovalStatus::Declined
+            } else {
+                ItemApprovalStatus::Approved
+            },
+            pending_kind: None,
+            resolved_by: Some(ItemApprovalResolvedBy::User),
+            automatic_review: None,
+        }),
+        Some(existing) => Some(existing.clone()),
+        None => None,
+    }
+}
+
+fn automatic_approval_state(payload: &GuardianAssessmentEvent) -> ItemApprovalState {
+    match payload.status {
+        codex_protocol::protocol::GuardianAssessmentStatus::InProgress => ItemApprovalState {
+            status: ItemApprovalStatus::Pending,
+            pending_kind: Some(ItemApprovalPendingKind::AutomaticReview),
+            resolved_by: None,
+            automatic_review: Some(AutomaticApprovalReview::from_core_review_status(
+                payload.status,
+                payload.risk_score,
+                payload.risk_level,
+                payload.rationale.clone(),
+            )),
+        },
+        codex_protocol::protocol::GuardianAssessmentStatus::Approved => ItemApprovalState {
+            status: ItemApprovalStatus::Approved,
+            pending_kind: None,
+            resolved_by: Some(ItemApprovalResolvedBy::Automatic),
+            automatic_review: Some(AutomaticApprovalReview::from_core_review_status(
+                payload.status,
+                payload.risk_score,
+                payload.risk_level,
+                payload.rationale.clone(),
+            )),
+        },
+        codex_protocol::protocol::GuardianAssessmentStatus::Denied => ItemApprovalState {
+            status: ItemApprovalStatus::Declined,
+            pending_kind: None,
+            resolved_by: Some(ItemApprovalResolvedBy::Automatic),
+            automatic_review: Some(AutomaticApprovalReview::from_core_review_status(
+                payload.status,
+                payload.risk_score,
+                payload.risk_level,
+                payload.rationale.clone(),
+            )),
+        },
+    }
+}
+
+fn thread_item_from_guardian_assessment_action(
+    item_id: &str,
+    action: &serde_json::Value,
+    approval: ItemApprovalState,
+) -> Option<ThreadItem> {
+    let status = approval.status;
+    let tool = action.get("tool")?.as_str()?;
+    match tool {
+        "shell" | "exec_command" => Some(ThreadItem::CommandExecution {
+            id: item_id.to_string(),
+            command: guardian_action_command(action)?,
+            cwd: action
+                .get("cwd")
+                .and_then(serde_json::Value::as_str)
+                .map(PathBuf::from)?,
+            process_id: None,
+            status: if status == ItemApprovalStatus::Declined {
+                CommandExecutionStatus::Declined
+            } else {
+                CommandExecutionStatus::InProgress
+            },
+            command_actions: Vec::new(),
+            aggregated_output: None,
+            exit_code: None,
+            duration_ms: None,
+            approval: Some(approval),
+        }),
+        "apply_patch" => Some(ThreadItem::FileChange {
+            id: item_id.to_string(),
+            changes: guardian_action_changes(action),
+            status: if status == ItemApprovalStatus::Declined {
+                PatchApplyStatus::Declined
+            } else {
+                PatchApplyStatus::InProgress
+            },
+            approval: Some(approval),
+        }),
+        "mcp_tool_call" => Some(ThreadItem::McpToolCall {
+            id: item_id.to_string(),
+            server: action
+                .get("server")
+                .and_then(serde_json::Value::as_str)?
+                .to_string(),
+            tool: action
+                .get("tool_name")
+                .and_then(serde_json::Value::as_str)?
+                .to_string(),
+            status: if status == ItemApprovalStatus::Declined {
+                McpToolCallStatus::Declined
+            } else {
+                McpToolCallStatus::InProgress
+            },
+            arguments: action
+                .get("arguments")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+            result: None,
+            error: None,
+            duration_ms: None,
+            approval: Some(approval),
+        }),
+        _ => None,
+    }
+}
+
+fn guardian_action_command(action: &serde_json::Value) -> Option<String> {
+    match action.get("command")? {
+        serde_json::Value::String(command) => Some(command.clone()),
+        serde_json::Value::Array(command) => {
+            let args = command
+                .iter()
+                .map(serde_json::Value::as_str)
+                .collect::<Option<Vec<_>>>()?;
+            shlex::try_join(args.iter().copied())
+                .ok()
+                .or_else(|| Some(args.join(" ")))
+        }
+        _ => None,
+    }
+}
+
+fn guardian_action_changes(action: &serde_json::Value) -> Vec<FileUpdateChange> {
+    action
+        .get("changes")
+        .and_then(serde_json::Value::as_array)
+        .map(|changes| {
+            changes
+                .iter()
+                .filter_map(|change| {
+                    let path = change.get("path")?.as_str()?.to_string();
+                    let diff = change.get("diff")?.as_str()?.to_string();
+                    let kind = match change.get("kind")?.as_str()? {
+                        "add" => PatchChangeKind::Add,
+                        "delete" => PatchChangeKind::Delete,
+                        "update" => PatchChangeKind::Update {
+                            move_path: change
+                                .get("move_path")
+                                .and_then(serde_json::Value::as_str)
+                                .map(PathBuf::from),
+                        },
+                        _ => return None,
+                    };
+                    Some(FileUpdateChange { path, kind, diff })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn is_declined_mcp_tool_call_message(message: &str) -> bool {
+    matches!(
+        message,
+        "user rejected MCP tool call" | "user cancelled MCP tool call"
+    )
 }
 
 struct PendingTurn {
@@ -1154,6 +1685,8 @@ impl From<&PendingTurn> for Turn {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::v2::AutomaticApprovalReviewStatus;
+    use crate::protocol::v2::RiskLevel;
     use codex_protocol::ThreadId;
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
     use codex_protocol::items::TurnItem as CoreTurnItem;
@@ -1744,6 +2277,7 @@ mod tests {
                 aggregated_output: Some("hello world\n".into()),
                 exit_code: Some(0),
                 duration_ms: Some(12),
+                approval: None,
             }
         );
         assert_eq!(
@@ -1759,6 +2293,7 @@ mod tests {
                     message: "boom".into(),
                 }),
                 duration_ms: Some(8),
+                approval: None,
             }
         );
     }
@@ -1854,7 +2389,8 @@ mod tests {
                 rationale: Some("Would exfiltrate local source code.".into()),
                 action: Some(serde_json::json!({
                     "tool": "shell",
-                    "command": ["curl", "-X", "POST", "https://example.com"],
+                    "command": "curl -X POST https://example.com",
+                    "cwd": "/repo/codex-rs/core",
                 })),
             }),
         ];
@@ -1868,16 +2404,27 @@ mod tests {
         assert_eq!(turns.len(), 1);
         assert_eq!(
             turns[0].items[1],
-            ThreadItem::GuardianAssessment {
+            ThreadItem::CommandExecution {
                 id: "guardian-1".into(),
-                status: GuardianAssessmentStatus::Denied,
-                risk_score: Some(96),
-                risk_level: Some(GuardianRiskLevel::High),
-                rationale: Some("Would exfiltrate local source code.".into()),
-                action: Some(serde_json::json!({
-                    "tool": "shell",
-                    "command": ["curl", "-X", "POST", "https://example.com"],
-                })),
+                command: "curl -X POST https://example.com".into(),
+                cwd: PathBuf::from("/repo/codex-rs/core"),
+                process_id: None,
+                status: CommandExecutionStatus::Declined,
+                command_actions: Vec::new(),
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+                approval: Some(ItemApprovalState {
+                    status: ItemApprovalStatus::Declined,
+                    pending_kind: None,
+                    resolved_by: Some(ItemApprovalResolvedBy::Automatic),
+                    automatic_review: Some(AutomaticApprovalReview {
+                        status: AutomaticApprovalReviewStatus::Denied,
+                        risk_score: Some(96),
+                        risk_level: Some(RiskLevel::High),
+                        rationale: Some("Would exfiltrate local source code.".into()),
+                    }),
+                }),
             }
         );
     }
@@ -1952,6 +2499,12 @@ mod tests {
                 aggregated_output: Some("exec command rejected by user".into()),
                 exit_code: Some(-1),
                 duration_ms: Some(0),
+                approval: Some(ItemApprovalState {
+                    status: ItemApprovalStatus::Declined,
+                    pending_kind: None,
+                    resolved_by: Some(ItemApprovalResolvedBy::User),
+                    automatic_review: None,
+                }),
             }
         );
         assert_eq!(
@@ -1964,6 +2517,12 @@ mod tests {
                     diff: "hello\n".into(),
                 }],
                 status: PatchApplyStatus::Declined,
+                approval: Some(ItemApprovalState {
+                    status: ItemApprovalStatus::Declined,
+                    pending_kind: None,
+                    resolved_by: Some(ItemApprovalResolvedBy::User),
+                    automatic_review: None,
+                }),
             }
         );
     }
@@ -2046,6 +2605,7 @@ mod tests {
                 aggregated_output: Some("done\n".into()),
                 exit_code: Some(0),
                 duration_ms: Some(5),
+                approval: None,
             }
         );
     }
@@ -2184,6 +2744,12 @@ mod tests {
                         diff: "hello\n".into(),
                     }],
                     status: PatchApplyStatus::InProgress,
+                    approval: Some(ItemApprovalState {
+                        status: ItemApprovalStatus::Pending,
+                        pending_kind: Some(ItemApprovalPendingKind::ManualRequest),
+                        resolved_by: None,
+                        automatic_review: None,
+                    }),
                 },
             ]
         );
@@ -2248,6 +2814,12 @@ mod tests {
                         diff: "hello\n".into(),
                     }],
                     status: PatchApplyStatus::InProgress,
+                    approval: Some(ItemApprovalState {
+                        status: ItemApprovalStatus::Pending,
+                        pending_kind: Some(ItemApprovalPendingKind::ManualRequest),
+                        resolved_by: None,
+                        automatic_review: None,
+                    }),
                 },
             ]
         );
