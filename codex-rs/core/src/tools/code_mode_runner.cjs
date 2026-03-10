@@ -161,6 +161,95 @@ function createToolsModule(context, callTool, enabledTools) {
   );
 }
 
+function ensureContentItems(context) {
+  if (!Array.isArray(context.__codexContentItems)) {
+    context.__codexContentItems = [];
+  }
+  return context.__codexContentItems;
+}
+
+function serializeOutputText(value) {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (
+    typeof value === 'undefined' ||
+    value === null ||
+    typeof value === 'boolean' ||
+    typeof value === 'number' ||
+    typeof value === 'bigint'
+  ) {
+    return String(value);
+  }
+
+  const serialized = JSON.stringify(value);
+  if (typeof serialized === 'string') {
+    return serialized;
+  }
+
+  return String(value);
+}
+
+function normalizeOutputImageUrl(value) {
+  if (typeof value !== 'string' || !value) {
+    throw new TypeError('output_image expects a non-empty image URL string');
+  }
+  if (/^(?:https?:\/\/|data:)/i.test(value)) {
+    return value;
+  }
+  throw new TypeError('output_image expects an http(s) or data URL');
+}
+
+function createCodeModeModule(context, state) {
+  const load = (key) => {
+    if (typeof key !== 'string') {
+      throw new TypeError('load key must be a string');
+    }
+    if (!Object.prototype.hasOwnProperty.call(state.storedValues, key)) {
+      return undefined;
+    }
+    return cloneJsonValue(state.storedValues[key]);
+  };
+  const store = (key, value) => {
+    if (typeof key !== 'string') {
+      throw new TypeError('store key must be a string');
+    }
+    state.storedValues[key] = cloneJsonValue(value);
+  };
+  const outputText = (value) => {
+    const item = {
+      type: 'input_text',
+      text: serializeOutputText(value),
+    };
+    ensureContentItems(context).push(item);
+    return item;
+  };
+  const outputImage = (value) => {
+    const item = {
+      type: 'input_image',
+      image_url: normalizeOutputImageUrl(value),
+    };
+    ensureContentItems(context).push(item);
+    return item;
+  };
+
+  return new SyntheticModule(
+    ['load', 'output_text', 'output_image', 'set_max_output_tokens_per_exec_call', 'store'],
+    function initCodeModeModule() {
+      this.setExport('load', load);
+      this.setExport('output_text', outputText);
+      this.setExport('output_image', outputImage);
+      this.setExport('set_max_output_tokens_per_exec_call', (value) => {
+        const normalized = normalizeMaxOutputTokensPerExecCall(value);
+        state.maxOutputTokensPerExecCall = normalized;
+        return normalized;
+      });
+      this.setExport('store', store);
+    },
+    { context }
+  );
+}
+
 function namespacesMatch(left, right) {
   if (left.length !== right.length) {
     return false;
@@ -209,39 +298,6 @@ function createNamespacedToolsModule(context, callTool, enabledTools, namespace)
           this.setExport(exportName, tools[exportName]);
         }
       }
-    },
-    { context }
-  );
-}
-
-function createCodeModeModule(context, state) {
-  const load = (key) => {
-    if (typeof key !== 'string') {
-      throw new TypeError('load key must be a string');
-    }
-    if (!Object.prototype.hasOwnProperty.call(state.storedValues, key)) {
-      return undefined;
-    }
-    return cloneJsonValue(state.storedValues[key]);
-  };
-
-  const store = (key, value) => {
-    if (typeof key !== 'string') {
-      throw new TypeError('store key must be a string');
-    }
-    state.storedValues[key] = cloneJsonValue(value);
-  };
-
-  return new SyntheticModule(
-    ['load', 'set_max_output_tokens_per_exec_call', 'store'],
-    function initCodeModeModule() {
-      this.setExport('load', load);
-      this.setExport('set_max_output_tokens_per_exec_call', (value) => {
-        const normalized = normalizeMaxOutputTokensPerExecCall(value);
-        state.maxOutputTokensPerExecCall = normalized;
-        return normalized;
-      });
-      this.setExport('store', store);
     },
     { context }
   );
@@ -308,6 +364,7 @@ async function main() {
   };
   const callTool = createToolCaller(protocol);
   const context = vm.createContext({
+    __codexContentItems: [],
     __codex_tool_call: callTool,
   });
 

@@ -222,6 +222,113 @@ Total\ output\ lines:\ 1\n
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_can_output_serialized_text_via_openai_code_mode_module() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use code_mode to return structured text",
+        r#"
+import { output_text } from "@openai/code_mode";
+
+output_text({ json: true });
+"#,
+        false,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "code_mode call failed unexpectedly: {output}"
+    );
+    assert_eq!(output, r#"{"json":true}"#);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_surfaces_output_text_stringify_errors() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use code_mode to return circular text",
+        r#"
+import { output_text } from "@openai/code_mode";
+
+const circular = {};
+circular.self = circular;
+output_text(circular);
+"#,
+        false,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(true),
+        "circular stringify unexpectedly succeeded"
+    );
+    assert!(output.contains("code_mode execution failed"));
+    assert!(output.contains("Converting circular structure to JSON"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_can_output_images_via_openai_code_mode_module() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use code_mode to return images",
+        r#"
+import { output_image } from "@openai/code_mode";
+
+output_image("https://example.com/image.jpg");
+output_image("data:image/png;base64,AAA");
+"#,
+        false,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (_, success) = custom_tool_output_text_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "code_mode image output failed unexpectedly"
+    );
+    assert_eq!(
+        req.custom_tool_call_output("call-1"),
+        serde_json::json!({
+            "type": "custom_tool_call_output",
+            "call_id": "call-1",
+            "output": [
+                {
+                    "type": "input_image",
+                    "image_url": "https://example.com/image.jpg"
+                },
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,AAA"
+                }
+            ]
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

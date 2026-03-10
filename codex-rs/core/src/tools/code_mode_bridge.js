@@ -1,6 +1,8 @@
 const __codexEnabledTools = __CODE_MODE_ENABLED_TOOLS_PLACEHOLDER__;
 const __codexEnabledToolNames = __codexEnabledTools.map((tool) => tool.tool_name);
-const __codexContentItems = [];
+const __codexContentItems = Array.isArray(globalThis.__codexContentItems)
+  ? globalThis.__codexContentItems
+  : [];
 
 function __codexCloneContentItem(item) {
   if (!item || typeof item !== 'object') {
