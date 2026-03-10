@@ -572,24 +572,6 @@ impl ChatComposer {
         self.sync_popups();
     }
 
-    #[cfg(test)]
-    pub(crate) fn take_mention_bindings(&mut self) -> Vec<MentionBinding> {
-        let elements = self.current_mention_elements();
-        let mut ordered = Vec::new();
-        for (id, mention) in elements {
-            if let Some(binding) = self.mention_bindings.remove(&id)
-                && binding.mention == mention
-            {
-                ordered.push(MentionBinding {
-                    mention: binding.mention,
-                    path: binding.path,
-                });
-            }
-        }
-        self.mention_bindings.clear();
-        ordered
-    }
-
     pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
         self.collaboration_modes_enabled = enabled;
     }
@@ -7599,7 +7581,7 @@ mod tests {
             composer.take_recent_submission_mention_bindings(),
             mention_bindings
         );
-        assert!(composer.take_mention_bindings().is_empty());
+        assert!(composer.mention_bindings().is_empty());
     }
 
     #[test]

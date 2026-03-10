@@ -1106,7 +1106,10 @@ async fn blocked_image_restore_preserves_mention_bindings() {
         chat.bottom_pane.composer_local_image_paths(),
         vec![local_images[0].path.clone()],
     );
-    assert_eq!(chat.bottom_pane.take_mention_bindings(), mention_bindings);
+    assert_eq!(
+        chat.bottom_pane.composer_mention_bindings(),
+        mention_bindings
+    );
 
     let cells = drain_insert_history(&mut rx);
     let warning = cells
@@ -4616,7 +4619,10 @@ async fn manual_interrupt_restores_pending_steer_mention_bindings_to_composer() 
     chat.on_interrupted_turn(TurnAbortReason::Interrupted);
 
     assert_eq!(chat.bottom_pane.composer_text(), "please use $figma");
-    assert_eq!(chat.bottom_pane.take_mention_bindings(), mention_bindings);
+    assert_eq!(
+        chat.bottom_pane.composer_mention_bindings(),
+        mention_bindings
+    );
     assert_no_submit_op(&mut op_rx);
 }
 
