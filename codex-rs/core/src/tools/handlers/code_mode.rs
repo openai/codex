@@ -3,9 +3,8 @@ use async_trait::async_trait;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::code_mode;
-use crate::tools::context::ContentToolOutput;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -14,6 +13,8 @@ pub struct CodeModeHandler;
 
 #[async_trait]
 impl ToolHandler for CodeModeHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -22,7 +23,7 @@ impl ToolHandler for CodeModeHandler {
         matches!(payload, ToolPayload::Custom { .. })
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -47,9 +48,6 @@ impl ToolHandler for CodeModeHandler {
         };
 
         let content_items = code_mode::execute(session, turn, tracker, code).await?;
-        Ok(Box::new(ContentToolOutput {
-            content: content_items,
-            success: Some(true),
-        }))
+        Ok(FunctionToolOutput::from_content(content_items, Some(true)))
     }
 }
