@@ -1438,6 +1438,10 @@ impl Renderable for McpServerElicitationOverlay {
 }
 
 impl BottomPaneView for McpServerElicitationOverlay {
+    fn thread_id(&self) -> Option<ThreadId> {
+        Some(self.request.thread_id)
+    }
+
     fn preserve_on_turn_interrupt(&self) -> bool {
         true
     }

@@ -2075,7 +2075,9 @@ impl ChatWidget {
             // The in-process agent clears pending turn-scoped approvals as part of turn abort
             // handling. Preserve MCP elicitation overlays because those requests can outlive the
             // interrupted turn and still need a local response.
-            self.bottom_pane.dismiss_turn_scoped_views();
+            if let Some(thread_id) = self.thread_id {
+                self.bottom_pane.dismiss_turn_scoped_views(thread_id);
+            }
         }
         let send_pending_steers_immediately = self.submit_pending_steers_after_interrupt;
         self.submit_pending_steers_after_interrupt = false;

@@ -2,6 +2,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::bottom_pane::ThreadUserInputRequest;
 use crate::render::renderable::Renderable;
+use codex_protocol::ThreadId;
 use crossterm::event::KeyEvent;
 
 use super::CancellationEvent;
@@ -92,5 +93,10 @@ pub(crate) trait BottomPaneView: Renderable {
     /// turn-scoped approvals.
     fn preserve_on_turn_interrupt(&self) -> bool {
         false
+    }
+
+    /// Owning thread for overlays scoped to a specific Codex thread.
+    fn thread_id(&self) -> Option<ThreadId> {
+        None
     }
 }

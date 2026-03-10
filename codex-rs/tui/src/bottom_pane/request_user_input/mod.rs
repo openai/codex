@@ -1038,6 +1038,10 @@ impl RequestUserInputOverlay {
 }
 
 impl BottomPaneView for RequestUserInputOverlay {
+    fn thread_id(&self) -> Option<ThreadId> {
+        Some(self.thread_id)
+    }
+
     fn prefer_esc_to_handle_key_event(&self) -> bool {
         true
     }

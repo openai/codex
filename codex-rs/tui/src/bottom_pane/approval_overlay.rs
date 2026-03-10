@@ -476,6 +476,13 @@ impl ApprovalOverlay {
 }
 
 impl BottomPaneView for ApprovalOverlay {
+    fn thread_id(&self) -> Option<ThreadId> {
+        self.current_request
+            .as_ref()
+            .map(ApprovalRequest::thread_id)
+            .or_else(|| self.queue.first().map(ApprovalRequest::thread_id))
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.try_handle_shortcut(&key_event) {
             return;

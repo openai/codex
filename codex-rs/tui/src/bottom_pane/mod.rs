@@ -54,7 +54,7 @@ pub(crate) use app_link_view::AppLinkView;
 pub(crate) use app_link_view::AppLinkViewParams;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
-pub(crate) use approval_overlay::format_additional_permissions_rule;
+pub(crate) use approval_overlay::permission_request_lines;
 pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
 pub(crate) use request_user_input::RequestUserInputOverlay;
@@ -812,13 +812,6 @@ impl BottomPane {
         true
     }
 
-    pub(crate) fn selected_index_for_active_view(&self, view_id: &'static str) -> Option<usize> {
-        self.view_stack
-            .last()
-            .filter(|view| view.view_id() == Some(view_id))
-            .and_then(|view| view.selected_index())
-    }
-
     /// Update the pending-input preview shown above the composer.
     pub(crate) fn set_pending_input_preview(
         &mut self,
@@ -837,13 +830,20 @@ impl BottomPane {
         }
     }
 
-    pub(crate) fn dismiss_turn_scoped_views(&mut self) {
+    /// Remove bottom-pane views owned by the interrupted thread unless they
+    /// explicitly outlive turn interrupts. Non-thread-scoped views are still
+    /// dismissed to preserve historical interrupt behavior.
+    pub(crate) fn dismiss_turn_scoped_views(&mut self, interrupted_thread_id: ThreadId) {
         if self.view_stack.is_empty() {
             return;
         }
 
-        self.view_stack
-            .retain(|view| view.preserve_on_turn_interrupt());
+        self.view_stack.retain(|view| {
+            view.preserve_on_turn_interrupt()
+                || view
+                    .thread_id()
+                    .is_some_and(|thread_id| thread_id != interrupted_thread_id)
+        });
         if self.view_stack.is_empty() {
             self.on_active_view_complete();
         }
@@ -1262,6 +1262,7 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use std::cell::Cell;
+    use std::cell::RefCell;
     use std::path::PathBuf;
     use std::rc::Rc;
     use tokio::sync::mpsc::unbounded_channel;
@@ -1978,5 +1979,85 @@ mod tests {
         ));
 
         assert_eq!(handle_calls.get(), 1);
+    }
+
+    #[test]
+    fn dismiss_turn_scoped_views_only_clears_interrupted_thread() {
+        struct TestView {
+            label: &'static str,
+            thread_id: Option<ThreadId>,
+            preserve_on_interrupt: bool,
+            dropped: Rc<RefCell<Vec<&'static str>>>,
+        }
+
+        impl Drop for TestView {
+            fn drop(&mut self) {
+                self.dropped.borrow_mut().push(self.label);
+            }
+        }
+
+        impl Renderable for TestView {
+            fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+
+            fn desired_height(&self, _width: u16) -> u16 {
+                0
+            }
+        }
+
+        impl BottomPaneView for TestView {
+            fn preserve_on_turn_interrupt(&self) -> bool {
+                self.preserve_on_interrupt
+            }
+
+            fn thread_id(&self) -> Option<ThreadId> {
+                self.thread_id
+            }
+        }
+
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        let dropped = Rc::new(RefCell::new(Vec::new()));
+        let interrupted_thread_id = ThreadId::new();
+        let other_thread_id = ThreadId::new();
+        pane.push_view(Box::new(TestView {
+            label: "other-thread",
+            thread_id: Some(other_thread_id),
+            preserve_on_interrupt: false,
+            dropped: Rc::clone(&dropped),
+        }));
+        pane.push_view(Box::new(TestView {
+            label: "preserved",
+            thread_id: Some(interrupted_thread_id),
+            preserve_on_interrupt: true,
+            dropped: Rc::clone(&dropped),
+        }));
+        pane.push_view(Box::new(TestView {
+            label: "interrupted-thread",
+            thread_id: Some(interrupted_thread_id),
+            preserve_on_interrupt: false,
+            dropped: Rc::clone(&dropped),
+        }));
+        pane.push_view(Box::new(TestView {
+            label: "unscoped",
+            thread_id: None,
+            preserve_on_interrupt: false,
+            dropped: Rc::clone(&dropped),
+        }));
+
+        pane.dismiss_turn_scoped_views(interrupted_thread_id);
+
+        assert_eq!(*dropped.borrow(), vec!["interrupted-thread", "unscoped"]);
+        assert!(pane.has_active_view());
     }
 }
