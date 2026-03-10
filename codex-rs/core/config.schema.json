@@ -376,9 +376,6 @@
             "enable_experimental_windows_sandbox": {
               "type": "boolean"
             },
-            "enable_fanout": {
-              "type": "boolean"
-            },
             "enable_request_compression": {
               "type": "boolean"
             },
@@ -395,9 +392,6 @@
               "type": "boolean"
             },
             "fast_mode": {
-              "type": "boolean"
-            },
-            "guardian_approval": {
               "type": "boolean"
             },
             "image_detail_original": {
@@ -476,6 +470,12 @@
               "type": "boolean"
             },
             "skill_mcp_dependency_install": {
+              "type": "boolean"
+            },
+            "smart_approvals": {
+              "type": "boolean"
+            },
+            "spawn_csv": {
               "type": "boolean"
             },
             "sqlite": {
@@ -1928,9 +1928,6 @@
         "enable_experimental_windows_sandbox": {
           "type": "boolean"
         },
-        "enable_fanout": {
-          "type": "boolean"
-        },
         "enable_request_compression": {
           "type": "boolean"
         },
@@ -1947,9 +1944,6 @@
           "type": "boolean"
         },
         "fast_mode": {
-          "type": "boolean"
-        },
-        "guardian_approval": {
           "type": "boolean"
         },
         "image_detail_original": {
@@ -2028,6 +2022,12 @@
           "type": "boolean"
         },
         "skill_mcp_dependency_install": {
+          "type": "boolean"
+        },
+        "smart_approvals": {
+          "type": "boolean"
+        },
+        "spawn_csv": {
           "type": "boolean"
         },
         "sqlite": {
