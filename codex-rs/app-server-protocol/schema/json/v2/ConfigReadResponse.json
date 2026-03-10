@@ -148,6 +148,9 @@
                 "mcp_elicitations": {
                   "type": "boolean"
                 },
+                "request_permissions": {
+                  "type": "boolean"
+                },
                 "rules": {
                   "type": "boolean"
                 },
@@ -157,6 +160,7 @@
               },
               "required": [
                 "mcp_elicitations",
+                "request_permissions",
                 "rules",
                 "sandbox_approval"
               ],

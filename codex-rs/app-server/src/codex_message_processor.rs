@@ -1649,9 +1649,10 @@ impl CodexMessageProcessor {
                 None => ExecExpiration::DefaultTimeout,
             }
         };
+        let sandbox_cwd = self.config.cwd.clone();
         let exec_params = ExecParams {
             command,
-            cwd,
+            cwd: cwd.clone(),
             expiration,
             env,
             network: started_network_proxy
@@ -1672,7 +1673,7 @@ impl CodexMessageProcessor {
             Some(policy) => match self.config.permissions.sandbox_policy.can_set(&policy) {
                 Ok(()) => {
                     let file_system_sandbox_policy =
-                        codex_protocol::permissions::FileSystemSandboxPolicy::from(&policy);
+                        codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, &sandbox_cwd);
                     let network_sandbox_policy =
                         codex_protocol::permissions::NetworkSandboxPolicy::from(&policy);
                     (policy, file_system_sandbox_policy, network_sandbox_policy)
@@ -1697,7 +1698,6 @@ impl CodexMessageProcessor {
         let codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
         let request_for_task = request.clone();
-        let sandbox_cwd = self.config.cwd.clone();
         let started_network_proxy_for_task = started_network_proxy;
         let use_linux_sandbox_bwrap = self.config.features.enabled(Feature::UseLinuxSandboxBwrap);
         let size = match size.map(crate::command_exec::terminal_size_from_protocol) {

@@ -218,6 +218,7 @@ mod tests {
             !runtime.wants_no_sandbox_approval(AskForApproval::Reject(RejectConfig {
                 sandbox_approval: true,
                 rules: false,
+                request_permissions: false,
                 mcp_elicitations: false,
             }))
         );
@@ -225,6 +226,7 @@ mod tests {
             runtime.wants_no_sandbox_approval(AskForApproval::Reject(RejectConfig {
                 sandbox_approval: false,
                 rules: false,
+                request_permissions: false,
                 mcp_elicitations: false,
             }))
         );
