@@ -100,6 +100,7 @@ use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
+use codex_core::features::Feature;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 
@@ -916,7 +917,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
-        approval_review_policy: Some(config.approval_review_policy.into()),
+        approval_review_policy: approval_review_policy_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
@@ -932,7 +933,7 @@ fn thread_resume_params_from_config(config: &Config, path: Option<PathBuf>) -> T
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
-        approval_review_policy: Some(config.approval_review_policy.into()),
+        approval_review_policy: approval_review_policy_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         config: config_request_overrides_from_config(config),
         ..ThreadResumeParams::default()
@@ -944,6 +945,15 @@ fn config_request_overrides_from_config(config: &Config) -> Option<HashMap<Strin
         .active_profile
         .as_ref()
         .map(|profile| HashMap::from([("profile".to_string(), Value::String(profile.clone()))]))
+}
+
+fn approval_review_policy_override_from_config(
+    config: &Config,
+) -> Option<codex_app_server_protocol::ApprovalReviewPolicy> {
+    config
+        .features
+        .enabled(Feature::GuardianApproval)
+        .then_some(config.approval_review_policy.into())
 }
 
 async fn send_request_with_response<T>(
@@ -974,6 +984,7 @@ fn session_configured_from_thread_start_response(
         response.model_provider.clone(),
         response.service_tier,
         response.approval_policy.to_core(),
+        response.approval_review_policy.to_core(),
         response.sandbox.to_core(),
         response.cwd.clone(),
         response.reasoning_effort,
@@ -991,6 +1002,7 @@ fn session_configured_from_thread_resume_response(
         response.model_provider.clone(),
         response.service_tier,
         response.approval_policy.to_core(),
+        response.approval_review_policy.to_core(),
         response.sandbox.to_core(),
         response.cwd.clone(),
         response.reasoning_effort,
@@ -1019,6 +1031,7 @@ fn session_configured_from_thread_response(
     model_provider_id: String,
     service_tier: Option<codex_protocol::config_types::ServiceTier>,
     approval_policy: AskForApproval,
+    approval_review_policy: codex_protocol::config_types::ApprovalReviewPolicy,
     sandbox_policy: codex_protocol::protocol::SandboxPolicy,
     cwd: PathBuf,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
@@ -1034,7 +1047,7 @@ fn session_configured_from_thread_response(
         model_provider_id,
         service_tier,
         approval_policy,
-        approval_review_policy: codex_protocol::config_types::ApprovalReviewPolicy::ManualOnly,
+        approval_review_policy,
         sandbox_policy,
         cwd,
         reasoning_effort,
@@ -1601,11 +1614,13 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
 mod tests {
     use super::*;
     use codex_otel::set_parent_from_w3c_trace_context;
+    use codex_protocol::config_types::ApprovalReviewPolicy;
     use opentelemetry::trace::TraceContextExt;
     use opentelemetry::trace::TraceId;
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
     use tracing_opentelemetry::OpenTelemetrySpanExt;
 
     fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
@@ -1821,5 +1836,88 @@ mod tests {
                 meta: None,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn thread_start_params_omit_review_policy_when_guardian_feature_disabled() {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("build default config");
+
+        let params = thread_start_params_from_config(&config);
+
+        assert_eq!(params.approval_review_policy, None);
+    }
+
+    #[tokio::test]
+    async fn thread_start_params_include_review_policy_when_guardian_feature_enabled() {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            "[features]\nguardian_approval = true\n",
+        )
+        .expect("write guardian-enabled config");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("build guardian-enabled config");
+
+        let params = thread_start_params_from_config(&config);
+
+        assert_eq!(
+            params.approval_review_policy,
+            Some(codex_app_server_protocol::ApprovalReviewPolicy::ManualOnly)
+        );
+    }
+
+    #[test]
+    fn session_configured_from_thread_response_uses_review_policy_from_response() {
+        let response = ThreadStartResponse {
+            thread: codex_app_server_protocol::Thread {
+                id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+                preview: String::new(),
+                ephemeral: false,
+                model_provider: "openai".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: codex_app_server_protocol::ThreadStatus::Idle,
+                path: Some(PathBuf::from("/tmp/rollout.jsonl")),
+                cwd: PathBuf::from("/tmp"),
+                cli_version: "0.0.0".to_string(),
+                source: codex_app_server_protocol::SessionSource::Cli,
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("thread".to_string()),
+                turns: vec![],
+            },
+            model: "gpt-5.4".to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: None,
+            cwd: PathBuf::from("/tmp"),
+            approval_policy: codex_app_server_protocol::AskForApproval::OnRequest,
+            approval_review_policy: codex_app_server_protocol::ApprovalReviewPolicy::AutoOnly,
+            sandbox: codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            },
+            reasoning_effort: None,
+        };
+
+        let event = session_configured_from_thread_start_response(&response)
+            .expect("build bootstrap session configured event");
+
+        assert_eq!(event.approval_review_policy, ApprovalReviewPolicy::AutoOnly);
     }
 }
