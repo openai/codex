@@ -1,4 +1,3 @@
-use assert_cmd::cargo::CommandCargoExt;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -58,8 +57,7 @@ fn write_cert_file(temp_dir: &TempDir, name: &str, contents: &str) -> std::path:
 }
 
 fn run_probe(envs: &[(&str, &Path)]) -> std::process::Output {
-    let mut cmd = Command::cargo_bin("login_ca_probe")
-        .unwrap_or_else(|error| panic!("failed to locate login_ca_probe: {error}"));
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("login_ca_probe"));
     for (key, value) in envs {
         cmd.env(key, value);
     }
