@@ -1022,8 +1022,25 @@ impl App {
             // Clear any in-flight rollback guard when switching threads.
             self.backtrack.pending_rollback = None;
             self.suppress_shutdown_complete = true;
-            self.chat_widget.submit_op(Op::Shutdown);
-            self.server.remove_thread(&thread_id).await;
+            if self.active_session_events_via_app_server {
+                match self.server.remove_thread(&thread_id).await {
+                    Some(thread) => {
+                        if let Err(err) = thread.submit(Op::Shutdown).await {
+                            tracing::error!(
+                                "failed to submit shutdown for switched thread {thread_id}: {err}"
+                            );
+                        }
+                    }
+                    None => {
+                        tracing::warn!(
+                            "failed to remove switched thread {thread_id} before shutdown"
+                        );
+                    }
+                }
+            } else {
+                self.chat_widget.submit_op(Op::Shutdown);
+                self.server.remove_thread(&thread_id).await;
+            }
             self.abort_thread_event_listener(thread_id);
         }
     }
@@ -7475,6 +7492,45 @@ mod tests {
             Ok(other) => panic!("expected Op::Shutdown, got {other:?}"),
             Err(_) => panic!("expected shutdown op to be sent"),
         }
+    }
+
+    #[tokio::test]
+    async fn new_session_shutdown_closes_previous_conversation_in_app_server_mode() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.active_session_events_via_app_server = true;
+
+        let new_thread = app
+            .server
+            .start_thread(app.config.clone())
+            .await
+            .expect("start thread");
+        let thread = Arc::clone(&new_thread.thread);
+        let thread_id = new_thread.thread_id;
+
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(new_thread.session_configured),
+        });
+        while op_rx.try_recv().is_ok() {}
+
+        app.shutdown_current_thread().await;
+
+        assert!(
+            app.server.get_thread(thread_id).await.is_err(),
+            "expected switched thread to be removed from the shared manager"
+        );
+        assert_eq!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+        time::timeout(std::time::Duration::from_secs(5), async move {
+            loop {
+                let event = thread.next_event().await.expect("thread event");
+                if matches!(event.msg, EventMsg::ShutdownComplete) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("expected switched thread to shut down");
     }
 
     #[tokio::test]
