@@ -183,6 +183,7 @@ async fn thread_start_reject_approval_policy_requires_experimental_api_capabilit
             approval_policy: Some(AskForApproval::Reject {
                 sandbox_approval: true,
                 rules: false,
+                skill_approval: false,
                 request_permissions: true,
                 mcp_elicitations: false,
             }),

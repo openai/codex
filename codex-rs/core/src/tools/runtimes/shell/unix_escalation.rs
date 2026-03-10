@@ -5,7 +5,6 @@ use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::is_likely_sandbox_denied;
-use crate::exec_policy::prompt_is_rejected_by_policy;
 use crate::features::Feature;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
@@ -62,6 +61,15 @@ pub(crate) struct PreparedUnifiedExecZshFork {
     pub(crate) exec_request: ExecRequest,
     pub(crate) escalation_session: EscalationSession,
 }
+
+const PROMPT_CONFLICT_REASON: &str =
+    "approval required by policy, but AskForApproval is set to Never";
+const REJECT_SANDBOX_APPROVAL_REASON: &str =
+    "approval required by policy, but AskForApproval::Reject.sandbox_approval is set";
+const REJECT_RULES_APPROVAL_REASON: &str =
+    "approval required by policy rule, but AskForApproval::Reject.rules is set";
+const REJECT_SKILL_APPROVAL_REASON: &str =
+    "approval required by skill, but AskForApproval::Reject.skill_approval is set";
 
 pub(super) async fn try_run_zsh_fork(
     req: &ShellRequest,
@@ -318,6 +326,31 @@ enum DecisionSource {
     UnmatchedCommandFallback,
 }
 
+fn execve_prompt_is_rejected_by_policy(
+    approval_policy: AskForApproval,
+    decision_source: &DecisionSource,
+) -> Option<&'static str> {
+    match (approval_policy, decision_source) {
+        (AskForApproval::Never, _) => Some(PROMPT_CONFLICT_REASON),
+        (AskForApproval::Reject(reject_config), DecisionSource::SkillScript { .. })
+            if reject_config.rejects_skill_approval() =>
+        {
+            Some(REJECT_SKILL_APPROVAL_REASON)
+        }
+        (AskForApproval::Reject(reject_config), DecisionSource::PrefixRule)
+            if reject_config.rejects_rules_approval() =>
+        {
+            Some(REJECT_RULES_APPROVAL_REASON)
+        }
+        (AskForApproval::Reject(reject_config), DecisionSource::UnmatchedCommandFallback)
+            if reject_config.rejects_sandbox_approval() =>
+        {
+            Some(REJECT_SANDBOX_APPROVAL_REASON)
+        }
+        _ => None,
+    }
+}
+
 impl CoreShellActionProvider {
     fn decision_driven_by_policy(matched_rules: &[RuleMatch], decision: Decision) -> bool {
         matched_rules.iter().any(|rule_match| {
@@ -483,11 +516,8 @@ impl CoreShellActionProvider {
                 EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
             }
             Decision::Prompt => {
-                if prompt_is_rejected_by_policy(
-                    self.approval_policy,
-                    matches!(decision_source, DecisionSource::PrefixRule),
-                )
-                .is_some()
+                if execve_prompt_is_rejected_by_policy(self.approval_policy, &decision_source)
+                    .is_some()
                 {
                     EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
                 } else {

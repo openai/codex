@@ -205,6 +205,8 @@ pub enum AskForApproval {
         sandbox_approval: bool,
         rules: bool,
         #[serde(default)]
+        skill_approval: bool,
+        #[serde(default)]
         request_permissions: bool,
         mcp_elicitations: bool,
     },
@@ -220,11 +222,13 @@ impl AskForApproval {
             AskForApproval::Reject {
                 sandbox_approval,
                 rules,
+                skill_approval,
                 request_permissions,
                 mcp_elicitations,
             } => CoreAskForApproval::Reject(CoreRejectConfig {
                 sandbox_approval,
                 rules,
+                skill_approval,
                 request_permissions,
                 mcp_elicitations,
             }),
@@ -242,6 +246,7 @@ impl From<CoreAskForApproval> for AskForApproval {
             CoreAskForApproval::Reject(reject_config) => AskForApproval::Reject {
                 sandbox_approval: reject_config.sandbox_approval,
                 rules: reject_config.rules,
+                skill_approval: reject_config.skill_approval,
                 request_permissions: reject_config.request_permissions,
                 mcp_elicitations: reject_config.mcp_elicitations,
             },
@@ -6021,6 +6026,7 @@ mod tests {
         let v2_policy = AskForApproval::Reject {
             sandbox_approval: true,
             rules: false,
+            skill_approval: false,
             request_permissions: true,
             mcp_elicitations: false,
         };
@@ -6031,6 +6037,7 @@ mod tests {
             CoreAskForApproval::Reject(CoreRejectConfig {
                 sandbox_approval: true,
                 rules: false,
+                skill_approval: false,
                 request_permissions: true,
                 mcp_elicitations: false,
             })
@@ -6041,7 +6048,7 @@ mod tests {
     }
 
     #[test]
-    fn ask_for_approval_reject_defaults_missing_request_permissions_to_false() {
+    fn ask_for_approval_reject_defaults_missing_optional_flags_to_false() {
         let decoded = serde_json::from_value::<AskForApproval>(serde_json::json!({
             "reject": {
                 "sandbox_approval": true,
@@ -6056,6 +6063,7 @@ mod tests {
             AskForApproval::Reject {
                 sandbox_approval: true,
                 rules: false,
+                skill_approval: false,
                 request_permissions: false,
                 mcp_elicitations: true,
             }
@@ -6068,6 +6076,7 @@ mod tests {
             &AskForApproval::Reject {
                 sandbox_approval: true,
                 rules: false,
+                skill_approval: false,
                 request_permissions: false,
                 mcp_elicitations: true,
             },
@@ -6090,6 +6099,7 @@ mod tests {
             approval_policy: Some(AskForApproval::Reject {
                 sandbox_approval: true,
                 rules: false,
+                skill_approval: false,
                 request_permissions: true,
                 mcp_elicitations: false,
             }),
@@ -6117,6 +6127,7 @@ mod tests {
             approval_policy: Some(AskForApproval::Reject {
                 sandbox_approval: false,
                 rules: true,
+                skill_approval: false,
                 request_permissions: false,
                 mcp_elicitations: true,
             }),
@@ -6167,6 +6178,7 @@ mod tests {
                     approval_policy: Some(AskForApproval::Reject {
                         sandbox_approval: true,
                         rules: false,
+                        skill_approval: false,
                         request_permissions: false,
                         mcp_elicitations: true,
                     }),
@@ -6202,6 +6214,7 @@ mod tests {
                 allowed_approval_policies: Some(vec![AskForApproval::Reject {
                     sandbox_approval: true,
                     rules: true,
+                    skill_approval: false,
                     request_permissions: false,
                     mcp_elicitations: false,
                 }]),
@@ -6224,6 +6237,7 @@ mod tests {
                     approval_policy: Some(AskForApproval::Reject {
                         sandbox_approval: true,
                         rules: false,
+                        skill_approval: false,
                         request_permissions: true,
                         mcp_elicitations: false,
                     }),
@@ -6245,6 +6259,7 @@ mod tests {
                     approval_policy: Some(AskForApproval::Reject {
                         sandbox_approval: false,
                         rules: true,
+                        skill_approval: false,
                         request_permissions: false,
                         mcp_elicitations: true,
                     }),
@@ -6266,6 +6281,7 @@ mod tests {
                     approval_policy: Some(AskForApproval::Reject {
                         sandbox_approval: true,
                         rules: false,
+                        skill_approval: false,
                         request_permissions: false,
                         mcp_elicitations: true,
                     }),
@@ -6288,6 +6304,7 @@ mod tests {
                     approval_policy: Some(AskForApproval::Reject {
                         sandbox_approval: false,
                         rules: true,
+                        skill_approval: false,
                         request_permissions: false,
                         mcp_elicitations: true,
                     }),

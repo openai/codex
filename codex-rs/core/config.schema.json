@@ -1344,6 +1344,11 @@
         "sandbox_approval": {
           "description": "Reject approval prompts related to sandbox escalation.",
           "type": "boolean"
+        },
+        "skill_approval": {
+          "default": false,
+          "description": "Reject approval prompts triggered by skill script execution.",
+          "type": "boolean"
         }
       },
       "required": [

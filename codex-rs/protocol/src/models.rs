@@ -453,6 +453,7 @@ impl DeveloperInstructions {
                 let on_request_instructions = on_request_instructions();
                 let sandbox_approval = reject_config.sandbox_approval;
                 let rules = reject_config.rules;
+                let skill_approval = reject_config.skill_approval;
                 let request_permissions = reject_config.request_permissions;
                 let mcp_elicitations = reject_config.mcp_elicitations;
                 format!(
@@ -460,6 +461,7 @@ impl DeveloperInstructions {
                      Approval policy is `reject`.\n\
                      - `sandbox_approval`: {sandbox_approval}\n\
                      - `rules`: {rules}\n\
+                     - `skill_approval`: {skill_approval}\n\
                      - `request_permissions`: {request_permissions}\n\
                      - `mcp_elicitations`: {mcp_elicitations}\n\
                      When a category is `true`, requests in that category are auto-rejected instead of prompting the user."
