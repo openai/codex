@@ -1552,10 +1552,11 @@ fn thread_item_from_guardian_assessment_action(
             command: format!("network access {}", action.get("target")?.as_str()?),
             cwd: PathBuf::new(),
             process_id: None,
-            status: if status == ItemApprovalStatus::Declined {
-                CommandExecutionStatus::Declined
-            } else {
-                CommandExecutionStatus::InProgress
+            status: match status {
+                ItemApprovalStatus::Pending => CommandExecutionStatus::InProgress,
+                ItemApprovalStatus::Approved => CommandExecutionStatus::Completed,
+                ItemApprovalStatus::Declined => CommandExecutionStatus::Declined,
+                ItemApprovalStatus::Cancelled => CommandExecutionStatus::Declined,
             },
             command_actions: Vec::new(),
             aggregated_output: None,
@@ -2567,6 +2568,71 @@ mod tests {
                         risk_score: Some(88),
                         risk_level: Some(RiskLevel::High),
                         rationale: Some("Would exfiltrate data.".into()),
+                    }),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn reconstructs_approved_guardian_network_access_item_as_completed() {
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-guardian".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "check the url".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::GuardianAssessment(codex_protocol::protocol::GuardianAssessmentEvent {
+                id: "guardian-network-2".into(),
+                turn_id: "turn-guardian".into(),
+                status: codex_protocol::protocol::GuardianAssessmentStatus::Approved,
+                risk_score: Some(12),
+                risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::Low),
+                rationale: Some("User-requested outbound check.".into()),
+                action: Some(serde_json::json!({
+                    "tool": "network_access",
+                    "target": "https://example.com",
+                    "host": "example.com",
+                    "protocol": "https",
+                    "port": 443,
+                })),
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].items[1],
+            ThreadItem::CommandExecution {
+                id: "guardian-network-2".into(),
+                command: "network access https://example.com".into(),
+                cwd: PathBuf::new(),
+                process_id: None,
+                status: CommandExecutionStatus::Completed,
+                command_actions: Vec::new(),
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+                approval: Some(ItemApprovalState {
+                    status: ItemApprovalStatus::Approved,
+                    pending_kind: None,
+                    resolved_by: Some(ItemApprovalResolvedBy::Automatic),
+                    automatic_review: Some(AutomaticApprovalReview {
+                        status: AutomaticApprovalReviewStatus::Approved,
+                        risk_score: Some(12),
+                        risk_level: Some(RiskLevel::Low),
+                        rationale: Some("User-requested outbound check.".into()),
                     }),
                 }),
             }
