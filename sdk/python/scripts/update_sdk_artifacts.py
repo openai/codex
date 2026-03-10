@@ -77,6 +77,11 @@ def current_sdk_version() -> str:
 
 
 def _copy_package_tree(src: Path, dst: Path) -> None:
+    if dst.exists():
+        if dst.is_dir():
+            shutil.rmtree(dst)
+        else:
+            dst.unlink()
     shutil.copytree(
         src,
         dst,

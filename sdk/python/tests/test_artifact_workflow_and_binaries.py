@@ -161,6 +161,27 @@ def test_stage_runtime_release_copies_binary_and_sets_version(tmp_path: Path) ->
     assert 'version = "1.2.3"' in (staged / "pyproject.toml").read_text()
 
 
+def test_stage_runtime_release_replaces_existing_staging_dir(tmp_path: Path) -> None:
+    script = _load_update_script_module()
+    staging_dir = tmp_path / "runtime-stage"
+    old_file = staging_dir / "stale.txt"
+    old_file.parent.mkdir(parents=True)
+    old_file.write_text("stale")
+
+    fake_binary = tmp_path / script.runtime_binary_name()
+    fake_binary.write_text("fake codex\n")
+
+    staged = script.stage_python_runtime_package(
+        staging_dir,
+        "1.2.3",
+        fake_binary,
+    )
+
+    assert staged == staging_dir
+    assert not old_file.exists()
+    assert script.staged_runtime_bin_path(staged).read_text() == "fake codex\n"
+
+
 def test_stage_sdk_release_injects_exact_runtime_pin(tmp_path: Path) -> None:
     script = _load_update_script_module()
     staged = script.stage_python_sdk_package(tmp_path / "sdk-stage", "0.2.1", "1.2.3")
@@ -169,6 +190,19 @@ def test_stage_sdk_release_injects_exact_runtime_pin(tmp_path: Path) -> None:
     assert 'version = "0.2.1"' in pyproject
     assert '"codex-cli-bin==1.2.3"' in pyproject
     assert not any((staged / "src" / "codex_app_server").glob("bin/**"))
+
+
+def test_stage_sdk_release_replaces_existing_staging_dir(tmp_path: Path) -> None:
+    script = _load_update_script_module()
+    staging_dir = tmp_path / "sdk-stage"
+    old_file = staging_dir / "stale.txt"
+    old_file.parent.mkdir(parents=True)
+    old_file.write_text("stale")
+
+    staged = script.stage_python_sdk_package(staging_dir, "0.2.1", "1.2.3")
+
+    assert staged == staging_dir
+    assert not old_file.exists()
 
 
 def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
