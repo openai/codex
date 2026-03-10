@@ -393,9 +393,9 @@ struct McpToolApprovalPromptOptions {
 }
 
 const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_call_approval";
-const MCP_TOOL_APPROVAL_ACCEPT: &str = "Approve Once";
-const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Approve this session";
-const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Always allow";
+const MCP_TOOL_APPROVAL_ACCEPT: &str = "Allow";
+const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this session";
+const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Allow and don't ask me again";
 const MCP_TOOL_APPROVAL_CANCEL: &str = "Cancel";
 const MCP_TOOL_APPROVAL_KIND_KEY: &str = "codex_approval_kind";
 const MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL: &str = "mcp_tool_call";
@@ -450,11 +450,11 @@ async fn maybe_request_mcp_tool_approval(
         match maybe_monitor_auto_approved_mcp_tool_call(sess, turn_context, invocation, metadata)
             .await
         {
-            ArcMonitorOutcome::None => return None,
-            ArcMonitorOutcome::InterruptForUser(reason) => {
+            ArcMonitorOutcome::Ok => return None,
+            ArcMonitorOutcome::AskUser(reason) => {
                 monitor_reason = Some(reason);
             }
-            ArcMonitorOutcome::InterruptForModel(reason) => {
+            ArcMonitorOutcome::SteerModel(reason) => {
                 return Some(McpToolApprovalDecision::BlockedBySafetyMonitor(
                     arc_monitor_interrupt_message(&reason),
                 ));
@@ -1997,9 +1997,15 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/codex/safety/arc"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "outcome": "interrupt-for-model",
-                "reason": "high-risk action",
-                "monitorRequestId": "arc_456",
+                "outcome": "steer-model",
+                "short_reason": "needs approval",
+                "rationale": "high-risk action",
+                "risk_score": 96,
+                "risk_level": "critical",
+                "evidence": [{
+                    "message": "dangerous_tool",
+                    "why": "high-risk action",
+                }],
             })))
             .expect(1)
             .mount(&server)

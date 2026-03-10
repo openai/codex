@@ -19,47 +19,80 @@ const CODEX_ARC_MONITOR_TOKEN: &str = "CODEX_ARC_MONITOR_TOKEN";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ArcMonitorOutcome {
-    None,
-    InterruptForUser(String),
-    InterruptForModel(String),
+    Ok(String),
+    SteerModel(String),
+    AskUser(String),
 }
 
 #[derive(Debug, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
 struct ArcMonitorRequest {
-    thread_id: String,
-    turn_id: String,
-    input: Vec<serde_json::Value>,
-    policies: Option<serde_json::Value>,
-    action: serde_json::Value,
+    metadata: ArcMonitorMetadata,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    messages: Option<Vec<ArcMonitorChatMessage>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input: Option<Vec<ResponseItem>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policies: Option<ArcMonitorPolicies>,
+    action: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ArcMonitorResponse {
-    outcome: ArcMonitorResponseOutcome,
-    #[serde(default, alias = "reason")]
-    long_reason: Option<String>,
-    #[serde(default)]
-    short_reason: Option<String>,
-    #[serde(default)]
-    metadata: Option<ArcMonitorResponseMetadata>,
-    #[serde(default, rename = "monitorRequestId")]
-    legacy_monitor_request_id: Option<String>,
+#[serde(deny_unknown_fields)]
+struct ArcMonitorResult {
+    outcome: ArcMonitorResultOutcome,
+    short_reason: String,
+    rationale: String,
+    risk_score: u8,
+    risk_level: ArcMonitorRiskLevel,
+    evidence: Vec<ArcMonitorEvidence>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+struct ArcMonitorChatMessage {
+    role: String,
+    content: serde_json::Value,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+struct ArcMonitorPolicies {
+    user: Option<String>,
+    developer: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ArcMonitorMetadata {
+    codex_thread_id: String,
+    codex_turn_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conversation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    protection_client_callsite: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ArcMonitorResponseMetadata {
-    monitor_response_id: Option<String>,
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct ArcMonitorEvidence {
+    message: String,
+    why: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-enum ArcMonitorResponseOutcome {
-    None,
-    InterruptForUser,
-    InterruptForModel,
+enum ArcMonitorResultOutcome {
+    Ok,
+    SteerModel,
+    AskUser,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ArcMonitorRiskLevel {
+    Low,
+    Medium,
+    High,
+    Critical,
 }
 
 pub(crate) async fn monitor_action(
@@ -78,7 +111,7 @@ pub(crate) async fn monitor_action(
         token
     } else {
         let Some(auth) = auth.as_ref() else {
-            return ArcMonitorOutcome::None;
+            return ArcMonitorOutcome::Ok;
         };
         match auth.get_token() {
             Ok(token) => token,
@@ -87,17 +120,24 @@ pub(crate) async fn monitor_action(
                     error = %err,
                     "skipping safety monitor because auth token is unavailable"
                 );
-                return ArcMonitorOutcome::None;
+                return ArcMonitorOutcome::Ok;
             }
         }
     };
 
     let url = read_non_empty_env_var(CODEX_ARC_MONITOR_ENDPOINT_OVERRIDE).unwrap_or_else(|| {
         format!(
-            "{}/codex/safety/arc",
+            "{}/api/codex/safety/arc",
             turn_context.config.chatgpt_base_url.trim_end_matches('/')
         )
     });
+    let action = match action {
+        serde_json::Value::Object(action) => action,
+        _ => {
+            warn!("skipping safety monitor because action payload is not an object");
+            return ArcMonitorOutcome::Ok;
+        }
+    };
     let body = build_arc_monitor_request(sess, turn_context, action).await;
     let client = build_reqwest_client();
     let mut request = client
@@ -116,7 +156,7 @@ pub(crate) async fn monitor_action(
         Ok(response) => response,
         Err(err) => {
             warn!(error = %err, %url, "safety monitor request failed");
-            return ArcMonitorOutcome::None;
+            return ArcMonitorOutcome::Ok;
         }
     };
     let status = response.status();
@@ -128,54 +168,46 @@ pub(crate) async fn monitor_action(
             response_text,
             "safety monitor returned non-success status"
         );
-        return ArcMonitorOutcome::None;
+        return ArcMonitorOutcome::Ok;
     }
 
-    let response = match response.json::<ArcMonitorResponse>().await {
+    let response = match response.json::<ArcMonitorResult>().await {
         Ok(response) => response,
         Err(err) => {
             warn!(error = %err, %url, "failed to parse safety monitor response");
-            return ArcMonitorOutcome::None;
+            return ArcMonitorOutcome::Ok;
         }
     };
-    if let Some(monitor_response_id) = response
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.monitor_response_id.as_deref())
-        .or(response.legacy_monitor_request_id.as_deref())
-    {
-        tracing::debug!(%monitor_response_id, "safety monitor completed");
-    } else {
-        tracing::debug!("safety monitor completed");
-    }
+    tracing::debug!(
+        risk_score = response.risk_score,
+        risk_level = ?response.risk_level,
+        evidence_count = response.evidence.len(),
+        "safety monitor completed"
+    );
 
-    let short_reason = response
-        .short_reason
-        .as_deref()
-        .map(str::trim)
-        .filter(|reason| !reason.is_empty());
-    let long_reason = response
-        .long_reason
-        .as_deref()
-        .map(str::trim)
-        .filter(|reason| !reason.is_empty());
+    let short_reason = response.short_reason.trim();
+    let rationale = response.rationale.trim();
     match response.outcome {
-        ArcMonitorResponseOutcome::None => ArcMonitorOutcome::None,
-        ArcMonitorResponseOutcome::InterruptForUser => {
-            if let Some(reason) = short_reason.or(long_reason) {
-                ArcMonitorOutcome::InterruptForUser(reason.to_string())
+        ArcMonitorResultOutcome::Ok => ArcMonitorOutcome::Ok,
+        ArcMonitorResultOutcome::AskUser => {
+            if !short_reason.is_empty() {
+                ArcMonitorOutcome::AskUser(short_reason.to_string())
+            } else if !rationale.is_empty() {
+                ArcMonitorOutcome::AskUser(rationale.to_string())
             } else {
-                ArcMonitorOutcome::InterruptForUser(
+                ArcMonitorOutcome::AskUser(
                     "Additional confirmation is required before this tool call can continue."
                         .to_string(),
                 )
             }
         }
-        ArcMonitorResponseOutcome::InterruptForModel => {
-            if let Some(reason) = long_reason.or(short_reason) {
-                ArcMonitorOutcome::InterruptForModel(reason.to_string())
+        ArcMonitorResultOutcome::SteerModel => {
+            if !rationale.is_empty() {
+                ArcMonitorOutcome::SteerModel(rationale.to_string())
+            } else if !short_reason.is_empty() {
+                ArcMonitorOutcome::SteerModel(short_reason.to_string())
             } else {
-                ArcMonitorOutcome::InterruptForModel(
+                ArcMonitorOutcome::SteerModel(
                     "Tool call was cancelled because of safety risks.".to_string(),
                 )
             }
@@ -203,23 +235,38 @@ fn read_non_empty_env_var(key: &str) -> Option<String> {
 async fn build_arc_monitor_request(
     sess: &Session,
     turn_context: &TurnContext,
-    action: serde_json::Value,
+    action: serde_json::Map<String, serde_json::Value>,
 ) -> ArcMonitorRequest {
     let history = sess.clone_history().await;
-    let input = build_arc_monitor_input(history.raw_items());
+    let mut messages = build_arc_monitor_messages(history.raw_items());
+    if messages.is_empty() {
+        messages.push(build_arc_monitor_message(
+            "user",
+            serde_json::Value::String(
+                "No prior conversation history is available for this ARC evaluation.".to_string(),
+            ),
+        ));
+    }
+
+    let conversation_id = sess.conversation_id.to_string();
     ArcMonitorRequest {
-        thread_id: sess.conversation_id.to_string(),
-        turn_id: turn_context.sub_id.clone(),
-        input,
-        policies: Some(serde_json::json!({
-            "user": serde_json::Value::Null,
-            "developer": serde_json::Value::Null,
-        })),
+        metadata: ArcMonitorMetadata {
+            codex_thread_id: conversation_id.clone(),
+            codex_turn_id: turn_context.sub_id.clone(),
+            conversation_id: Some(conversation_id),
+            protection_client_callsite: None,
+        },
+        messages: Some(messages),
+        input: None,
+        policies: Some(ArcMonitorPolicies {
+            user: None,
+            developer: None,
+        }),
         action,
     }
 }
 
-fn build_arc_monitor_input(items: &[ResponseItem]) -> Vec<serde_json::Value> {
+fn build_arc_monitor_messages(items: &[ResponseItem]) -> Vec<ArcMonitorChatMessage> {
     let last_tool_call_index = items
         .iter()
         .enumerate()
@@ -253,7 +300,7 @@ fn build_arc_monitor_input(items: &[ResponseItem]) -> Vec<serde_json::Value> {
         .iter()
         .enumerate()
         .filter_map(|(index, item)| {
-            build_arc_monitor_input_item(
+            build_arc_monitor_message_item(
                 item,
                 index,
                 last_tool_call_index,
@@ -263,12 +310,12 @@ fn build_arc_monitor_input(items: &[ResponseItem]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-fn build_arc_monitor_input_item(
+fn build_arc_monitor_message_item(
     item: &ResponseItem,
     index: usize,
     last_tool_call_index: Option<usize>,
     last_encrypted_reasoning_index: Option<usize>,
-) -> Option<serde_json::Value> {
+) -> Option<ArcMonitorChatMessage> {
     match item {
         ResponseItem::Message { role, content, .. } if role == "user" => {
             if is_contextual_user_message_content(content) {
@@ -294,51 +341,51 @@ fn build_arc_monitor_input_item(
         {
             Some(build_arc_monitor_message(
                 "assistant",
-                serde_json::json!({
+                serde_json::json!([{
                     "type": "encrypted_reasoning",
-                    "encryptedContent": encrypted_content,
-                }),
+                    "encrypted_content": encrypted_content,
+                }]),
             ))
         }
         ResponseItem::Reasoning { .. } => None,
         ResponseItem::LocalShellCall { action, .. } if Some(index) == last_tool_call_index => {
             Some(build_arc_monitor_message(
                 "assistant",
-                serde_json::json!({
+                serde_json::json!([{
                     "type": "tool_call",
-                    "toolName": "shell",
+                    "tool_name": "shell",
                     "action": action,
-                }),
+                }]),
             ))
         }
         ResponseItem::FunctionCall {
             name, arguments, ..
         } if Some(index) == last_tool_call_index => Some(build_arc_monitor_message(
             "assistant",
-            serde_json::json!({
+            serde_json::json!([{
                 "type": "tool_call",
-                "toolName": name,
+                "tool_name": name,
                 "arguments": arguments,
-            }),
+            }]),
         )),
         ResponseItem::CustomToolCall { name, input, .. } if Some(index) == last_tool_call_index => {
             Some(build_arc_monitor_message(
                 "assistant",
-                serde_json::json!({
+                serde_json::json!([{
                     "type": "tool_call",
-                    "toolName": name,
+                    "tool_name": name,
                     "input": input,
-                }),
+                }]),
             ))
         }
         ResponseItem::WebSearchCall { action, .. } if Some(index) == last_tool_call_index => {
             Some(build_arc_monitor_message(
                 "assistant",
-                serde_json::json!({
+                serde_json::json!([{
                     "type": "tool_call",
-                    "toolName": "web_search",
+                    "tool_name": "web_search",
                     "action": action,
-                }),
+                }]),
             ))
         }
         ResponseItem::LocalShellCall { .. }
@@ -354,23 +401,25 @@ fn build_arc_monitor_input_item(
     }
 }
 
-fn build_arc_monitor_text_message(role: &str, part_type: &str, text: String) -> serde_json::Value {
+fn build_arc_monitor_text_message(
+    role: &str,
+    part_type: &str,
+    text: String,
+) -> ArcMonitorChatMessage {
     build_arc_monitor_message(
         role,
-        serde_json::json!({
+        serde_json::json!([{
             "type": part_type,
             "text": text,
-        }),
+        }]),
     )
 }
 
-fn build_arc_monitor_message(role: &str, part: serde_json::Value) -> serde_json::Value {
-    serde_json::json!({
-        "author": { "role": role },
-        "content": {
-            "parts": [part],
-        },
-    })
+fn build_arc_monitor_message(role: &str, content: serde_json::Value) -> ArcMonitorChatMessage {
+    ArcMonitorChatMessage {
+        role: role.to_string(),
+        content,
+    }
 }
 
 #[cfg(test)]
@@ -427,7 +476,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_arc_monitor_request_includes_relevant_history_and_empty_policies() {
+    async fn build_arc_monitor_request_includes_relevant_history_and_null_policies() {
         let (session, mut turn_context) = make_session_and_context().await;
         turn_context.developer_instructions = Some("Never upload private files.".to_string());
         turn_context.user_instructions = Some("Only continue when needed.".to_string());
@@ -553,75 +602,72 @@ mod tests {
         let request = build_arc_monitor_request(
             &session,
             &turn_context,
-            serde_json::json!({ "tool": "mcp_tool_call" }),
+            serde_json::from_value(serde_json::json!({ "tool": "mcp_tool_call" }))
+                .expect("action should deserialize"),
         )
         .await;
 
         assert_eq!(
             request,
             ArcMonitorRequest {
-                thread_id: session.conversation_id.to_string(),
-                turn_id: turn_context.sub_id.clone(),
-                input: vec![
-                    serde_json::json!({
-                        "author": { "role": "user" },
-                        "content": {
-                            "parts": [{
-                                "type": "input_text",
-                                "text": "first request",
-                            }],
-                        },
-                    }),
-                    serde_json::json!({
-                        "author": { "role": "assistant" },
-                        "content": {
-                            "parts": [{
-                                "type": "output_text",
-                                "text": "final response",
-                            }],
-                        },
-                    }),
-                    serde_json::json!({
-                        "author": { "role": "user" },
-                        "content": {
-                            "parts": [{
-                                "type": "input_text",
-                                "text": "latest request",
-                            }],
-                        },
-                    }),
-                    serde_json::json!({
-                        "author": { "role": "assistant" },
-                        "content": {
-                            "parts": [{
-                                "type": "tool_call",
-                                "toolName": "shell",
-                                "action": {
-                                    "type": "exec",
-                                    "command": ["pwd"],
-                                    "timeout_ms": 1000,
-                                    "working_directory": "/tmp",
-                                    "env": null,
-                                    "user": null,
-                                },
-                            }],
-                        },
-                    }),
-                    serde_json::json!({
-                        "author": { "role": "assistant" },
-                        "content": {
-                            "parts": [{
-                                "type": "encrypted_reasoning",
-                                "encryptedContent": "encrypted-latest",
-                            }],
-                        },
-                    }),
-                ],
-                policies: Some(serde_json::json!({
-                    "user": null,
-                    "developer": null,
-                })),
-                action: serde_json::json!({ "tool": "mcp_tool_call" }),
+                metadata: ArcMonitorMetadata {
+                    codex_thread_id: session.conversation_id.to_string(),
+                    codex_turn_id: turn_context.sub_id.clone(),
+                    conversation_id: Some(session.conversation_id.to_string()),
+                    protection_client_callsite: None,
+                },
+                messages: Some(vec![
+                    ArcMonitorChatMessage {
+                        role: "user".to_string(),
+                        content: serde_json::json!([{
+                            "type": "input_text",
+                            "text": "first request",
+                        }]),
+                    },
+                    ArcMonitorChatMessage {
+                        role: "assistant".to_string(),
+                        content: serde_json::json!([{
+                            "type": "output_text",
+                            "text": "final response",
+                        }]),
+                    },
+                    ArcMonitorChatMessage {
+                        role: "user".to_string(),
+                        content: serde_json::json!([{
+                            "type": "input_text",
+                            "text": "latest request",
+                        }]),
+                    },
+                    ArcMonitorChatMessage {
+                        role: "assistant".to_string(),
+                        content: serde_json::json!([{
+                            "type": "tool_call",
+                            "tool_name": "shell",
+                            "action": {
+                                "type": "exec",
+                                "command": ["pwd"],
+                                "timeout_ms": 1000,
+                                "working_directory": "/tmp",
+                                "env": null,
+                                "user": null,
+                            },
+                        }]),
+                    },
+                    ArcMonitorChatMessage {
+                        role: "assistant".to_string(),
+                        content: serde_json::json!([{
+                            "type": "encrypted_reasoning",
+                            "encrypted_content": "encrypted-latest",
+                        }]),
+                    },
+                ]),
+                input: None,
+                policies: Some(ArcMonitorPolicies {
+                    user: None,
+                    developer: None,
+                }),
+                action: serde_json::from_value(serde_json::json!({ "tool": "mcp_tool_call" }))
+                    .expect("action should deserialize"),
             }
         );
     }
@@ -661,16 +707,17 @@ mod tests {
             .and(header("authorization", "Bearer Access Token"))
             .and(header("chatgpt-account-id", "account_id"))
             .and(body_json(serde_json::json!({
-                "threadId": session.conversation_id.to_string(),
-                "turnId": turn_context.sub_id.clone(),
-                "input": [{
-                    "author": { "role": "user" },
-                    "content": {
-                        "parts": [{
-                            "type": "input_text",
-                            "text": "please run the tool",
-                        }],
-                    },
+                "metadata": {
+                    "codex_thread_id": session.conversation_id.to_string(),
+                    "codex_turn_id": turn_context.sub_id.clone(),
+                    "conversation_id": session.conversation_id.to_string(),
+                },
+                "messages": [{
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "please run the tool",
+                    }],
                 }],
                 "policies": {
                     "developer": null,
@@ -681,12 +728,9 @@ mod tests {
                 },
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "outcome": "interrupt-for-user",
-                "shortReason": "needs confirmation",
-                "longReason": "tool call needs additional review",
-                "metadata": {
-                    "monitorResponseId": "arc_123",
-                },
+                "outcome": "ask-user",
+                "short_reason": "needs confirmation",
+                "rationale": "tool call needs additional review",
             })))
             .expect(1)
             .mount(&server)
@@ -701,7 +745,7 @@ mod tests {
 
         assert_eq!(
             outcome,
-            ArcMonitorOutcome::InterruptForUser("needs confirmation".to_string())
+            ArcMonitorOutcome::AskUser("needs confirmation".to_string())
         );
     }
 
@@ -735,12 +779,9 @@ mod tests {
             .and(path("/override/arc"))
             .and(header("authorization", "Bearer override-token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "outcome": "interrupt-for-model",
-                "shortReason": "needs approval",
-                "longReason": "high-risk action",
-                "metadata": {
-                    "monitorResponseId": "arc_789",
-                },
+                "outcome": "steer-model",
+                "short_reason": "needs approval",
+                "rationale": "high-risk action",
             })))
             .expect(1)
             .mount(&server)
@@ -755,18 +796,18 @@ mod tests {
 
         assert_eq!(
             outcome,
-            ArcMonitorOutcome::InterruptForModel("high-risk action".to_string())
+            ArcMonitorOutcome::SteerModel("high-risk action".to_string())
         );
     }
 
     #[tokio::test]
     #[serial(arc_monitor_env)]
-    async fn monitor_action_accepts_legacy_reason_response_fields() {
+    async fn monitor_action_rejects_legacy_response_fields() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/codex/safety/arc"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "outcome": "interrupt-for-model",
+                "outcome": "steer-model",
                 "reason": "legacy high-risk action",
                 "monitorRequestId": "arc_456",
             })))
@@ -782,6 +823,21 @@ mod tests {
         config.chatgpt_base_url = server.uri();
         turn_context.config = Arc::new(config);
 
+        session
+            .record_into_history(
+                &[ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "please run the tool".to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                }],
+                &turn_context,
+            )
+            .await;
+
         let outcome = monitor_action(
             &session,
             &turn_context,
@@ -789,9 +845,6 @@ mod tests {
         )
         .await;
 
-        assert_eq!(
-            outcome,
-            ArcMonitorOutcome::InterruptForModel("legacy high-risk action".to_string())
-        );
+        assert_eq!(outcome, ArcMonitorOutcome::Ok);
     }
 }
