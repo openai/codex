@@ -40,6 +40,7 @@ use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AgentReasoningEvent;
+use codex_protocol::protocol::AgentSpawnMode;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -581,6 +582,7 @@ fn collab_spawn_begin_and_end_emit_item_events() {
             prompt: prompt.clone(),
             model: "gpt-5".to_string(),
             reasoning_effort: ReasoningEffortConfig::default(),
+            spawn_mode: AgentSpawnMode::Spawn,
             status: AgentStatus::Running,
         }),
     );

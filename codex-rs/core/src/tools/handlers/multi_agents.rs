@@ -27,6 +27,7 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::protocol::AgentSpawnMode;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentRef;
@@ -231,6 +232,11 @@ mod spawn {
                         prompt,
                         model: args.model.clone().unwrap_or_default(),
                         reasoning_effort: args.reasoning_effort.unwrap_or_default(),
+                        spawn_mode: if args.fork_context {
+                            AgentSpawnMode::Fork
+                        } else {
+                            AgentSpawnMode::Spawn
+                        },
                         status,
                     }
                     .into(),
