@@ -12,7 +12,6 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use once_cell::sync::Lazy;
-use serde_json;
 
 use crate::AuthManager;
 use crate::CodexAuth;
