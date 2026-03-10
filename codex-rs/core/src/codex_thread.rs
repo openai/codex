@@ -159,20 +159,6 @@ impl CodexThread {
             self.codex
                 .session
                 .set_out_of_band_elicitation_pause_state(true);
-            if let Err(err) = self
-                .codex
-                .session
-                .notify_out_of_band_elicitation_pause_state(true)
-                .await
-            {
-                self.codex
-                    .session
-                    .set_out_of_band_elicitation_pause_state(false);
-                *guard -= 1;
-                return Err(CodexErr::Fatal(format!(
-                    "failed to pause out-of-band elicitation state: {err:#}"
-                )));
-            }
         }
 
         Ok(*guard)
@@ -192,20 +178,6 @@ impl CodexThread {
             self.codex
                 .session
                 .set_out_of_band_elicitation_pause_state(false);
-            if let Err(err) = self
-                .codex
-                .session
-                .notify_out_of_band_elicitation_pause_state(false)
-                .await
-            {
-                self.codex
-                    .session
-                    .set_out_of_band_elicitation_pause_state(true);
-                *guard += 1;
-                return Err(CodexErr::Fatal(format!(
-                    "failed to resume out-of-band elicitation state: {err:#}"
-                )));
-            }
         }
 
         Ok(*guard)
