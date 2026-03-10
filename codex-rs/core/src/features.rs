@@ -83,6 +83,8 @@ pub enum Feature {
     // Experimental
     /// Enable JavaScript REPL tools backed by a persistent Node kernel.
     JsRepl,
+    /// Enable a minimal JavaScript mode backed by Node's built-in vm runtime.
+    CodeMode,
     /// Only expose js_repl tools directly to the model.
     JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
@@ -93,6 +95,8 @@ pub enum Feature {
     ApplyPatchFreeform,
     /// Allow requesting additional filesystem permissions while staying sandboxed.
     RequestPermissions,
+    /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
+    CodexHooks,
     /// Expose the built-in request_permissions tool.
     RequestPermissionsTool,
     /// Allow the model to request web searches that fetch live content.
@@ -511,6 +515,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::CodeMode,
+        key: "code_mode",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::JsReplToolsOnly,
         key: "js_repl_tools_only",
         stage: Stage::UnderDevelopment,
@@ -580,6 +590,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RequestPermissions,
         key: "request_permissions",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CodexHooks,
+        key: "codex_hooks",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

@@ -326,7 +326,13 @@
             "child_agents_md": {
               "type": "boolean"
             },
+            "code_mode": {
+              "type": "boolean"
+            },
             "codex_git_commit": {
+              "type": "boolean"
+            },
+            "codex_hooks": {
               "type": "boolean"
             },
             "collab": {
@@ -1806,7 +1812,13 @@
         "child_agents_md": {
           "type": "boolean"
         },
+        "code_mode": {
+          "type": "boolean"
+        },
         "codex_git_commit": {
+          "type": "boolean"
+        },
+        "codex_hooks": {
           "type": "boolean"
         },
         "collab": {

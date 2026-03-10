@@ -306,6 +306,7 @@ use strum::IntoEnumIterator;
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const FAST_STATUS_MODEL: &str = "gpt-5.4";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] =
     ["model-with-reasoning", "context-remaining", "current-dir"];
 // Track information about an in-flight exec command.
@@ -1270,7 +1271,7 @@ impl ChatWidget {
         self.sync_personality_command_enabled();
         self.refresh_plugin_mentions();
         let startup_tooltip_override = self.startup_tooltip_override.take();
-        let show_fast_status = self.should_show_fast_status(event.service_tier);
+        let show_fast_status = self.should_show_fast_status(&model_for_header, event.service_tier);
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -2559,6 +2560,37 @@ impl ChatWidget {
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.set_status_header(message);
+    }
+
+    fn on_hook_started(&mut self, event: codex_protocol::protocol::HookStartedEvent) {
+        let label = hook_event_label(event.run.event_name);
+        let mut message = format!("Running {label} hook");
+        if let Some(status_message) = event.run.status_message
+            && !status_message.is_empty()
+        {
+            message.push_str(": ");
+            message.push_str(&status_message);
+        }
+        self.add_to_history(history_cell::new_info_event(message, None));
+        self.request_redraw();
+    }
+
+    fn on_hook_completed(&mut self, event: codex_protocol::protocol::HookCompletedEvent) {
+        let status = format!("{:?}", event.run.status).to_lowercase();
+        let header = format!("{} hook ({status})", hook_event_label(event.run.event_name));
+        let mut lines: Vec<ratatui::text::Line<'static>> = vec![header.into()];
+        for entry in event.run.entries {
+            let prefix = match entry.kind {
+                codex_protocol::protocol::HookOutputEntryKind::Warning => "warning: ",
+                codex_protocol::protocol::HookOutputEntryKind::Stop => "stop: ",
+                codex_protocol::protocol::HookOutputEntryKind::Feedback => "feedback: ",
+                codex_protocol::protocol::HookOutputEntryKind::Context => "hook context: ",
+                codex_protocol::protocol::HookOutputEntryKind::Error => "error: ",
+            };
+            lines.push(format!("  {prefix}{}", entry.text).into());
+        }
+        self.add_to_history(PlainHistoryCell::new(lines));
+        self.request_redraw();
     }
 
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
@@ -4981,6 +5013,8 @@ impl ChatWidget {
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_)
             | EventMsg::DynamicToolCallResponse(_) => {}
+            EventMsg::HookStarted(event) => self.on_hook_started(event),
+            EventMsg::HookCompleted(event) => self.on_hook_completed(event),
             EventMsg::RealtimeConversationStarted(ev) => {
                 if !from_replay {
                     self.on_realtime_conversation_started(ev);
@@ -5391,7 +5425,14 @@ impl ChatWidget {
             StatusLineItem::ModelWithReasoning => {
                 let label =
                     Self::status_line_reasoning_effort_label(self.effective_reasoning_effort());
-                Some(format!("{} {label}", self.model_display_name()))
+                let fast_label = if self
+                    .should_show_fast_status(self.current_model(), self.config.service_tier)
+                {
+                    " fast"
+                } else {
+                    ""
+                };
+                Some(format!("{} {label}{fast_label}", self.model_display_name()))
             }
             StatusLineItem::CurrentDir => {
                 Some(format_directory_display(self.status_line_cwd(), None))
@@ -7380,8 +7421,13 @@ impl ChatWidget {
         self.config.service_tier
     }
 
-    pub(crate) fn should_show_fast_status(&self, service_tier: Option<ServiceTier>) -> bool {
-        matches!(service_tier, Some(ServiceTier::Fast))
+    pub(crate) fn should_show_fast_status(
+        &self,
+        model: &str,
+        service_tier: Option<ServiceTier>,
+    ) -> bool {
+        model == FAST_STATUS_MODEL
+            && matches!(service_tier, Some(ServiceTier::Fast))
             && self
                 .auth_manager
                 .auth_cached()
@@ -8783,6 +8829,13 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
+    match event_name {
+        codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
+        codex_protocol::protocol::HookEventName::Stop => "Stop",
+    }
 }
 
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSnapshot> {
