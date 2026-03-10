@@ -946,42 +946,6 @@ pub(crate) struct SessionConfiguration {
 }
 
 impl SessionConfiguration {
-    pub(crate) fn from_config_for_tests(
-        config: Arc<Config>,
-        collaboration_mode: CollaborationMode,
-        model_info: &ModelInfo,
-    ) -> Self {
-        Self {
-            provider: config.model_provider.clone(),
-            collaboration_mode,
-            model_reasoning_summary: config.model_reasoning_summary,
-            developer_instructions: config.developer_instructions.clone(),
-            user_instructions: config.user_instructions.clone(),
-            service_tier: None,
-            personality: config.personality,
-            base_instructions: config
-                .base_instructions
-                .clone()
-                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
-            compact_prompt: config.compact_prompt.clone(),
-            approval_policy: config.permissions.approval_policy.clone(),
-            sandbox_policy: config.permissions.sandbox_policy.clone(),
-            file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
-            network_sandbox_policy: config.permissions.network_sandbox_policy,
-            windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-            cwd: config.cwd.clone(),
-            codex_home: config.codex_home.clone(),
-            thread_name: None,
-            original_config_do_not_use: config,
-            metrics_service_name: None,
-            app_server_client_name: None,
-            session_source: SessionSource::Exec,
-            dynamic_tools: Vec::new(),
-            persist_extended_history: false,
-            inherited_shell_snapshot: None,
-        }
-    }
-
     pub(crate) fn codex_home(&self) -> &PathBuf {
         &self.codex_home
     }

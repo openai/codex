@@ -10,7 +10,6 @@ use crate::config_loader::Sourced;
 use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
-use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
@@ -47,7 +46,7 @@ use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
-use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::TextToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::ShellHandler;
@@ -90,10 +89,11 @@ use std::time::Duration as StdDuration;
 #[path = "codex_tests_guardian.rs"]
 mod guardian_tests;
 
-use codex_protocol::models::function_call_output_content_items_to_text;
-
-fn expect_text_tool_output(output: &FunctionToolOutput) -> String {
-    function_call_output_content_items_to_text(&output.body).unwrap_or_default()
+fn expect_text_tool_output(output: &dyn std::any::Any) -> String {
+    let Some(output) = output.downcast_ref::<TextToolOutput>() else {
+        panic!("unexpected tool output");
+    };
+    output.text.clone()
 }
 
 struct InstructionsTestCase {
@@ -2059,7 +2059,6 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let skills_manager = Arc::new(SkillsManager::new(
         config.codex_home.clone(),
         Arc::clone(&plugins_manager),
-        true,
     ));
     let result = Session::new(
         session_configuration,
@@ -2088,11 +2087,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
 }
 
 // todo: use online model info
-async fn make_session_and_context_with_dynamic_tools_and_agent_control(
-    dynamic_tools: Vec<DynamicToolSpec>,
-    agent_control: AgentControl,
-) -> (Session, TurnContext, async_channel::Receiver<Event>) {
-    let (tx_event, rx_event) = async_channel::unbounded();
+pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
+    let (tx_event, _rx_event) = async_channel::unbounded();
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let config = build_test_config(codex_home.path()).await;
     let config = Arc::new(config);
@@ -2104,6 +2100,7 @@ async fn make_session_and_context_with_dynamic_tools_and_agent_control(
         None,
         CollaborationModesConfig::default(),
     ));
+    let agent_control = AgentControl::default();
     let exec_policy = ExecPolicyManager::default();
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
@@ -2142,7 +2139,7 @@ async fn make_session_and_context_with_dynamic_tools_and_agent_control(
         metrics_service_name: None,
         app_server_client_name: None,
         session_source: SessionSource::Exec,
-        dynamic_tools,
+        dynamic_tools: Vec::new(),
         persist_extended_history: false,
         inherited_shell_snapshot: None,
     };
@@ -2164,7 +2161,6 @@ async fn make_session_and_context_with_dynamic_tools_and_agent_control(
     let skills_manager = Arc::new(SkillsManager::new(
         config.codex_home.clone(),
         Arc::clone(&plugins_manager),
-        true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
 
@@ -2187,7 +2183,6 @@ async fn make_session_and_context_with_dynamic_tools_and_agent_control(
         ),
         hooks: Hooks::new(HooksConfig {
             legacy_notify_argv: config.notify.clone(),
-            ..HooksConfig::default()
         }),
         rollout: Mutex::new(None),
         user_shell: Arc::new(default_user_shell()),
@@ -2231,10 +2226,6 @@ async fn make_session_and_context_with_dynamic_tools_and_agent_control(
         session_configuration.provider.clone(),
         &session_configuration,
         per_turn_config,
-        services
-            .models_manager
-            .try_list_models()
-            .unwrap_or_default(),
         model_info,
         None,
         "turn_id".to_string(),
@@ -2246,7 +2237,6 @@ async fn make_session_and_context_with_dynamic_tools_and_agent_control(
         conversation_id,
         tx_event,
         agent_status: agent_status_tx,
-        out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
@@ -2257,16 +2247,6 @@ async fn make_session_and_context_with_dynamic_tools_and_agent_control(
         next_internal_sub_id: AtomicU64::new(0),
     };
 
-    (session, turn_context, rx_event)
-}
-
-pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
-    let (session, turn_context, _rx_event) =
-        make_session_and_context_with_dynamic_tools_and_agent_control(
-            Vec::new(),
-            AgentControl::default(),
-        )
-        .await;
     (session, turn_context)
 }
 
@@ -2320,7 +2300,7 @@ async fn request_permissions_emits_event_when_reject_policy_allows_requests() {
             }),
             ..Default::default()
         },
-        scope: PermissionGrantScope::Turn,
+        scope: codex_protocol::request_permissions::PermissionGrantScope::Turn,
     };
 
     let handle = tokio::spawn({
@@ -2405,7 +2385,7 @@ async fn request_permissions_returns_empty_grant_when_reject_policy_blocks_reque
         Some(
             codex_protocol::request_permissions::RequestPermissionsResponse {
                 permissions: codex_protocol::models::PermissionProfile::default(),
-                scope: PermissionGrantScope::Turn,
+                scope: codex_protocol::request_permissions::PermissionGrantScope::Turn,
             }
         )
     );
@@ -2662,13 +2642,166 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     Arc<TurnContext>,
     async_channel::Receiver<Event>,
 ) {
-    let (session, turn_context, rx_event) =
-        make_session_and_context_with_dynamic_tools_and_agent_control(
-            dynamic_tools,
-            AgentControl::default(),
-        )
-        .await;
-    (Arc::new(session), Arc::new(turn_context), rx_event)
+    let (tx_event, rx_event) = async_channel::unbounded();
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let config = build_test_config(codex_home.path()).await;
+    let config = Arc::new(config);
+    let conversation_id = ThreadId::default();
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let models_manager = Arc::new(ModelsManager::new(
+        config.codex_home.clone(),
+        auth_manager.clone(),
+        None,
+        CollaborationModesConfig::default(),
+    ));
+    let agent_control = AgentControl::default();
+    let exec_policy = ExecPolicyManager::default();
+    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+    let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
+    let model_info = ModelsManager::construct_model_info_offline_for_tests(model.as_str(), &config);
+    let reasoning_effort = config.model_reasoning_effort;
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model,
+            reasoning_effort,
+            developer_instructions: None,
+        },
+    };
+    let session_configuration = SessionConfiguration {
+        provider: config.model_provider.clone(),
+        collaboration_mode,
+        model_reasoning_summary: config.model_reasoning_summary,
+        developer_instructions: config.developer_instructions.clone(),
+        user_instructions: config.user_instructions.clone(),
+        service_tier: None,
+        personality: config.personality,
+        base_instructions: config
+            .base_instructions
+            .clone()
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+        compact_prompt: config.compact_prompt.clone(),
+        approval_policy: config.permissions.approval_policy.clone(),
+        sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
+        windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        cwd: config.cwd.clone(),
+        codex_home: config.codex_home.clone(),
+        thread_name: None,
+        original_config_do_not_use: Arc::clone(&config),
+        metrics_service_name: None,
+        app_server_client_name: None,
+        session_source: SessionSource::Exec,
+        dynamic_tools,
+        persist_extended_history: false,
+        inherited_shell_snapshot: None,
+    };
+    let per_turn_config = Session::build_per_turn_config(&session_configuration);
+    let model_info = ModelsManager::construct_model_info_offline_for_tests(
+        session_configuration.collaboration_mode.model(),
+        &per_turn_config,
+    );
+    let session_telemetry = session_telemetry(
+        conversation_id,
+        config.as_ref(),
+        &model_info,
+        session_configuration.session_source.clone(),
+    );
+
+    let state = SessionState::new(session_configuration.clone());
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+    let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
+    let skills_manager = Arc::new(SkillsManager::new(
+        config.codex_home.clone(),
+        Arc::clone(&plugins_manager),
+    ));
+    let network_approval = Arc::new(NetworkApprovalService::default());
+
+    let file_watcher = Arc::new(FileWatcher::noop());
+    let services = SessionServices {
+        mcp_connection_manager: Arc::new(RwLock::new(
+            McpConnectionManager::new_mcp_connection_manager_for_tests(
+                &config.permissions.approval_policy,
+            ),
+        )),
+        mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
+        unified_exec_manager: UnifiedExecProcessManager::new(
+            config.background_terminal_max_timeout,
+        ),
+        shell_zsh_path: None,
+        main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
+        analytics_events_client: AnalyticsEventsClient::new(
+            Arc::clone(&config),
+            Arc::clone(&auth_manager),
+        ),
+        hooks: Hooks::new(HooksConfig {
+            legacy_notify_argv: config.notify.clone(),
+        }),
+        rollout: Mutex::new(None),
+        user_shell: Arc::new(default_user_shell()),
+        shell_snapshot_tx: watch::channel(None).0,
+        show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+        exec_policy,
+        auth_manager: Arc::clone(&auth_manager),
+        session_telemetry: session_telemetry.clone(),
+        models_manager: Arc::clone(&models_manager),
+        tool_approvals: Mutex::new(ApprovalStore::default()),
+        execve_session_approvals: RwLock::new(HashMap::new()),
+        skills_manager,
+        plugins_manager,
+        mcp_manager,
+        file_watcher,
+        agent_control,
+        network_proxy: None,
+        network_approval: Arc::clone(&network_approval),
+        state_db: None,
+        model_client: ModelClient::new(
+            Some(Arc::clone(&auth_manager)),
+            conversation_id,
+            session_configuration.provider.clone(),
+            session_configuration.session_source.clone(),
+            config.model_verbosity,
+            ws_version_from_features(config.as_ref()),
+            config.features.enabled(Feature::EnableRequestCompression),
+            config.features.enabled(Feature::RuntimeMetrics),
+            Session::build_model_client_beta_features_header(config.as_ref()),
+        ),
+    };
+    let js_repl = Arc::new(JsReplHandle::with_node_path(
+        config.js_repl_node_path.clone(),
+        config.js_repl_node_module_dirs.clone(),
+    ));
+
+    let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&per_turn_config));
+    let turn_context = Arc::new(Session::make_turn_context(
+        Some(Arc::clone(&auth_manager)),
+        &session_telemetry,
+        session_configuration.provider.clone(),
+        &session_configuration,
+        per_turn_config,
+        model_info,
+        None,
+        "turn_id".to_string(),
+        Arc::clone(&js_repl),
+        skills_outcome,
+    ));
+
+    let session = Arc::new(Session {
+        conversation_id,
+        tx_event,
+        agent_status: agent_status_tx,
+        state: Mutex::new(state),
+        features: config.features.clone(),
+        pending_mcp_server_refresh_config: Mutex::new(None),
+        conversation: Arc::new(RealtimeConversationManager::new()),
+        active_turn: Mutex::new(None),
+        services,
+        js_repl,
+        next_internal_sub_id: AtomicU64::new(0),
+    });
+
+    (session, turn_context, rx_event)
 }
 
 // Like make_session_and_context, but returns Arc<Session> and the event receiver
@@ -4009,7 +4142,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         })
         .await;
 
-    let output = expect_text_tool_output(&resp2.expect("expected Ok result"));
+    let output = expect_text_tool_output(&*resp2.expect("expected Ok result"));
 
     #[derive(Deserialize, PartialEq, Eq, Debug)]
     struct ResponseExecMetadata {
