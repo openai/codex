@@ -259,11 +259,31 @@ impl From<CoreAskForApproval> for AskForApproval {
     }
 }
 
-v2_enum_from_core!(
-    pub enum ApprovalReviewPolicy from CoreApprovalReviewPolicy {
-        ManualOnly, AutoOnly
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum ApprovalReviewPolicy {
+    ManualOnly,
+    AutoOnly,
+}
+
+impl ApprovalReviewPolicy {
+    pub fn to_core(self) -> CoreApprovalReviewPolicy {
+        match self {
+            ApprovalReviewPolicy::ManualOnly => CoreApprovalReviewPolicy::ManualOnly,
+            ApprovalReviewPolicy::AutoOnly => CoreApprovalReviewPolicy::AutoOnly,
+        }
     }
-);
+}
+
+impl From<CoreApprovalReviewPolicy> for ApprovalReviewPolicy {
+    fn from(value: CoreApprovalReviewPolicy) -> Self {
+        match value {
+            CoreApprovalReviewPolicy::ManualOnly => ApprovalReviewPolicy::ManualOnly,
+            CoreApprovalReviewPolicy::AutoOnly => ApprovalReviewPolicy::AutoOnly,
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "kebab-case")]
