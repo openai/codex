@@ -14,15 +14,10 @@ use crate::tools::context::ToolPayload;
 use crate::tools::js_repl::resolve_compatible_node;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use serde_json::json;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -385,66 +380,6 @@ fn build_freeform_tool_payload(
     }
 }
 
-fn content_items_from_response_input(
-    response: ResponseInputItem,
-) -> Vec<FunctionCallOutputContentItem> {
-    match response {
-        ResponseInputItem::Message { content, .. } => content
-            .into_iter()
-            .map(function_output_content_item_from_content_item)
-            .collect(),
-        ResponseInputItem::FunctionCallOutput { output, .. } => {
-            content_items_from_function_output(output)
-        }
-        ResponseInputItem::CustomToolCallOutput { output, .. } => {
-            content_items_from_function_output(output)
-        }
-        ResponseInputItem::McpToolCallOutput { output, .. } => {
-            content_items_from_function_output(output.into_function_call_output_payload())
-        }
-    }
-}
-
-fn content_items_from_function_output(
-    output: FunctionCallOutputPayload,
-) -> Vec<FunctionCallOutputContentItem> {
-    match output.body {
-        FunctionCallOutputBody::Text(text) => {
-            vec![FunctionCallOutputContentItem::InputText { text }]
-        }
-        FunctionCallOutputBody::ContentItems(items) => items,
-    }
-}
-
-fn function_output_content_item_from_content_item(
-    item: ContentItem,
-) -> FunctionCallOutputContentItem {
-    match item {
-        ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-            FunctionCallOutputContentItem::InputText { text }
-        }
-        ContentItem::InputImage { image_url } => FunctionCallOutputContentItem::InputImage {
-            image_url,
-            detail: None,
-        },
-    }
-}
-
-fn json_values_from_output_content_items(
-    content_items: Vec<FunctionCallOutputContentItem>,
-) -> Vec<JsonValue> {
-    content_items
-        .into_iter()
-        .map(|item| match item {
-            FunctionCallOutputContentItem::InputText { text } => {
-                json!({ "type": "input_text", "text": text })
-            }
-            FunctionCallOutputContentItem::InputImage { image_url, detail } => {
-                json!({ "type": "input_image", "image_url": image_url, "detail": detail })
-            }
-        })
-        .collect()
-}
 fn output_content_items_from_json_values(
     content_items: Vec<JsonValue>,
 ) -> Result<Vec<FunctionCallOutputContentItem>, String> {
