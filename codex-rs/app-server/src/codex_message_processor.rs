@@ -1379,29 +1379,30 @@ impl CodexMessageProcessor {
             }
         } else {
             let refresh_failure = self.auth_manager.refresh_failure();
+            let permanent_refresh_failure = refresh_failure.is_some()
+                || matches!(
+                    refresh_outcome,
+                    RefreshTokenRequestOutcome::FailedPermanently
+                );
             match self.auth_manager.auth().await {
                 Some(auth) => {
                     let auth_mode = auth.api_auth_mode();
-                    let (reported_auth_method, token_opt) = if include_token
-                        && (refresh_failure.is_some()
-                            || matches!(
-                                refresh_outcome,
-                                RefreshTokenRequestOutcome::FailedPermanently
-                            )) {
-                        (Some(auth_mode), None)
-                    } else {
-                        match auth.get_token() {
-                            Ok(token) if !token.is_empty() => {
-                                let tok = if include_token { Some(token) } else { None };
-                                (Some(auth_mode), tok)
+                    let (reported_auth_method, token_opt) =
+                        if include_token && permanent_refresh_failure {
+                            (Some(auth_mode), None)
+                        } else {
+                            match auth.get_token() {
+                                Ok(token) if !token.is_empty() => {
+                                    let tok = if include_token { Some(token) } else { None };
+                                    (Some(auth_mode), tok)
+                                }
+                                Ok(_) => (None, None),
+                                Err(err) => {
+                                    tracing::warn!("failed to get token for auth status: {err}");
+                                    (None, None)
+                                }
                             }
-                            Ok(_) => (None, None),
-                            Err(err) => {
-                                tracing::warn!("failed to get token for auth status: {err}");
-                                (None, None)
-                            }
-                        }
-                    };
+                        };
                     GetAuthStatusResponse {
                         auth_method: reported_auth_method,
                         auth_token: token_opt,

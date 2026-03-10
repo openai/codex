@@ -796,15 +796,9 @@ struct CachedAuth {
     auth: Option<CodexAuth>,
     /// Callback used to refresh external auth by asking the parent app for new tokens.
     external_refresher: Option<Arc<dyn ExternalAuthRefresher>>,
-    /// Permanent refresh failure cached for the current managed auth snapshot so
+    /// Permanent refresh failure cached for the current auth snapshot so
     /// later refresh attempts for the same credentials fail fast without network.
-    permanent_refresh_failure: Option<PermanentRefreshFailure>,
-}
-
-#[derive(Clone, Debug)]
-struct PermanentRefreshFailure {
-    auth_dot_json: AuthDotJson,
-    error: RefreshTokenFailedError,
+    permanent_refresh_failure: Option<RefreshTokenFailedError>,
 }
 
 impl Debug for CachedAuth {
@@ -823,7 +817,7 @@ impl Debug for CachedAuth {
                 &self
                     .permanent_refresh_failure
                     .as_ref()
-                    .map(|failure| failure.error.reason),
+                    .map(|failure| failure.reason),
             )
             .finish()
     }
@@ -1190,39 +1184,34 @@ impl AuthManager {
         }
     }
 
+    /// Returns the cached permanent refresh failure only when `auth` still
+    /// matches the current cached auth snapshot.
     fn permanent_refresh_failure_for_auth(
         &self,
         auth: &CodexAuth,
     ) -> Option<RefreshTokenFailedError> {
-        let auth_dot_json = auth.get_current_auth_json()?;
         self.inner
             .read()
             .ok()
             .and_then(|cached| cached.permanent_refresh_failure.clone())
-            .filter(|failure| failure.auth_dot_json == auth_dot_json)
-            .map(|failure| failure.error)
+            .filter(|_| {
+                let current_auth = self.auth_cached();
+                Self::auths_equal_for_refresh(Some(auth), current_auth.as_ref())
+            })
     }
 
+    /// Records a permanent refresh failure only if the failed refresh was
+    /// attempted against the auth snapshot that is still cached.
     fn record_permanent_refresh_failure_if_unchanged(
         &self,
         attempted_auth: &CodexAuth,
         error: &RefreshTokenFailedError,
     ) {
-        let Some(attempted_auth_dot_json) = attempted_auth.get_current_auth_json() else {
-            return;
-        };
-
         if let Ok(mut guard) = self.inner.write() {
-            let current_auth_matches = guard
-                .auth
-                .as_ref()
-                .and_then(CodexAuth::get_current_auth_json)
-                .is_some_and(|current| current == attempted_auth_dot_json);
+            let current_auth_matches =
+                Self::auths_equal_for_refresh(Some(attempted_auth), guard.auth.as_ref());
             if current_auth_matches {
-                guard.permanent_refresh_failure = Some(PermanentRefreshFailure {
-                    auth_dot_json: attempted_auth_dot_json,
-                    error: error.clone(),
-                });
+                guard.permanent_refresh_failure = Some(error.clone());
             }
         }
     }
@@ -1241,17 +1230,9 @@ impl AuthManager {
         if let Ok(mut guard) = self.inner.write() {
             let previous = guard.auth.as_ref();
             let changed = !AuthManager::auths_equal(previous, new_auth.as_ref());
-            let permanent_refresh_failure_still_matches = guard
-                .permanent_refresh_failure
-                .as_ref()
-                .and_then(|failure| {
-                    new_auth
-                        .as_ref()
-                        .and_then(CodexAuth::get_current_auth_json)
-                        .map(|current| current == failure.auth_dot_json)
-                })
-                .unwrap_or(false);
-            if !permanent_refresh_failure_still_matches {
+            let auth_changed_for_refresh =
+                !Self::auths_equal_for_refresh(previous, new_auth.as_ref());
+            if auth_changed_for_refresh {
                 guard.permanent_refresh_failure = None;
             }
             tracing::info!("Reloaded auth, changed: {changed}");
