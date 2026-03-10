@@ -7,9 +7,10 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::skills::maybe_emit_implicit_skill_invocation;
+use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
@@ -20,10 +21,8 @@ use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecProcessManager;
-use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::PermissionProfile;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -82,6 +81,8 @@ fn default_tty() -> bool {
 
 #[async_trait]
 impl ToolHandler for UnifiedExecHandler {
+    type Output = ExecCommandToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -113,7 +114,7 @@ impl ToolHandler for UnifiedExecHandler {
         !is_known_safe_command(&command)
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -170,8 +171,19 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let request_permission_enabled =
                     session.features().enabled(Feature::RequestPermissions);
+                let effective_additional_permissions = apply_granted_turn_permissions(
+                    context.session.as_ref(),
+                    sandbox_permissions,
+                    additional_permissions,
+                )
+                .await;
 
-                if sandbox_permissions.requests_sandbox_override()
+                // Sticky turn permissions have already been approved, so they should
+                // continue through the normal exec approval flow for the command.
+                if effective_additional_permissions
+                    .sandbox_permissions
+                    .requests_sandbox_override()
+                    && !effective_additional_permissions.permissions_preapproved
                     && !matches!(
                         context.turn.approval_policy.value(),
                         codex_protocol::protocol::AskForApproval::OnRequest
@@ -192,8 +204,9 @@ impl ToolHandler for UnifiedExecHandler {
                     match normalize_and_validate_additional_permissions(
                         request_permission_enabled,
                         context.turn.approval_policy.value(),
-                        sandbox_permissions,
-                        additional_permissions,
+                        effective_additional_permissions.sandbox_permissions,
+                        effective_additional_permissions.additional_permissions,
+                        effective_additional_permissions.permissions_preapproved,
                         &cwd,
                     ) {
                         Ok(normalized) => normalized,
@@ -216,7 +229,17 @@ impl ToolHandler for UnifiedExecHandler {
                 .await?
                 {
                     manager.release_process_id(&process_id).await;
-                    return Ok(output);
+                    return Ok(ExecCommandToolOutput {
+                        event_call_id: String::new(),
+                        chunk_id: String::new(),
+                        wall_time: std::time::Duration::ZERO,
+                        raw_output: output.into_text().into_bytes(),
+                        max_output_tokens: None,
+                        process_id: None,
+                        exit_code: None,
+                        original_token_count: None,
+                        session_command: None,
+                    });
                 }
 
                 manager
@@ -229,8 +252,11 @@ impl ToolHandler for UnifiedExecHandler {
                             workdir,
                             network: context.turn.network.clone(),
                             tty,
-                            sandbox_permissions,
+                            sandbox_permissions: effective_additional_permissions
+                                .sandbox_permissions,
                             additional_permissions: normalized_additional_permissions,
+                            additional_permissions_preapproved: effective_additional_permissions
+                                .permissions_preapproved,
                             justification,
                             prefix_rule,
                         },
@@ -273,12 +299,7 @@ impl ToolHandler for UnifiedExecHandler {
             }
         };
 
-        let content = format_response(&response);
-
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            success: Some(true),
-        })
+        Ok(response)
     }
 }
 
@@ -305,35 +326,6 @@ pub(crate) fn get_command(
     };
 
     Ok(shell.derive_exec_args(&args.cmd, use_login_shell))
-}
-
-fn format_response(response: &UnifiedExecResponse) -> String {
-    let mut sections = Vec::new();
-
-    if !response.chunk_id.is_empty() {
-        sections.push(format!("Chunk ID: {}", response.chunk_id));
-    }
-
-    let wall_time_seconds = response.wall_time.as_secs_f64();
-    sections.push(format!("Wall time: {wall_time_seconds:.4} seconds"));
-
-    if let Some(exit_code) = response.exit_code {
-        sections.push(format!("Process exited with code {exit_code}"));
-    }
-
-    if let Some(process_id) = &response.process_id {
-        // Training still uses "session ID".
-        sections.push(format!("Process running with session ID {process_id}"));
-    }
-
-    if let Some(original_token_count) = response.original_token_count {
-        sections.push(format!("Original token count: {original_token_count}"));
-    }
-
-    sections.push("Output:".to_string());
-    sections.push(response.output.clone());
-
-    sections.join("\n")
 }
 
 #[cfg(test)]

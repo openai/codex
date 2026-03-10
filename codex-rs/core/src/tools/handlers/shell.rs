@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use std::sync::Arc;
@@ -15,11 +14,12 @@ use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
 use crate::skills::maybe_emit_implicit_skill_invocation;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments_with_base_path;
@@ -141,6 +141,8 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
 
 #[async_trait]
 impl ToolHandler for ShellHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -164,7 +166,7 @@ impl ToolHandler for ShellHandler {
         }
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -223,6 +225,8 @@ impl ToolHandler for ShellHandler {
 
 #[async_trait]
 impl ToolHandler for ShellCommandHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -252,7 +256,7 @@ impl ToolHandler for ShellCommandHandler {
             .unwrap_or(true)
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -304,7 +308,7 @@ impl ToolHandler for ShellCommandHandler {
 }
 
 impl ShellHandler {
-    async fn run_exec_like(args: RunExecLikeArgs) -> Result<ToolOutput, FunctionCallError> {
+    async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, FunctionCallError> {
         let RunExecLikeArgs {
             tool_name,
             exec_params,
@@ -332,17 +336,29 @@ impl ShellHandler {
         }
 
         let request_permission_enabled = session.features().enabled(Feature::RequestPermissions);
+        let effective_additional_permissions = apply_granted_turn_permissions(
+            session.as_ref(),
+            exec_params.sandbox_permissions,
+            additional_permissions,
+        )
+        .await;
         let normalized_additional_permissions = normalize_and_validate_additional_permissions(
             request_permission_enabled,
             turn.approval_policy.value(),
-            exec_params.sandbox_permissions,
-            additional_permissions,
+            effective_additional_permissions.sandbox_permissions,
+            effective_additional_permissions.additional_permissions,
+            effective_additional_permissions.permissions_preapproved,
             &exec_params.cwd,
         )
         .map_err(FunctionCallError::RespondToModel)?;
 
         // Approval policy guard for explicit escalation in non-OnRequest modes.
-        if exec_params.sandbox_permissions.requests_sandbox_override()
+        // Sticky turn permissions have already been approved, so they should
+        // continue through the normal exec approval flow for the command.
+        if effective_additional_permissions
+            .sandbox_permissions
+            .requests_sandbox_override()
+            && !effective_additional_permissions.permissions_preapproved
             && !matches!(
                 turn.approval_policy.value(),
                 codex_protocol::protocol::AskForApproval::OnRequest
@@ -387,7 +403,11 @@ impl ShellHandler {
                 command: &exec_params.command,
                 approval_policy: turn.approval_policy.value(),
                 sandbox_policy: turn.sandbox_policy.get(),
-                sandbox_permissions: exec_params.sandbox_permissions,
+                sandbox_permissions: if effective_additional_permissions.permissions_preapproved {
+                    codex_protocol::models::SandboxPermissions::UseDefault
+                } else {
+                    effective_additional_permissions.sandbox_permissions
+                },
                 prefix_rule,
             })
             .await;
@@ -399,7 +419,7 @@ impl ShellHandler {
             env: exec_params.env.clone(),
             explicit_env_overrides,
             network: exec_params.network.clone(),
-            sandbox_permissions: exec_params.sandbox_permissions,
+            sandbox_permissions: effective_additional_permissions.sandbox_permissions,
             additional_permissions: normalized_additional_permissions,
             justification: exec_params.justification.clone(),
             exec_approval_requirement,
@@ -432,10 +452,7 @@ impl ShellHandler {
             .map(|result| result.output);
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         let content = emitter.finish(event_ctx, out).await?;
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            success: Some(true),
-        })
+        Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
 

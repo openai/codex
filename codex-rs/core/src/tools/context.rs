@@ -3,15 +3,21 @@ use crate::codex::TurnContext;
 use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
 use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
 use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::formatted_truncate_text;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::unified_exec::resolve_max_tokens;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ShellToolCallParams;
+use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_utils_string::take_bytes_at_char_boundary;
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
@@ -20,6 +26,7 @@ pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 pub enum ToolCallSource {
     Direct,
     JsRepl,
+    CodeMode,
 }
 
 #[derive(Clone)]
@@ -61,62 +68,175 @@ impl ToolPayload {
     }
 }
 
-#[derive(Clone)]
-pub enum ToolOutput {
-    Function {
-        // Canonical output body for function-style tools. This may be plain text
-        // or structured content items.
-        body: FunctionCallOutputBody,
-        success: Option<bool>,
-    },
-    Mcp {
-        result: Result<CallToolResult, String>,
-    },
+pub trait ToolOutput: Send {
+    fn log_preview(&self) -> String;
+
+    fn success_for_logging(&self) -> bool;
+
+    fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
 }
 
-impl ToolOutput {
-    pub fn log_preview(&self) -> String {
-        match self {
-            ToolOutput::Function { body, .. } => {
-                telemetry_preview(&body.to_text().unwrap_or_default())
-            }
-            ToolOutput::Mcp { result } => format!("{result:?}"),
+pub struct McpToolOutput {
+    pub result: Result<CallToolResult, String>,
+}
+
+impl ToolOutput for McpToolOutput {
+    fn log_preview(&self) -> String {
+        format!("{:?}", self.result)
+    }
+
+    fn success_for_logging(&self) -> bool {
+        self.result.is_ok()
+    }
+
+    fn into_response(self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
+        let Self { result } = self;
+        ResponseInputItem::McpToolCallOutput {
+            call_id: call_id.to_string(),
+            result,
+        }
+    }
+}
+
+pub struct FunctionToolOutput {
+    pub body: Vec<FunctionCallOutputContentItem>,
+    pub success: Option<bool>,
+}
+
+impl FunctionToolOutput {
+    pub fn from_text(text: String, success: Option<bool>) -> Self {
+        Self {
+            body: vec![FunctionCallOutputContentItem::InputText { text }],
+            success,
         }
     }
 
-    pub fn success_for_logging(&self) -> bool {
-        match self {
-            ToolOutput::Function { success, .. } => success.unwrap_or(true),
-            ToolOutput::Mcp { result } => result.is_ok(),
+    pub fn from_content(
+        content: Vec<FunctionCallOutputContentItem>,
+        success: Option<bool>,
+    ) -> Self {
+        Self {
+            body: content,
+            success,
         }
     }
 
-    pub fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
-        match self {
-            ToolOutput::Function { body, success } => {
-                // `custom_tool_call` is the Responses API item type for freeform
-                // tools (`ToolSpec::Freeform`, e.g. freeform `apply_patch` or
-                // `js_repl`).
-                if matches!(payload, ToolPayload::Custom { .. }) {
-                    return ResponseInputItem::CustomToolCallOutput {
-                        call_id: call_id.to_string(),
-                        output: FunctionCallOutputPayload { body, success },
-                    };
-                }
+    pub fn into_text(self) -> String {
+        function_call_output_content_items_to_text(&self.body).unwrap_or_default()
+    }
+}
 
-                // Function-style outputs (JSON function tools, including dynamic
-                // tools and MCP adaptation) preserve the exact body shape.
-                ResponseInputItem::FunctionCallOutput {
-                    call_id: call_id.to_string(),
-                    output: FunctionCallOutputPayload { body, success },
-                }
-            }
-            // Direct MCP response path for MCP tool result envelopes.
-            ToolOutput::Mcp { result } => ResponseInputItem::McpToolCallOutput {
-                call_id: call_id.to_string(),
-                result,
-            },
+impl ToolOutput for FunctionToolOutput {
+    fn log_preview(&self) -> String {
+        telemetry_preview(
+            &function_call_output_content_items_to_text(&self.body).unwrap_or_default(),
+        )
+    }
+
+    fn success_for_logging(&self) -> bool {
+        self.success.unwrap_or(true)
+    }
+
+    fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+        let Self { body, success } = self;
+        function_tool_response(call_id, payload, body, success)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecCommandToolOutput {
+    pub event_call_id: String,
+    pub chunk_id: String,
+    pub wall_time: Duration,
+    /// Raw bytes returned for this unified exec call before any truncation.
+    pub raw_output: Vec<u8>,
+    pub max_output_tokens: Option<usize>,
+    pub process_id: Option<String>,
+    pub exit_code: Option<i32>,
+    pub original_token_count: Option<usize>,
+    pub session_command: Option<Vec<String>>,
+}
+
+impl ToolOutput for ExecCommandToolOutput {
+    fn log_preview(&self) -> String {
+        telemetry_preview(&self.response_text())
+    }
+
+    fn success_for_logging(&self) -> bool {
+        true
+    }
+
+    fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+        function_tool_response(
+            call_id,
+            payload,
+            vec![FunctionCallOutputContentItem::InputText {
+                text: self.response_text(),
+            }],
+            Some(true),
+        )
+    }
+}
+
+impl ExecCommandToolOutput {
+    pub(crate) fn truncated_output(&self) -> String {
+        let text = String::from_utf8_lossy(&self.raw_output).to_string();
+        let max_tokens = resolve_max_tokens(self.max_output_tokens);
+        formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens))
+    }
+
+    fn response_text(&self) -> String {
+        let mut sections = Vec::new();
+
+        if !self.chunk_id.is_empty() {
+            sections.push(format!("Chunk ID: {}", self.chunk_id));
         }
+
+        let wall_time_seconds = self.wall_time.as_secs_f64();
+        sections.push(format!("Wall time: {wall_time_seconds:.4} seconds"));
+
+        if let Some(exit_code) = self.exit_code {
+            sections.push(format!("Process exited with code {exit_code}"));
+        }
+
+        if let Some(process_id) = &self.process_id {
+            sections.push(format!("Process running with session ID {process_id}"));
+        }
+
+        if let Some(original_token_count) = self.original_token_count {
+            sections.push(format!("Original token count: {original_token_count}"));
+        }
+
+        sections.push("Output:".to_string());
+        sections.push(self.truncated_output());
+
+        sections.join("\n")
+    }
+}
+
+fn function_tool_response(
+    call_id: &str,
+    payload: &ToolPayload,
+    body: Vec<FunctionCallOutputContentItem>,
+    success: Option<bool>,
+) -> ResponseInputItem {
+    let body = match body.as_slice() {
+        [FunctionCallOutputContentItem::InputText { text }] => {
+            FunctionCallOutputBody::Text(text.clone())
+        }
+        _ => FunctionCallOutputBody::ContentItems(body),
+    };
+
+    if matches!(payload, ToolPayload::Custom { .. }) {
+        return ResponseInputItem::CustomToolCallOutput {
+            call_id: call_id.to_string(),
+            output: FunctionCallOutputPayload { body, success },
+        };
+    }
+
+    ResponseInputItem::FunctionCallOutput {
+        call_id: call_id.to_string(),
+        output: FunctionCallOutputPayload { body, success },
     }
 }
 
@@ -163,7 +283,7 @@ fn telemetry_preview(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_protocol::models::FunctionCallOutputContentItem;
+    use core_test_support::assert_regex_match;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -171,17 +291,14 @@ mod tests {
         let payload = ToolPayload::Custom {
             input: "patch".to_string(),
         };
-        let response = ToolOutput::Function {
-            body: FunctionCallOutputBody::Text("patched".to_string()),
-            success: Some(true),
-        }
-        .into_response("call-42", &payload);
+        let response = FunctionToolOutput::from_text("patched".to_string(), Some(true))
+            .into_response("call-42", &payload);
 
         match response {
             ResponseInputItem::CustomToolCallOutput { call_id, output } => {
                 assert_eq!(call_id, "call-42");
-                assert_eq!(output.text_content(), Some("patched"));
-                assert!(output.content_items().is_none());
+                assert_eq!(output.content_items(), None);
+                assert_eq!(output.body.to_text().as_deref(), Some("patched"));
                 assert_eq!(output.success, Some(true));
             }
             other => panic!("expected CustomToolCallOutput, got {other:?}"),
@@ -193,17 +310,14 @@ mod tests {
         let payload = ToolPayload::Function {
             arguments: "{}".to_string(),
         };
-        let response = ToolOutput::Function {
-            body: FunctionCallOutputBody::Text("ok".to_string()),
-            success: Some(true),
-        }
-        .into_response("fn-1", &payload);
+        let response = FunctionToolOutput::from_text("ok".to_string(), Some(true))
+            .into_response("fn-1", &payload);
 
         match response {
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 assert_eq!(call_id, "fn-1");
-                assert_eq!(output.text_content(), Some("ok"));
-                assert!(output.content_items().is_none());
+                assert_eq!(output.content_items(), None);
+                assert_eq!(output.body.to_text().as_deref(), Some("ok"));
                 assert_eq!(output.success, Some(true));
             }
             other => panic!("expected FunctionCallOutput, got {other:?}"),
@@ -215,8 +329,8 @@ mod tests {
         let payload = ToolPayload::Custom {
             input: "patch".to_string(),
         };
-        let response = ToolOutput::Function {
-            body: FunctionCallOutputBody::ContentItems(vec![
+        let response = FunctionToolOutput::from_content(
+            vec![
                 FunctionCallOutputContentItem::InputText {
                     text: "line 1".to_string(),
                 },
@@ -227,9 +341,9 @@ mod tests {
                 FunctionCallOutputContentItem::InputText {
                     text: "line 2".to_string(),
                 },
-            ]),
-            success: Some(true),
-        }
+            ],
+            Some(true),
+        )
         .into_response("call-99", &payload);
 
         match response {
@@ -257,16 +371,18 @@ mod tests {
 
     #[test]
     fn log_preview_uses_content_items_when_plain_text_is_missing() {
-        let output = ToolOutput::Function {
-            body: FunctionCallOutputBody::ContentItems(vec![
-                FunctionCallOutputContentItem::InputText {
-                    text: "preview".to_string(),
-                },
-            ]),
-            success: Some(true),
-        };
+        let output = FunctionToolOutput::from_content(
+            vec![FunctionCallOutputContentItem::InputText {
+                text: "preview".to_string(),
+            }],
+            Some(true),
+        );
 
         assert_eq!(output.log_preview(), "preview");
+        assert_eq!(
+            function_call_output_content_items_to_text(&output.body),
+            Some("preview".to_string())
+        );
     }
 
     #[test]
@@ -299,5 +415,47 @@ mod tests {
 
         assert!(lines.len() <= TELEMETRY_PREVIEW_MAX_LINES + 1);
         assert_eq!(lines.last(), Some(&TELEMETRY_PREVIEW_TRUNCATION_NOTICE));
+    }
+
+    #[test]
+    fn exec_command_tool_output_formats_truncated_response() {
+        let payload = ToolPayload::Function {
+            arguments: "{}".to_string(),
+        };
+        let response = ExecCommandToolOutput {
+            event_call_id: "call-42".to_string(),
+            chunk_id: "abc123".to_string(),
+            wall_time: std::time::Duration::from_millis(1250),
+            raw_output: b"token one token two token three token four token five".to_vec(),
+            max_output_tokens: Some(4),
+            process_id: None,
+            exit_code: Some(0),
+            original_token_count: Some(10),
+            session_command: None,
+        }
+        .into_response("call-42", &payload);
+
+        match response {
+            ResponseInputItem::FunctionCallOutput { call_id, output } => {
+                assert_eq!(call_id, "call-42");
+                assert_eq!(output.success, Some(true));
+                let text = output
+                    .body
+                    .to_text()
+                    .expect("exec output should serialize as text");
+                assert_regex_match(
+                    r#"(?sx)
+                    ^Chunk\ ID:\ abc123
+                    \nWall\ time:\ \d+\.\d{4}\ seconds
+                    \nProcess\ exited\ with\ code\ 0
+                    \nOriginal\ token\ count:\ 10
+                    \nOutput:
+                    \n.*tokens\ truncated.*
+                    $"#,
+                    &text,
+                );
+            }
+            other => panic!("expected FunctionCallOutput, got {other:?}"),
+        }
     }
 }

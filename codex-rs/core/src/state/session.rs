@@ -1,5 +1,6 @@
 //! Session-wide mutable state.
 
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -32,6 +33,8 @@ pub(crate) struct SessionState {
     pub(crate) startup_regular_task: Option<JoinHandle<CodexResult<RegularTask>>>,
     pub(crate) active_mcp_tool_selection: Option<Vec<String>>,
     pub(crate) active_connector_selection: HashSet<String>,
+    pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
+    granted_permissions: Option<PermissionProfile>,
 }
 
 impl SessionState {
@@ -49,6 +52,8 @@ impl SessionState {
             startup_regular_task: None,
             active_mcp_tool_selection: None,
             active_connector_selection: HashSet::new(),
+            pending_session_start_source: None,
+            granted_permissions: None,
         }
     }
 
@@ -218,6 +223,17 @@ impl SessionState {
         self.active_mcp_tool_selection = None;
     }
 
+    pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {
+        self.granted_permissions = crate::sandboxing::merge_permission_profiles(
+            self.granted_permissions.as_ref(),
+            Some(&permissions),
+        );
+    }
+
+    pub(crate) fn granted_permissions(&self) -> Option<PermissionProfile> {
+        self.granted_permissions.clone()
+    }
+
     // Adds connector IDs to the active set and returns the merged selection.
     pub(crate) fn merge_connector_selection<I>(&mut self, connector_ids: I) -> HashSet<String>
     where
@@ -235,6 +251,19 @@ impl SessionState {
     // Removes all currently tracked connector selections.
     pub(crate) fn clear_connector_selection(&mut self) {
         self.active_connector_selection.clear();
+    }
+
+    pub(crate) fn set_pending_session_start_source(
+        &mut self,
+        value: Option<codex_hooks::SessionStartSource>,
+    ) {
+        self.pending_session_start_source = value;
+    }
+
+    pub(crate) fn take_pending_session_start_source(
+        &mut self,
+    ) -> Option<codex_hooks::SessionStartSource> {
+        self.pending_session_start_source.take()
     }
 }
 

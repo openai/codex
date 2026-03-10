@@ -212,6 +212,10 @@ impl CodexAuth {
         }
     }
 
+    pub fn is_api_key_auth(&self) -> bool {
+        self.auth_mode() == AuthMode::ApiKey
+    }
+
     pub fn is_chatgpt_auth(&self) -> bool {
         self.auth_mode() == AuthMode::Chatgpt
     }

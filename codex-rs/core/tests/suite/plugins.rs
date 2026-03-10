@@ -114,7 +114,7 @@ async fn build_apps_enabled_plugin_test_codex(
 ) -> Result<Arc<codex_core::CodexThread>> {
     let mut builder = test_codex()
         .with_home(codex_home)
-        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
             config
                 .features

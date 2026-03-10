@@ -39,6 +39,7 @@ use codex_core::check_execpolicy_for_warnings;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_feedback::CodexFeedback;
+use codex_protocol::protocol::SessionSource;
 use codex_state::log_db;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -65,6 +66,7 @@ mod error_code;
 mod external_agent_config_api;
 mod filters;
 mod fuzzy_file_search;
+pub mod in_process;
 mod message_processor;
 mod models;
 mod outgoing_message;
@@ -597,6 +599,8 @@ pub async fn run_main_with_transport(
             feedback: feedback.clone(),
             log_db,
             config_warnings,
+            session_source: SessionSource::VSCode,
+            enable_codex_api_key_env: false,
         });
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
@@ -711,7 +715,6 @@ pub async fn run_main_with_transport(
                                                 request,
                                                 transport,
                                                 &mut connection_state.session,
-                                                &connection_state.outbound_initialized,
                                             )
                                             .await;
                                         if let Ok(mut opted_out_notification_methods) = connection_state
@@ -734,7 +737,15 @@ pub async fn run_main_with_transport(
                                                 std::sync::atomic::Ordering::Release,
                                             );
                                         if !was_initialized && connection_state.session.initialized {
-                                            processor.send_initialize_notifications().await;
+                                            processor
+                                                .send_initialize_notifications_to_connection(
+                                                    connection_id,
+                                                )
+                                                .await;
+                                            processor.connection_initialized(connection_id).await;
+                                            connection_state
+                                                .outbound_initialized
+                                                .store(true, std::sync::atomic::Ordering::Release);
                                         }
                                     }
                                     JSONRPCMessage::Response(response) => {

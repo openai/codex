@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::local_image_content_items_with_label_number;
@@ -13,8 +12,8 @@ use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::EventMsg;
 use crate::protocol::ViewImageToolCallEvent;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -32,11 +31,13 @@ struct ViewImageArgs {
 
 #[async_trait]
 impl ToolHandler for ViewImageHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         if !invocation
             .turn
             .model_info
@@ -121,9 +122,6 @@ impl ToolHandler for ViewImageHandler {
             )
             .await;
 
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::ContentItems(content),
-            success: Some(true),
-        })
+        Ok(FunctionToolOutput::from_content(content, Some(true)))
     }
 }

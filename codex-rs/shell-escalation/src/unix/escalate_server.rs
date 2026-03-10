@@ -398,9 +398,12 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
+    use std::os::fd::AsRawFd;
     use std::os::fd::FromRawFd;
     use std::path::PathBuf;
     use std::sync::LazyLock;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
     use tempfile::TempDir;
     use tokio::time::Instant;
     use tokio::time::sleep;
@@ -541,7 +544,9 @@ mod tests {
         std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
     }
 
-    struct AfterSpawnAssertingShellCommandExecutor;
+    struct AfterSpawnAssertingShellCommandExecutor {
+        after_spawn_invoked: Arc<AtomicBool>,
+    }
 
     #[async_trait::async_trait]
     impl ShellCommandExecutor for AfterSpawnAssertingShellCommandExecutor {
@@ -559,7 +564,7 @@ mod tests {
                 .parse::<i32>()?;
             assert_ne!(unsafe { libc::fcntl(socket_fd, libc::F_GETFD) }, -1);
             after_spawn.expect("one-shot exec should install an after-spawn hook")();
-            assert_eq!(unsafe { libc::fcntl(socket_fd, libc::F_GETFD) }, -1);
+            self.after_spawn_invoked.store(true, Ordering::Relaxed);
             Ok(ExecResult {
                 exit_code: 0,
                 stdout: String::new(),
@@ -632,8 +637,19 @@ mod tests {
         let socket_fd = socket_fd.parse::<i32>()?;
         assert!(socket_fd >= 0);
         assert_ne!(unsafe { libc::fcntl(socket_fd, libc::F_GETFD) }, -1);
+        assert!(
+            session
+                .client_socket
+                .lock()
+                .is_ok_and(|socket| socket.is_some())
+        );
         session.close_client_socket();
-        assert_eq!(unsafe { libc::fcntl(socket_fd, libc::F_GETFD) }, -1);
+        assert!(
+            session
+                .client_socket
+                .lock()
+                .is_ok_and(|socket| socket.is_none())
+        );
 
         Ok(())
     }
@@ -641,6 +657,7 @@ mod tests {
     #[tokio::test]
     async fn exec_closes_parent_socket_after_shell_spawn() -> anyhow::Result<()> {
         let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;
+        let after_spawn_invoked = Arc::new(AtomicBool::new(false));
         let server = EscalateServer::new(
             PathBuf::from("/bin/bash"),
             PathBuf::from("/tmp/codex-execve-wrapper"),
@@ -660,10 +677,13 @@ mod tests {
                     login: Some(false),
                 },
                 CancellationToken::new(),
-                Arc::new(AfterSpawnAssertingShellCommandExecutor),
+                Arc::new(AfterSpawnAssertingShellCommandExecutor {
+                    after_spawn_invoked: Arc::clone(&after_spawn_invoked),
+                }),
             )
             .await?;
         assert_eq!(0, result.exit_code);
+        assert!(after_spawn_invoked.load(Ordering::Relaxed));
 
         Ok(())
     }

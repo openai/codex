@@ -65,6 +65,7 @@ mod auth_refresh;
 mod cli_stream;
 mod client;
 mod client_websockets;
+mod code_mode;
 mod codex_delegate;
 mod collaboration_instructions;
 mod compact;
@@ -104,6 +105,8 @@ mod remote_models;
 mod request_compression;
 #[cfg(not(target_os = "windows"))]
 mod request_permissions;
+#[cfg(not(target_os = "windows"))]
+mod request_permissions_tool;
 mod request_user_input;
 mod resume;
 mod resume_warning;

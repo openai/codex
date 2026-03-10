@@ -7,6 +7,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::ExecApprovalRequestSkillMetadata;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RejectConfig;
 use codex_protocol::protocol::ReviewDecision;
@@ -242,6 +243,14 @@ permissions:
             ..Default::default()
         })
     );
+    assert_eq!(
+        approval.skill_metadata,
+        Some(ExecApprovalRequestSkillMetadata {
+            path_to_skills_md: test
+                .codex_home_path()
+                .join("skills/mbolin-test-skill/agents/openai.yaml"),
+        })
+    );
 
     test.codex
         .submit(Op::ExecApproval {
@@ -279,6 +288,7 @@ async fn shell_zsh_fork_skill_script_reject_policy_with_sandbox_approval_false_s
     let approval_policy = AskForApproval::Reject(RejectConfig {
         sandbox_approval: false,
         rules: true,
+        request_permissions: false,
         mcp_elicitations: false,
     });
     let server = start_mock_server().await;
@@ -371,6 +381,7 @@ async fn shell_zsh_fork_skill_script_reject_policy_with_sandbox_approval_true_sk
     let approval_policy = AskForApproval::Reject(RejectConfig {
         sandbox_approval: true,
         rules: false,
+        request_permissions: false,
         mcp_elicitations: false,
     });
     let server = start_mock_server().await;

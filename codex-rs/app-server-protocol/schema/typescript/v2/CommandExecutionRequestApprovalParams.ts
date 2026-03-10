@@ -4,6 +4,7 @@
 import type { AdditionalPermissionProfile } from "./AdditionalPermissionProfile";
 import type { CommandAction } from "./CommandAction";
 import type { CommandExecutionApprovalDecision } from "./CommandExecutionApprovalDecision";
+import type { CommandExecutionRequestApprovalSkillMetadata } from "./CommandExecutionRequestApprovalSkillMetadata";
 import type { ExecPolicyAmendment } from "./ExecPolicyAmendment";
 import type { NetworkApprovalContext } from "./NetworkApprovalContext";
 import type { NetworkPolicyAmendment } from "./NetworkPolicyAmendment";
@@ -43,6 +44,10 @@ commandActions?: Array<CommandAction> | null,
  * Optional additional permissions requested for this command.
  */
 additionalPermissions?: AdditionalPermissionProfile | null, 
+/**
+ * Optional skill metadata when the approval was triggered by a skill script.
+ */
+skillMetadata?: CommandExecutionRequestApprovalSkillMetadata | null, 
 /**
  * Optional proposed execpolicy amendment to allow similar commands without prompting.
  */
