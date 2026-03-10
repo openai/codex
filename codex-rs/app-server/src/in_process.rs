@@ -919,6 +919,111 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn nested_in_process_clients_keep_latest_shared_auth_override_active() {
+        let mut config_a = build_test_config().await;
+        config_a.forced_chatgpt_workspace_id = Some("workspace-a".to_string());
+        let auth_manager = AuthManager::shared(
+            config_a.codex_home.clone(),
+            false,
+            config_a.cli_auth_credentials_store_mode,
+        );
+        auth_manager.set_forced_chatgpt_workspace_id(Some("workspace-before".to_string()));
+        let thread_manager = Arc::new(ThreadManager::new(
+            config_a.codex_home.clone(),
+            auth_manager.clone(),
+            SessionSource::Cli,
+            config_a.model_catalog.clone(),
+            CollaborationModesConfig {
+                default_mode_request_user_input: false,
+            },
+        ));
+
+        let client_a = start(InProcessStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(config_a),
+            thread_manager: Some(Arc::clone(&thread_manager)),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            initialize: InitializeParams {
+                client_info: ClientInfo {
+                    name: "codex-in-process-test-a".to_string(),
+                    title: None,
+                    version: "0.0.0".to_string(),
+                },
+                capabilities: None,
+            },
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await
+        .expect("first in-process runtime should start");
+
+        assert!(auth_manager.has_external_auth_refresher());
+        assert_eq!(
+            auth_manager.forced_chatgpt_workspace_id(),
+            Some("workspace-a".to_string())
+        );
+
+        let mut config_b = build_test_config().await;
+        config_b.forced_chatgpt_workspace_id = Some("workspace-b".to_string());
+        let client_b = start(InProcessStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(config_b),
+            thread_manager: Some(Arc::clone(&thread_manager)),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            initialize: InitializeParams {
+                client_info: ClientInfo {
+                    name: "codex-in-process-test-b".to_string(),
+                    title: None,
+                    version: "0.0.0".to_string(),
+                },
+                capabilities: None,
+            },
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await
+        .expect("second in-process runtime should start");
+
+        assert!(auth_manager.has_external_auth_refresher());
+        assert_eq!(
+            auth_manager.forced_chatgpt_workspace_id(),
+            Some("workspace-b".to_string())
+        );
+
+        client_a
+            .shutdown()
+            .await
+            .expect("first in-process runtime should shutdown cleanly");
+
+        assert!(auth_manager.has_external_auth_refresher());
+        assert_eq!(
+            auth_manager.forced_chatgpt_workspace_id(),
+            Some("workspace-b".to_string())
+        );
+
+        client_b
+            .shutdown()
+            .await
+            .expect("second in-process runtime should shutdown cleanly");
+
+        assert!(!auth_manager.has_external_auth_refresher());
+        assert_eq!(
+            auth_manager.forced_chatgpt_workspace_id(),
+            Some("workspace-before".to_string())
+        );
+    }
+
     #[test]
     fn guaranteed_delivery_helpers_cover_terminal_notifications() {
         assert!(server_notification_requires_delivery(
