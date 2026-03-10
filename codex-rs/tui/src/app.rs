@@ -852,9 +852,12 @@ impl App {
                 Feature::WindowsSandbox | Feature::WindowsSandboxElevated
             )
         });
-        let approval_review_policy_is_configured = || {
+        let approval_review_policy_config_scope = || {
             let effective_config = self.config.config_layer_stack.effective_config();
-            if let Some(profile) = self.active_profile.as_deref() {
+            let root_configured = effective_config
+                .as_table()
+                .is_some_and(|table| table.contains_key("approval_review_policy"));
+            let profile_configured = self.active_profile.as_deref().is_some_and(|profile| {
                 effective_config
                     .as_table()
                     .and_then(|table| table.get("profiles"))
@@ -864,11 +867,8 @@ impl App {
                     .is_some_and(|profile_config| {
                         profile_config.contains_key("approval_review_policy")
                     })
-            } else {
-                effective_config
-                    .as_table()
-                    .is_some_and(|table| table.contains_key("approval_review_policy"))
-            }
+            });
+            (root_configured, profile_configured)
         };
         let mut permissions_history_label: Option<&'static str> = None;
         let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
@@ -906,6 +906,16 @@ impl App {
                     continue;
                 }
             }
+            if feature == Feature::GuardianApproval && !enabled {
+                let (root_approval_review_policy_configured, _) =
+                    approval_review_policy_config_scope();
+                if self.active_profile.is_some() && root_approval_review_policy_configured {
+                    self.chat_widget.add_error_message(
+                        "Cannot disable Smart Approvals in this profile because `approval_review_policy` is configured outside the active profile.".to_string(),
+                    );
+                    continue;
+                }
+            }
             if let Err(err) = self.config.features.set_enabled(feature, enabled) {
                 tracing::error!(
                     error = %err,
@@ -921,7 +931,12 @@ impl App {
             self.chat_widget
                 .set_feature_enabled(feature, effective_enabled);
             if feature == Feature::GuardianApproval {
-                let approval_review_policy_was_configured = approval_review_policy_is_configured();
+                let (
+                    root_approval_review_policy_configured,
+                    profile_approval_review_policy_configured,
+                ) = approval_review_policy_config_scope();
+                let approval_review_policy_was_configured = root_approval_review_policy_configured
+                    || profile_approval_review_policy_configured;
                 let previous_approval_review_policy = self.config.approval_review_policy;
                 if effective_enabled && !approval_review_policy_was_configured {
                     self.config.approval_review_policy = ApprovalReviewPolicy::AutoOnly;
@@ -935,7 +950,7 @@ impl App {
                         permissions_history_label = Some("Smart Approvals");
                     }
                 } else if !effective_enabled {
-                    if approval_review_policy_was_configured {
+                    if profile_approval_review_policy_configured || self.active_profile.is_none() {
                         builder = builder.with_edits([ConfigEdit::ClearPath {
                             segments: scoped_segments("approval_review_policy"),
                         }]);
@@ -5532,6 +5547,117 @@ mod tests {
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(!config.contains("guardian_approval = true"));
         assert!(!config.contains("approval_review_policy ="));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_feature_flags_enabling_guardian_in_profile_keeps_root_review_policy()
+    -> Result<()> {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        app.active_profile = Some("guardian".to_string());
+        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml = "profile = \"guardian\"\napproval_review_policy = \"manual-only\"\n";
+        std::fs::write(config_toml_path.as_path(), config_toml)?;
+        let user_config = toml::from_str::<TomlValue>(config_toml)?;
+        app.config.config_layer_stack = app
+            .config
+            .config_layer_stack
+            .with_user_config(&config_toml_path, user_config);
+        app.config.approval_review_policy = ApprovalReviewPolicy::ManualOnly;
+        app.chat_widget
+            .set_approval_review_policy(ApprovalReviewPolicy::ManualOnly);
+
+        app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
+            .await;
+
+        assert!(app.config.features.enabled(Feature::GuardianApproval));
+        assert_eq!(
+            app.config.approval_review_policy,
+            ApprovalReviewPolicy::ManualOnly
+        );
+        assert_eq!(
+            app.chat_widget.config_ref().approval_review_policy,
+            ApprovalReviewPolicy::ManualOnly
+        );
+        assert!(
+            op_rx.try_recv().is_err(),
+            "feature toggle should not patch the active session"
+        );
+
+        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        let config_value = toml::from_str::<TomlValue>(&config)?;
+        let profile_config = config_value
+            .as_table()
+            .and_then(|table| table.get("profiles"))
+            .and_then(TomlValue::as_table)
+            .and_then(|profiles| profiles.get("guardian"))
+            .and_then(TomlValue::as_table)
+            .expect("guardian profile should exist");
+        assert_eq!(
+            config_value
+                .as_table()
+                .and_then(|table| table.get("approval_review_policy")),
+            Some(&TomlValue::String("manual-only".to_string()))
+        );
+        assert!(!profile_config.contains_key("approval_review_policy"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_feature_flags_disabling_guardian_in_profile_rejects_inherited_review_policy()
+    -> Result<()> {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        app.active_profile = Some("guardian".to_string());
+        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml = "profile = \"guardian\"\napproval_review_policy = \"manual-only\"\n\n[features]\nguardian_approval = true\n";
+        std::fs::write(config_toml_path.as_path(), config_toml)?;
+        let user_config = toml::from_str::<TomlValue>(config_toml)?;
+        app.config.config_layer_stack = app
+            .config
+            .config_layer_stack
+            .with_user_config(&config_toml_path, user_config);
+        app.config
+            .features
+            .set_enabled(Feature::GuardianApproval, true)?;
+        app.chat_widget
+            .set_feature_enabled(Feature::GuardianApproval, true);
+        app.config.approval_review_policy = ApprovalReviewPolicy::ManualOnly;
+        app.chat_widget
+            .set_approval_review_policy(ApprovalReviewPolicy::ManualOnly);
+
+        app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
+            .await;
+
+        assert!(app.config.features.enabled(Feature::GuardianApproval));
+        assert!(
+            app.chat_widget
+                .config_ref()
+                .features
+                .enabled(Feature::GuardianApproval)
+        );
+        assert_eq!(
+            app.config.approval_review_policy,
+            ApprovalReviewPolicy::ManualOnly
+        );
+        assert_eq!(
+            app.chat_widget.config_ref().approval_review_policy,
+            ApprovalReviewPolicy::ManualOnly
+        );
+        assert!(
+            op_rx.try_recv().is_err(),
+            "feature toggle should not patch the active session"
+        );
+        assert!(
+            app_event_rx.try_recv().is_err(),
+            "rejected feature disable should not emit a permissions history update"
+        );
+
+        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        assert_eq!(config, config_toml);
         Ok(())
     }
 
