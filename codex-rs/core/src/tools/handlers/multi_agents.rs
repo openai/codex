@@ -15,7 +15,6 @@ use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::TextToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
