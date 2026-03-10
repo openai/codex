@@ -2744,6 +2744,7 @@ mod tests {
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_protocol::protocol::TurnStartedEvent;
     use pretty_assertions::assert_eq;
     use tokio::sync::Mutex;
     use tokio::sync::mpsc;
