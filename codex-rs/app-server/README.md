@@ -157,7 +157,7 @@ Example with notification opt-out:
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
-- `plugin/list` — list discovered plugin marketplaces, including plugin id, installed/enabled state, and optional interface metadata (**under development; do not call from production clients yet**).
+- `plugin/list` — list discovered plugin marketplaces and plugin state. Pass `forceRemoteSync: true` to refresh curated plugin state before listing (**under development; do not call from production clients yet**).
 - `skills/changed` — notification emitted when watched local skill files change.
 - `skills/remote/list` — list public remote skills (**under development; do not call from production clients yet**).
 - `skills/remote/export` — download a remote skill by `hazelnutId` into `skills` under `codex_home` (**under development; do not call from production clients yet**).
@@ -1319,6 +1319,7 @@ Examples of descriptor strings:
 
 - `mock/experimentalMethod` (method-level gate)
 - `thread/start.mockExperimentalField` (field-level gate)
+- `askForApproval.reject` (enum-variant gate, for `approvalPolicy: { "reject": ... }`)
 
 ### For maintainers: Adding experimental fields and methods
 
@@ -1334,6 +1335,28 @@ At runtime, clients must send `initialize` with `capabilities.experimentalApi = 
 2. Ensure the params type derives `ExperimentalApi` so field-level gating can be detected at runtime.
 
 3. In `app-server-protocol/src/protocol/common.rs`, keep the method stable and use `inspect_params: true` when only some fields are experimental (like `thread/start`). If the entire method is experimental, annotate the method variant with `#[experimental("method/name")]`.
+
+Enum variants can be gated too:
+
+```rust
+#[derive(ExperimentalApi)]
+enum AskForApproval {
+    #[experimental("askForApproval.reject")]
+    Reject { /* ... */ },
+}
+```
+
+If a stable field contains a nested type that may itself be experimental, mark
+the field with `#[experimental(nested)]` so `ExperimentalApi` bubbles the nested
+reason up through the containing type:
+
+```rust
+#[derive(ExperimentalApi)]
+struct ProfileV2 {
+    #[experimental(nested)]
+    approval_policy: Option<AskForApproval>,
+}
+```
 
 For server-initiated request payloads, annotate the field the same way so schema generation treats it as experimental, and make sure app-server omits that field when the client did not opt into `experimentalApi`.
 

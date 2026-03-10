@@ -1,5 +1,5 @@
 const __codexEnabledTools = __CODE_MODE_ENABLED_TOOLS_PLACEHOLDER__;
-const __codexEnabledToolNames = __codexEnabledTools.map((tool) => tool.name);
+const __codexEnabledToolNames = __codexEnabledTools.map((tool) => tool.tool_name);
 const __codexContentItems = [];
 
 function __codexCloneContentItem(item) {

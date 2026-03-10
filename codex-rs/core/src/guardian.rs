@@ -731,8 +731,8 @@ fn truncate_guardian_action_value(value: Value) -> Value {
     }
 }
 
-fn format_guardian_action_pretty(action: &GuardianApprovalRequest) -> String {
-    let mut value = match action {
+pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest) -> Value {
+    match action {
         GuardianApprovalRequest::Shell {
             command,
             cwd,
@@ -871,7 +871,11 @@ fn format_guardian_action_pretty(action: &GuardianApprovalRequest) -> String {
             }
             action
         }
-    };
+    }
+}
+
+fn format_guardian_action_pretty(action: &GuardianApprovalRequest) -> String {
+    let mut value = guardian_approval_request_to_json(action);
     value = truncate_guardian_action_value(value);
     serde_json::to_string_pretty(&value).unwrap_or_else(|_| "null".to_string())
 }

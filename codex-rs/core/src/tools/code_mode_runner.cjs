@@ -103,13 +103,13 @@ function isValidIdentifier(name) {
 function createToolsNamespace(protocol, enabledTools) {
   const tools = Object.create(null);
 
-  for (const { name } of enabledTools) {
+  for (const { tool_name } of enabledTools) {
     const callTool = async (args) =>
       protocol.request('tool_call', {
-        name: String(name),
+        name: String(tool_name),
         input: args,
       });
-    Object.defineProperty(tools, name, {
+    Object.defineProperty(tools, tool_name, {
       value: callTool,
       configurable: false,
       enumerable: true,
@@ -124,9 +124,9 @@ function createToolsModule(context, protocol, enabledTools) {
   const tools = createToolsNamespace(protocol, enabledTools);
   const exportNames = ['tools'];
 
-  for (const { name } of enabledTools) {
-    if (name !== 'tools' && isValidIdentifier(name)) {
-      exportNames.push(name);
+  for (const { tool_name } of enabledTools) {
+    if (tool_name !== 'tools' && isValidIdentifier(tool_name)) {
+      exportNames.push(tool_name);
     }
   }
 
@@ -146,24 +146,108 @@ function createToolsModule(context, protocol, enabledTools) {
   );
 }
 
+function namespacesMatch(left, right) {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((segment, index) => segment === right[index]);
+}
+
+function createNamespacedToolsNamespace(protocol, enabledTools, namespace) {
+  const tools = Object.create(null);
+
+  for (const tool of enabledTools) {
+    const toolNamespace = Array.isArray(tool.namespace) ? tool.namespace : [];
+    if (!namespacesMatch(toolNamespace, namespace)) {
+      continue;
+    }
+
+    const callTool = async (args) =>
+      protocol.request('tool_call', {
+        name: String(tool.tool_name),
+        input: args,
+      });
+    Object.defineProperty(tools, tool.name, {
+      value: callTool,
+      configurable: false,
+      enumerable: true,
+      writable: false,
+    });
+  }
+
+  return Object.freeze(tools);
+}
+
+function createNamespacedToolsModule(context, protocol, enabledTools, namespace) {
+  const tools = createNamespacedToolsNamespace(protocol, enabledTools, namespace);
+  const exportNames = ['tools'];
+
+  for (const exportName of Object.keys(tools)) {
+    if (exportName !== 'tools' && isValidIdentifier(exportName)) {
+      exportNames.push(exportName);
+    }
+  }
+
+  const uniqueExportNames = [...new Set(exportNames)];
+
+  return new SyntheticModule(
+    uniqueExportNames,
+    function initNamespacedToolsModule() {
+      this.setExport('tools', tools);
+      for (const exportName of uniqueExportNames) {
+        if (exportName !== 'tools') {
+          this.setExport(exportName, tools[exportName]);
+        }
+      }
+    },
+    { context }
+  );
+}
+
+function createModuleResolver(context, protocol, enabledTools) {
+  const toolsModule = createToolsModule(context, protocol, enabledTools);
+  const namespacedModules = new Map();
+
+  return function resolveModule(specifier) {
+    if (specifier === 'tools.js') {
+      return toolsModule;
+    }
+
+    const namespacedMatch = /^tools\/(.+)\.js$/.exec(specifier);
+    if (!namespacedMatch) {
+      throw new Error(`Unsupported import in code_mode: ${specifier}`);
+    }
+
+    const namespace = namespacedMatch[1]
+      .split('/')
+      .filter((segment) => segment.length > 0);
+    if (namespace.length === 0) {
+      throw new Error(`Unsupported import in code_mode: ${specifier}`);
+    }
+
+    const cacheKey = namespace.join('/');
+    if (!namespacedModules.has(cacheKey)) {
+      namespacedModules.set(
+        cacheKey,
+        createNamespacedToolsModule(context, protocol, enabledTools, namespace)
+      );
+    }
+    return namespacedModules.get(cacheKey);
+  };
+}
+
 async function runModule(context, protocol, request) {
-  const toolsModule = createToolsModule(context, protocol, request.enabled_tools ?? []);
+  const resolveModule = createModuleResolver(context, protocol, request.enabled_tools ?? []);
   const mainModule = new SourceTextModule(request.source, {
     context,
     identifier: 'exec_main.mjs',
     importModuleDynamically(specifier) {
-      if (specifier === 'tools.js') {
-        return toolsModule;
-      }
-      throw new Error(`Unsupported import in exec: ${specifier}`);
+      return resolveModule(specifier);
     },
   });
 
   await mainModule.link(async (specifier) => {
-    if (specifier === 'tools.js') {
-      return toolsModule;
-    }
-    throw new Error(`Unsupported import in exec: ${specifier}`);
+    return resolveModule(specifier);
   });
   await mainModule.evaluate();
 }
