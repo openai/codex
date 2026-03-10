@@ -774,6 +774,16 @@ impl RequestUserInputOverlay {
                 interrupted: false,
             },
         )));
+        self.finish_current_request();
+    }
+
+    fn open_unanswered_confirmation(&mut self) {
+        let mut state = ScrollState::new();
+        state.selected_idx = Some(0);
+        self.confirm_unanswered = Some(state);
+    }
+
+    fn finish_current_request(&mut self) {
         if let Some(next) = self.queue.pop_front() {
             self.thread_id = next.thread_id;
             self.request = next.request;
@@ -785,10 +795,12 @@ impl RequestUserInputOverlay {
         }
     }
 
-    fn open_unanswered_confirmation(&mut self) {
-        let mut state = ScrollState::new();
-        state.selected_idx = Some(0);
-        self.confirm_unanswered = Some(state);
+    fn interrupt_current_request(&mut self) {
+        self.app_event_tx.send(AppEvent::SubmitThreadOp {
+            thread_id: self.thread_id,
+            op: Op::Interrupt,
+        });
+        self.finish_current_request();
     }
 
     fn close_unanswered_confirmation(&mut self) {
@@ -1023,11 +1035,7 @@ impl BottomPaneView for RequestUserInputOverlay {
             }
             // TODO: Emit interrupted request_user_input results (including committed answers)
             // once core supports persisting them reliably without follow-up turn issues.
-            self.app_event_tx.send(AppEvent::SubmitThreadOp {
-                thread_id: self.thread_id,
-                op: Op::Interrupt,
-            });
-            self.done = true;
+            self.interrupt_current_request();
             return;
         }
 
@@ -1242,11 +1250,7 @@ impl BottomPaneView for RequestUserInputOverlay {
             self.close_unanswered_confirmation();
             // TODO: Emit interrupted request_user_input results (including committed answers)
             // once core supports persisting them reliably without follow-up turn issues.
-            self.app_event_tx.send(AppEvent::SubmitThreadOp {
-                thread_id: self.thread_id,
-                op: Op::Interrupt,
-            });
-            self.done = true;
+            self.interrupt_current_request();
             return CancellationEvent::Handled;
         }
         if self.focus_is_notes() && !self.composer.current_text_with_pending().is_empty() {
@@ -1256,11 +1260,7 @@ impl BottomPaneView for RequestUserInputOverlay {
 
         // TODO: Emit interrupted request_user_input results (including committed answers)
         // once core supports persisting them reliably without follow-up turn issues.
-        self.app_event_tx.send(AppEvent::SubmitThreadOp {
-            thread_id: self.thread_id,
-            op: Op::Interrupt,
-        });
-        self.done = true;
+        self.interrupt_current_request();
         CancellationEvent::Handled
     }
 
@@ -1586,7 +1586,7 @@ mod tests {
     }
 
     #[test]
-    fn interrupt_discards_queued_requests_and_emits_interrupt() {
+    fn interrupt_advances_to_next_queued_request_and_emits_interrupt() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
             request_event("turn-1", vec![question_with_options("q1", "First")]),
@@ -1611,11 +1611,14 @@ mod tests {
                 questions: vec![question_with_options("q3", "Third")],
             },
         });
+        let interrupted_thread_id = overlay.thread_id;
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
-        assert!(overlay.done, "expected overlay to be done");
-        expect_interrupt_only(&mut rx, overlay.thread_id);
+        assert!(!overlay.done, "expected queued requests to remain visible");
+        assert_eq!(overlay.request.turn_id, "turn-2");
+        assert_eq!(overlay.queue.len(), 1);
+        expect_interrupt_only(&mut rx, interrupted_thread_id);
     }
 
     #[test]
