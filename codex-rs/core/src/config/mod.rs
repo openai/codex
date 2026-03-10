@@ -85,7 +85,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -98,6 +97,7 @@ use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
+pub(crate) mod agent_roles;
 pub mod edit;
 mod managed_features;
 mod network_proxy_spec;
@@ -1423,6 +1423,7 @@ pub struct AgentsToml {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentRoleConfig {
     /// Human-facing role documentation used in spawn tool guidance.
+    /// Required for loaded user-defined roles after deprecated/new metadata precedence resolves.
     pub description: Option<String>,
     /// Path to a role-specific config layer.
     pub config_file: Option<PathBuf>,
@@ -1434,6 +1435,7 @@ pub struct AgentRoleConfig {
 #[schemars(deny_unknown_fields)]
 pub struct AgentRoleToml {
     /// Human-facing role documentation used in spawn tool guidance.
+    /// Required unless supplied by the referenced agent role file.
     pub description: Option<String>,
 
     /// Path to a role-specific config layer.
@@ -2046,6 +2048,8 @@ impl Config {
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
 
+        let agent_roles = agent_roles::load_agent_roles(&cfg, &config_layer_stack)?;
+
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
@@ -2095,34 +2099,6 @@ impl Config {
                 "agents.max_depth must be at least 1",
             ));
         }
-        let agent_roles = cfg
-            .agents
-            .as_ref()
-            .map(|agents| {
-                agents
-                    .roles
-                    .iter()
-                    .map(|(name, role)| {
-                        let config_file =
-                            role.config_file.as_ref().map(AbsolutePathBuf::to_path_buf);
-                        Self::validate_agent_role_config_file(name, config_file.as_deref())?;
-                        let nickname_candidates = Self::normalize_agent_role_nickname_candidates(
-                            name,
-                            role.nickname_candidates.as_deref(),
-                        )?;
-                        Ok((
-                            name.clone(),
-                            AgentRoleConfig {
-                                description: role.description.clone(),
-                                config_file,
-                                nickname_candidates,
-                            },
-                        ))
-                    })
-                    .collect::<std::io::Result<BTreeMap<_, _>>>()
-            })
-            .transpose()?
-            .unwrap_or_default();
         let agent_job_max_runtime_seconds = cfg
             .agents
             .as_ref()
@@ -2565,88 +2541,6 @@ impl Config {
         } else {
             Ok(Some(s))
         }
-    }
-
-    fn validate_agent_role_config_file(
-        role_name: &str,
-        config_file: Option<&Path>,
-    ) -> std::io::Result<()> {
-        let Some(config_file) = config_file else {
-            return Ok(());
-        };
-
-        let metadata = std::fs::metadata(config_file).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "agents.{role_name}.config_file must point to an existing file at {}: {e}",
-                    config_file.display()
-                ),
-            )
-        })?;
-        if metadata.is_file() {
-            Ok(())
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "agents.{role_name}.config_file must point to a file: {}",
-                    config_file.display()
-                ),
-            ))
-        }
-    }
-
-    fn normalize_agent_role_nickname_candidates(
-        role_name: &str,
-        nickname_candidates: Option<&[String]>,
-    ) -> std::io::Result<Option<Vec<String>>> {
-        let Some(nickname_candidates) = nickname_candidates else {
-            return Ok(None);
-        };
-
-        if nickname_candidates.is_empty() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("agents.{role_name}.nickname_candidates must contain at least one name"),
-            ));
-        }
-
-        let mut normalized_candidates = Vec::with_capacity(nickname_candidates.len());
-        let mut seen_candidates = BTreeSet::new();
-
-        for nickname in nickname_candidates {
-            let normalized_nickname = nickname.trim();
-            if normalized_nickname.is_empty() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("agents.{role_name}.nickname_candidates cannot contain blank names"),
-                ));
-            }
-
-            if !seen_candidates.insert(normalized_nickname.to_owned()) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("agents.{role_name}.nickname_candidates cannot contain duplicates"),
-                ));
-            }
-
-            if !normalized_nickname
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_'))
-            {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!(
-                        "agents.{role_name}.nickname_candidates may only contain ASCII letters, digits, spaces, hyphens, and underscores"
-                    ),
-                ));
-            }
-
-            normalized_candidates.push(normalized_nickname.to_owned());
-        }
-
-        Ok(Some(normalized_candidates))
     }
 
     pub fn set_windows_sandbox_enabled(&mut self, value: bool) {

@@ -184,7 +184,7 @@ async fn code_mode_can_truncate_final_result_with_configured_budget() -> Result<
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "use code_mode to truncate the final result",
+        "use exec to truncate the final result",
         r#"
 import { exec_command } from "tools.js";
 import { set_max_output_tokens_per_exec_call } from "@openai/code_mode";
@@ -205,7 +205,7 @@ add_content(JSON.stringify(await exec_command({
     assert_ne!(
         success,
         Some(false),
-        "code_mode call failed unexpectedly: {output}"
+        "exec call failed unexpectedly: {output}"
     );
     let expected_pattern = r#"(?sx)
 \A
@@ -217,6 +217,113 @@ Total\ output\ lines:\ 1\n
 \z
 "#;
     assert_regex_match(expected_pattern, &output);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_can_output_serialized_text_via_openai_code_mode_module() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec to return structured text",
+        r#"
+import { output_text } from "@openai/code_mode";
+
+output_text({ json: true });
+"#,
+        false,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec call failed unexpectedly: {output}"
+    );
+    assert_eq!(output, r#"{"json":true}"#);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_surfaces_output_text_stringify_errors() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec to return circular text",
+        r#"
+import { output_text } from "@openai/code_mode";
+
+const circular = {};
+circular.self = circular;
+output_text(circular);
+"#,
+        false,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(true),
+        "circular stringify unexpectedly succeeded"
+    );
+    assert!(output.contains("exec execution failed"));
+    assert!(output.contains("Converting circular structure to JSON"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_can_output_images_via_openai_code_mode_module() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec to return images",
+        r#"
+import { output_image } from "@openai/code_mode";
+
+output_image("https://example.com/image.jpg");
+output_image("data:image/png;base64,AAA");
+"#,
+        false,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (_, success) = custom_tool_output_text_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "code_mode image output failed unexpectedly"
+    );
+    assert_eq!(
+        req.custom_tool_call_output("call-1"),
+        serde_json::json!({
+            "type": "custom_tool_call_output",
+            "call_id": "call-1",
+            "output": [
+                {
+                    "type": "input_image",
+                    "image_url": "https://example.com/image.jpg"
+                },
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,AAA"
+                }
+            ]
+        })
+    );
 
     Ok(())
 }
@@ -278,7 +385,7 @@ add_content(
     assert_ne!(
         success,
         Some(false),
-        "code_mode rmcp echo call failed unexpectedly: {output}"
+        "exec rmcp echo call failed unexpectedly: {output}"
     );
     assert_eq!(
         output,
@@ -317,7 +424,7 @@ add_content(
     assert_ne!(
         success,
         Some(false),
-        "code_mode rmcp echo call failed unexpectedly: {output}"
+        "exec rmcp echo call failed unexpectedly: {output}"
     );
     assert_eq!(
         output,
@@ -361,7 +468,7 @@ add_content(
     assert_ne!(
         success,
         Some(false),
-        "code_mode rmcp image scenario call failed unexpectedly: {output}"
+        "exec rmcp image scenario call failed unexpectedly: {output}"
     );
     assert_eq!(
         output,
@@ -402,7 +509,7 @@ add_content(
     assert_ne!(
         success,
         Some(false),
-        "code_mode rmcp error call failed unexpectedly: {output}"
+        "exec rmcp error call failed unexpectedly: {output}"
     );
     assert_eq!(
         output,
