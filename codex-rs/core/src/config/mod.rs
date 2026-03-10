@@ -2144,7 +2144,7 @@ impl Config {
         if approval_review_policy_was_explicit && !features.enabled(Feature::GuardianApproval) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "`approval_review_policy` requires `features.guardian_approval = true`",
+                "`approval_review_policy` requires `features.smart_approvals = true`",
             ));
         }
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)

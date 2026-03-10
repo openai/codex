@@ -5400,7 +5400,7 @@ mod tests {
         assert!(rendered.contains("Permissions updated to Smart Approvals"));
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-        assert!(config.contains("guardian_approval = true"));
+        assert!(config.contains("smart_approvals = true"));
         assert!(config.contains("approval_review_policy = \"auto-only\""));
         assert!(config.contains("approval_policy = \"on-request\""));
         assert!(config.contains("sandbox_mode = \"workspace-write\""));
@@ -5414,7 +5414,7 @@ mod tests {
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
-        let config_toml = "approval_review_policy = \"auto-only\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
+        let config_toml = "approval_review_policy = \"auto-only\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nsmart_approvals = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
         app.config.config_layer_stack = app
@@ -5494,7 +5494,7 @@ mod tests {
         assert!(rendered.contains("Permissions updated to Default"));
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-        assert!(!config.contains("guardian_approval = true"));
+        assert!(!config.contains("smart_approvals = true"));
         assert!(!config.contains("approval_review_policy ="));
         assert!(config.contains("approval_policy = \"on-request\""));
         assert!(config.contains("sandbox_mode = \"workspace-write\""));
@@ -5562,7 +5562,7 @@ mod tests {
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(config.contains("approval_review_policy = \"manual-only\""));
-        assert!(config.contains("guardian_approval = true"));
+        assert!(config.contains("smart_approvals = true"));
         assert!(config.contains("approval_policy = \"on-request\""));
         assert!(config.contains("sandbox_mode = \"workspace-write\""));
         Ok(())
@@ -5575,7 +5575,7 @@ mod tests {
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
-        let config_toml = "approval_review_policy = \"manual-only\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
+        let config_toml = "approval_review_policy = \"manual-only\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nsmart_approvals = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
         app.config.config_layer_stack = app
@@ -5625,7 +5625,7 @@ mod tests {
         );
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-        assert!(!config.contains("guardian_approval = true"));
+        assert!(!config.contains("smart_approvals = true"));
         assert!(!config.contains("approval_review_policy ="));
         Ok(())
     }
@@ -5705,7 +5705,7 @@ mod tests {
         app.config.codex_home = codex_home.path().to_path_buf();
         app.active_profile = Some("guardian".to_string());
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
-        let config_toml = "profile = \"guardian\"\napproval_review_policy = \"manual-only\"\n\n[features]\nguardian_approval = true\n";
+        let config_toml = "profile = \"guardian\"\napproval_review_policy = \"manual-only\"\n\n[features]\nsmart_approvals = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
         app.config.config_layer_stack = app
