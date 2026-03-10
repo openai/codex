@@ -3,9 +3,10 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
-import platform
 import sys
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,66 +82,48 @@ def test_schema_normalization_only_flattens_string_literal_oneofs() -> None:
     ]
 
 
-def test_bundled_binaries_exist_for_all_supported_platforms() -> None:
+def test_runtime_package_template_has_no_checked_in_binaries() -> None:
+    runtime_root = ROOT.parent / "python-runtime" / "src" / "codex_cli_bin"
+    assert sorted(
+        path.name
+        for path in runtime_root.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    ) == ["__init__.py"]
+
+
+def test_stage_runtime_release_copies_binary_and_sets_version(tmp_path: Path) -> None:
     script = _load_update_script_module()
-    for platform_key in script.PLATFORMS:
-        bin_path = script.bundled_platform_bin_path(platform_key)
-        assert bin_path.is_file(), f"Missing bundled binary: {bin_path}"
+    fake_binary = tmp_path / script.runtime_binary_name()
+    fake_binary.write_text("fake codex\n")
 
-
-def test_default_runtime_uses_current_platform_bundled_binary() -> None:
-    client_source = (ROOT / "src" / "codex_app_server" / "client.py").read_text()
-    client_tree = ast.parse(client_source)
-
-    # Keep this assertion source-level so it works in both PR2 (types foundation)
-    # and PR3 (full SDK), regardless of runtime module wiring.
-    app_server_config = next(
-        (
-            node
-            for node in client_tree.body
-            if isinstance(node, ast.ClassDef) and node.name == "AppServerConfig"
-        ),
-        None,
+    staged = script.stage_python_runtime_package(
+        tmp_path / "runtime-stage",
+        "1.2.3",
+        fake_binary,
     )
-    assert app_server_config is not None
 
-    codex_bin_field = next(
-        (
-            node
-            for node in app_server_config.body
-            if isinstance(node, ast.AnnAssign)
-            and isinstance(node.target, ast.Name)
-            and node.target.id == "codex_bin"
-        ),
-        None,
-    )
-    assert codex_bin_field is not None
-    assert isinstance(codex_bin_field.value, ast.Call)
-    assert isinstance(codex_bin_field.value.func, ast.Name)
-    assert codex_bin_field.value.func.id == "str"
-    assert len(codex_bin_field.value.args) == 1
-    bundled_call = codex_bin_field.value.args[0]
-    assert isinstance(bundled_call, ast.Call)
-    assert isinstance(bundled_call.func, ast.Name)
-    assert bundled_call.func.id == "_bundled_codex_path"
+    assert staged == tmp_path / "runtime-stage"
+    assert script.staged_runtime_bin_path(staged).read_text() == "fake codex\n"
+    assert 'version = "1.2.3"' in (staged / "pyproject.toml").read_text()
 
-    bin_root = (ROOT / "src" / "codex_app_server" / "bin").resolve()
 
-    sys_name = platform.system().lower()
-    machine = platform.machine().lower()
-    is_arm = machine in {"arm64", "aarch64"}
+def test_stage_sdk_release_injects_exact_runtime_pin(tmp_path: Path) -> None:
+    script = _load_update_script_module()
+    staged = script.stage_python_sdk_package(tmp_path / "sdk-stage", "0.2.1", "1.2.3")
 
-    if sys_name.startswith("darwin"):
-        platform_dir = "darwin-arm64" if is_arm else "darwin-x64"
-        exe = "codex"
-    elif sys_name.startswith("linux"):
-        platform_dir = "linux-arm64" if is_arm else "linux-x64"
-        exe = "codex"
-    elif sys_name.startswith("windows"):
-        platform_dir = "windows-arm64" if is_arm else "windows-x64"
-        exe = "codex.exe"
-    else:
-        raise AssertionError(f"Unsupported platform in test: {sys_name}/{machine}")
+    pyproject = (staged / "pyproject.toml").read_text()
+    assert 'version = "0.2.1"' in pyproject
+    assert '"codex-cli-bin==1.2.3"' in pyproject
+    assert not any((staged / "src" / "codex_app_server").glob("bin/**"))
 
-    expected = (bin_root / platform_dir / exe).resolve()
-    assert expected.is_file()
+
+def test_default_runtime_is_resolved_from_installed_runtime_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from codex_app_server import client as client_module
+
+    fake_binary = tmp_path / ("codex.exe" if client_module.os.name == "nt" else "codex")
+    fake_binary.write_text("")
+    monkeypatch.setattr(client_module, "_installed_codex_path", lambda: fake_binary)
+
+    config = client_module.AppServerConfig()
+    assert config.codex_bin is None
+    assert client_module._resolve_codex_bin(config) == fake_binary

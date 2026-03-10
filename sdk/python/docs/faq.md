@@ -33,15 +33,19 @@ Use `thread(...)` for simple continuation. Use `thread_resume(...)` when you nee
 
 Common causes:
 
-- bundled runtime binary missing for your OS/arch under `src/codex_app_server/bin/*`
+- published runtime package (`codex-cli-bin`) is not installed
+- local `codex_bin` override points to a missing file
 - local auth/session is missing
 - incompatible/old app-server
 
-Maintainers can refresh bundled binaries with:
+Maintainers can stage a pinned SDK/runtime release with:
 
 ```bash
 cd sdk/python
-python scripts/update_sdk_artifacts.py --channel stable --bundle-all-platforms
+python scripts/update_sdk_artifacts.py \
+  --stage-release \
+  --output-dir /tmp/codex-python-release \
+  --channel stable
 ```
 
 ## Why does a turn "hang"?

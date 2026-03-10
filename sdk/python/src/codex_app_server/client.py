@@ -47,6 +47,7 @@ from .retry import retry_on_overload
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 ApprovalHandler = Callable[[str, JsonObject | None], JsonObject]
+RUNTIME_PKG_NAME = "codex-cli-bin"
 
 
 def _params_dict(
@@ -76,30 +77,32 @@ def _params_dict(
     raise TypeError(f"Expected generated params model or dict, got {type(params).__name__}")
 
 
-def _bundled_codex_path() -> Path:
-    import platform
+def _installed_codex_path() -> Path:
+    try:
+        from codex_cli_bin import bundled_codex_path
+    except ImportError as exc:
+        raise FileNotFoundError(
+            "Unable to locate the pinned Codex runtime. Install the published SDK build "
+            f"with its {RUNTIME_PKG_NAME} dependency, or set AppServerConfig.codex_bin "
+            "explicitly."
+        ) from exc
 
-    sys_name = platform.system().lower()
-    machine = platform.machine().lower()
+    return bundled_codex_path()
 
-    if sys_name.startswith("darwin"):
-        platform_dir = "darwin-arm64" if machine in {"arm64", "aarch64"} else "darwin-x64"
-        exe = "codex"
-    elif sys_name.startswith("linux"):
-        platform_dir = "linux-arm64" if machine in {"arm64", "aarch64"} else "linux-x64"
-        exe = "codex"
-    elif sys_name.startswith("windows") or os.name == "nt":
-        platform_dir = "windows-arm64" if machine in {"arm64", "aarch64"} else "windows-x64"
-        exe = "codex.exe"
-    else:
-        raise RuntimeError(f"Unsupported OS for bundled codex binary: {sys_name}/{machine}")
 
-    return Path(__file__).resolve().parent / "bin" / platform_dir / exe
+def _resolve_codex_bin(config: "AppServerConfig") -> Path:
+    codex_bin = Path(config.codex_bin) if config.codex_bin is not None else _installed_codex_path()
+    if not codex_bin.exists():
+        raise FileNotFoundError(
+            f"Codex binary not found at {codex_bin}. Install {RUNTIME_PKG_NAME} or set "
+            "AppServerConfig.codex_bin explicitly."
+        )
+    return codex_bin
 
 
 @dataclass(slots=True)
 class AppServerConfig:
-    codex_bin: str = str(_bundled_codex_path())
+    codex_bin: str | None = None
     launch_args_override: tuple[str, ...] | None = None
     config_overrides: tuple[str, ...] = ()
     cwd: str | None = None
@@ -142,11 +145,7 @@ class AppServerClient:
         if self.config.launch_args_override is not None:
             args = list(self.config.launch_args_override)
         else:
-            codex_bin = Path(self.config.codex_bin)
-            if not codex_bin.exists():
-                raise FileNotFoundError(
-                    f"Pinned codex binary not found at {codex_bin}. Run `python scripts/update_sdk_artifacts.py --channel stable` from sdk/python."
-                )
+            codex_bin = _resolve_codex_bin(self.config)
             args = [str(codex_bin)]
             for kv in self.config.config_overrides:
                 args.extend(["--config", kv])

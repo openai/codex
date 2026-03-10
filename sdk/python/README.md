@@ -7,9 +7,16 @@ The generated wire-model layer is currently sourced from the bundled v2 schema a
 ## Install
 
 ```bash
+cd sdk/python-runtime
+python -m pip install -e .
+
 cd sdk/python
 python -m pip install -e .
 ```
+
+Published SDK builds pin an exact `codex-cli-bin` runtime dependency. For local
+repo development, either install a staged runtime package too or pass
+`AppServerConfig(codex_bin=...)`.
 
 ## Quickstart
 
@@ -40,33 +47,34 @@ python examples/01_quickstart_constructor/sync.py
 python examples/01_quickstart_constructor/async.py
 ```
 
-## Bundled runtime binaries (out of the box)
+## Runtime packaging
 
-The SDK ships with platform-specific bundled binaries, so end users do not need updater scripts.
+The repo no longer checks `codex` binaries into `sdk/python`.
 
-Runtime binary source (single source, no fallback):
-
-- `src/codex_app_server/bin/darwin-arm64/codex`
-- `src/codex_app_server/bin/darwin-x64/codex`
-- `src/codex_app_server/bin/linux-arm64/codex`
-- `src/codex_app_server/bin/linux-x64/codex`
-- `src/codex_app_server/bin/windows-arm64/codex.exe`
-- `src/codex_app_server/bin/windows-x64/codex.exe`
+Published SDK builds are pinned to an exact `codex-cli-bin` package version,
+and that runtime package carries the platform-specific binary for the target
+wheel.
 
 ## Maintainer workflow (refresh binaries/types)
 
 ```bash
 cd sdk/python
-python scripts/update_sdk_artifacts.py --channel stable --bundle-all-platforms
-# or
-python scripts/update_sdk_artifacts.py --channel alpha --bundle-all-platforms
+python scripts/update_sdk_artifacts.py --types-only
+python scripts/update_sdk_artifacts.py \
+  --stage-release \
+  --output-dir /tmp/codex-python-release \
+  --channel stable
 ```
 
-This refreshes all bundled OS/arch binaries and regenerates protocol-derived Python types.
+This regenerates protocol-derived Python types, then stages:
+
+- `codex-app-server-sdk` with an exact `codex-cli-bin==...` dependency
+- `codex-cli-bin` for the current platform with the matching `codex` binary
 
 ## Compatibility and versioning
 
 - Package: `codex-app-server-sdk`
+- Runtime package: `codex-cli-bin`
 - Current SDK version in this repo: `0.2.0`
 - Python: `>=3.10`
 - Target protocol: Codex `app-server` JSON-RPC v2
