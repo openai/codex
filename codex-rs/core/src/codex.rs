@@ -3407,13 +3407,20 @@ impl Session {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
         let shell = self.user_shell();
-        let (reference_context_item, previous_turn_settings, collaboration_mode, base_instructions) = {
+        let (
+            reference_context_item,
+            previous_turn_settings,
+            collaboration_mode,
+            base_instructions,
+            session_source,
+        ) = {
             let state = self.state.lock().await;
             (
                 state.reference_context_item(),
                 state.previous_turn_settings(),
                 state.session_configuration.collaboration_mode.clone(),
                 state.session_configuration.base_instructions.clone(),
+                state.session_configuration.session_source.clone(),
             )
         };
         if let Some(model_switch_message) =
@@ -3439,7 +3446,11 @@ impl Session {
             )
             .into_text(),
         );
-        if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
+        let separate_guardian_developer_message =
+            crate::guardian::is_guardian_subagent_source(&session_source);
+        if !separate_guardian_developer_message
+            && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
+        {
             developer_sections.push(developer_instructions.to_string());
         }
         // Add developer instructions for memories.
@@ -3512,7 +3523,7 @@ impl Session {
                 .serialize_to_xml(),
         );
 
-        let mut items = Vec::with_capacity(2);
+        let mut items = Vec::with_capacity(3);
         if let Some(developer_message) =
             crate::context_manager::updates::build_developer_update_item(developer_sections)
         {
@@ -3522,6 +3533,15 @@ impl Session {
             crate::context_manager::updates::build_contextual_user_message(contextual_user_sections)
         {
             items.push(contextual_user_message);
+        }
+        if separate_guardian_developer_message
+            && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
+            && let Some(guardian_developer_message) =
+                crate::context_manager::updates::build_developer_update_item(vec![
+                    developer_instructions.to_string(),
+                ])
+        {
+            items.push(guardian_developer_message);
         }
         items
     }
