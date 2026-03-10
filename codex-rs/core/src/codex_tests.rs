@@ -2294,6 +2294,7 @@ async fn request_permissions_emits_event_when_reject_policy_allows_requests() {
             }),
             ..Default::default()
         },
+        scope: PermissionGrantScope::Turn,
     };
 
     let handle = tokio::spawn({
@@ -2378,6 +2379,7 @@ async fn request_permissions_returns_empty_grant_when_reject_policy_blocks_reque
         Some(
             codex_protocol::request_permissions::RequestPermissionsResponse {
                 permissions: codex_protocol::models::PermissionProfile::default(),
+                scope: PermissionGrantScope::Turn,
             }
         )
     );
