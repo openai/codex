@@ -3,7 +3,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
@@ -99,18 +98,25 @@ impl SkillPopup {
             .map(|(idx, indices, _score)| {
                 let mention = &self.mentions[idx];
                 let name = truncate_text(&mention.display_name, MENTION_NAME_TRUNCATE_LEN);
-                let description = mention.description.clone().unwrap_or_default();
-                let name_prefix_spans = mention
-                    .category_tag
-                    .as_deref()
-                    .map(|tag| vec![tag.to_string().dim(), " ".into()])
-                    .unwrap_or_default();
+                let description = match (
+                    mention.category_tag.as_deref(),
+                    mention.description.as_deref(),
+                ) {
+                    (Some(tag), Some(description)) if !description.is_empty() => {
+                        Some(format!("{tag} {description}"))
+                    }
+                    (Some(tag), _) => Some(tag.to_string()),
+                    (None, Some(description)) if !description.is_empty() => {
+                        Some(description.to_string())
+                    }
+                    _ => None,
+                };
                 GenericDisplayRow {
                     name,
-                    name_prefix_spans,
+                    name_prefix_spans: Vec::new(),
                     match_indices: indices,
                     display_shortcut: None,
-                    description: Some(description).filter(|desc| !desc.is_empty()),
+                    description,
                     category_tag: None,
                     is_disabled: false,
                     disabled_reason: None,
