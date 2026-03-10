@@ -460,7 +460,12 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
             (summary, Some(web_search_details().to_string()))
         }
         _ => {
-            let summary = format!("`{alias}` is deprecated. Use `[features].{canonical}` instead.");
+            let label = if alias.contains('.') || alias.starts_with('[') {
+                alias.to_string()
+            } else {
+                format!("[features].{alias}")
+            };
+            let summary = format!("`{label}` is deprecated. Use `[features].{canonical}` instead.");
             let details = if alias == canonical {
                 None
             } else {
