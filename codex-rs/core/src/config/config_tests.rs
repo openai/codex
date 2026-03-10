@@ -5498,7 +5498,7 @@ smart_approvals = true
 }
 
 #[tokio::test]
-async fn approval_review_policy_requires_guardian_feature_when_set_in_config() -> std::io::Result<()>
+async fn approval_review_policy_can_be_set_in_config_without_smart_approvals() -> std::io::Result<()>
 {
     let codex_home = TempDir::new()?;
     std::fs::write(
@@ -5507,22 +5507,21 @@ async fn approval_review_policy_requires_guardian_feature_when_set_in_config() -
 "#,
     )?;
 
-    let err = ConfigBuilder::default()
+    let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
-        .await
-        .expect_err("expected approval_review_policy without guardian feature to fail");
+        .await?;
 
     assert_eq!(
-        err.to_string(),
-        "`approval_review_policy` requires `features.smart_approvals = true`"
+        config.approval_review_policy,
+        ApprovalReviewPolicy::ManualOnly
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn approval_review_policy_requires_guardian_feature_when_set_in_profile()
+async fn approval_review_policy_can_be_set_in_profile_without_smart_approvals()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
@@ -5534,16 +5533,15 @@ approval_review_policy = "auto-only"
 "#,
     )?;
 
-    let err = ConfigBuilder::default()
+    let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
-        .await
-        .expect_err("expected approval_review_policy in profile without guardian feature to fail");
+        .await?;
 
     assert_eq!(
-        err.to_string(),
-        "`approval_review_policy` requires `features.smart_approvals = true`"
+        config.approval_review_policy,
+        ApprovalReviewPolicy::AutoOnly
     );
     Ok(())
 }

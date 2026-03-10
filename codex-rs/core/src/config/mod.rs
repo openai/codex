@@ -2212,15 +2212,6 @@ impl Config {
             .or(config_profile.approval_review_policy)
             .or(cfg.approval_review_policy)
             .unwrap_or(ApprovalReviewPolicy::ManualOnly);
-        let approval_review_policy_was_explicit = approval_review_policy_override.is_some()
-            || config_profile.approval_review_policy.is_some()
-            || cfg.approval_review_policy.is_some();
-        if approval_review_policy_was_explicit && !features.enabled(Feature::GuardianApproval) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "`approval_review_policy` requires `features.smart_approvals = true`",
-            ));
-        }
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
