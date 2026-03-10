@@ -3666,9 +3666,9 @@ impl CodexMessageProcessor {
         thread.id = thread_id.to_string();
         thread.path = Some(rollout_path.to_path_buf());
         let history_items = thread_history.get_rollout_items();
-        if let Err(message) = populate_resume_turns(
+        if let Err(message) = populate_thread_turns(
             &mut thread,
-            ResumeTurnSource::HistoryItems(&history_items),
+            ThreadTurnSource::HistoryItems(&history_items),
             None,
         )
         .await
@@ -3786,7 +3786,7 @@ impl CodexMessageProcessor {
             developer_instructions,
             None,
         );
-        typesafe_overrides.ephemeral = ephemeral;
+        typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let cloud_requirements = self.current_cloud_requirements();
         let config = match derive_config_for_cwd(
@@ -3865,6 +3865,8 @@ impl CodexMessageProcessor {
             "thread",
         );
 
+        // Persistent forks materialize their own rollout immediately. Ephemeral forks stay
+        // pathless, so they rebuild their visible history from the copied source rollout instead.
         let mut thread = if let Some(fork_rollout_path) = session_configured.rollout_path.as_ref() {
             match read_summary_from_rollout(
                 fork_rollout_path.as_path(),
@@ -3887,6 +3889,7 @@ impl CodexMessageProcessor {
             }
         } else {
             let config_snapshot = forked_thread.config_snapshot().await;
+            // forked thread names do not inherit the source thread name
             let mut thread = build_thread_from_snapshot(thread_id, &config_snapshot, None);
             let history_items = match read_rollout_items_from_rollout(rollout_path.as_path()).await
             {
@@ -3904,14 +3907,23 @@ impl CodexMessageProcessor {
                 }
             };
             thread.preview = preview_from_rollout_items(&history_items);
-            thread.turns = build_turns_from_rollout_items(&history_items);
+            if let Err(message) = populate_thread_turns(
+                &mut thread,
+                ThreadTurnSource::HistoryItems(&history_items),
+                None,
+            )
+            .await
+            {
+                self.send_internal_error(request_id, message).await;
+                return;
+            }
             thread
         };
 
         if let Some(fork_rollout_path) = session_configured.rollout_path.as_ref()
-            && let Err(message) = populate_resume_turns(
+            && let Err(message) = populate_thread_turns(
                 &mut thread,
-                ResumeTurnSource::RolloutPath(fork_rollout_path.as_path()),
+                ThreadTurnSource::RolloutPath(fork_rollout_path.as_path()),
                 None,
             )
             .await
@@ -6961,9 +6973,9 @@ async fn handle_pending_thread_resume_request(
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
     let mut thread = pending.thread_summary;
-    if let Err(message) = populate_resume_turns(
+    if let Err(message) = populate_thread_turns(
         &mut thread,
-        ResumeTurnSource::RolloutPath(pending.rollout_path.as_path()),
+        ThreadTurnSource::RolloutPath(pending.rollout_path.as_path()),
         active_turn.as_ref(),
     )
     .await
@@ -7025,18 +7037,18 @@ async fn handle_pending_thread_resume_request(
         .await;
 }
 
-enum ResumeTurnSource<'a> {
+enum ThreadTurnSource<'a> {
     RolloutPath(&'a Path),
     HistoryItems(&'a [RolloutItem]),
 }
 
-async fn populate_resume_turns(
+async fn populate_thread_turns(
     thread: &mut Thread,
-    turn_source: ResumeTurnSource<'_>,
+    turn_source: ThreadTurnSource<'_>,
     active_turn: Option<&Turn>,
 ) -> std::result::Result<(), String> {
     let mut turns = match turn_source {
-        ResumeTurnSource::RolloutPath(rollout_path) => {
+        ThreadTurnSource::RolloutPath(rollout_path) => {
             read_rollout_items_from_rollout(rollout_path)
                 .await
                 .map(|items| build_turns_from_rollout_items(&items))
@@ -7048,7 +7060,7 @@ async fn populate_resume_turns(
                     )
                 })?
         }
-        ResumeTurnSource::HistoryItems(items) => build_turns_from_rollout_items(items),
+        ThreadTurnSource::HistoryItems(items) => build_turns_from_rollout_items(items),
     };
     if let Some(active_turn) = active_turn {
         merge_turn_history_with_active_turn(&mut turns, active_turn.clone());

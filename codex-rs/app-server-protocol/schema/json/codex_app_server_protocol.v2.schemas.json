@@ -12934,10 +12934,7 @@
           ]
         },
         "ephemeral": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+          "type": "boolean"
         },
         "model": {
           "description": "Configuration overrides for the forked thread, if any.",

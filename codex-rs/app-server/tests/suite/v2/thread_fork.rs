@@ -234,7 +234,7 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
             thread_id: conversation_id.clone(),
-            ephemeral: Some(true),
+            ephemeral: true,
             ..Default::default()
         })
         .await?;
