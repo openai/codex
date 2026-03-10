@@ -5458,6 +5458,57 @@ guardian_approval = true
 }
 
 #[tokio::test]
+async fn approval_review_policy_requires_guardian_feature_when_set_in_config() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"approval_review_policy = "manual-only"
+"#,
+    )?;
+
+    let err = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+        .expect_err("expected approval_review_policy without guardian feature to fail");
+
+    assert_eq!(
+        err.to_string(),
+        "`approval_review_policy` requires `features.guardian_approval = true`"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn approval_review_policy_requires_guardian_feature_when_set_in_profile()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"profile = "guardian"
+
+[profiles.guardian]
+approval_review_policy = "auto-only"
+"#,
+    )?;
+
+    let err = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+        .expect_err("expected approval_review_policy in profile without guardian feature to fail");
+
+    assert_eq!(
+        err.to_string(),
+        "`approval_review_policy` requires `features.guardian_approval = true`"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn feature_requirements_normalize_runtime_feature_mutations() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
 
