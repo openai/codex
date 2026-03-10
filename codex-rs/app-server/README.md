@@ -1346,6 +1346,18 @@ enum AskForApproval {
 }
 ```
 
+If a stable field contains a nested type that may itself be experimental, mark
+the field with `#[experimental(nested)]` so `ExperimentalApi` bubbles the nested
+reason up through the containing type:
+
+```rust
+#[derive(ExperimentalApi)]
+struct ProfileV2 {
+    #[experimental(nested)]
+    approval_policy: Option<AskForApproval>,
+}
+```
+
 For server-initiated request payloads, annotate the field the same way so schema generation treats it as experimental, and make sure app-server omits that field when the client did not opt into `experimentalApi`.
 
 4. Regenerate protocol fixtures:
