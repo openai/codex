@@ -1,0 +1,29 @@
+---
+source: tui/src/bottom_pane/app_link_view.rs
+expression: "render_snapshot(&view, area)"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 80, height: 12 },
+    content: [
+        "                                                                                ",
+        "  Notion                                                                        ",
+        "  Reason: The user asked to access their workspace docs.                        ",
+        "                                                                                ",
+        "  Install this app in your browser, then reload Codex.                          ",
+        "  Newly installed apps can take a few minutes to appear in /apps.               ",
+        "  After installed, use $ to insert this app into the prompt.                    ",
+        "                                                                                ",
+        "                                                                                ",
+        "  › 1. Install on ChatGPT                                                       ",
+        "    2. Back                                                                     ",
+        "  Use tab / ↑ ↓ to move, enter to select, esc to close                          ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 8, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 9, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 25, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 11, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+    ]
+}

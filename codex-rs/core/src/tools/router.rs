@@ -1,6 +1,7 @@
 use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::connectors::AppInfo;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::sandboxing::SandboxPermissions;
@@ -13,6 +14,7 @@ use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::build_specs;
+use crate::tools::spec::build_specs_with_connectors;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseInputItem;
@@ -45,6 +47,20 @@ impl ToolRouter {
         dynamic_tools: &[DynamicToolSpec],
     ) -> Self {
         let builder = build_specs(config, mcp_tools, app_tools, dynamic_tools);
+        let (specs, registry) = builder.build();
+
+        Self { registry, specs }
+    }
+
+    pub fn from_config_with_connectors(
+        config: &ToolsConfig,
+        mcp_tools: Option<HashMap<String, Tool>>,
+        app_tools: Option<HashMap<String, ToolInfo>>,
+        dynamic_tools: &[DynamicToolSpec],
+        connectors: Option<&[AppInfo]>,
+    ) -> Self {
+        let builder =
+            build_specs_with_connectors(config, mcp_tools, app_tools, dynamic_tools, connectors);
         let (specs, registry) = builder.build();
 
         Self { registry, specs }

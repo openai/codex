@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use base64::Engine as _;
 use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::NewThread;
@@ -12,6 +13,8 @@ use codex_core::config::Config;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::features::Feature;
+use codex_protocol::approvals::ElicitationAction;
+use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -29,24 +32,38 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use wiremock::Mock;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const SEARCH_TOOL_INSTRUCTION_SNIPPETS: [&str; 2] = [
-    "MCP tools of the apps (Calendar) are hidden until you search for them with this tool",
-    "Matching tools are added to available `tools` and available for the remainder of the current session/thread.",
+    "Always search `mode: \"enabled\"` first.",
+    "If `discoverable` finds the right app, call `tool_suggest` with the returned `connector_id`, `tool_type`, and `suggestion_type`, include a concise one-liner, user-facing `suggest_reason` for the `tool_suggest` tool.",
 ];
 const SEARCH_TOOL_BM25_TOOL_NAME: &str = "search_tool_bm25";
+const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
 const CALENDAR_CREATE_TOOL: &str = "mcp__codex_apps__calendar_create_event";
 const CALENDAR_LIST_TOOL: &str = "mcp__codex_apps__calendar_list_events";
 const RMCP_ECHO_TOOL: &str = "mcp__rmcp__echo";
 const RMCP_IMAGE_TOOL: &str = "mcp__rmcp__image";
 const CALENDAR_CREATE_QUERY: &str = "create calendar event";
 const CALENDAR_LIST_QUERY: &str = "list calendar events";
+const ALLOWLISTED_INSTALLABLE_CONNECTOR_ID: &str = "connector_2128aebfecb84f64a069897515042a44";
+const ALLOWLISTED_INSTALLABLE_CONNECTOR_NAME: &str = "Docs Connector";
+const ALLOWLISTED_INSTALLABLE_CONNECTOR_DESCRIPTION: &str = "Approved workspace docs";
+const ALLOWLISTED_INSTALLABLE_QUERY: &str = "approved workspace docs";
+const NOTION_CONNECTOR_ID: &str = "notion";
+const NOTION_CONNECTOR_NAME: &str = "Notion";
+const NOTION_CONNECTOR_DESCRIPTION: &str = "Workspace docs and notes";
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -82,15 +99,20 @@ fn search_tool_description(body: &Value) -> Option<String> {
 }
 
 fn search_tool_output_payload(request: &ResponsesRequest, call_id: &str) -> Value {
+    function_tool_output_payload(request, call_id, SEARCH_TOOL_BM25_TOOL_NAME)
+}
+
+fn function_tool_output_payload(
+    request: &ResponsesRequest,
+    call_id: &str,
+    tool_name: &str,
+) -> Value {
     let (content, _success) = request
         .function_call_output_content_and_success(call_id)
-        .unwrap_or_else(|| {
-            panic!("{SEARCH_TOOL_BM25_TOOL_NAME} function_call_output should be present")
-        });
-    let content = content
-        .unwrap_or_else(|| panic!("{SEARCH_TOOL_BM25_TOOL_NAME} output should include content"));
+        .unwrap_or_else(|| panic!("{tool_name} function_call_output should be present"));
+    let content = content.unwrap_or_else(|| panic!("{tool_name} output should include content"));
     serde_json::from_str(&content)
-        .unwrap_or_else(|_| panic!("{SEARCH_TOOL_BM25_TOOL_NAME} content should be valid JSON"))
+        .unwrap_or_else(|_| panic!("{tool_name} content should be valid JSON"))
 }
 
 fn active_selected_tools(payload: &Value) -> Vec<String> {
@@ -116,6 +138,91 @@ fn search_result_tools(payload: &Value) -> Vec<&Value> {
         .unwrap_or_default()
         .iter()
         .collect()
+}
+
+fn search_result_connectors(payload: &Value) -> Vec<&Value> {
+    payload
+        .get("connectors")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .collect()
+}
+
+async fn mount_directory_connectors(server: &wiremock::MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/connectors/directory/list"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "apps": [
+                {
+                    "id": "calendar",
+                    "name": "Calendar",
+                    "description": "Manage events",
+                    "appMetadata": {
+                        "categories": ["calendar"]
+                    }
+                },
+                {
+                    "id": NOTION_CONNECTOR_ID,
+                    "name": NOTION_CONNECTOR_NAME,
+                    "description": NOTION_CONNECTOR_DESCRIPTION,
+                    "appMetadata": {
+                        "categories": ["docs"]
+                    }
+                },
+                {
+                    "id": ALLOWLISTED_INSTALLABLE_CONNECTOR_ID,
+                    "name": ALLOWLISTED_INSTALLABLE_CONNECTOR_NAME,
+                    "description": ALLOWLISTED_INSTALLABLE_CONNECTOR_DESCRIPTION,
+                    "appMetadata": {
+                        "categories": ["docs"]
+                    }
+                }
+            ],
+            "nextToken": null
+        })))
+        .mount(server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/connectors/directory/list_workspace"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "apps": [],
+            "nextToken": null
+        })))
+        .mount(server)
+        .await;
+}
+
+fn write_test_chatgpt_auth(home: &std::path::Path) {
+    let header = json!({ "alg": "none", "typ": "JWT" });
+    let payload = json!({
+        "email": "user@example.com",
+        "https://api.openai.com/auth": {
+            "chatgpt_plan_type": "plus",
+            "chatgpt_account_id": "account_id"
+        }
+    });
+    let encode = |value: &Value| {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(value).expect("serialize test JWT section"))
+    };
+    let fake_jwt = format!("{}.{}.{}", encode(&header), encode(&payload), "sig");
+    let auth_json = json!({
+        "tokens": {
+            "id_token": fake_jwt,
+            "access_token": "test-access-token",
+            "refresh_token": "test-refresh-token",
+            "account_id": "account_id"
+        },
+        "last_refresh": chrono::Utc::now()
+    });
+    std::fs::write(
+        home.join("auth.json"),
+        serde_json::to_string_pretty(&auth_json).expect("serialize test auth.json"),
+    )
+    .expect("write test auth.json");
 }
 
 fn rmcp_server_config(command: String) -> McpServerConfig {
@@ -166,6 +273,9 @@ fn configure_apps_with_optional_rmcp(
 fn configured_builder(apps_base_url: String, rmcp_server_bin: Option<String>) -> TestCodexBuilder {
     test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_pre_build_hook(|home| {
+            write_test_chatgpt_auth(home);
+        })
         .with_config(move |config| {
             configure_apps_with_optional_rmcp(config, apps_base_url.as_str(), rmcp_server_bin);
         })
@@ -183,6 +293,38 @@ async fn submit_user_input(thread: &Arc<CodexThread>, text: &str) -> Result<()> 
         .await?;
     wait_for_event(thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     Ok(())
+}
+
+async fn submit_turn_without_waiting(test: &TestCodex, text: &str) -> Result<()> {
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: text.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+    Ok(())
+}
+
+async fn wait_for_elicitation_request(
+    thread: &Arc<CodexThread>,
+) -> codex_protocol::approvals::ElicitationRequestEvent {
+    wait_for_event_match(thread, |event| match event {
+        EventMsg::ElicitationRequest(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -216,6 +358,10 @@ async fn search_tool_flag_adds_tool() -> Result<()> {
     assert!(
         tools.iter().any(|name| name == SEARCH_TOOL_BM25_TOOL_NAME),
         "tools list should include {SEARCH_TOOL_BM25_TOOL_NAME} when enabled: {tools:?}"
+    );
+    assert!(
+        tools.iter().any(|name| name == TOOL_SUGGEST_TOOL_NAME),
+        "tools list should include {TOOL_SUGGEST_TOOL_NAME} when enabled: {tools:?}"
     );
 
     Ok(())
@@ -294,6 +440,10 @@ async fn search_tool_adds_discovery_instructions_to_tool_description() -> Result
             .iter()
             .all(|snippet| description.contains(snippet)),
         "search tool description should include search tool workflow: {description:?}"
+    );
+    assert!(
+        description.contains("connector metadata unavailable"),
+        "search tool description should explain missing discoverable connector metadata: {description:?}"
     );
 
     Ok(())
@@ -1211,6 +1361,616 @@ async fn search_tool_selection_drops_when_fork_excludes_search_turn() -> Result<
             .iter()
             .any(|name| name.starts_with("mcp__codex_apps__")),
         "forked history without search turn should not restore apps tools: {forked_tools:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn installable_search_returns_inaccessible_connectors_without_selecting_tools() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_directory_connectors(&server).await;
+    let call_id = "installable-search";
+    let args = json!({
+        "query": ALLOWLISTED_INSTALLABLE_QUERY,
+        "limit": 5,
+        "mode": "discoverable",
+    });
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    SEARCH_TOOL_BM25_TOOL_NAME,
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone(), None);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_policies(
+        "find installable docs app",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = mock.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected 2 requests, got {}",
+        requests.len()
+    );
+
+    let payload = search_tool_output_payload(&requests[1], call_id);
+    assert_eq!(
+        payload.get("mode").and_then(Value::as_str),
+        Some("discoverable")
+    );
+    assert_eq!(
+        payload.get("total_connectors").and_then(Value::as_u64),
+        Some(1),
+        "expected one installable connector: {payload:?}"
+    );
+    assert_eq!(
+        active_selected_tools(&payload),
+        Vec::<String>::new(),
+        "installable search should not select tools: {payload:?}"
+    );
+    let connectors = search_result_connectors(&payload);
+    assert_eq!(
+        connectors.len(),
+        1,
+        "expected one connector result: {payload:?}"
+    );
+    assert_eq!(
+        connectors[0].get("connector_id").and_then(Value::as_str),
+        Some(ALLOWLISTED_INSTALLABLE_CONNECTOR_ID),
+    );
+    assert_eq!(
+        connectors[0].get("tool_type").and_then(Value::as_str),
+        Some("connector"),
+    );
+    assert_eq!(
+        connectors[0].get("suggestion_type").and_then(Value::as_str),
+        Some("install"),
+    );
+    assert_eq!(
+        connectors[0].get("connector_name").and_then(Value::as_str),
+        Some(ALLOWLISTED_INSTALLABLE_CONNECTOR_NAME),
+    );
+    assert_eq!(
+        connectors[0]
+            .get("connector_description")
+            .and_then(Value::as_str),
+        Some(ALLOWLISTED_INSTALLABLE_CONNECTOR_DESCRIPTION),
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn installable_search_preserves_available_selection() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_directory_connectors(&server).await;
+    let available_call_id = "available-search";
+    let installable_call_id = "installable-search";
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                available_call_id,
+                SEARCH_TOOL_BM25_TOOL_NAME,
+                &serde_json::to_string(&json!({
+                    "query": CALENDAR_CREATE_QUERY,
+                    "limit": 1,
+                }))?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_function_call(
+                installable_call_id,
+                SEARCH_TOOL_BM25_TOOL_NAME,
+                &serde_json::to_string(&json!({
+                    "query": ALLOWLISTED_INSTALLABLE_QUERY,
+                    "limit": 5,
+                    "mode": "discoverable",
+                }))?,
+            ),
+            ev_completed("resp-3"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-2", "done"),
+            ev_completed("resp-4"),
+        ]),
+    ];
+    let mock = mount_sse_sequence(&server, responses).await;
+
+    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone(), None);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_policies(
+        "find calendar tool",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+    test.submit_turn_with_policies(
+        "find installable docs app",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = mock.requests();
+    assert_eq!(
+        requests.len(),
+        4,
+        "expected 4 requests, got {}",
+        requests.len()
+    );
+
+    let available_payload = search_tool_output_payload(&requests[1], available_call_id);
+    let selected_tools = active_selected_tools(&available_payload);
+    assert_eq!(
+        selected_tools,
+        vec![CALENDAR_CREATE_TOOL.to_string()],
+        "available search should select calendar create tool: {available_payload:?}"
+    );
+
+    let installable_payload = search_tool_output_payload(&requests[3], installable_call_id);
+    assert_eq!(
+        active_selected_tools(&installable_payload),
+        selected_tools,
+        "installable search should preserve active selected tools: {installable_payload:?}"
+    );
+    assert_eq!(
+        search_result_connectors(&installable_payload)
+            .first()
+            .and_then(|connector| connector.get("connector_id"))
+            .and_then(Value::as_str),
+        Some(ALLOWLISTED_INSTALLABLE_CONNECTOR_ID),
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn installable_search_reports_catalog_load_errors() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let call_id = "installable-search";
+    let args = json!({
+        "query": "notion docs",
+        "mode": "discoverable",
+    });
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    SEARCH_TOOL_BM25_TOOL_NAME,
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("dummy"))
+        .with_config({
+            let apps_base_url = apps_server.chatgpt_base_url.clone();
+            move |config| {
+                configure_apps_with_optional_rmcp(config, apps_base_url.as_str(), None);
+            }
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_policies(
+        "find installable notion app",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = mock.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected 2 requests, got {}",
+        requests.len()
+    );
+
+    let error = requests[1]
+        .function_call_output_content_and_success(call_id)
+        .and_then(|(content, _)| content)
+        .expect("installable search output should contain an error");
+    assert!(
+        error.contains("failed to load discoverable apps"),
+        "unexpected installable search error: {error:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_suggest_prompts_install_via_elicitation() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_directory_connectors(&server).await;
+    let call_id = "tool-suggest";
+    let args = json!({
+        "connector_id": NOTION_CONNECTOR_ID,
+        "tool_type": "connector",
+        "suggestion_type": "install",
+        "suggest_reason": "The user asked to access their workspace docs.",
+    });
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    TOOL_SUGGEST_TOOL_NAME,
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone(), None);
+    let test = builder.build(&server).await?;
+
+    submit_turn_without_waiting(&test, "suggest notion install").await?;
+
+    let elicitation = wait_for_elicitation_request(&test.codex).await;
+    assert_eq!(elicitation.server_name, "codex_apps");
+    assert!(elicitation.turn_id.is_some());
+    let ElicitationRequest::Form {
+        meta,
+        message,
+        requested_schema,
+    } = elicitation.request
+    else {
+        panic!("tool_suggest should emit a form elicitation");
+    };
+    assert_eq!(
+        message,
+        format!(
+            "Install {NOTION_CONNECTOR_NAME} to continue? | Reason: The user asked to access their workspace docs. | {NOTION_CONNECTOR_DESCRIPTION} | Open URL: https://chatgpt.com/apps/notion/notion"
+        )
+    );
+    assert_eq!(
+        meta,
+        Some(json!({
+            "codex_approval_kind": "tool_suggestion",
+            "tool_type": "connector",
+            "suggestion_type": "install",
+            "connector_id": NOTION_CONNECTOR_ID,
+            "connector_name": NOTION_CONNECTOR_NAME,
+            "suggest_reason": "The user asked to access their workspace docs.",
+            "connector_description": NOTION_CONNECTOR_DESCRIPTION,
+            "install_url": "https://chatgpt.com/apps/notion/notion",
+        }))
+    );
+    assert_eq!(
+        requested_schema,
+        json!({
+            "type": "object",
+            "properties": {}
+        })
+    );
+
+    test.codex
+        .submit(Op::ResolveElicitation {
+            server_name: elicitation.server_name,
+            request_id: elicitation.id,
+            decision: ElicitationAction::Accept,
+            content: None,
+            meta: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = mock.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected 2 requests, got {}",
+        requests.len()
+    );
+
+    let payload = function_tool_output_payload(&requests[1], call_id, TOOL_SUGGEST_TOOL_NAME);
+    assert_eq!(
+        payload.get("connector_id").and_then(Value::as_str),
+        Some(NOTION_CONNECTOR_ID),
+    );
+    assert_eq!(
+        payload.get("connector_name").and_then(Value::as_str),
+        Some(NOTION_CONNECTOR_NAME),
+    );
+    assert_eq!(
+        payload.get("suggest_reason").and_then(Value::as_str),
+        Some("The user asked to access their workspace docs."),
+    );
+    assert_eq!(
+        payload.get("connector_description").and_then(Value::as_str),
+        Some(NOTION_CONNECTOR_DESCRIPTION),
+    );
+    assert_eq!(
+        payload.get("install_url").and_then(Value::as_str),
+        Some("https://chatgpt.com/apps/notion/notion"),
+    );
+    assert_eq!(
+        payload.get("elicitation_action").and_then(Value::as_str),
+        Some("accept"),
+    );
+    assert_eq!(
+        payload.get("user_decision").and_then(Value::as_str),
+        Some("install"),
+    );
+    assert!(
+        payload
+            .get("assistant_instruction")
+            .and_then(Value::as_str)
+            .is_some_and(|instruction| instruction.contains("completed the install flow")),
+        "unexpected tool_suggest payload: {payload:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_suggest_rejects_accessible_connector() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_directory_connectors(&server).await;
+    let call_id = "tool-suggest";
+    let args = json!({
+        "connector_id": "calendar",
+        "tool_type": "connector",
+        "suggestion_type": "install",
+    });
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    TOOL_SUGGEST_TOOL_NAME,
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone(), None);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_policies(
+        "suggest calendar install",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = mock.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected 2 requests, got {}",
+        requests.len()
+    );
+
+    let error = requests[1]
+        .function_call_output_content_and_success(call_id)
+        .and_then(|(content, _)| content)
+        .expect("tool_suggest should return an error");
+    assert!(
+        error.contains("already installed"),
+        "unexpected accessible connector rejection: {error:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_suggest_reports_not_now_when_user_declines_install() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_directory_connectors(&server).await;
+    let call_id = "tool-suggest";
+    let args = json!({
+        "connector_id": NOTION_CONNECTOR_ID,
+        "tool_type": "connector",
+        "suggestion_type": "install",
+    });
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    TOOL_SUGGEST_TOOL_NAME,
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone(), None);
+    let test = builder.build(&server).await?;
+
+    submit_turn_without_waiting(&test, "suggest notion install").await?;
+
+    let elicitation = wait_for_elicitation_request(&test.codex).await;
+    test.codex
+        .submit(Op::ResolveElicitation {
+            server_name: elicitation.server_name,
+            request_id: elicitation.id,
+            decision: ElicitationAction::Decline,
+            content: None,
+            meta: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = mock.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected 2 requests, got {}",
+        requests.len()
+    );
+
+    let payload = function_tool_output_payload(&requests[1], call_id, TOOL_SUGGEST_TOOL_NAME);
+    assert_eq!(
+        payload.get("elicitation_action").and_then(Value::as_str),
+        Some("decline"),
+    );
+    assert_eq!(
+        payload.get("user_decision").and_then(Value::as_str),
+        Some("not_now"),
+    );
+    assert!(
+        payload
+            .get("assistant_instruction")
+            .and_then(Value::as_str)
+            .is_some_and(|instruction| instruction.contains("Do not ask them again")),
+        "unexpected tool_suggest payload: {payload:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_suggest_rejects_unknown_connector() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    mount_directory_connectors(&server).await;
+    let call_id = "tool-suggest";
+    let args = json!({
+        "connector_id": "unknown-app",
+        "tool_type": "connector",
+        "suggestion_type": "install",
+    });
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    TOOL_SUGGEST_TOOL_NAME,
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone(), None);
+    let test = builder.build(&server).await?;
+
+    test.submit_turn_with_policies(
+        "suggest unknown install",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+
+    let requests = mock.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "expected 2 requests, got {}",
+        requests.len()
+    );
+
+    let error = requests[1]
+        .function_call_output_content_and_success(call_id)
+        .and_then(|(content, _)| content)
+        .expect("tool_suggest should return an error");
+    assert!(
+        error.contains("unknown connector_id `unknown-app`"),
+        "unexpected unknown connector rejection: {error:?}"
     );
 
     Ok(())

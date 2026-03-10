@@ -47,8 +47,10 @@ mod mcp_server_elicitation;
 mod multi_select_picker;
 mod request_user_input;
 mod status_line_setup;
+pub(crate) use app_link_view::APP_LINK_INSTALL_INSTRUCTIONS;
 pub(crate) use app_link_view::AppLinkView;
 pub(crate) use app_link_view::AppLinkViewParams;
+pub(crate) use app_link_view::tool_suggestion_params_from_event;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 pub(crate) use approval_overlay::format_additional_permissions_rule;
@@ -896,6 +898,16 @@ impl BottomPane {
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.push_view(view);
+    }
+
+    pub(crate) fn push_app_link_view(&mut self, params: AppLinkViewParams) {
+        let view = AppLinkView::new(params, self.app_event_tx.clone());
+        self.pause_status_timer_for_modal();
+        self.set_composer_input_enabled(
+            false,
+            Some("Complete the app setup flow to continue.".to_string()),
+        );
+        self.push_view(Box::new(view));
     }
 
     /// Called when the agent requests user approval.

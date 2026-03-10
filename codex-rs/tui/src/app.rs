@@ -2378,10 +2378,13 @@ impl App {
                         app_id,
                         title,
                         description,
+                        suggest_reason: None,
                         instructions,
                         url,
                         is_installed,
                         is_enabled,
+                        suggestion_type: None,
+                        elicitation_resolution: None,
                     });
             }
             AppEvent::OpenUrlInBrowser { url } => {

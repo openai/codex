@@ -2987,7 +2987,12 @@ impl ChatWidget {
         });
 
         let thread_id = self.thread_id.unwrap_or_default();
-        if let Some(request) = McpServerElicitationFormRequest::from_event(thread_id, ev.clone()) {
+        if let Some(params) = crate::bottom_pane::tool_suggestion_params_from_event(thread_id, &ev)
+        {
+            self.bottom_pane.push_app_link_view(params);
+        } else if let Some(request) =
+            McpServerElicitationFormRequest::from_event(thread_id, ev.clone())
+        {
             self.bottom_pane
                 .push_mcp_server_elicitation_request(request);
         } else {
@@ -7989,7 +7994,7 @@ impl ChatWidget {
             let instructions = if connector.is_accessible {
                 "Manage this app in your browser."
             } else {
-                "Install this app in your browser, then reload Codex."
+                crate::bottom_pane::APP_LINK_INSTALL_INSTRUCTIONS
             };
             if let Some(install_url) = connector.install_url.clone() {
                 let app_id = connector.id.clone();

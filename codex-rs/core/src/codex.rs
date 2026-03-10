@@ -5984,7 +5984,9 @@ fn filter_connectors_for_input(
 ) -> Vec<connectors::AppInfo> {
     let connectors: Vec<connectors::AppInfo> = connectors
         .iter()
-        .filter(|connector| connector.is_enabled)
+        .filter(|connector| {
+            connector.is_enabled || explicitly_enabled_connectors.contains(&connector.id)
+        })
         .cloned()
         .collect::<Vec<_>>();
     if connectors.is_empty() {
@@ -6056,6 +6058,7 @@ fn filter_codex_apps_mcp_tools(
     mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
     connectors: &[connectors::AppInfo],
     config: &Config,
+    enabled_connector_overrides: &HashSet<String>,
 ) -> HashMap<String, crate::mcp_connection_manager::ToolInfo> {
     let allowed: HashSet<&str> = connectors
         .iter()
@@ -6071,7 +6074,12 @@ fn filter_codex_apps_mcp_tools(
             let Some(connector_id) = codex_apps_connector_id(tool) else {
                 return false;
             };
-            allowed.contains(connector_id) && connectors::codex_app_tool_is_enabled(config, tool)
+            allowed.contains(connector_id)
+                && connectors::codex_app_tool_is_enabled_with_enabled_connector_overrides(
+                    config,
+                    tool,
+                    enabled_connector_overrides,
+                )
         })
         .map(|(name, tool)| (name.clone(), tool.clone()))
         .collect()
@@ -6266,8 +6274,28 @@ async fn built_tools(
     // Keep the connector-grouped app view around for the router even though
     // app tools only become prompt-visible after explicit selection/discovery.
     let app_tools = connectors.as_ref().map(|connectors| {
-        filter_codex_apps_mcp_tools(&mcp_tools, connectors, &turn_context.config)
+        filter_codex_apps_mcp_tools(
+            &mcp_tools,
+            connectors,
+            &turn_context.config,
+            &effective_explicitly_enabled_connectors,
+        )
     });
+    let search_tool_connectors =
+        if turn_context.tools_config.search_tool && turn_context.apps_enabled() {
+            match connectors::list_cached_connectors(&turn_context.config).await {
+                Some(connectors) => Some(connectors),
+                None => match connectors::list_connectors(&turn_context.config).await {
+                    Ok(connectors) => Some(connectors),
+                    Err(err) => {
+                        warn!("failed to load connectors for search tool description: {err}");
+                        None
+                    }
+                },
+            }
+        } else {
+            None
+        };
 
     if let Some(connectors) = connectors.as_ref() {
         let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
@@ -6292,11 +6320,14 @@ async fn built_tools(
             explicitly_enabled.as_ref(),
         ));
 
-        mcp_tools =
-            connectors::filter_codex_apps_tools_by_policy(selected_mcp_tools, &turn_context.config);
+        mcp_tools = connectors::filter_codex_apps_tools_by_policy_with_enabled_connector_overrides(
+            selected_mcp_tools,
+            &turn_context.config,
+            &effective_explicitly_enabled_connectors,
+        );
     }
 
-    Ok(Arc::new(ToolRouter::from_config(
+    Ok(Arc::new(ToolRouter::from_config_with_connectors(
         &turn_context.tools_config,
         has_mcp_servers.then(|| {
             mcp_tools
@@ -6306,6 +6337,7 @@ async fn built_tools(
         }),
         app_tools,
         turn_context.dynamic_tools.as_slice(),
+        search_tool_connectors.as_deref(),
     )))
 }
 

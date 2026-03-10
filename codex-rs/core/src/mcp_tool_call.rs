@@ -79,8 +79,9 @@ pub(crate) async fn handle_mcp_tool_call(
 
     let metadata =
         lookup_mcp_tool_metadata(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
+    let enabled_connector_overrides = sess.get_connector_selection().await;
     let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
-        connectors::app_tool_policy(
+        connectors::app_tool_policy_with_enabled_connector_overrides(
             &turn_context.config,
             metadata
                 .as_ref()
@@ -92,6 +93,7 @@ pub(crate) async fn handle_mcp_tool_call(
             metadata
                 .as_ref()
                 .and_then(|metadata| metadata.annotations.as_ref()),
+            &enabled_connector_overrides,
         )
     } else {
         connectors::AppToolPolicy::default()

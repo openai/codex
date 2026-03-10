@@ -16,6 +16,7 @@ mod request_user_input;
 mod search_tool_bm25;
 mod shell;
 mod test_sync;
+mod tool_suggest;
 pub(crate) mod unified_exec;
 mod view_image;
 
@@ -51,11 +52,14 @@ pub(crate) use request_permissions::request_permissions_tool_description;
 pub use request_user_input::RequestUserInputHandler;
 pub(crate) use request_user_input::request_user_input_tool_description;
 pub(crate) use search_tool_bm25::DEFAULT_LIMIT as SEARCH_TOOL_BM25_DEFAULT_LIMIT;
+pub(crate) use search_tool_bm25::INSTALLABLE_DISCOVERABLE_CONNECTOR_IDS;
 pub(crate) use search_tool_bm25::SEARCH_TOOL_BM25_TOOL_NAME;
 pub use search_tool_bm25::SearchToolBm25Handler;
 pub use shell::ShellCommandHandler;
 pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;
+pub(crate) use tool_suggest::TOOL_SUGGEST_TOOL_NAME;
+pub use tool_suggest::ToolSuggestHandler;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;
 
