@@ -41,7 +41,6 @@ use crate::realtime_conversation::handle_start as handle_realtime_conversation_s
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::rollout::session_index;
 use crate::stream_events_utils::HandleOutputCtx;
-use crate::stream_events_utils::default_image_generation_output_dir;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
@@ -3301,20 +3300,9 @@ impl Session {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
         let shell = self.user_shell();
-        let (
-            has_image_generation_history,
-            reference_context_item,
-            previous_turn_settings,
-            collaboration_mode,
-            base_instructions,
-        ) = {
+        let (reference_context_item, previous_turn_settings, collaboration_mode, base_instructions) = {
             let state = self.state.lock().await;
             (
-                state
-                    .history
-                    .raw_items()
-                    .iter()
-                    .any(|item| matches!(item, ResponseItem::ImageGenerationCall { .. })),
                 state.reference_context_item(),
                 state.previous_turn_settings(),
                 state.session_configuration.collaboration_mode.clone(),
@@ -3339,14 +3327,6 @@ impl Session {
             )
             .into_text(),
         );
-        if has_image_generation_history {
-            let image_output_dir = default_image_generation_output_dir();
-            developer_sections.push(format!(
-                "Generated images are saved to {} as {} by default.",
-                image_output_dir.display(),
-                image_output_dir.join("<image_id>.png").display(),
-            ));
-        }
         if let Some(developer_instructions) = turn_context.developer_instructions.as_deref() {
             developer_sections.push(developer_instructions.to_string());
         }

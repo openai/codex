@@ -19,6 +19,7 @@ use crate::parse_turn_item;
 use crate::state_db;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
+use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
@@ -188,7 +189,9 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
+            let mut record_default_image_save_developer_message = false;
             if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode).await {
+                record_default_image_save_developer_message = matches!(&turn_item, TurnItem::ImageGeneration(item) if item.saved_path.is_some());
                 if previously_active_item.is_none() {
                     let mut started_item = turn_item.clone();
                     if let TurnItem::ImageGeneration(item) = &mut started_item {
@@ -209,6 +212,18 @@ pub(crate) async fn handle_output_item_done(
 
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await;
+            if record_default_image_save_developer_message {
+                let image_output_dir = default_image_generation_output_dir();
+                let message: ResponseItem = DeveloperInstructions::new(format!(
+                    "Generated images are saved to {} as {} by default.",
+                    image_output_dir.display(),
+                    image_output_dir.join("<image_id>.png").display(),
+                ))
+                .into();
+                ctx.sess
+                    .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&message))
+                    .await;
+            }
             let last_agent_message = last_assistant_message_from_item(&item, plan_mode);
 
             output.last_agent_message = last_agent_message;
