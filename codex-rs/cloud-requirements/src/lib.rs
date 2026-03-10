@@ -271,7 +271,7 @@ impl CloudRequirementsService {
         let _timer =
             codex_otel::start_global_timer("codex.cloud_requirements.fetch.duration_ms", &[]);
         let started_at = Instant::now();
-        let result = timeout(self.timeout, self.fetch())
+        let fetch_result = timeout(self.timeout, self.fetch())
             .await
             .inspect_err(|_| {
                 let message = format!(
@@ -286,7 +286,15 @@ impl CloudRequirementsService {
                     "timed out waiting for cloud requirements after {}s",
                     self.timeout.as_secs()
                 ))
-            })??;
+            })?;
+
+        let result = match fetch_result {
+            Ok(result) => result,
+            Err(err) => {
+                emit_load_metric("startup", "error");
+                return Err(err);
+            }
+        };
 
         match result.as_ref() {
             Some(requirements) => {
