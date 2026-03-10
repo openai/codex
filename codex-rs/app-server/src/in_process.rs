@@ -446,6 +446,18 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                 );
                                 if !was_initialized && session.initialized {
                                     processor.send_initialize_notifications().await;
+                                    for thread_id in processor
+                                        .thread_manager()
+                                        .list_thread_ids()
+                                        .await
+                                    {
+                                        processor
+                                            .try_attach_thread_listener(
+                                                thread_id,
+                                                vec![IN_PROCESS_CONNECTION_ID],
+                                            )
+                                            .await;
+                                    }
                                 }
                             }
                             Some(ProcessorCommand::Notification(notification)) => {
@@ -731,6 +743,8 @@ mod tests {
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
+    use codex_app_server_protocol::TurnStartParams;
+    use codex_app_server_protocol::TurnStartResponse;
     use codex_app_server_protocol::TurnStatus;
     use codex_core::AuthManager;
     use codex_core::ThreadManager;
@@ -1022,6 +1036,102 @@ mod tests {
             auth_manager.forced_chatgpt_workspace_id(),
             Some("workspace-before".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn in_process_start_attaches_listeners_for_existing_shared_manager_threads() {
+        let config = build_test_config().await;
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            false,
+            config.cli_auth_credentials_store_mode,
+        );
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.codex_home.clone(),
+            auth_manager,
+            SessionSource::Cli,
+            config.model_catalog.clone(),
+            CollaborationModesConfig {
+                default_mode_request_user_input: false,
+            },
+        ));
+        let new_thread = thread_manager
+            .start_thread(config.clone())
+            .await
+            .expect("pre-existing shared-manager thread");
+        let thread_id = new_thread.thread_id.to_string();
+
+        let mut client = start(InProcessStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(config),
+            thread_manager: Some(Arc::clone(&thread_manager)),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            initialize: InitializeParams {
+                client_info: ClientInfo {
+                    name: "codex-in-process-existing-thread-test".to_string(),
+                    title: None,
+                    version: "0.0.0".to_string(),
+                },
+                capabilities: None,
+            },
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await
+        .expect("in-process runtime should start");
+
+        let response = client
+            .request(ClientRequest::TurnStart {
+                request_id: RequestId::Integer(100),
+                params: TurnStartParams {
+                    thread_id: thread_id.clone(),
+                    input: vec![codex_app_server_protocol::UserInput::Text {
+                        text: "hello".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: None,
+                    service_tier: None,
+                    effort: None,
+                    summary: None,
+                    personality: None,
+                    output_schema: None,
+                    collaboration_mode: None,
+                },
+            })
+            .await
+            .expect("turn/start request should be sent")
+            .expect("turn/start should succeed");
+        let _: TurnStartResponse =
+            serde_json::from_value(response).expect("turn/start response should parse");
+
+        let started = timeout(Duration::from_secs(2), async {
+            loop {
+                let Some(event) = client.next_event().await else {
+                    panic!("expected in-process server event");
+                };
+                if let InProcessServerEvent::LegacyNotification(notification) = event
+                    && notification.method == "codex/event/task_started"
+                {
+                    break notification;
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for task_started notification");
+        assert_eq!(started.method, "codex/event/task_started".to_string());
+
+        client
+            .shutdown()
+            .await
+            .expect("in-process runtime should shutdown cleanly");
     }
 
     #[test]

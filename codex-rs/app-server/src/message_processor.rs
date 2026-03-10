@@ -422,6 +422,10 @@ impl MessageProcessor {
             .await;
     }
 
+    pub(crate) fn thread_manager(&self) -> &Arc<ThreadManager> {
+        self.codex_message_processor.thread_manager()
+    }
+
     pub(crate) async fn drain_background_tasks(&self) {
         self.codex_message_processor.drain_background_tasks().await;
     }
