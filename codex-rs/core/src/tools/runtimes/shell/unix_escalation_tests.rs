@@ -1,6 +1,7 @@
 use super::CoreShellActionProvider;
 #[cfg(target_os = "macos")]
 use super::CoreShellCommandExecutor;
+use super::InterceptedExecPolicyContext;
 use super::ParsedShellCommand;
 use super::commands_for_intercepted_exec_policy;
 use super::evaluate_intercepted_exec_policy;
@@ -412,10 +413,15 @@ fn evaluate_intercepted_exec_policy_uses_wrapper_command_when_shell_wrapper_pars
             "-lc".to_string(),
             "npm publish".to_string(),
         ],
-        AskForApproval::OnRequest,
-        &SandboxPolicy::new_read_only_policy(),
-        SandboxPermissions::UseDefault,
-        enable_intercepted_exec_policy_shell_wrapper_parsing,
+        InterceptedExecPolicyContext {
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &FileSystemSandboxPolicy::from(
+                &SandboxPolicy::new_read_only_policy(),
+            ),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            enable_shell_wrapper_parsing: enable_intercepted_exec_policy_shell_wrapper_parsing,
+        },
     );
 
     assert!(
@@ -460,10 +466,15 @@ fn evaluate_intercepted_exec_policy_matches_inner_shell_commands_when_enabled() 
             "-lc".to_string(),
             "npm publish".to_string(),
         ],
-        AskForApproval::OnRequest,
-        &SandboxPolicy::new_read_only_policy(),
-        SandboxPermissions::UseDefault,
-        enable_intercepted_exec_policy_shell_wrapper_parsing,
+        InterceptedExecPolicyContext {
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &FileSystemSandboxPolicy::from(
+                &SandboxPolicy::new_read_only_policy(),
+            ),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            enable_shell_wrapper_parsing: enable_intercepted_exec_policy_shell_wrapper_parsing,
+        },
     );
 
     assert_eq!(
@@ -499,10 +510,15 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
         &policy,
         &program,
         &["git".to_string(), "status".to_string()],
-        AskForApproval::OnRequest,
-        &SandboxPolicy::new_read_only_policy(),
-        SandboxPermissions::UseDefault,
-        false,
+        InterceptedExecPolicyContext {
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &FileSystemSandboxPolicy::from(
+                &SandboxPolicy::new_read_only_policy(),
+            ),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            enable_shell_wrapper_parsing: false,
+        },
     );
 
     assert_eq!(
@@ -543,10 +559,15 @@ host_executable(name = "git", paths = ["{allowed_git_literal}"])
         &policy,
         &program,
         &["git".to_string(), "status".to_string()],
-        AskForApproval::OnRequest,
-        &SandboxPolicy::new_read_only_policy(),
-        SandboxPermissions::UseDefault,
-        false,
+        InterceptedExecPolicyContext {
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &FileSystemSandboxPolicy::from(
+                &SandboxPolicy::new_read_only_policy(),
+            ),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            enable_shell_wrapper_parsing: false,
+        },
     );
 
     assert!(matches!(
