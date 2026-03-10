@@ -2681,9 +2681,9 @@ impl Config {
             return Ok(roles);
         }
 
-        let mut roles = BTreeMap::new();
+        let mut roles: BTreeMap<String, AgentRoleConfig> = BTreeMap::new();
         for layer in layers {
-            let mut layer_roles = BTreeMap::new();
+            let mut layer_roles: BTreeMap<String, AgentRoleConfig> = BTreeMap::new();
             if let Some(agents_toml) = Self::agents_toml_from_layer(&layer.config)? {
                 for (declared_role_name, role_toml) in &agents_toml.roles {
                     let mut role =
@@ -2699,10 +2699,13 @@ impl Config {
                         role.nickname_candidates =
                             parsed.nickname_candidates.or(role.nickname_candidates);
                     }
-                    Self::validate_required_agent_role_description(
-                        &role_name,
-                        role.description.as_deref(),
-                    )?;
+                    if let Some(existing_role) = layer_roles.get(&role_name) {
+                        role.description = role.description.or(existing_role.description.clone());
+                        role.config_file = role.config_file.or(existing_role.config_file.clone());
+                        role.nickname_candidates = role
+                            .nickname_candidates
+                            .or(existing_role.nickname_candidates.clone());
+                    }
 
                     if layer_roles.insert(role_name.clone(), role).is_some() {
                         return Err(std::io::Error::new(
@@ -2724,7 +2727,23 @@ impl Config {
             }
 
             for (role_name, role) in layer_roles {
-                roles.insert(role_name, role);
+                let mut merged_role = role;
+                if let Some(existing_role) = roles.get(&role_name) {
+                    merged_role.description = merged_role
+                        .description
+                        .or(existing_role.description.clone());
+                    merged_role.config_file = merged_role
+                        .config_file
+                        .or(existing_role.config_file.clone());
+                    merged_role.nickname_candidates = merged_role
+                        .nickname_candidates
+                        .or(existing_role.nickname_candidates.clone());
+                }
+                Self::validate_required_agent_role_description(
+                    &role_name,
+                    merged_role.description.as_deref(),
+                )?;
+                roles.insert(role_name, merged_role);
             }
         }
 
@@ -2782,10 +2801,6 @@ impl Config {
                 Err(err) => return Err(err),
             };
             let role_name = parsed.role_name;
-            Self::validate_required_agent_role_description(
-                &role_name,
-                parsed.description.as_deref(),
-            )?;
             if roles
                 .insert(
                     role_name.clone(),

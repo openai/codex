@@ -3373,6 +3373,89 @@ model = "gpt-5"
     Ok(())
 }
 
+#[tokio::test]
+async fn higher_precedence_agent_role_can_inherit_description_from_lower_layer()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    let nested_cwd = repo_root.path().join("packages").join("app");
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(&nested_cwd)?;
+
+    let workspace_key = repo_root.path().to_string_lossy().replace('\\', "\\\\");
+    tokio::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"[projects."{workspace_key}"]
+trust_level = "trusted"
+
+[agents.researcher]
+description = "Research role from config"
+config_file = "./agents/researcher.toml"
+"#
+        ),
+    )
+    .await?;
+
+    let home_agents_dir = codex_home.path().join("agents");
+    tokio::fs::create_dir_all(&home_agents_dir).await?;
+    tokio::fs::write(
+        home_agents_dir.join("researcher.toml"),
+        r#"
+developer_instructions = "Research carefully"
+model = "gpt-5"
+"#,
+    )
+    .await?;
+
+    let standalone_agents_dir = repo_root.path().join(".codex").join("agents");
+    tokio::fs::create_dir_all(&standalone_agents_dir).await?;
+    tokio::fs::write(
+        standalone_agents_dir.join("researcher.toml"),
+        r#"
+name = "researcher"
+nickname_candidates = ["Hypatia"]
+developer_instructions = "Research from file"
+model = "gpt-5-mini"
+"#,
+    )
+    .await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(nested_cwd),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.description.as_deref()),
+        Some("Research role from config")
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.config_file.as_ref()),
+        Some(&standalone_agents_dir.join("researcher.toml"))
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.nickname_candidates.as_ref())
+            .map(|candidates| candidates.iter().map(String::as_str).collect::<Vec<_>>()),
+        Some(vec!["Hypatia"])
+    );
+
+    Ok(())
+}
+
 #[test]
 fn load_config_normalizes_agent_role_nickname_candidates() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
