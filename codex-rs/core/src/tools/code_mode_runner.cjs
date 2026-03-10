@@ -100,6 +100,10 @@ function isValidIdentifier(name) {
   return /^[A-Za-z_$][0-9A-Za-z_$]*$/.test(name);
 }
 
+function cloneJsonValue(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 function createToolsNamespace(protocol, enabledTools) {
   const tools = Object.create(null);
 
@@ -204,13 +208,46 @@ function createNamespacedToolsModule(context, protocol, enabledTools, namespace)
   );
 }
 
-function createModuleResolver(context, protocol, enabledTools) {
+function createCodeModeStateModule(context, storedValues) {
+  const load = (key) => {
+    if (typeof key !== 'string') {
+      throw new TypeError('load key must be a string');
+    }
+    if (!Object.prototype.hasOwnProperty.call(storedValues, key)) {
+      return undefined;
+    }
+    return cloneJsonValue(storedValues[key]);
+  };
+
+  const store = (key, value) => {
+    if (typeof key !== 'string') {
+      throw new TypeError('store key must be a string');
+    }
+    storedValues[key] = cloneJsonValue(value);
+  };
+
+  return new SyntheticModule(
+    ['load', 'store'],
+    function initCodeModeStateModule() {
+      this.setExport('load', load);
+      this.setExport('store', store);
+    },
+    { context }
+  );
+}
+
+function createModuleResolver(context, protocol, enabledTools, storedValues) {
   const toolsModule = createToolsModule(context, protocol, enabledTools);
+  const codeModeModule = createCodeModeStateModule(context, storedValues);
   const namespacedModules = new Map();
 
   return function resolveModule(specifier) {
     if (specifier === 'tools.js') {
       return toolsModule;
+    }
+
+    if (specifier === '@openai/code_mode' || specifier === 'openai/code_mode') {
+      return codeModeModule;
     }
 
     const namespacedMatch = /^tools\/(.+)\.js$/.exec(specifier);
@@ -237,7 +274,12 @@ function createModuleResolver(context, protocol, enabledTools) {
 }
 
 async function runModule(context, protocol, request) {
-  const resolveModule = createModuleResolver(context, protocol, request.enabled_tools ?? []);
+  const resolveModule = createModuleResolver(
+    context,
+    protocol,
+    request.enabled_tools ?? [],
+    request.stored_values ?? {}
+  );
   const mainModule = new SourceTextModule(request.source, {
     context,
     identifier: 'code_mode_main.mjs',
@@ -255,6 +297,7 @@ async function runModule(context, protocol, request) {
 async function main() {
   const protocol = createProtocol();
   const request = await protocol.init;
+  const storedValues = cloneJsonValue(request.stored_values ?? {});
   const context = vm.createContext({
     __codex_tool_call: async (name, input) =>
       protocol.request('tool_call', {
@@ -264,10 +307,14 @@ async function main() {
   });
 
   try {
-    await runModule(context, protocol, request);
+    await runModule(context, protocol, {
+      ...request,
+      stored_values: storedValues,
+    });
     await protocol.send({
       type: 'result',
       content_items: readContentItems(context),
+      stored_values: storedValues,
     });
     process.exit(0);
   } catch (error) {
@@ -275,6 +322,7 @@ async function main() {
     await protocol.send({
       type: 'result',
       content_items: readContentItems(context),
+      stored_values: storedValues,
     });
     process.exit(1);
   }

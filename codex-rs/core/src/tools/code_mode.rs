@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::process::ExitStatus;
 use std::sync::Arc;
 
@@ -53,6 +54,7 @@ struct EnabledTool {
 enum HostToNodeMessage {
     Init {
         enabled_tools: Vec<EnabledTool>,
+        stored_values: HashMap<String, JsonValue>,
         source: String,
     },
     Response {
@@ -72,6 +74,7 @@ enum NodeToHostMessage {
     },
     Result {
         content_items: Vec<JsonValue>,
+        stored_values: HashMap<String, JsonValue>,
     },
 }
 
@@ -88,6 +91,7 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
     section.push_str("- Direct tool calls remain available while `code_mode` is enabled.\n");
     section.push_str("- `code_mode` uses the same Node runtime resolution as `js_repl`. If needed, point `js_repl_node_path` at the Node binary you want Codex to use.\n");
     section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to their code-mode result values.\n");
+    section.push_str("- Persist values across `code_mode` calls in the current session with `import { store, load } from \"@openai/code_mode\"` (or `\"openai/code_mode\"`). Values are stored via JSON serialization. `load(key)` returns a cloned stored value or `undefined`.\n");
     section.push_str(
         "- Function tools require JSON object arguments. Freeform tools require raw strings.\n",
     );
@@ -109,8 +113,9 @@ pub(crate) async fn execute(
         tracker,
     };
     let enabled_tools = build_enabled_tools(&exec).await;
+    let stored_values = exec.session.services.code_mode_store.stored_values().await;
     let source = build_source(&code, &enabled_tools).map_err(FunctionCallError::RespondToModel)?;
-    execute_node(exec, source, enabled_tools)
+    execute_node(exec, source, enabled_tools, stored_values)
         .await
         .map_err(FunctionCallError::RespondToModel)
 }
@@ -119,6 +124,7 @@ async fn execute_node(
     exec: ExecContext,
     source: String,
     enabled_tools: Vec<EnabledTool>,
+    stored_values: HashMap<String, JsonValue>,
 ) -> Result<Vec<FunctionCallOutputContentItem>, String> {
     let node_path = resolve_compatible_node(exec.turn.config.js_repl_node_path.as_deref()).await?;
 
@@ -162,6 +168,7 @@ async fn execute_node(
         &mut stdin,
         &HostToNodeMessage::Init {
             enabled_tools: enabled_tools.clone(),
+            stored_values,
             source,
         },
     )
@@ -187,7 +194,15 @@ async fn execute_node(
                 };
                 write_message(&mut stdin, &response).await?;
             }
-            NodeToHostMessage::Result { content_items } => {
+            NodeToHostMessage::Result {
+                content_items,
+                stored_values,
+            } => {
+                exec.session
+                    .services
+                    .code_mode_store
+                    .replace_stored_values(stored_values)
+                    .await;
                 final_content_items = Some(output_content_items_from_json_values(content_items)?);
                 break;
             }
