@@ -1901,6 +1901,7 @@ async fn make_chatwidget_manual(
     let mut widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
+        thread_scoped_op_tx: None,
         bottom_pane: bottom,
         active_cell: None,
         active_cell_revision: 0,

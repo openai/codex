@@ -348,6 +348,12 @@ struct PendingMcpElicitationRequest {
     request_id: codex_protocol::mcp::RequestId,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ThreadScopedOp {
+    pub(crate) thread_id: ThreadId,
+    pub(crate) op: Op,
+}
+
 impl PendingServerRequests {
     fn clear_turn_scoped(&mut self) {
         self.exec_approvals.clear();
@@ -2374,6 +2380,7 @@ async fn process_in_process_command(
 /// turn id and pending approval state.
 async fn run_in_process_agent_loop(
     mut codex_op_rx: tokio::sync::mpsc::UnboundedReceiver<Op>,
+    mut thread_scoped_op_rx: tokio::sync::mpsc::UnboundedReceiver<ThreadScopedOp>,
     mut client: InProcessAppServerClient,
     config: Config,
     thread_id: String,
@@ -2393,6 +2400,29 @@ async fn run_in_process_agent_loop(
                         let should_shutdown = process_in_process_command(
                             op,
                             &thread_id,
+                            &session_id,
+                            &config,
+                            &mut current_turn_id,
+                            &mut request_ids,
+                            &mut pending_server_requests,
+                            &client,
+                            &app_event_tx,
+                        ).await;
+                        if should_shutdown {
+                            pending_shutdown_complete = true;
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
+            maybe_thread_scoped_op = thread_scoped_op_rx.recv() => {
+                match maybe_thread_scoped_op {
+                    Some(ThreadScopedOp { thread_id: scoped_thread_id, op }) => {
+                        let scoped_thread_id = scoped_thread_id.to_string();
+                        let should_shutdown = process_in_process_command(
+                            op,
+                            &scoped_thread_id,
                             &session_id,
                             &config,
                             &mut current_turn_id,
@@ -2862,8 +2892,9 @@ pub(crate) fn spawn_agent(
     app_event_tx: AppEventSender,
     server: Arc<ThreadManager>,
     in_process_context: InProcessAgentContext,
-) -> UnboundedSender<Op> {
+) -> (UnboundedSender<Op>, UnboundedSender<ThreadScopedOp>) {
     let (codex_op_tx, codex_op_rx) = unbounded_channel::<Op>();
+    let (thread_scoped_op_tx, thread_scoped_op_rx) = unbounded_channel::<ThreadScopedOp>();
 
     let app_event_tx_clone = app_event_tx;
     tokio::spawn(async move {
@@ -2925,6 +2956,7 @@ pub(crate) fn spawn_agent(
 
         run_in_process_agent_loop(
             codex_op_rx,
+            thread_scoped_op_rx,
             client,
             config,
             thread_id,
@@ -2936,7 +2968,7 @@ pub(crate) fn spawn_agent(
         .await;
     });
 
-    codex_op_tx
+    (codex_op_tx, thread_scoped_op_tx)
 }
 
 /// Spawn an op-forwarding loop for an existing thread without subscribing to events.
@@ -3667,7 +3699,7 @@ mod tests {
             ),
         );
 
-        let codex_op_tx = spawn_agent(
+        let (codex_op_tx, _thread_scoped_op_tx) = spawn_agent(
             config.clone(),
             app_event_tx,
             thread_manager,

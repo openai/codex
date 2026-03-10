@@ -273,6 +273,7 @@ use crate::tui::FrameRequester;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
+pub(crate) use self::agent::ThreadScopedOp;
 use self::agent::spawn_agent;
 pub(crate) use self::agent::spawn_op_forwarder;
 mod session_header;
@@ -558,6 +559,7 @@ pub(crate) enum ExternalEditorState {
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
+    thread_scoped_op_tx: Option<UnboundedSender<ThreadScopedOp>>,
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
@@ -3256,7 +3258,7 @@ impl ChatWidget {
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
-        let codex_op_tx = spawn_agent(
+        let (codex_op_tx, thread_scoped_op_tx) = spawn_agent(
             config.clone(),
             app_event_tx.clone(),
             thread_manager,
@@ -3293,6 +3295,7 @@ impl ChatWidget {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
+            thread_scoped_op_tx: Some(thread_scoped_op_tx),
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
                 app_event_tx,
@@ -3479,6 +3482,7 @@ impl ChatWidget {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
+            thread_scoped_op_tx: None,
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
                 app_event_tx,
@@ -3656,6 +3660,7 @@ impl ChatWidget {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
+            thread_scoped_op_tx: None,
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
                 app_event_tx,
@@ -8430,8 +8435,10 @@ impl ChatWidget {
         true
     }
 
-    pub(crate) fn op_sender(&self) -> tokio::sync::mpsc::UnboundedSender<Op> {
-        self.codex_op_tx.clone()
+    pub(crate) fn thread_scoped_op_sender(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedSender<ThreadScopedOp>> {
+        self.thread_scoped_op_tx.clone()
     }
 
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {

@@ -15,6 +15,7 @@ use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
 use crate::chatwidget::InProcessAgentContext;
 use crate::chatwidget::ThreadInputState;
+use crate::chatwidget::ThreadScopedOp;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -715,7 +716,7 @@ pub(crate) struct App {
     /// app-server event stream, so `register_live_thread` must *not* spawn a
     /// competing `next_event()` listener for the primary thread.
     active_session_events_via_app_server: bool,
-    primary_app_server_op_tx: Option<mpsc::UnboundedSender<Op>>,
+    primary_app_server_op_tx: Option<mpsc::UnboundedSender<ThreadScopedOp>>,
     agent_navigation: AgentNavigationState,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<Event>>,
@@ -1246,7 +1247,7 @@ impl App {
             crate::session_log::log_outbound_op(&op);
             match self.primary_app_server_op_tx.as_ref() {
                 Some(tx) => {
-                    if let Err(err) = tx.send(op) {
+                    if let Err(err) = tx.send(ThreadScopedOp { thread_id, op }) {
                         self.chat_widget.add_error_message(format!(
                             "Failed to submit op through app-server session for thread {thread_id}: {err}"
                         ));
@@ -1675,7 +1676,7 @@ impl App {
         self.chat_widget = ChatWidget::new(init, self.server.clone());
         self.active_session_events_via_app_server = true;
         self.reset_thread_event_state();
-        self.primary_app_server_op_tx = Some(self.chat_widget.op_sender());
+        self.primary_app_server_op_tx = self.chat_widget.thread_scoped_op_sender();
         if let Some(summary) = summary {
             let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
             if let Some(command) = summary.resume_command {
@@ -2064,7 +2065,7 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
         };
-        app.primary_app_server_op_tx = Some(app.chat_widget.op_sender());
+        app.primary_app_server_op_tx = app.chat_widget.thread_scoped_op_sender();
         if let Some((thread, session_configured)) = existing_primary_thread.take() {
             app.attach_existing_primary_thread(thread, session_configured)
                 .await;
@@ -5868,10 +5869,11 @@ mod tests {
 
     #[tokio::test]
     async fn submit_op_to_thread_routes_interactive_responses_via_app_server() {
-        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let (thread_op_tx, mut thread_op_rx) = tokio::sync::mpsc::unbounded_channel();
         let thread_id = ThreadId::new();
         app.active_session_events_via_app_server = true;
-        app.primary_app_server_op_tx = Some(app.chat_widget.op_sender());
+        app.primary_app_server_op_tx = Some(thread_op_tx);
 
         app.submit_op_to_thread(
             thread_id,
@@ -5885,11 +5887,14 @@ mod tests {
         .await;
 
         assert_eq!(
-            op_rx.try_recv(),
-            Ok(Op::UserInputAnswer {
-                id: "turn-user-input".to_string(),
-                response: codex_protocol::request_user_input::RequestUserInputResponse {
-                    answers: HashMap::new(),
+            thread_op_rx.try_recv(),
+            Ok(ThreadScopedOp {
+                thread_id,
+                op: Op::UserInputAnswer {
+                    id: "turn-user-input".to_string(),
+                    response: codex_protocol::request_user_input::RequestUserInputResponse {
+                        answers: HashMap::new(),
+                    },
                 },
             })
         );
