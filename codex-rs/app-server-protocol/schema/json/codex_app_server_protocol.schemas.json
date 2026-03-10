@@ -867,6 +867,30 @@
             },
             "method": {
               "enum": [
+                "plugin/uninstall"
+              ],
+              "title": "Plugin/uninstallRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginUninstallParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/uninstallRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "turn/start"
               ],
               "title": "Turn/startRequestMethod",
@@ -4147,6 +4171,58 @@
         },
         {
           "properties": {
+            "run": {
+              "$ref": "#/definitions/v2/HookRunSummary"
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "hook_started"
+              ],
+              "title": "HookStartedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run",
+            "type"
+          ],
+          "title": "HookStartedEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "run": {
+              "$ref": "#/definitions/v2/HookRunSummary"
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "hook_completed"
+              ],
+              "title": "HookCompletedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run",
+            "type"
+          ],
+          "title": "HookCompletedEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
             "delta": {
               "type": "string"
             },
@@ -6438,6 +6514,13 @@
         }
       ]
     },
+    "PermissionGrantScope": {
+      "enum": [
+        "turn",
+        "session"
+      ],
+      "type": "string"
+    },
     "PermissionProfile": {
       "properties": {
         "file_system": {
@@ -6509,6 +6592,14 @@
       "properties": {
         "permissions": {
           "$ref": "#/definitions/GrantedPermissionProfile"
+        },
+        "scope": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PermissionGrantScope"
+            }
+          ],
+          "default": "turn"
         }
       },
       "required": [
@@ -6596,6 +6687,32 @@
         {
           "additionalProperties": false,
           "properties": {
+            "InputTranscriptDelta": {
+              "$ref": "#/definitions/RealtimeTranscriptDelta"
+            }
+          },
+          "required": [
+            "InputTranscriptDelta"
+          ],
+          "title": "InputTranscriptDeltaRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "OutputTranscriptDelta": {
+              "$ref": "#/definitions/RealtimeTranscriptDelta"
+            }
+          },
+          "required": [
+            "OutputTranscriptDelta"
+          ],
+          "title": "OutputTranscriptDeltaRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "AudioOut": {
               "$ref": "#/definitions/RealtimeAudioFrame"
             }
@@ -6666,7 +6783,44 @@
         }
       ]
     },
-    "RealtimeHandoffMessage": {
+    "RealtimeHandoffRequested": {
+      "properties": {
+        "active_transcript": {
+          "items": {
+            "$ref": "#/definitions/RealtimeTranscriptEntry"
+          },
+          "type": "array"
+        },
+        "handoff_id": {
+          "type": "string"
+        },
+        "input_transcript": {
+          "type": "string"
+        },
+        "item_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "active_transcript",
+        "handoff_id",
+        "input_transcript",
+        "item_id"
+      ],
+      "type": "object"
+    },
+    "RealtimeTranscriptDelta": {
+      "properties": {
+        "delta": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "delta"
+      ],
+      "type": "object"
+    },
+    "RealtimeTranscriptEntry": {
       "properties": {
         "role": {
           "type": "string"
@@ -6681,36 +6835,15 @@
       ],
       "type": "object"
     },
-    "RealtimeHandoffRequested": {
-      "properties": {
-        "handoff_id": {
-          "type": "string"
-        },
-        "input_transcript": {
-          "type": "string"
-        },
-        "item_id": {
-          "type": "string"
-        },
-        "messages": {
-          "items": {
-            "$ref": "#/definitions/RealtimeHandoffMessage"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "handoff_id",
-        "input_transcript",
-        "item_id",
-        "messages"
-      ],
-      "type": "object"
-    },
     "RejectConfig": {
       "properties": {
         "mcp_elicitations": {
           "description": "Reject MCP elicitation prompts.",
+          "type": "boolean"
+        },
+        "request_permissions": {
+          "default": false,
+          "description": "Reject approval prompts related to built-in permission requests.",
           "type": "boolean"
         },
         "rules": {
@@ -7204,6 +7337,26 @@
           "properties": {
             "method": {
               "enum": [
+                "hook/started"
+              ],
+              "title": "Hook/startedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/HookStartedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Hook/startedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "turn/completed"
               ],
               "title": "Turn/completedNotificationMethod",
@@ -7218,6 +7371,26 @@
             "params"
           ],
           "title": "Turn/completedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "hook/completed"
+              ],
+              "title": "Hook/completedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/HookCompletedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Hook/completedNotification",
           "type": "object"
         },
         {
@@ -9191,6 +9364,10 @@
               "reject": {
                 "properties": {
                   "mcp_elicitations": {
+                    "type": "boolean"
+                  },
+                  "request_permissions": {
+                    "default": false,
                     "type": "boolean"
                   },
                   "rules": {
@@ -11358,6 +11535,188 @@
         ],
         "type": "string"
       },
+      "HookCompletedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "run": {
+            "$ref": "#/definitions/v2/HookRunSummary"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "run",
+          "threadId"
+        ],
+        "title": "HookCompletedNotification",
+        "type": "object"
+      },
+      "HookEventName": {
+        "enum": [
+          "sessionStart",
+          "stop"
+        ],
+        "type": "string"
+      },
+      "HookExecutionMode": {
+        "enum": [
+          "sync",
+          "async"
+        ],
+        "type": "string"
+      },
+      "HookHandlerType": {
+        "enum": [
+          "command",
+          "prompt",
+          "agent"
+        ],
+        "type": "string"
+      },
+      "HookOutputEntry": {
+        "properties": {
+          "kind": {
+            "$ref": "#/definitions/v2/HookOutputEntryKind"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "text"
+        ],
+        "type": "object"
+      },
+      "HookOutputEntryKind": {
+        "enum": [
+          "warning",
+          "stop",
+          "feedback",
+          "context",
+          "error"
+        ],
+        "type": "string"
+      },
+      "HookRunStatus": {
+        "enum": [
+          "running",
+          "completed",
+          "failed",
+          "blocked",
+          "stopped"
+        ],
+        "type": "string"
+      },
+      "HookRunSummary": {
+        "properties": {
+          "completedAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "displayOrder": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "durationMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/definitions/v2/HookOutputEntry"
+            },
+            "type": "array"
+          },
+          "eventName": {
+            "$ref": "#/definitions/v2/HookEventName"
+          },
+          "executionMode": {
+            "$ref": "#/definitions/v2/HookExecutionMode"
+          },
+          "handlerType": {
+            "$ref": "#/definitions/v2/HookHandlerType"
+          },
+          "id": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/definitions/v2/HookScope"
+          },
+          "sourcePath": {
+            "type": "string"
+          },
+          "startedAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/definitions/v2/HookRunStatus"
+          },
+          "statusMessage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "displayOrder",
+          "entries",
+          "eventName",
+          "executionMode",
+          "handlerType",
+          "id",
+          "scope",
+          "sourcePath",
+          "startedAt",
+          "status"
+        ],
+        "type": "object"
+      },
+      "HookScope": {
+        "enum": [
+          "thread",
+          "turn"
+        ],
+        "type": "string"
+      },
+      "HookStartedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "run": {
+            "$ref": "#/definitions/v2/HookRunSummary"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "run",
+          "threadId"
+        ],
+        "title": "HookStartedNotification",
+        "type": "object"
+      },
       "ImageDetail": {
         "enum": [
           "auto",
@@ -12563,6 +12922,24 @@
           "name",
           "source"
         ],
+        "type": "object"
+      },
+      "PluginUninstallParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "pluginId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pluginId"
+        ],
+        "title": "PluginUninstallParams",
+        "type": "object"
+      },
+      "PluginUninstallResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "PluginUninstallResponse",
         "type": "object"
       },
       "ProductSurface": {

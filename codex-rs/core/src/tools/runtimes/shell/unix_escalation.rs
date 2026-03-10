@@ -7,7 +7,7 @@ use crate::exec::SandboxType;
 use crate::exec::is_likely_sandbox_denied;
 use crate::exec_policy::prompt_is_rejected_by_policy;
 use crate::features::Feature;
-use crate::guardian::GuardianReviewRequest;
+use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecRequest;
@@ -50,7 +50,6 @@ use codex_shell_escalation::PreparedExec;
 use codex_shell_escalation::ShellCommandExecutor;
 use codex_shell_escalation::Stopwatch;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -386,16 +385,19 @@ impl CoreShellActionProvider {
         Ok(stopwatch
             .pause_for(async move {
                 if routes_approval_to_guardian(&turn) {
-                    let request = GuardianReviewRequest {
-                        action: json!({
-                            "tool": tool_name,
-                            "program": program,
-                            "argv": argv,
-                            "cwd": workdir,
-                            "additional_permissions": additional_permissions,
-                        }),
-                    };
-                    return review_approval_request(&session, &turn, request, None).await;
+                    return review_approval_request(
+                        &session,
+                        &turn,
+                        GuardianApprovalRequest::Execve {
+                            tool_name: tool_name.to_string(),
+                            program: program.to_string_lossy().into_owned(),
+                            argv: argv.to_vec(),
+                            cwd: workdir,
+                            additional_permissions,
+                        },
+                        None,
+                    )
+                    .await;
                 }
                 let available_decisions = vec![
                     Some(ReviewDecision::Approved),

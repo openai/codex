@@ -1,6 +1,7 @@
 pub(crate) mod agent_jobs;
 pub mod apply_patch;
 mod artifacts;
+mod code_mode;
 mod dynamic;
 mod grep_files;
 mod js_repl;
@@ -32,6 +33,7 @@ use crate::sandboxing::merge_permission_profiles;
 use crate::sandboxing::normalize_additional_permissions;
 pub use apply_patch::ApplyPatchHandler;
 pub use artifacts::ArtifactsHandler;
+pub use code_mode::CodeModeHandler;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use dynamic::DynamicToolHandler;
@@ -95,7 +97,7 @@ fn resolve_workdir_base_path(
 
 /// Validates feature/policy constraints for `with_additional_permissions` and
 /// normalizes any path-based permissions. Errors if the request is invalid.
-pub(super) fn normalize_and_validate_additional_permissions(
+pub(crate) fn normalize_and_validate_additional_permissions(
     request_permission_enabled: bool,
     approval_policy: AskForApproval,
     sandbox_permissions: SandboxPermissions,
@@ -172,7 +174,12 @@ pub(super) async fn apply_granted_turn_permissions(
         };
     }
 
-    let granted_permissions = session.granted_turn_permissions().await;
+    let granted_session_permissions = session.granted_session_permissions().await;
+    let granted_turn_permissions = session.granted_turn_permissions().await;
+    let granted_permissions = merge_permission_profiles(
+        granted_session_permissions.as_ref(),
+        granted_turn_permissions.as_ref(),
+    );
     let effective_permissions = merge_permission_profiles(
         additional_permissions.as_ref(),
         granted_permissions.as_ref(),

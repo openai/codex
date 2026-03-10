@@ -331,10 +331,9 @@ pub(crate) fn create_seatbelt_command_args(
     enforce_managed_network: bool,
     network: Option<&NetworkProxy>,
 ) -> Vec<String> {
-    create_seatbelt_command_args_for_policies_with_extensions(
+    create_seatbelt_command_args_with_extensions(
         command,
-        &FileSystemSandboxPolicy::from(sandbox_policy),
-        NetworkSandboxPolicy::from(sandbox_policy),
+        sandbox_policy,
         sandbox_policy_cwd,
         enforce_managed_network,
         network,
@@ -410,7 +409,7 @@ pub(crate) fn create_seatbelt_command_args_with_extensions(
 ) -> Vec<String> {
     create_seatbelt_command_args_for_policies_with_extensions(
         command,
-        &FileSystemSandboxPolicy::from(sandbox_policy),
+        &FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, sandbox_policy_cwd),
         NetworkSandboxPolicy::from(sandbox_policy),
         sandbox_policy_cwd,
         enforce_managed_network,
@@ -596,6 +595,7 @@ mod tests {
     use super::normalize_path_for_sandbox;
     use super::unix_socket_dir_params;
     use super::unix_socket_policy;
+    use crate::protocol::ReadOnlyAccess;
     use crate::protocol::SandboxPolicy;
     use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
     use crate::seatbelt_permissions::MacOsAutomationPermission;
@@ -863,6 +863,40 @@ sys.exit(0 if allowed else 13)
         let policy = &args[1];
         assert!(policy.contains("(allow user-preference-read)"));
         assert!(!policy.contains("(allow user-preference-write)"));
+    }
+
+    #[test]
+    fn seatbelt_legacy_workspace_write_nested_readable_root_stays_writable() {
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(cwd.join("docs")).expect("create docs");
+        let docs = AbsolutePathBuf::from_absolute_path(cwd.join("docs")).expect("absolute docs");
+        let args = create_seatbelt_command_args(
+            vec!["/bin/true".to_string()],
+            &SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                read_only_access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: true,
+                    readable_roots: vec![docs.clone()],
+                },
+                network_access: false,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            },
+            cwd.as_path(),
+            false,
+            None,
+        );
+
+        let docs_param = format!("-DWRITABLE_ROOT_0_RO_0={}", docs.as_path().display());
+        assert!(
+            !seatbelt_policy_arg(&args).contains("WRITABLE_ROOT_0_RO_0"),
+            "legacy workspace-write readable roots under cwd should not become seatbelt carveouts:\n{args:#?}"
+        );
+        assert!(
+            !args.iter().any(|arg| arg == &docs_param),
+            "unexpected seatbelt carveout parameter for redundant legacy readable root: {args:#?}"
+        );
     }
 
     #[test]

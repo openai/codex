@@ -918,8 +918,10 @@ impl App {
         history_cell::SessionHeaderHistoryCell::new(
             self.chat_widget.current_model().to_string(),
             self.chat_widget.current_reasoning_effort(),
-            self.chat_widget
-                .should_show_fast_status(self.chat_widget.current_service_tier()),
+            self.chat_widget.should_show_fast_status(
+                self.chat_widget.current_model(),
+                self.chat_widget.current_service_tier(),
+            ),
             self.config.cwd.clone(),
             version,
         )
@@ -1171,6 +1173,15 @@ impl App {
                     ))
                 }
             }
+            EventMsg::RequestPermissions(ev) => Some(ThreadInteractiveRequest::Approval(
+                ApprovalRequest::Permissions {
+                    thread_id,
+                    thread_label,
+                    call_id: ev.call_id.clone(),
+                    reason: ev.reason.clone(),
+                    permissions: ev.permissions.clone(),
+                },
+            )),
             _ => None,
         }
     }
@@ -1684,16 +1695,19 @@ impl App {
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
         let thread_manager = Arc::new(ThreadManager::new(
-            config.codex_home.clone(),
+            &config,
             auth_manager.clone(),
             SessionSource::Cli,
-            config.model_catalog.clone(),
             CollaborationModesConfig {
                 default_mode_request_user_input: config
                     .features
                     .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
             },
         ));
+        // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
+        thread_manager
+            .plugins_manager()
+            .maybe_start_curated_repo_sync_for_config(&config);
         let mut model = thread_manager
             .get_models_manager()
             .get_default_model(&config.model, RefreshStrategy::Offline)
@@ -3237,6 +3251,30 @@ impl App {
                         "E X E C".to_string(),
                     ));
                 }
+                ApprovalRequest::Permissions {
+                    permissions,
+                    reason,
+                    ..
+                } => {
+                    let _ = tui.enter_alt_screen();
+                    let mut lines = Vec::new();
+                    if let Some(reason) = reason {
+                        lines.push(Line::from(vec!["Reason: ".into(), reason.italic()]));
+                        lines.push(Line::from(""));
+                    }
+                    if let Some(rule_line) =
+                        crate::bottom_pane::format_additional_permissions_rule(&permissions)
+                    {
+                        lines.push(Line::from(vec![
+                            "Permission rule: ".into(),
+                            rule_line.cyan(),
+                        ]));
+                    }
+                    self.overlay = Some(Overlay::new_static_with_renderables(
+                        vec![Box::new(Paragraph::new(lines).wrap(Wrap { trim: false }))],
+                        "P E R M I S S I O N S".to_string(),
+                    ));
+                }
                 ApprovalRequest::McpElicitation {
                     server_name,
                     message,
@@ -3753,6 +3791,7 @@ mod tests {
     use crate::app_backtrack::BacktrackState;
     use crate::app_backtrack::user_count;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
+    use crate::chatwidget::tests::set_chatgpt_auth;
     use crate::file_search::FileSearchManager;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
@@ -5424,6 +5463,32 @@ mod tests {
     async fn ctrl_l_clear_ui_after_long_transcript_reuses_clear_header_snapshot() {
         let rendered = render_clear_ui_header_after_long_transcript_for_snapshot().await;
         assert_snapshot!("clear_ui_after_long_transcript_fresh_header_only", rendered);
+    }
+
+    #[tokio::test]
+    async fn clear_ui_header_shows_fast_status_only_for_gpt54() {
+        let mut app = make_test_app().await;
+        app.config.cwd = PathBuf::from("/tmp/project");
+        app.chat_widget.set_model("gpt-5.4");
+        app.chat_widget
+            .set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+        app.chat_widget
+            .set_service_tier(Some(codex_protocol::config_types::ServiceTier::Fast));
+        set_chatgpt_auth(&mut app.chat_widget);
+
+        let rendered = app
+            .clear_ui_header_lines_with_version(80, "<VERSION>")
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_snapshot!("clear_ui_header_fast_status_gpt54_only", rendered);
     }
 
     async fn make_test_app() -> App {

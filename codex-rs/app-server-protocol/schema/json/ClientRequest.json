@@ -57,6 +57,10 @@
                 "mcp_elicitations": {
                   "type": "boolean"
                 },
+                "request_permissions": {
+                  "default": false,
+                  "type": "boolean"
+                },
                 "rules": {
                   "type": "boolean"
                 },
@@ -1129,6 +1133,17 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "PluginUninstallParams": {
+      "properties": {
+        "pluginId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId"
+      ],
       "type": "object"
     },
     "ProductSurface": {
@@ -3569,6 +3584,30 @@
         "params"
       ],
       "title": "Plugin/installRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/uninstall"
+          ],
+          "title": "Plugin/uninstallRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginUninstallParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/uninstallRequest",
       "type": "object"
     },
     {

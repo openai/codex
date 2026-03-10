@@ -43,6 +43,8 @@ use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::GrantedPermissionProfile as V2GrantedPermissionProfile;
+use codex_app_server_protocol::HookCompletedNotification;
+use codex_app_server_protocol::HookStartedNotification;
 use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -120,6 +122,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TurnDiffEvent;
+use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
@@ -272,6 +275,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             if let ApiVersion::V2 = api_version {
                 match event.payload {
                     RealtimeEvent::SessionUpdated { .. } => {}
+                    RealtimeEvent::InputTranscriptDelta(_) => {}
+                    RealtimeEvent::OutputTranscriptDelta(_) => {}
                     RealtimeEvent::AudioOut(audio) => {
                         let notification = ThreadRealtimeOutputAudioDeltaNotification {
                             thread_id: conversation_id.to_string(),
@@ -303,7 +308,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                                 "handoff_id": handoff.handoff_id,
                                 "item_id": handoff.item_id,
                                 "input_transcript": handoff.input_transcript,
-                                "messages": handoff.messages,
+                                "active_transcript": handoff.active_transcript,
                             }),
                         };
                         outgoing
@@ -718,6 +723,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 );
                 let empty = CoreRequestPermissionsResponse {
                     permissions: Default::default(),
+                    scope: CorePermissionGrantScope::Turn,
                 };
                 if let Err(err) = conversation
                     .submit(Op::RequestPermissionsResponse {
@@ -1305,6 +1311,30 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
+        }
+        EventMsg::HookStarted(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = HookStartedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event.turn_id,
+                    run: event.run.into(),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::HookStarted(notification))
+                    .await;
+            }
+        }
+        EventMsg::HookCompleted(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = HookCompletedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event.turn_id,
+                    run: event.run.into(),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::HookCompleted(notification))
+                    .await;
+            }
         }
         EventMsg::ExitedReviewMode(review_event) => {
             let review = match review_event.review_output {
@@ -2219,12 +2249,14 @@ fn request_permissions_response_from_client_result(
             error!("request failed with client error: {err:?}");
             return Some(CoreRequestPermissionsResponse {
                 permissions: Default::default(),
+                scope: CorePermissionGrantScope::Turn,
             });
         }
         Err(err) => {
             error!("request failed: {err:?}");
             return Some(CoreRequestPermissionsResponse {
                 permissions: Default::default(),
+                scope: CorePermissionGrantScope::Turn,
             });
         }
     };
@@ -2234,6 +2266,7 @@ fn request_permissions_response_from_client_result(
             error!("failed to deserialize PermissionsRequestApprovalResponse: {err}");
             PermissionsRequestApprovalResponse {
                 permissions: V2GrantedPermissionProfile::default(),
+                scope: codex_app_server_protocol::PermissionGrantScope::Turn,
             }
         });
     Some(CoreRequestPermissionsResponse {
@@ -2241,6 +2274,7 @@ fn request_permissions_response_from_client_result(
             requested_permissions,
             response.permissions.into(),
         ),
+        scope: response.scope.to_core(),
     })
 }
 
@@ -2766,9 +2800,30 @@ mod tests {
                 response,
                 CoreRequestPermissionsResponse {
                     permissions: expected_permissions,
+                    scope: CorePermissionGrantScope::Turn,
                 }
             );
         }
+    }
+
+    #[test]
+    fn request_permissions_response_preserves_session_scope() {
+        let response = request_permissions_response_from_client_result(
+            CorePermissionProfile::default(),
+            Ok(Ok(serde_json::json!({
+                "scope": "session",
+                "permissions": {},
+            }))),
+        )
+        .expect("response should be accepted");
+
+        assert_eq!(
+            response,
+            CoreRequestPermissionsResponse {
+                permissions: CorePermissionProfile::default(),
+                scope: CorePermissionGrantScope::Session,
+            }
+        );
     }
 
     #[test]

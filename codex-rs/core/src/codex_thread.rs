@@ -2,6 +2,7 @@ use crate::agent::AgentStatus;
 use crate::codex::Codex;
 use crate::codex::SteerInputError;
 use crate::config::ConstraintResult;
+use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
 use crate::file_watcher::WatchRegistration;
@@ -20,6 +21,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use std::path::PathBuf;
+use tokio::sync::Mutex;
 use tokio::sync::watch;
 
 use crate::state_db::StateDbHandle;
@@ -41,6 +43,7 @@ pub struct ThreadConfigSnapshot {
 pub struct CodexThread {
     pub(crate) codex: Codex,
     rollout_path: Option<PathBuf>,
+    out_of_band_elicitation_count: Mutex<u64>,
     _watch_registration: WatchRegistration,
 }
 
@@ -55,6 +58,7 @@ impl CodexThread {
         Self {
             codex,
             rollout_path,
+            out_of_band_elicitation_count: Mutex::new(0),
             _watch_registration: watch_registration,
         }
     }
@@ -142,5 +146,40 @@ impl CodexThread {
 
     pub fn enabled(&self, feature: Feature) -> bool {
         self.codex.enabled(feature)
+    }
+
+    pub async fn increment_out_of_band_elicitation_count(&self) -> CodexResult<u64> {
+        let mut guard = self.out_of_band_elicitation_count.lock().await;
+        let was_zero = *guard == 0;
+        *guard = guard.checked_add(1).ok_or_else(|| {
+            CodexErr::Fatal("out-of-band elicitation count overflowed".to_string())
+        })?;
+
+        if was_zero {
+            self.codex
+                .session
+                .set_out_of_band_elicitation_pause_state(true);
+        }
+
+        Ok(*guard)
+    }
+
+    pub async fn decrement_out_of_band_elicitation_count(&self) -> CodexResult<u64> {
+        let mut guard = self.out_of_band_elicitation_count.lock().await;
+        if *guard == 0 {
+            return Err(CodexErr::InvalidRequest(
+                "out-of-band elicitation count is already zero".to_string(),
+            ));
+        }
+
+        *guard -= 1;
+        let now_zero = *guard == 0;
+        if now_zero {
+            self.codex
+                .session
+                .set_out_of_band_elicitation_pause_state(false);
+        }
+
+        Ok(*guard)
     }
 }

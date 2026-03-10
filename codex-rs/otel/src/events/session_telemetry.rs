@@ -24,9 +24,8 @@ use crate::metrics::names::WEBSOCKET_EVENT_DURATION_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_COUNT_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_DURATION_METRIC;
 use crate::metrics::runtime_metrics::RuntimeMetricsSummary;
+use crate::metrics::tags::SessionMetricTagValues;
 use crate::metrics::timer::Timer;
-use crate::metrics::validation::validate_tag_key;
-use crate::metrics::validation::validate_tag_value;
 use crate::provider::OtelProvider;
 use crate::sanitize_metric_tag_value;
 use codex_api::ApiError;
@@ -228,40 +227,15 @@ impl SessionTelemetry {
         if !self.metrics_use_metadata_tags {
             return Ok(Vec::new());
         }
-        let mut tags = Vec::with_capacity(7);
-        Self::push_metadata_tag(&mut tags, "auth_mode", self.metadata.auth_mode.as_deref())?;
-        Self::push_metadata_tag(
-            &mut tags,
-            "session_source",
-            Some(self.metadata.session_source.as_str()),
-        )?;
-        Self::push_metadata_tag(
-            &mut tags,
-            "originator",
-            Some(self.metadata.originator.as_str()),
-        )?;
-        Self::push_metadata_tag(
-            &mut tags,
-            "service_name",
-            self.metadata.service_name.as_deref(),
-        )?;
-        Self::push_metadata_tag(&mut tags, "model", Some(self.metadata.model.as_str()))?;
-        Self::push_metadata_tag(&mut tags, "app.version", Some(self.metadata.app_version))?;
-        Ok(tags)
-    }
-
-    fn push_metadata_tag<'a>(
-        tags: &mut Vec<(&'a str, &'a str)>,
-        key: &'static str,
-        value: Option<&'a str>,
-    ) -> MetricsResult<()> {
-        let Some(value) = value else {
-            return Ok(());
-        };
-        validate_tag_key(key)?;
-        validate_tag_value(value)?;
-        tags.push((key, value));
-        Ok(())
+        SessionMetricTagValues {
+            auth_mode: self.metadata.auth_mode.as_deref(),
+            session_source: self.metadata.session_source.as_str(),
+            originator: self.metadata.originator.as_str(),
+            service_name: self.metadata.service_name.as_deref(),
+            model: self.metadata.model.as_str(),
+            app_version: self.metadata.app_version,
+        }
+        .into_tags()
     }
 
     #[allow(clippy::too_many_arguments)]

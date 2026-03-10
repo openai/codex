@@ -12,6 +12,7 @@ use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -993,6 +994,7 @@ async fn request_permissions_grants_apply_to_later_exec_command_calls() -> Resul
             id: "permissions-call".to_string(),
             response: RequestPermissionsResponse {
                 permissions: normalized_requested_permissions.clone(),
+                scope: PermissionGrantScope::Turn,
             },
         })
         .await?;
@@ -1106,6 +1108,7 @@ async fn request_permissions_preapprove_explicit_exec_permissions_outside_on_req
             id: "permissions-call".to_string(),
             response: RequestPermissionsResponse {
                 permissions: normalized_requested_permissions,
+                scope: PermissionGrantScope::Turn,
             },
         })
         .await?;
@@ -1218,6 +1221,7 @@ async fn request_permissions_grants_apply_to_later_shell_command_calls() -> Resu
             id: "permissions-call".to_string(),
             response: RequestPermissionsResponse {
                 permissions: normalized_requested_permissions.clone(),
+                scope: PermissionGrantScope::Turn,
             },
         })
         .await?;
@@ -1360,6 +1364,7 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
             id: "permissions-call".to_string(),
             response: RequestPermissionsResponse {
                 permissions: granted_permissions.clone(),
+                scope: PermissionGrantScope::Turn,
             },
         })
         .await?;
@@ -1477,6 +1482,7 @@ async fn request_permissions_grants_do_not_carry_across_turns() -> Result<()> {
             id: "permissions-call".to_string(),
             response: RequestPermissionsResponse {
                 permissions: normalized_requested_permissions,
+                scope: PermissionGrantScope::Turn,
             },
         })
         .await?;
@@ -1515,6 +1521,141 @@ async fn request_permissions_grants_do_not_carry_across_turns() -> Result<()> {
         .function_call_output_text("exec-call")
         .unwrap_or_else(|| panic!("expected exec-call output"));
     assert!(output.contains("missing `additional_permissions`"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(target_os = "macos")]
+async fn request_permissions_session_grants_carry_across_turns() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = workspace_write_excluding_tmp();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+
+    let outside_dir = tempfile::tempdir()?;
+    let outside_write = outside_dir.path().join("session-sticky-write.txt");
+    let requested_permissions = requested_directory_write_permissions(outside_dir.path());
+    let normalized_requested_permissions =
+        normalized_directory_write_permissions(outside_dir.path())?;
+    let command = format!(
+        "printf {:?} > {:?} && cat {:?}",
+        "session-sticky-ok", outside_write, outside_write
+    );
+
+    let _first_turn = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-session-turn-1"),
+                request_permissions_tool_event(
+                    "permissions-call",
+                    "Allow writing outside the workspace",
+                    &requested_permissions,
+                )?,
+                ev_completed("resp-session-turn-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-session-turn-2"),
+                ev_assistant_message("msg-session-turn-1", "done"),
+                ev_completed("resp-session-turn-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "request session permissions for later use",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    let granted_permissions = expect_request_permissions_event(&test, "permissions-call").await;
+    assert_eq!(
+        granted_permissions,
+        normalized_requested_permissions.clone()
+    );
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: "permissions-call".to_string(),
+            response: RequestPermissionsResponse {
+                permissions: normalized_requested_permissions,
+                scope: PermissionGrantScope::Session,
+            },
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let second_turn = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-session-turn-3"),
+                exec_command_event("exec-call", &command)?,
+                ev_completed("resp-session-turn-3"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-session-turn-4"),
+                ev_assistant_message("msg-session-turn-2", "done"),
+                ev_completed("resp-session-turn-4"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "reuse session permissions in a later turn",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+
+    let completion_event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    if let EventMsg::ExecApprovalRequest(approval) = completion_event {
+        test.codex
+            .submit(Op::ExecApproval {
+                id: approval.effective_approval_id(),
+                turn_id: None,
+                decision: ReviewDecision::Approved,
+            })
+            .await?;
+        wait_for_completion(&test).await;
+    }
+
+    let exec_output = second_turn
+        .function_call_output_text("exec-call")
+        .map(|output| json!({ "output": output }))
+        .unwrap_or_else(|| panic!("expected exec-call output"));
+    let result = parse_result(&exec_output);
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(result.stdout.trim(), "session-sticky-ok");
+    assert_eq!(fs::read_to_string(&outside_write)?, "session-sticky-ok");
 
     Ok(())
 }

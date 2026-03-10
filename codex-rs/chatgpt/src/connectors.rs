@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use std::sync::LazyLock;
 use std::sync::Mutex as StdMutex;
 
+use codex_core::AuthManager;
 use codex_core::config::Config;
-use codex_core::features::Feature;
 use codex_core::token_data::TokenData;
 use serde::Deserialize;
 use std::time::Duration;
@@ -75,8 +75,17 @@ struct CachedAllConnectors {
 static ALL_CONNECTORS_CACHE: LazyLock<StdMutex<Option<CachedAllConnectors>>> =
     LazyLock::new(|| StdMutex::new(None));
 
+async fn apps_enabled(config: &Config) -> bool {
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        false,
+        config.cli_auth_credentials_store_mode,
+    );
+    config.features.apps_enabled(Some(&auth_manager)).await
+}
+
 pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    if !config.features.enabled(Feature::Apps) {
+    if !apps_enabled(config).await {
         return Ok(Vec::new());
     }
     let (connectors_result, accessible_result) = tokio::join!(
@@ -96,7 +105,7 @@ pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>
 }
 
 pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>> {
-    if !config.features.enabled(Feature::Apps) {
+    if !apps_enabled(config).await {
         return Some(Vec::new());
     }
 
@@ -118,7 +127,7 @@ pub async fn list_all_connectors_with_options(
     config: &Config,
     force_refetch: bool,
 ) -> anyhow::Result<Vec<AppInfo>> {
-    if !config.features.enabled(Feature::Apps) {
+    if !apps_enabled(config).await {
         return Ok(Vec::new());
     }
     init_chatgpt_token_from_auth(&config.codex_home, config.cli_auth_credentials_store_mode)

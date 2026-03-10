@@ -19,6 +19,7 @@ mod output_schema;
 mod plan_item;
 mod plugin_install;
 mod plugin_list;
+mod plugin_uninstall;
 mod rate_limits;
 mod realtime_conversation;
 mod request_permissions;
