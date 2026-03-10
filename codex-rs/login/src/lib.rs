@@ -1,16 +1,8 @@
-mod custom_ca;
 mod device_code_auth;
 mod pkce;
-// Hidden because this exists only to let the spawned `login_ca_probe` binary call the
-// probe-specific client builder without exposing that workaround as part of the normal API.
-// `login_ca_probe` is a separate binary target, not a `#[cfg(test)]` module inside this crate, so
-// it cannot call crate-private helpers and would not see test-only modules.
-#[doc(hidden)]
-pub mod probe_support;
 mod server;
 
-pub use custom_ca::BuildLoginHttpClientError;
-pub use custom_ca::build_login_http_client;
+pub use codex_client::BuildReqwestClientError as BuildLoginHttpClientError;
 pub use device_code_auth::DeviceCode;
 pub use device_code_auth::complete_device_code_login;
 pub use device_code_auth::request_device_code;

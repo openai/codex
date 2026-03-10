@@ -13,6 +13,7 @@ http = { workspace = true }
 opentelemetry = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
+rustls-pki-types = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -25,5 +26,8 @@ zstd = { workspace = true }
 workspace = true
 
 [dev-dependencies]
+codex-utils-cargo-bin = { workspace = true }
 opentelemetry_sdk = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
 tracing-subscriber = { workspace = true }
