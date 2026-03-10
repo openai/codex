@@ -22,6 +22,8 @@
 //! - unit tests cover pure env-selection logic without constructing a real client
 //! - subprocess tests in `tests/ca_env.rs` cover real client construction, because that path is
 //!   not hermetic in macOS sandboxed runs and must also scrub inherited CA environment variables
+//! - the spawned `login_ca_probe` binary reaches the probe-only builder through the hidden
+//!   `probe_support` module so that workaround does not become part of the normal crate API
 
 use std::env;
 use std::fs;
@@ -130,27 +132,51 @@ impl From<BuildLoginHttpClientError> for io::Error {
 /// Callers should use this instead of constructing a raw `reqwest::Client` so every login entry
 /// point honors the same CA override behavior. A caller that bypasses this helper can silently
 /// regress enterprise login setups that rely on `CODEX_CA_CERTIFICATE` or `SSL_CERT_FILE`.
+/// `CODEX_CA_CERTIFICATE` takes precedence over `SSL_CERT_FILE`, and empty values for either are
+/// treated as unset so callers do not accidentally turn `VAR=""` into a bogus path lookup.
 ///
 /// # Errors
 ///
 /// Returns a [`BuildLoginHttpClientError`] when the configured CA file is unreadable, malformed,
-/// or contains a certificate block that `reqwest` cannot register as a root.
+/// or contains a certificate block that `reqwest` cannot register as a root. Calling raw
+/// `reqwest::Client::builder()` instead would skip those user-facing errors and can make login
+/// failures in enterprise environments much harder to diagnose.
 pub fn build_login_http_client() -> Result<reqwest::Client, BuildLoginHttpClientError> {
-    build_login_http_client_with_env(&ProcessEnv)
+    build_login_http_client_with_env(&ProcessEnv, reqwest::Client::builder())
 }
 
-/// Builds a login HTTP client using an injected environment source.
+/// Builds the login HTTP client used behind the spawned CA probe binary.
+///
+/// This stays crate-private because normal callers should continue to go through
+/// [`build_login_http_client`]. The hidden `probe_support` module exposes this behavior only to
+/// `login_ca_probe`, which disables proxy autodetection so the subprocess tests can reach the
+/// custom-CA code path in sandboxed macOS test runs without crashing first in reqwest's platform
+/// proxy setup. Using this path for normal login would make the tests and production behavior
+/// diverge on proxy handling, which is exactly what the hidden module arrangement is trying to
+/// avoid.
+pub(crate) fn build_login_http_client_for_subprocess_tests()
+-> Result<reqwest::Client, BuildLoginHttpClientError> {
+    build_login_http_client_with_env(
+        &ProcessEnv,
+        // The probe disables proxy autodetection so the subprocess tests can reach the custom-CA
+        // code path even in macOS seatbelt runs, where platform proxy discovery can panic first.
+        reqwest::Client::builder().no_proxy(),
+    )
+}
+
+/// Builds a login HTTP client using an injected environment source and reqwest builder.
 ///
 /// This exists so unit tests can exercise precedence and PEM-handling behavior deterministically.
 /// Production code should call [`build_login_http_client`] instead of supplying its own
 /// environment adapter, otherwise the tests and the real process environment can drift apart.
 /// This function is also the place where module responsibilities come together: it selects the CA
-/// bundle, delegates file parsing to [`ConfiguredCaBundle::load_certificates`], logs the unusual-but-supported PEM shapes,
-/// and finally registers each parsed certificate with the `reqwest` builder.
+/// bundle, delegates file parsing to [`ConfiguredCaBundle::load_certificates`], preserves the
+/// caller's chosen `reqwest` builder configuration, and finally registers each parsed certificate
+/// with that builder.
 fn build_login_http_client_with_env(
     env_source: &dyn EnvSource,
+    mut builder: reqwest::ClientBuilder,
 ) -> Result<reqwest::Client, BuildLoginHttpClientError> {
-    let mut builder = reqwest::Client::builder();
     if let Some(bundle) = env_source.configured_ca_bundle() {
         let certificates = bundle.load_certificates()?;
 
@@ -333,6 +359,10 @@ impl ConfiguredCaBundle {
         // Use the mixed-section parser from `rustls-pki-types` so CRLs can be identified and
         // skipped explicitly instead of being removed with ad hoc text rewriting.
         for section_result in normalized_pem.sections() {
+            // Known limitation: if `rustls-pki-types` fails while parsing a malformed CRL section,
+            // that error is reported here before we can classify the block as ignorable. A bundle
+            // containing valid certificates plus a malformed `X509 CRL` therefore still fails to
+            // load today, even though well-formed CRLs are ignored.
             let (section_kind, der) = match section_result {
                 Ok(section) => section,
                 Err(error) => return Err(self.pem_parse_error(&error)),
@@ -427,9 +457,15 @@ impl NormalizedPem {
     /// bundle. OpenSSL's `TRUSTED CERTIFICATE` form is one such variant: it is still certificate
     /// material, but it uses a different PEM label and may carry auxiliary trust metadata that
     /// this crate does not consume. This constructor rewrites only the PEM labels so the mixed-
-    /// section parser can keep treating the file as certificate input.
+    /// section parser can keep treating the file as certificate input. The rustls ecosystem does
+    /// not currently accept `TRUSTED CERTIFICATE` as a standard certificate label upstream, so
+    /// this remains a local compatibility shim rather than behavior delegated to
+    /// `rustls-pki-types`.
     ///
     /// See also:
+    /// - rustls/pemfile issue #52, closed as not planned, documenting that
+    ///   `BEGIN TRUSTED CERTIFICATE` blocks are ignored upstream:
+    ///   <https://github.com/rustls/pemfile/issues/52>
     /// - OpenSSL `x509 -trustout`, which emits `TRUSTED CERTIFICATE` PEM blocks:
     ///   <https://docs.openssl.org/master/man1/openssl-x509/>
     /// - OpenSSL PEM readers, which document that plain `PEM_read_bio_X509()` discards auxiliary

@@ -2,7 +2,12 @@
 //!
 //! These tests intentionally run through `login_ca_probe` instead of calling the helper in-process:
 //! reqwest client construction is not hermetic on macOS sandboxed runs, and these cases also need
-//! exact control over inherited CA environment variables.
+//! exact control over inherited CA environment variables. The probe disables reqwest proxy
+//! autodetection because `reqwest::Client::builder().build()` can panic inside
+//! `system-configuration` while probing macOS proxy settings under seatbelt. The probe-level
+//! workaround keeps these tests focused on custom-CA success and failure instead of failing first
+//! on unrelated platform proxy discovery. These tests still stop at client construction: they
+//! verify CA file selection, PEM parsing, and user-facing errors, not a full TLS handshake.
 
 use codex_utils_cargo_bin::cargo_bin;
 use std::fs;

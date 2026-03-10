@@ -8,11 +8,18 @@
 //! - env precedence is respected,
 //! - multi-cert PEM bundles load,
 //! - error messages guide users when CA files are invalid.
+//!
+//! The probe intentionally disables reqwest proxy autodetection while building the client. That
+//! keeps the subprocess tests hermetic in macOS seatbelt runs, where
+//! `reqwest::Client::builder().build()` can panic inside the `system-configuration` crate while
+//! probing macOS proxy settings. Without that workaround, the subprocess exits before the custom
+//! CA code reports either success or a structured `BuildLoginHttpClientError`, so tests that are
+//! supposed to validate CA parsing instead fail on unrelated platform proxy discovery.
 
 use std::process;
 
 fn main() {
-    match codex_login::build_login_http_client() {
+    match codex_login::probe_support::build_login_http_client() {
         Ok(_) => {
             println!("ok");
         }
