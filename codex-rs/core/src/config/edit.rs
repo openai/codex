@@ -1,6 +1,6 @@
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
-use crate::features::Feature;
+use crate::features::FEATURES;
 use crate::path_utils::resolve_symlink_write_paths;
 use crate::path_utils::write_atomically;
 use anyhow::Context;
@@ -874,7 +874,11 @@ impl ConfigEditsBuilder {
         } else {
             vec!["features".to_string(), key.to_string()]
         };
-        if enabled || !Feature::from_key(key).is_some_and(|feature| !feature.default_enabled()) {
+        let is_default_false_feature = FEATURES
+            .iter()
+            .find(|spec| spec.key == key)
+            .is_some_and(|spec| !spec.default_enabled);
+        if enabled || !is_default_false_feature {
             self.edits.push(ConfigEdit::SetPath {
                 segments,
                 value: value(enabled),
