@@ -450,7 +450,17 @@ impl PluginsManager {
             Vec::<(String, PluginId, AbsolutePathBuf, Option<bool>, bool)>::new();
         let mut local_plugin_names = HashSet::new();
         for plugin in curated_marketplace.plugins {
-            let plugin_id = PluginId::new(plugin.name.clone(), marketplace_name.clone())?;
+            let plugin_name = plugin.name;
+            if !local_plugin_names.insert(plugin_name.clone()) {
+                warn!(
+                    plugin = plugin_name,
+                    marketplace = %marketplace_name,
+                    "ignoring duplicate local plugin entry during remote sync"
+                );
+                continue;
+            }
+
+            let plugin_id = PluginId::new(plugin_name.clone(), marketplace_name.clone())?;
             let plugin_key = plugin_id.as_key();
             let source_path = match plugin.source {
                 MarketplacePluginSourceSummary::Local { path } => path,
@@ -459,9 +469,8 @@ impl PluginsManager {
                 .get(&plugin_key)
                 .map(|plugin| plugin.enabled);
             let is_installed = self.store.is_installed(&plugin_id);
-            local_plugin_names.insert(plugin.name.clone());
             local_plugins.push((
-                plugin.name,
+                plugin_name,
                 plugin_id,
                 source_path,
                 current_enabled,
@@ -2580,6 +2589,91 @@ enabled = false
         assert!(config.contains(r#"[plugins."linear@openai-curated"]"#));
         assert!(!config.contains(r#"[plugins."gmail@openai-curated"]"#));
         assert!(config.contains("enabled = false"));
+    }
+
+    #[tokio::test]
+    async fn sync_plugins_from_remote_uses_first_duplicate_local_plugin_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let curated_root = curated_plugins_repo_path(tmp.path());
+        fs::create_dir_all(curated_root.join(".git")).unwrap();
+        fs::create_dir_all(curated_root.join(".agents/plugins")).unwrap();
+        fs::write(
+            curated_root.join(".agents/plugins/marketplace.json"),
+            r#"{
+  "name": "openai-curated",
+  "plugins": [
+    {
+      "name": "gmail",
+      "source": {
+        "source": "local",
+        "path": "./plugins/gmail-first"
+      }
+    },
+    {
+      "name": "gmail",
+      "source": {
+        "source": "local",
+        "path": "./plugins/gmail-second"
+      }
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+        write_plugin(&curated_root, "plugins/gmail-first", "gmail");
+        write_plugin(&curated_root, "plugins/gmail-second", "gmail");
+        fs::write(curated_root.join("plugins/gmail-first/marker.txt"), "first").unwrap();
+        fs::write(
+            curated_root.join("plugins/gmail-second/marker.txt"),
+            "second",
+        )
+        .unwrap();
+        write_file(
+            &tmp.path().join(CONFIG_TOML_FILE),
+            r#"[features]
+plugins = true
+"#,
+        );
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/backend-api/plugins/list"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"[
+  {"id":"1","name":"gmail","marketplace_name":"openai-curated","version":"1.0.0","enabled":true}
+]"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let mut config = load_config(tmp.path(), tmp.path()).await;
+        config.chatgpt_base_url = format!("{}/backend-api/", server.uri());
+        let manager = PluginsManager::new(tmp.path().to_path_buf());
+        let result = manager
+            .sync_plugins_from_remote(
+                &config,
+                Some(&CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            RemotePluginSyncResult {
+                installed_plugin_ids: vec!["gmail@openai-curated".to_string()],
+                enabled_plugin_ids: vec!["gmail@openai-curated".to_string()],
+                disabled_plugin_ids: Vec::new(),
+                uninstalled_plugin_ids: Vec::new(),
+            }
+        );
+        assert_eq!(
+            fs::read_to_string(
+                tmp.path()
+                    .join("plugins/cache/openai-curated/gmail/local/marker.txt")
+            )
+            .unwrap(),
+            "first"
+        );
     }
 
     #[test]
