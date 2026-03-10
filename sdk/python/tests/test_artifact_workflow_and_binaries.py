@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -34,7 +33,11 @@ def test_generate_types_wires_all_generation_steps() -> None:
     tree = ast.parse(source)
 
     generate_types_fn = next(
-        (node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "generate_types"),
+        (
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "generate_types"
+        ),
         None,
     )
     assert generate_types_fn is not None
@@ -83,6 +86,57 @@ def test_schema_normalization_only_flattens_string_literal_oneofs() -> None:
     ]
 
 
+def test_python_codegen_schema_annotation_adds_stable_variant_titles() -> None:
+    script = _load_update_script_module()
+    schema = json.loads(
+        (
+            ROOT.parent.parent
+            / "codex-rs"
+            / "app-server-protocol"
+            / "schema"
+            / "json"
+            / "codex_app_server_protocol.v2.schemas.json"
+        ).read_text()
+    )
+
+    script._annotate_schema(schema)
+    definitions = schema["definitions"]
+
+    server_notification_titles = {
+        variant.get("title")
+        for variant in definitions["ServerNotification"]["oneOf"]
+        if isinstance(variant, dict)
+    }
+    assert "ErrorServerNotification" in server_notification_titles
+    assert "ThreadStartedServerNotification" in server_notification_titles
+    assert "ErrorNotification" not in server_notification_titles
+    assert "Thread/startedNotification" not in server_notification_titles
+
+    ask_for_approval_titles = [
+        variant.get("title") for variant in definitions["AskForApproval"]["oneOf"]
+    ]
+    assert ask_for_approval_titles == [
+        "AskForApprovalValue",
+        "RejectAskForApproval",
+    ]
+
+    reasoning_summary_titles = [
+        variant.get("title") for variant in definitions["ReasoningSummary"]["oneOf"]
+    ]
+    assert reasoning_summary_titles == [
+        "ReasoningSummaryValue",
+        "NoneReasoningSummary",
+    ]
+
+
+def test_generate_v2_all_uses_titles_for_generated_names() -> None:
+    source = (ROOT / "scripts" / "update_sdk_artifacts.py").read_text()
+    assert "--use-title-as-name" in source
+    assert "--use-annotated" in source
+    assert "--formatters" in source
+    assert "ruff-format" in source
+
+
 def test_runtime_package_template_has_no_checked_in_binaries() -> None:
     runtime_root = ROOT.parent / "python-runtime" / "src" / "codex_cli_bin"
     assert sorted(
@@ -93,7 +147,9 @@ def test_runtime_package_template_has_no_checked_in_binaries() -> None:
 
 
 def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> None:
-    pyproject = tomllib.loads((ROOT.parent / "python-runtime" / "pyproject.toml").read_text())
+    pyproject = tomllib.loads(
+        (ROOT.parent / "python-runtime" / "pyproject.toml").read_text()
+    )
     hook_source = (ROOT.parent / "python-runtime" / "hatch_build.py").read_text()
     hook_tree = ast.parse(hook_source)
     initialize_fn = next(
@@ -220,11 +276,15 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
     def fake_generate_types() -> None:
         calls.append("generate_types")
 
-    def fake_stage_sdk_package(_staging_dir: Path, _sdk_version: str, _runtime_version: str) -> Path:
+    def fake_stage_sdk_package(
+        _staging_dir: Path, _sdk_version: str, _runtime_version: str
+    ) -> Path:
         calls.append("stage_sdk")
         return tmp_path / "sdk-stage"
 
-    def fake_stage_runtime_package(_staging_dir: Path, _runtime_version: str, _runtime_binary: Path) -> Path:
+    def fake_stage_runtime_package(
+        _staging_dir: Path, _runtime_version: str, _runtime_binary: Path
+    ) -> Path:
         raise AssertionError("runtime staging should not run for stage-sdk")
 
     def fake_current_sdk_version() -> str:
@@ -260,10 +320,14 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
     def fake_generate_types() -> None:
         calls.append("generate_types")
 
-    def fake_stage_sdk_package(_staging_dir: Path, _sdk_version: str, _runtime_version: str) -> Path:
+    def fake_stage_sdk_package(
+        _staging_dir: Path, _sdk_version: str, _runtime_version: str
+    ) -> Path:
         raise AssertionError("sdk staging should not run for stage-runtime")
 
-    def fake_stage_runtime_package(_staging_dir: Path, _runtime_version: str, _runtime_binary: Path) -> Path:
+    def fake_stage_runtime_package(
+        _staging_dir: Path, _runtime_version: str, _runtime_binary: Path
+    ) -> Path:
         calls.append("stage_runtime")
         return tmp_path / "runtime-stage"
 
@@ -282,7 +346,9 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
     assert calls == ["stage_runtime"]
 
 
-def test_default_runtime_is_resolved_from_installed_runtime_package(tmp_path: Path) -> None:
+def test_default_runtime_is_resolved_from_installed_runtime_package(
+    tmp_path: Path,
+) -> None:
     from codex_app_server import client as client_module
 
     fake_binary = tmp_path / ("codex.exe" if client_module.os.name == "nt" else "codex")
@@ -300,7 +366,9 @@ def test_default_runtime_is_resolved_from_installed_runtime_package(tmp_path: Pa
 def test_explicit_codex_bin_override_takes_priority(tmp_path: Path) -> None:
     from codex_app_server import client as client_module
 
-    explicit_binary = tmp_path / ("custom-codex.exe" if client_module.os.name == "nt" else "custom-codex")
+    explicit_binary = tmp_path / (
+        "custom-codex.exe" if client_module.os.name == "nt" else "custom-codex"
+    )
     explicit_binary.write_text("")
     ops = client_module.CodexBinResolverOps(
         installed_codex_path=lambda: (_ for _ in ()).throw(
@@ -340,6 +408,4 @@ def test_broken_runtime_package_does_not_fall_back() -> None:
     with pytest.raises(FileNotFoundError) as exc_info:
         client_module.resolve_codex_bin(client_module.AppServerConfig(), ops)
 
-    assert str(exc_info.value) == (
-        "missing packaged binary"
-    )
+    assert str(exc_info.value) == ("missing packaged binary")
