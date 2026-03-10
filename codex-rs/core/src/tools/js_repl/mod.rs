@@ -622,7 +622,7 @@ impl JsReplManager {
             }
             ResponseInputItem::McpToolCallOutput { output, .. } => {
                 let function_output = output.as_function_call_output_payload();
-                let payload_kind = if output.success {
+                let payload_kind = if output.success() {
                     JsReplToolCallPayloadKind::McpResult
                 } else {
                     JsReplToolCallPayloadKind::McpErrorResult
@@ -634,7 +634,7 @@ impl JsReplManager {
                 );
                 summary.payload_item_count = Some(output.content.len());
                 summary.structured_content_present = Some(output.structured_content.is_some());
-                summary.result_is_error = Some(!output.success);
+                summary.result_is_error = Some(!output.success());
                 summary
             }
         }

@@ -42,7 +42,7 @@ def test_generated_files_are_up_to_date():
     env["PATH"] = f"{python_bin}{os.pathsep}{env.get('PATH', '')}"
 
     subprocess.run(
-        [sys.executable, "scripts/update_sdk_artifacts.py", "--types-only"],
+        [sys.executable, "scripts/update_sdk_artifacts.py", "generate-types"],
         cwd=ROOT,
         check=True,
         env=env,

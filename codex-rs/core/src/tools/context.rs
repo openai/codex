@@ -7,10 +7,10 @@ use crate::truncate::TruncationPolicy;
 use crate::truncate::formatted_truncate_text;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::resolve_max_tokens;
+use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::McpToolOutput;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::models::function_call_output_content_items_to_text;
@@ -82,7 +82,7 @@ pub trait ToolOutput: Send {
     }
 }
 
-impl ToolOutput for McpToolOutput {
+impl ToolOutput for CallToolResult {
     fn log_preview(&self) -> String {
         let output = self.as_function_call_output_payload();
         let preview = output.body.to_text().unwrap_or_else(|| output.to_string());
@@ -90,7 +90,7 @@ impl ToolOutput for McpToolOutput {
     }
 
     fn success_for_logging(&self) -> bool {
-        self.success
+        self.success()
     }
 
     fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
@@ -98,6 +98,12 @@ impl ToolOutput for McpToolOutput {
             call_id: call_id.to_string(),
             output: self.clone(),
         }
+    }
+
+    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+        serde_json::to_value(self).unwrap_or_else(|err| {
+            JsonValue::String(format!("failed to serialize mcp result: {err}"))
+        })
     }
 }
 
@@ -272,12 +278,11 @@ fn response_input_to_code_mode_result(response: ResponseInputItem) -> JsonValue 
             }
         },
         ResponseInputItem::McpToolCallOutput { output, .. } => {
-            match output.as_function_call_output_payload().body {
-                FunctionCallOutputBody::Text(text) => JsonValue::String(text),
-                FunctionCallOutputBody::ContentItems(items) => {
-                    content_items_to_code_mode_result(&items)
-                }
-            }
+            output.code_mode_result(&ToolPayload::Mcp {
+                server: String::new(),
+                tool: String::new(),
+                raw_arguments: String::new(),
+            })
         }
     }
 }
@@ -411,6 +416,48 @@ mod tests {
             }
             other => panic!("expected FunctionCallOutput, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn mcp_code_mode_result_serializes_full_call_tool_result() {
+        let output = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": "ignored",
+            })],
+            structured_content: Some(serde_json::json!({
+                "threadId": "thread_123",
+                "content": "done",
+            })),
+            is_error: Some(false),
+            meta: Some(serde_json::json!({
+                "source": "mcp",
+            })),
+        };
+
+        let result = output.code_mode_result(&ToolPayload::Mcp {
+            server: "server".to_string(),
+            tool: "tool".to_string(),
+            raw_arguments: "{}".to_string(),
+        });
+
+        assert_eq!(
+            result,
+            serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": "ignored",
+                }],
+                "structuredContent": {
+                    "threadId": "thread_123",
+                    "content": "done",
+                },
+                "isError": false,
+                "_meta": {
+                    "source": "mcp",
+                },
+            })
+        );
     }
 
     #[test]
