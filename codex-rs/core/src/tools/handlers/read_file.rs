@@ -147,7 +147,10 @@ impl ToolHandler for ReadFileHandler {
                 indentation::read_block(&path, offset, limit, indentation).await?
             }
         };
-        Ok(FunctionToolOutput::from_text(collected.join("\n"), Some(true)))
+        Ok(FunctionToolOutput::from_text(
+            collected.join("\n"),
+            Some(true),
+        ))
     }
 }
 

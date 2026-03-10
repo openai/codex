@@ -223,8 +223,8 @@ mod tests {
         let payload = ToolPayload::Function {
             arguments: "{}".to_string(),
         };
-        let response =
-            FunctionToolOutput::from_text("ok".to_string(), Some(true)).into_response("fn-1", &payload);
+        let response = FunctionToolOutput::from_text("ok".to_string(), Some(true))
+            .into_response("fn-1", &payload);
 
         match response {
             ResponseInputItem::FunctionCallOutput { call_id, output } => {

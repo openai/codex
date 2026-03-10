@@ -1026,10 +1026,7 @@ mod tests {
     }
 
     fn expect_text_output(output: FunctionToolOutput) -> (String, Option<bool>) {
-        (
-            output.body.to_text().unwrap_or_default(),
-            output.success,
-        )
+        (output.body.to_text().unwrap_or_default(), output.success)
     }
 
     #[tokio::test]

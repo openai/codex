@@ -91,16 +91,14 @@ impl ToolHandler for McpHandler {
             ResponseInputItem::FunctionCallOutput { output, .. } => {
                 let success = output.success;
                 match output.body {
-                    codex_protocol::models::FunctionCallOutputBody::Text(text) => {
-                        Ok(McpHandlerOutput::Function(FunctionToolOutput::from_text(
-                            text, success,
-                        )))
-                    }
-                    codex_protocol::models::FunctionCallOutputBody::ContentItems(content) => Ok(
-                        McpHandlerOutput::Function(FunctionToolOutput::from_content(
-                            content, success,
-                        )),
+                    codex_protocol::models::FunctionCallOutputBody::Text(text) => Ok(
+                        McpHandlerOutput::Function(FunctionToolOutput::from_text(text, success)),
                     ),
+                    codex_protocol::models::FunctionCallOutputBody::ContentItems(content) => {
+                        Ok(McpHandlerOutput::Function(
+                            FunctionToolOutput::from_content(content, success),
+                        ))
+                    }
                 }
             }
             _ => Err(FunctionCallError::RespondToModel(
