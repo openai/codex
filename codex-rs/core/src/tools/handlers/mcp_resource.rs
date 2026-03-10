@@ -1,4 +1,3 @@
-use codex_protocol::models::FunctionCallOutputBody;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,8 +24,9 @@ use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
+use crate::tools::context::TextToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
+use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -184,7 +184,7 @@ impl ToolHandler for McpResourceHandler {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -245,7 +245,7 @@ async fn handle_list_resources(
     turn: Arc<TurnContext>,
     call_id: String,
     arguments: Option<Value>,
-) -> Result<ToolOutput, FunctionCallError> {
+) -> Result<ToolOutputBox, FunctionCallError> {
     let args: ListResourcesArgs = parse_args_with_default(arguments.clone())?;
     let ListResourcesArgs { server, cursor } = args;
     let server = normalize_optional_string(server);
@@ -298,10 +298,12 @@ async fn handle_list_resources(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let ToolOutput::Function { body, success } = &output else {
-                    unreachable!("MCP resource handler should return function output");
+                let Some(output_text) =
+                    (&*output as &dyn std::any::Any).downcast_ref::<TextToolOutput>()
+                else {
+                    unreachable!("MCP resource handler should return text output");
                 };
-                let content = body.to_text().unwrap_or_default();
+                let content = output_text.text.clone();
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,
@@ -309,7 +311,7 @@ async fn handle_list_resources(
                     &call_id,
                     invocation,
                     duration,
-                    Ok(call_tool_result_from_content(&content, *success)),
+                    Ok(call_tool_result_from_content(&content, output_text.success)),
                 )
                 .await;
                 Ok(output)
@@ -351,7 +353,7 @@ async fn handle_list_resource_templates(
     turn: Arc<TurnContext>,
     call_id: String,
     arguments: Option<Value>,
-) -> Result<ToolOutput, FunctionCallError> {
+) -> Result<ToolOutputBox, FunctionCallError> {
     let args: ListResourceTemplatesArgs = parse_args_with_default(arguments.clone())?;
     let ListResourceTemplatesArgs { server, cursor } = args;
     let server = normalize_optional_string(server);
@@ -406,10 +408,12 @@ async fn handle_list_resource_templates(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let ToolOutput::Function { body, success } = &output else {
-                    unreachable!("MCP resource handler should return function output");
+                let Some(output_text) =
+                    (&*output as &dyn std::any::Any).downcast_ref::<TextToolOutput>()
+                else {
+                    unreachable!("MCP resource handler should return text output");
                 };
-                let content = body.to_text().unwrap_or_default();
+                let content = output_text.text.clone();
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,
@@ -417,7 +421,7 @@ async fn handle_list_resource_templates(
                     &call_id,
                     invocation,
                     duration,
-                    Ok(call_tool_result_from_content(&content, *success)),
+                    Ok(call_tool_result_from_content(&content, output_text.success)),
                 )
                 .await;
                 Ok(output)
@@ -459,7 +463,7 @@ async fn handle_read_resource(
     turn: Arc<TurnContext>,
     call_id: String,
     arguments: Option<Value>,
-) -> Result<ToolOutput, FunctionCallError> {
+) -> Result<ToolOutputBox, FunctionCallError> {
     let args: ReadResourceArgs = parse_args(arguments.clone())?;
     let ReadResourceArgs { server, uri } = args;
     let server = normalize_required_string("server", server)?;
@@ -499,10 +503,12 @@ async fn handle_read_resource(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let ToolOutput::Function { body, success } = &output else {
-                    unreachable!("MCP resource handler should return function output");
+                let Some(output_text) =
+                    (&*output as &dyn std::any::Any).downcast_ref::<TextToolOutput>()
+                else {
+                    unreachable!("MCP resource handler should return text output");
                 };
-                let content = body.to_text().unwrap_or_default();
+                let content = output_text.text.clone();
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,
@@ -510,7 +516,7 @@ async fn handle_read_resource(
                     &call_id,
                     invocation,
                     duration,
-                    Ok(call_tool_result_from_content(&content, *success)),
+                    Ok(call_tool_result_from_content(&content, output_text.success)),
                 )
                 .await;
                 Ok(output)
@@ -614,7 +620,7 @@ fn normalize_required_string(field: &str, value: String) -> Result<String, Funct
     }
 }
 
-fn serialize_function_output<T>(payload: T) -> Result<ToolOutput, FunctionCallError>
+fn serialize_function_output<T>(payload: T) -> Result<ToolOutputBox, FunctionCallError>
 where
     T: Serialize,
 {
@@ -624,10 +630,10 @@ where
         ))
     })?;
 
-    Ok(ToolOutput::Function {
-        body: FunctionCallOutputBody::Text(content),
+    Ok(Box::new(TextToolOutput {
+        text: content,
         success: Some(true),
-    })
+    }))
 }
 
 fn parse_arguments(raw_args: &str) -> Result<Option<Value>, FunctionCallError> {

@@ -1,4 +1,3 @@
-use codex_protocol::models::FunctionCallOutputBody;
 use std::path::Path;
 use std::time::Duration;
 
@@ -8,8 +7,9 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 use crate::function_tool::FunctionCallError;
+use crate::tools::context::TextToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
+use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -42,7 +42,7 @@ impl ToolHandler for GrepFilesHandler {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
         let ToolInvocation { payload, turn, .. } = invocation;
 
         let arguments = match payload {
@@ -86,15 +86,15 @@ impl ToolHandler for GrepFilesHandler {
             run_rg_search(pattern, include.as_deref(), &search_path, limit, &turn.cwd).await?;
 
         if search_results.is_empty() {
-            Ok(ToolOutput::Function {
-                body: FunctionCallOutputBody::Text("No matches found.".to_string()),
+            Ok(Box::new(TextToolOutput {
+                text: "No matches found.".to_string(),
                 success: Some(false),
-            })
+            }))
         } else {
-            Ok(ToolOutput::Function {
-                body: FunctionCallOutputBody::Text(search_results.join("\n")),
+            Ok(Box::new(TextToolOutput {
+                text: search_results.join("\n"),
                 success: Some(true),
-            })
+            }))
         }
     }
 }

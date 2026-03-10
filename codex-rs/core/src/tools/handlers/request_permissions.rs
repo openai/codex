@@ -1,11 +1,11 @@
 use async_trait::async_trait;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
 
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::normalize_additional_permissions;
+use crate::tools::context::TextToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
+use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::registry::ToolHandler;
@@ -24,7 +24,7 @@ impl ToolHandler for RequestPermissionsHandler {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -67,9 +67,9 @@ impl ToolHandler for RequestPermissionsHandler {
             ))
         })?;
 
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
+        Ok(Box::new(TextToolOutput {
+            text: content,
             success: Some(true),
-        })
+        }))
     }
 }
