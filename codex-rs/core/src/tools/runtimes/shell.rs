@@ -11,6 +11,9 @@ pub(crate) mod zsh_fork_backend;
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
+use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::review_approval_request;
+use crate::guardian::routes_approval_to_guardian;
 use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
@@ -141,14 +144,27 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let keys = self.approval_keys(req);
         let command = req.command.clone();
         let cwd = req.cwd.clone();
-        let reason = ctx
-            .retry_reason
-            .clone()
-            .or_else(|| req.justification.clone());
+        let retry_reason = ctx.retry_reason.clone();
+        let reason = retry_reason.clone().or_else(|| req.justification.clone());
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
+            if routes_approval_to_guardian(turn) {
+                return review_approval_request(
+                    session,
+                    turn,
+                    GuardianApprovalRequest::Shell {
+                        command,
+                        cwd,
+                        sandbox_permissions: req.sandbox_permissions,
+                        additional_permissions: req.additional_permissions.clone(),
+                        justification: req.justification.clone(),
+                    },
+                    retry_reason,
+                )
+                .await;
+            }
             with_cached_approval(&session.services, "shell", keys, move || async move {
                 let available_decisions = None;
                 session
@@ -164,6 +180,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                             .proposed_execpolicy_amendment()
                             .cloned(),
                         req.additional_permissions.clone(),
+                        None,
                         available_decisions,
                     )
                     .await

@@ -101,6 +101,10 @@ impl ThreadScopedOutgoingMessageSender {
             .await;
     }
 
+    pub(crate) async fn send_global_server_notification(&self, notification: ServerNotification) {
+        self.outgoing.send_server_notification(notification).await;
+    }
+
     pub(crate) async fn abort_pending_server_requests(&self) {
         self.outgoing
             .cancel_requests_for_thread(
@@ -267,6 +271,25 @@ impl OutgoingMessageSender {
 
     pub(crate) async fn cancel_request(&self, id: &RequestId) -> bool {
         self.take_request_callback(id).await.is_some()
+    }
+
+    pub(crate) async fn cancel_all_requests(&self, error: Option<JSONRPCErrorError>) {
+        let entries = {
+            let mut request_id_to_callback = self.request_id_to_callback.lock().await;
+            request_id_to_callback
+                .drain()
+                .map(|(_, entry)| entry)
+                .collect::<Vec<_>>()
+        };
+
+        if let Some(error) = error {
+            for entry in entries {
+                if let Err(err) = entry.callback.send(Err(error.clone())) {
+                    let request_id = entry.request.id();
+                    warn!("could not notify callback for {request_id:?} due to: {err:?}");
+                }
+            }
+        }
     }
 
     async fn take_request_callback(

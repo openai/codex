@@ -218,14 +218,6 @@ fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature
             enabled,
         ));
     }
-    if let Some(enabled) = cfg.tools.as_ref().and_then(|tools| tools.web_search) {
-        explicit_settings.push((
-            "tools.web_search".to_string(),
-            Feature::WebSearchRequest,
-            enabled,
-        ));
-    }
-
     for (profile_name, profile) in &cfg.profiles {
         if let Some(features) = profile.features.as_ref() {
             for (key, enabled) in &features.entries {
@@ -256,13 +248,6 @@ fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature
             explicit_settings.push((
                 format!("profiles.{profile_name}.experimental_use_freeform_apply_patch"),
                 Feature::ApplyPatchFreeform,
-                enabled,
-            ));
-        }
-        if let Some(enabled) = profile.tools_web_search {
-            explicit_settings.push((
-                format!("profiles.{profile_name}.tools_web_search"),
-                Feature::WebSearchRequest,
                 enabled,
             ));
         }

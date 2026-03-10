@@ -543,6 +543,7 @@ impl UnifiedExecProcessManager {
                 env.cwd.as_path(),
                 &env.env,
                 &env.arg0,
+                codex_utils_pty::TerminalSize::default(),
             )
             .await
         } else {
@@ -582,7 +583,11 @@ impl UnifiedExecProcessManager {
                 command: &request.command,
                 approval_policy: context.turn.approval_policy.value(),
                 sandbox_policy: context.turn.sandbox_policy.get(),
-                sandbox_permissions: request.sandbox_permissions,
+                sandbox_permissions: if request.additional_permissions_preapproved {
+                    crate::sandboxing::SandboxPermissions::UseDefault
+                } else {
+                    request.sandbox_permissions
+                },
                 prefix_rule: request.prefix_rule.clone(),
             })
             .await;

@@ -476,6 +476,42 @@ macro_rules! skip_if_no_network {
 }
 
 #[macro_export]
+macro_rules! codex_linux_sandbox_exe_or_skip {
+    () => {{
+        #[cfg(target_os = "linux")]
+        {
+            match codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox") {
+                Ok(path) => Some(path),
+                Err(err) => {
+                    eprintln!("codex-linux-sandbox binary not available, skipping test: {err}");
+                    return;
+                }
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
+    }};
+    ($return_value:expr $(,)?) => {{
+        #[cfg(target_os = "linux")]
+        {
+            match codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox") {
+                Ok(path) => Some(path),
+                Err(err) => {
+                    eprintln!("codex-linux-sandbox binary not available, skipping test: {err}");
+                    return $return_value;
+                }
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
+    }};
+}
+
+#[macro_export]
 macro_rules! skip_if_windows {
     ($return_value:expr $(,)?) => {{
         if cfg!(target_os = "windows") {

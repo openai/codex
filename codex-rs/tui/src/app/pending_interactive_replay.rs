@@ -39,6 +39,8 @@ pub(super) struct PendingInteractiveReplayState {
     patch_approval_call_ids: HashSet<String>,
     patch_approval_call_ids_by_turn_id: HashMap<String, Vec<String>>,
     elicitation_requests: HashSet<ElicitationRequestKey>,
+    request_permissions_call_ids: HashSet<String>,
+    request_permissions_call_ids_by_turn_id: HashMap<String, Vec<String>>,
     request_user_input_call_ids: HashSet<String>,
     request_user_input_call_ids_by_turn_id: HashMap<String, Vec<String>>,
 }
@@ -50,6 +52,7 @@ impl PendingInteractiveReplayState {
             EventMsg::ExecApprovalRequest(_)
                 | EventMsg::ApplyPatchApprovalRequest(_)
                 | EventMsg::ElicitationRequest(_)
+                | EventMsg::RequestPermissions(_)
                 | EventMsg::ExecCommandBegin(_)
                 | EventMsg::PatchApplyBegin(_)
                 | EventMsg::TurnComplete(_)
@@ -64,6 +67,7 @@ impl PendingInteractiveReplayState {
             Op::ExecApproval { .. }
                 | Op::PatchApproval { .. }
                 | Op::ResolveElicitation { .. }
+                | Op::RequestPermissionsResponse { .. }
                 | Op::UserInputAnswer { .. }
                 | Op::Shutdown
         )
@@ -98,6 +102,13 @@ impl PendingInteractiveReplayState {
                         server_name.clone(),
                         request_id.clone(),
                     ));
+            }
+            Op::RequestPermissionsResponse { id, .. } => {
+                self.request_permissions_call_ids.remove(id);
+                Self::remove_call_id_from_turn_map(
+                    &mut self.request_permissions_call_ids_by_turn_id,
+                    id,
+                );
             }
             // `Op::UserInputAnswer` identifies the turn, not the prompt call_id. The UI
             // answers queued prompts for the same turn in FIFO order, so remove the oldest
@@ -166,17 +177,26 @@ impl PendingInteractiveReplayState {
                     .or_default()
                     .push(ev.call_id.clone());
             }
+            EventMsg::RequestPermissions(ev) => {
+                self.request_permissions_call_ids.insert(ev.call_id.clone());
+                self.request_permissions_call_ids_by_turn_id
+                    .entry(ev.turn_id.clone())
+                    .or_default()
+                    .push(ev.call_id.clone());
+            }
             // A turn ending (normally or aborted/replaced) invalidates any unresolved
-            // turn-scoped approvals and request_user_input prompts from that turn.
+            // turn-scoped approvals, permission prompts, and request_user_input prompts.
             EventMsg::TurnComplete(ev) => {
                 self.clear_exec_approval_turn(&ev.turn_id);
                 self.clear_patch_approval_turn(&ev.turn_id);
+                self.clear_request_permissions_turn(&ev.turn_id);
                 self.clear_request_user_input_turn(&ev.turn_id);
             }
             EventMsg::TurnAborted(ev) => {
                 if let Some(turn_id) = &ev.turn_id {
                     self.clear_exec_approval_turn(turn_id);
                     self.clear_patch_approval_turn(turn_id);
+                    self.clear_request_permissions_turn(turn_id);
                     self.clear_request_user_input_turn(turn_id);
                 }
             }
@@ -228,6 +248,23 @@ impl PendingInteractiveReplayState {
                         .remove(&ev.turn_id);
                 }
             }
+            EventMsg::RequestPermissions(ev) => {
+                self.request_permissions_call_ids.remove(&ev.call_id);
+                let mut remove_turn_entry = false;
+                if let Some(call_ids) = self
+                    .request_permissions_call_ids_by_turn_id
+                    .get_mut(&ev.turn_id)
+                {
+                    call_ids.retain(|call_id| call_id != &ev.call_id);
+                    if call_ids.is_empty() {
+                        remove_turn_entry = true;
+                    }
+                }
+                if remove_turn_entry {
+                    self.request_permissions_call_ids_by_turn_id
+                        .remove(&ev.turn_id);
+                }
+            }
             _ => {}
         }
     }
@@ -250,6 +287,9 @@ impl PendingInteractiveReplayState {
             EventMsg::RequestUserInput(ev) => {
                 self.request_user_input_call_ids.contains(&ev.call_id)
             }
+            EventMsg::RequestPermissions(ev) => {
+                self.request_permissions_call_ids.contains(&ev.call_id)
+            }
             _ => true,
         }
     }
@@ -258,12 +298,21 @@ impl PendingInteractiveReplayState {
         !self.exec_approval_call_ids.is_empty()
             || !self.patch_approval_call_ids.is_empty()
             || !self.elicitation_requests.is_empty()
+            || !self.request_permissions_call_ids.is_empty()
     }
 
     fn clear_request_user_input_turn(&mut self, turn_id: &str) {
         if let Some(call_ids) = self.request_user_input_call_ids_by_turn_id.remove(turn_id) {
             for call_id in call_ids {
                 self.request_user_input_call_ids.remove(&call_id);
+            }
+        }
+    }
+
+    fn clear_request_permissions_turn(&mut self, turn_id: &str) {
+        if let Some(call_ids) = self.request_permissions_call_ids_by_turn_id.remove(turn_id) {
+            for call_id in call_ids {
+                self.request_permissions_call_ids.remove(&call_id);
             }
         }
     }
@@ -317,6 +366,8 @@ impl PendingInteractiveReplayState {
         self.patch_approval_call_ids.clear();
         self.patch_approval_call_ids_by_turn_id.clear();
         self.elicitation_requests.clear();
+        self.request_permissions_call_ids.clear();
+        self.request_permissions_call_ids_by_turn_id.clear();
         self.request_user_input_call_ids.clear();
         self.request_user_input_call_ids_by_turn_id.clear();
     }
@@ -402,6 +453,7 @@ mod tests {
                     proposed_execpolicy_amendment: None,
                     proposed_network_policy_amendments: None,
                     additional_permissions: None,
+                    skill_metadata: None,
                     available_decisions: None,
                     parsed_cmd: Vec::new(),
                 },
@@ -545,6 +597,7 @@ mod tests {
                     proposed_execpolicy_amendment: None,
                     proposed_network_policy_amendments: None,
                     additional_permissions: None,
+                    skill_metadata: None,
                     available_decisions: None,
                     parsed_cmd: Vec::new(),
                 },
@@ -586,9 +639,11 @@ mod tests {
         store.push_event(Event {
             id: "ev-1".to_string(),
             msg: EventMsg::ElicitationRequest(codex_protocol::approvals::ElicitationRequestEvent {
+                turn_id: Some("turn-1".to_string()),
                 server_name: "server-1".to_string(),
                 id: request_id.clone(),
                 request: codex_protocol::approvals::ElicitationRequest::Form {
+                    meta: None,
                     message: "Please confirm".to_string(),
                     requested_schema: serde_json::json!({
                         "type": "object",
@@ -603,6 +658,7 @@ mod tests {
             request_id,
             decision: codex_protocol::approvals::ElicitationAction::Accept,
             content: None,
+            meta: None,
         });
 
         let snapshot = store.snapshot();
@@ -631,6 +687,7 @@ mod tests {
                     proposed_execpolicy_amendment: None,
                     proposed_network_policy_amendments: None,
                     additional_permissions: None,
+                    skill_metadata: None,
                     available_decisions: None,
                     parsed_cmd: Vec::new(),
                 },

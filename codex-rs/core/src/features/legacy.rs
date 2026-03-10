@@ -62,7 +62,6 @@ pub struct LegacyFeatureToggles {
     pub include_apply_patch_tool: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
-    pub tools_web_search: Option<bool>,
 }
 
 impl LegacyFeatureToggles {
@@ -84,12 +83,6 @@ impl LegacyFeatureToggles {
             Feature::UnifiedExec,
             self.experimental_use_unified_exec_tool,
             "experimental_use_unified_exec_tool",
-        );
-        set_if_some(
-            features,
-            Feature::WebSearchRequest,
-            self.tools_web_search,
-            "tools.web_search",
         );
     }
 }

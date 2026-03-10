@@ -548,6 +548,7 @@
       "oneOf": [
         {
           "properties": {
+            "_meta": true,
             "message": {
               "type": "string"
             },
@@ -568,6 +569,7 @@
         },
         {
           "properties": {
+            "_meta": true,
             "elicitation_id": {
               "type": "string"
             },
@@ -1412,7 +1414,7 @@
         {
           "properties": {
             "action": {
-              "$ref": "#/definitions/WebSearchAction"
+              "$ref": "#/definitions/ResponsesApiWebSearchAction"
             },
             "call_id": {
               "type": "string"
@@ -1466,6 +1468,12 @@
               "type": "string"
             },
             "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "saved_path": {
               "type": [
                 "string",
                 "null"
@@ -1858,6 +1866,17 @@
                 "null"
               ]
             },
+            "skill_metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ExecApprovalRequestSkillMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional skill metadata when the approval was triggered by a skill script."
+            },
             "turn_id": {
               "default": "",
               "description": "Turn ID that this command belongs to. Uses `#[serde(default)]` for backwards compatibility.",
@@ -1879,6 +1898,42 @@
             "type"
           ],
           "title": "ExecApprovalRequestEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "description": "Responses API call id for the associated tool call, if available.",
+              "type": "string"
+            },
+            "permissions": {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "turn_id": {
+              "default": "",
+              "description": "Turn ID that this request belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "request_permissions"
+              ],
+              "title": "RequestPermissionsEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "permissions",
+            "type"
+          ],
+          "title": "RequestPermissionsEventMsg",
           "type": "object"
         },
         {
@@ -2018,6 +2073,13 @@
             },
             "server_name": {
               "type": "string"
+            },
+            "turn_id": {
+              "description": "Turn ID that this elicitation belongs to, when known.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "enum": [
@@ -3427,6 +3489,17 @@
         }
       ]
     },
+    "ExecApprovalRequestSkillMetadata": {
+      "properties": {
+        "path_to_skills_md": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path_to_skills_md"
+      ],
+      "type": "object"
+    },
     "ExecCommandSource": {
       "enum": [
         "agent",
@@ -3756,65 +3829,69 @@
       ],
       "type": "string"
     },
-    "MacOsAutomationValue": {
-      "anyOf": [
+    "MacOsAutomationPermission": {
+      "oneOf": [
         {
-          "type": "boolean"
+          "enum": [
+            "none",
+            "all"
+          ],
+          "type": "string"
         },
         {
-          "items": {
-            "type": "string"
+          "additionalProperties": false,
+          "properties": {
+            "bundle_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
           },
-          "type": "array"
+          "required": [
+            "bundle_ids"
+          ],
+          "title": "BundleIdsMacOsAutomationPermission",
+          "type": "object"
         }
       ]
     },
-    "MacOsPermissions": {
+    "MacOsPreferencesPermission": {
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ],
+      "type": "string"
+    },
+    "MacOsSeatbeltProfileExtensions": {
       "properties": {
-        "accessibility": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+        "macos_accessibility": {
+          "default": false,
+          "type": "boolean"
         },
-        "automations": {
-          "anyOf": [
+        "macos_automation": {
+          "allOf": [
             {
-              "$ref": "#/definitions/MacOsAutomationValue"
-            },
-            {
-              "type": "null"
+              "$ref": "#/definitions/MacOsAutomationPermission"
             }
-          ]
+          ],
+          "default": "none"
         },
-        "calendar": {
-          "type": [
-            "boolean",
-            "null"
-          ]
+        "macos_calendar": {
+          "default": false,
+          "type": "boolean"
         },
-        "preferences": {
-          "anyOf": [
+        "macos_preferences": {
+          "allOf": [
             {
-              "$ref": "#/definitions/MacOsPreferencesValue"
-            },
-            {
-              "type": "null"
+              "$ref": "#/definitions/MacOsPreferencesPermission"
             }
-          ]
+          ],
+          "default": "read_only"
         }
       },
       "type": "object"
-    },
-    "MacOsPreferencesValue": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "string"
-        }
-      ]
     },
     "McpAuthStatus": {
       "enum": [
@@ -4159,7 +4236,7 @@
         "macos": {
           "anyOf": [
             {
-              "$ref": "#/definitions/MacOsPermissions"
+              "$ref": "#/definitions/MacOsSeatbeltProfileExtensions"
             },
             {
               "type": "null"
@@ -5053,7 +5130,7 @@
             "action": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/WebSearchAction"
+                  "$ref": "#/definitions/ResponsesApiWebSearchAction"
                 },
                 {
                   "type": "null"
@@ -5175,6 +5252,107 @@
             "type"
           ],
           "title": "OtherResponseItem",
+          "type": "object"
+        }
+      ]
+    },
+    "ResponsesApiWebSearchAction": {
+      "oneOf": [
+        {
+          "properties": {
+            "queries": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "search"
+              ],
+              "title": "SearchResponsesApiWebSearchActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "SearchResponsesApiWebSearchAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "open_page"
+              ],
+              "title": "OpenPageResponsesApiWebSearchActionType",
+              "type": "string"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "OpenPageResponsesApiWebSearchAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "pattern": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "find_in_page"
+              ],
+              "title": "FindInPageResponsesApiWebSearchActionType",
+              "type": "string"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FindInPageResponsesApiWebSearchAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "other"
+              ],
+              "title": "OtherResponsesApiWebSearchActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "OtherResponsesApiWebSearchAction",
           "type": "object"
         }
       ]
@@ -5605,9 +5783,6 @@
     },
     "SessionNetworkProxyRuntime": {
       "properties": {
-        "admin_addr": {
-          "type": "string"
-        },
         "http_addr": {
           "type": "string"
         },
@@ -5616,7 +5791,6 @@
         }
       },
       "required": [
-        "admin_addr",
         "http_addr",
         "socks_addr"
       ],
@@ -6080,7 +6254,7 @@
         {
           "properties": {
             "action": {
-              "$ref": "#/definitions/WebSearchAction"
+              "$ref": "#/definitions/ResponsesApiWebSearchAction"
             },
             "id": {
               "type": "string"
@@ -6114,6 +6288,12 @@
               "type": "string"
             },
             "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "saved_path": {
               "type": [
                 "string",
                 "null"
@@ -6260,7 +6440,7 @@
           "type": "object"
         },
         {
-          "description": "Explicit mention selected by the user (name + app://connector id).",
+          "description": "Explicit structured mention selected by the user.\n\n`path` identifies the exact mention target, for example `app://<connector-id>` or `plugin://<plugin-name>@<marketplace-name>`.",
           "properties": {
             "name": {
               "type": "string"
@@ -6282,107 +6462,6 @@
             "type"
           ],
           "title": "MentionUserInput",
-          "type": "object"
-        }
-      ]
-    },
-    "WebSearchAction": {
-      "oneOf": [
-        {
-          "properties": {
-            "queries": {
-              "items": {
-                "type": "string"
-              },
-              "type": [
-                "array",
-                "null"
-              ]
-            },
-            "query": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "search"
-              ],
-              "title": "SearchWebSearchActionType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "SearchWebSearchAction",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "open_page"
-              ],
-              "title": "OpenPageWebSearchActionType",
-              "type": "string"
-            },
-            "url": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "OpenPageWebSearchAction",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "pattern": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "find_in_page"
-              ],
-              "title": "FindInPageWebSearchActionType",
-              "type": "string"
-            },
-            "url": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "FindInPageWebSearchAction",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "other"
-              ],
-              "title": "OtherWebSearchActionType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "OtherWebSearchAction",
           "type": "object"
         }
       ]
@@ -7205,7 +7284,7 @@
     {
       "properties": {
         "action": {
-          "$ref": "#/definitions/WebSearchAction"
+          "$ref": "#/definitions/ResponsesApiWebSearchAction"
         },
         "call_id": {
           "type": "string"
@@ -7259,6 +7338,12 @@
           "type": "string"
         },
         "revised_prompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "saved_path": {
           "type": [
             "string",
             "null"
@@ -7651,6 +7736,17 @@
             "null"
           ]
         },
+        "skill_metadata": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExecApprovalRequestSkillMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional skill metadata when the approval was triggered by a skill script."
+        },
         "turn_id": {
           "default": "",
           "description": "Turn ID that this command belongs to. Uses `#[serde(default)]` for backwards compatibility.",
@@ -7672,6 +7768,42 @@
         "type"
       ],
       "title": "ExecApprovalRequestEventMsg",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "call_id": {
+          "description": "Responses API call id for the associated tool call, if available.",
+          "type": "string"
+        },
+        "permissions": {
+          "$ref": "#/definitions/PermissionProfile"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "default": "",
+          "description": "Turn ID that this request belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "request_permissions"
+          ],
+          "title": "RequestPermissionsEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "permissions",
+        "type"
+      ],
+      "title": "RequestPermissionsEventMsg",
       "type": "object"
     },
     {
@@ -7811,6 +7943,13 @@
         },
         "server_name": {
           "type": "string"
+        },
+        "turn_id": {
+          "description": "Turn ID that this elicitation belongs to, when known.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "type": {
           "enum": [

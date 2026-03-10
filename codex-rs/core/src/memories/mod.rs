@@ -57,6 +57,8 @@ mod phase_one {
     pub(super) const JOB_RETRY_DELAY_SECONDS: i64 = 3_600;
     /// Maximum number of threads to scan.
     pub(super) const THREAD_SCAN_LIMIT: usize = 5_000;
+    /// Size of the batches when pruning old thread memories.
+    pub(super) const PRUNE_BATCH_SIZE: usize = 200;
 }
 
 /// Phase 2 (aka `Consolidation`).

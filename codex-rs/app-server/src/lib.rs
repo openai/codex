@@ -38,8 +38,8 @@ use codex_core::ExecPolicyError;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::TextRange as CoreTextRange;
-use codex_core::features::Feature;
 use codex_feedback::CodexFeedback;
+use codex_protocol::protocol::SessionSource;
 use codex_state::log_db;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -59,12 +59,14 @@ use tracing_subscriber::util::SubscriberInitExt;
 mod app_server_tracing;
 mod bespoke_event_handling;
 mod codex_message_processor;
+mod command_exec;
 mod config_api;
 mod dynamic_tools;
 mod error_code;
 mod external_agent_config_api;
 mod filters;
 mod fuzzy_file_search;
+pub mod in_process;
 mod message_processor;
 mod models;
 mod outgoing_message;
@@ -124,6 +126,25 @@ enum ShutdownAction {
     Finish,
 }
 
+async fn shutdown_signal() -> IoResult<()> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::SignalKind;
+        use tokio::signal::unix::signal;
+
+        let mut term = signal(SignalKind::terminate())?;
+        tokio::select! {
+            ctrl_c_result = tokio::signal::ctrl_c() => ctrl_c_result,
+            _ = term.recv() => Ok(()),
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await
+    }
+}
+
 impl ShutdownState {
     fn requested(&self) -> bool {
         self.requested
@@ -133,7 +154,7 @@ impl ShutdownState {
         self.forced
     }
 
-    fn on_ctrl_c(&mut self, connection_count: usize, running_turn_count: usize) {
+    fn on_signal(&mut self, connection_count: usize, running_turn_count: usize) {
         if self.requested {
             self.forced = true;
             return;
@@ -142,7 +163,7 @@ impl ShutdownState {
         self.requested = true;
         self.last_logged_running_turn_count = None;
         info!(
-            "received Ctrl-C; entering graceful restart drain (connections={}, runningAssistantTurns={}, requests still accepted until no assistant turns are running)",
+            "received shutdown signal; entering graceful restart drain (connections={}, runningAssistantTurns={}, requests still accepted until no assistant turns are running)",
             connection_count, running_turn_count,
         );
     }
@@ -155,11 +176,11 @@ impl ShutdownState {
         if self.forced || running_turn_count == 0 {
             if self.forced {
                 info!(
-                    "received second Ctrl-C; forcing restart with {running_turn_count} running assistant turn(s) and {connection_count} connection(s)"
+                    "received second shutdown signal; forcing restart with {running_turn_count} running assistant turn(s) and {connection_count} connection(s)"
                 );
             } else {
                 info!(
-                    "Ctrl-C restart: no assistant turns running; stopping acceptor and disconnecting {connection_count} connection(s)"
+                    "shutdown signal restart: no assistant turns running; stopping acceptor and disconnecting {connection_count} connection(s)"
                 );
             }
             return ShutdownAction::Finish;
@@ -167,7 +188,7 @@ impl ShutdownState {
 
         if self.last_logged_running_turn_count != Some(running_turn_count) {
             info!(
-                "Ctrl-C restart: waiting for {running_turn_count} running assistant turn(s) to finish"
+                "shutdown signal restart: waiting for {running_turn_count} running assistant turn(s) to finish"
             );
             self.last_logged_running_turn_count = Some(running_turn_count);
         }
@@ -359,8 +380,7 @@ pub async fn run_main_with_transport(
     };
     let single_client_mode = matches!(&transport_runtime, TransportRuntime::Stdio);
     let shutdown_when_no_connections = single_client_mode;
-    let graceful_ctrl_c_restart_enabled = !single_client_mode;
-
+    let graceful_signal_restart_enabled = !single_client_mode;
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
     let cli_kv_overrides = cli_config_overrides.parse_overrides().map_err(|e| {
@@ -481,18 +501,13 @@ pub async fn run_main_with_transport(
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-    let log_db = if config.features.enabled(Feature::Sqlite) {
-        codex_state::StateRuntime::init(
-            config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
-            None,
-        )
-        .await
-        .ok()
-        .map(log_db::start)
-    } else {
-        None
-    };
+    let log_db = codex_state::StateRuntime::init(
+        config.sqlite_home.clone(),
+        config.model_provider_id.clone(),
+    )
+    .await
+    .ok()
+    .map(log_db::start);
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
@@ -584,6 +599,8 @@ pub async fn run_main_with_transport(
             feedback: feedback.clone(),
             log_db,
             config_warnings,
+            session_source: SessionSource::VSCode,
+            enable_codex_api_key_env: false,
         });
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
@@ -614,14 +631,14 @@ pub async fn run_main_with_transport(
                 }
 
                 tokio::select! {
-                    ctrl_c_result = tokio::signal::ctrl_c(), if graceful_ctrl_c_restart_enabled && !shutdown_state.forced() => {
-                        if let Err(err) = ctrl_c_result {
-                            warn!("failed to listen for Ctrl-C during graceful restart drain: {err}");
+                    shutdown_signal_result = shutdown_signal(), if graceful_signal_restart_enabled && !shutdown_state.forced() => {
+                        if let Err(err) = shutdown_signal_result {
+                            warn!("failed to listen for shutdown signal during graceful restart drain: {err}");
                         }
                         let running_turn_count = *running_turn_count_rx.borrow();
-                        shutdown_state.on_ctrl_c(connections.len(), running_turn_count);
+                        shutdown_state.on_signal(connections.len(), running_turn_count);
                     }
-                    changed = running_turn_count_rx.changed(), if graceful_ctrl_c_restart_enabled && shutdown_state.requested() => {
+                    changed = running_turn_count_rx.changed(), if graceful_signal_restart_enabled && shutdown_state.requested() => {
                         if changed.is_err() {
                             warn!("running-turn watcher closed during graceful restart drain");
                         }
@@ -698,7 +715,6 @@ pub async fn run_main_with_transport(
                                                 request,
                                                 transport,
                                                 &mut connection_state.session,
-                                                &connection_state.outbound_initialized,
                                             )
                                             .await;
                                         if let Ok(mut opted_out_notification_methods) = connection_state
@@ -721,7 +737,15 @@ pub async fn run_main_with_transport(
                                                 std::sync::atomic::Ordering::Release,
                                             );
                                         if !was_initialized && connection_state.session.initialized {
-                                            processor.send_initialize_notifications().await;
+                                            processor
+                                                .send_initialize_notifications_to_connection(
+                                                    connection_id,
+                                                )
+                                                .await;
+                                            processor.connection_initialized(connection_id).await;
+                                            connection_state
+                                                .outbound_initialized
+                                                .store(true, std::sync::atomic::Ordering::Release);
                                         }
                                     }
                                     JSONRPCMessage::Response(response) => {

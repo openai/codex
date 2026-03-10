@@ -78,7 +78,7 @@ context.btoa = (data) => Buffer.from(data, "binary").toString("base64");
 
 // REPL state model:
 // - Every exec is compiled as a fresh ESM "cell".
-// - `previousModule` is the most recently evaluated module namespace.
+// - `previousModule` is the most recently committed module namespace.
 // - `previousBindings` tracks which top-level names should be carried forward.
 // Each new cell imports a synthetic view of the previous namespace and
 // redeclares those names so user variables behave like a persistent REPL.
@@ -86,6 +86,12 @@ let previousModule = null;
 /** @type {Binding[]} */
 let previousBindings = [];
 let cellCounter = 0;
+let internalBindingCounter = 0;
+const internalBindingSalt = (() => {
+  const raw = process.env.CODEX_THREAD_ID ?? "";
+  const sanitized = raw.replace(/[^A-Za-z0-9_$]/g, "_");
+  return sanitized || "session";
+})();
 let activeExecId = null;
 let fatalExitScheduled = false;
 
@@ -553,17 +559,447 @@ function collectBindings(ast) {
   return Array.from(map.entries()).map(([name, kind]) => ({ name, kind }));
 }
 
+function collectPatternBindingNames(pattern) {
+  const map = new Map();
+  collectPatternNames(pattern, "binding", map);
+  return Array.from(map.keys());
+}
+
+function nextInternalBindingName() {
+  // We intentionally do not scan user-declared names here. Internal helpers use
+  // a per-thread salt plus a counter instead. A user could still collide by
+  // deliberately spelling the exact generated name, but the thread-id salt
+  // keeps accidental collisions negligible while avoiding more AST bookkeeping.
+  return `__codex_internal_commit_${internalBindingSalt}_${internalBindingCounter++}`;
+}
+
+function buildMarkCommittedExpression(names, markCommittedFnName) {
+  const serializedNames = names.map((name) => JSON.stringify(name)).join(", ");
+  return `(${markCommittedFnName}(${serializedNames}), undefined)`;
+}
+
+function tryReadBindingValue(module, bindingName) {
+  if (!module) {
+    return { ok: false, value: undefined };
+  }
+
+  try {
+    return { ok: true, value: module.namespace[bindingName] };
+  } catch {
+    return { ok: false, value: undefined };
+  }
+}
+
+function instrumentVariableDeclarationSource(
+  code,
+  declaration,
+  markCommittedFnName,
+) {
+  if (!declaration.declarations?.length) {
+    return code.slice(declaration.start, declaration.end);
+  }
+
+  const prefix = code.slice(declaration.start, declaration.declarations[0].start);
+  const suffix = code.slice(
+    declaration.declarations[declaration.declarations.length - 1].end,
+    declaration.end,
+  );
+  const parts = [];
+
+  for (const decl of declaration.declarations) {
+    parts.push(code.slice(decl.start, decl.end));
+
+    const names = collectPatternBindingNames(decl.id);
+    if (names.length > 0) {
+      const helperName = nextInternalBindingName();
+      parts.push(
+        `${helperName} = ${buildMarkCommittedExpression(names, markCommittedFnName)}`,
+      );
+    }
+  }
+
+  return `${prefix}${parts.join(", ")}${suffix}`;
+}
+
+function instrumentLoopBody(code, body, names, guardName, markCommittedFnName) {
+  const marker = `if (${guardName}) { ${guardName} = false; ${markCommittedFnName}(${names
+    .map((name) => JSON.stringify(name))
+    .join(", ")}); }`;
+  const bodyCode = code.slice(body.start, body.end);
+
+  if (body.type === "BlockStatement") {
+    return `{ ${marker}${bodyCode.slice(1)}`;
+  }
+
+  return `{ ${marker} ${bodyCode} }`;
+}
+
+function applyReplacements(code, replacements) {
+  let instrumentedCode = code;
+
+  for (const replacement of replacements.sort((a, b) => b.start - a.start)) {
+    instrumentedCode =
+      instrumentedCode.slice(0, replacement.start) +
+      replacement.text +
+      instrumentedCode.slice(replacement.end);
+  }
+
+  return instrumentedCode;
+}
+
+function collectHoistedVarDeclarationStarts(ast) {
+  const varDeclarationStarts = new Map();
+
+  const recordDeclarationStart = (map, name, start) => {
+    const existingStart = map.get(name);
+    if (existingStart === undefined || start < existingStart) {
+      map.set(name, start);
+    }
+  };
+
+  const recordVarDeclarationStarts = (declaration) => {
+    for (const name of collectPatternBindingNames(declaration.id)) {
+      recordDeclarationStart(varDeclarationStarts, name, declaration.start);
+    }
+  };
+
+  for (const stmt of ast.body ?? []) {
+    if (stmt.type === "VariableDeclaration" && stmt.kind === "var") {
+      for (const declaration of stmt.declarations ?? []) {
+        recordVarDeclarationStarts(declaration);
+      }
+      continue;
+    }
+
+    if (
+      stmt.type === "ForStatement" &&
+      stmt.init?.type === "VariableDeclaration" &&
+      stmt.init.kind === "var"
+    ) {
+      for (const declaration of stmt.init.declarations ?? []) {
+        recordVarDeclarationStarts(declaration);
+      }
+      continue;
+    }
+
+    if (
+      (stmt.type === "ForInStatement" || stmt.type === "ForOfStatement") &&
+      stmt.left?.type === "VariableDeclaration" &&
+      stmt.left.kind === "var"
+    ) {
+      for (const declaration of stmt.left.declarations ?? []) {
+        recordVarDeclarationStarts(declaration);
+      }
+    }
+  }
+
+  return varDeclarationStarts;
+}
+
+function collectFutureVarWriteReplacements(
+  code,
+  ast,
+  {
+    helperDeclarations = null,
+    markCommittedFnName = null,
+  } = {},
+) {
+  // Failed-cell hoisted tracking intentionally stays small here. We only mark
+  // direct top-level writes to future `var` bindings, plus top-level
+  // declaration-site markers handled later in `instrumentCurrentBindings`.
+  // We do not recurse through nested statement structure because that quickly
+  // requires real lexical-scope tracking for blocks, loop scopes, catch
+  // bindings, and similar shadowing cases. Supported write recovery is limited
+  // to direct top-level expression statements such as `x = 1`, `x += 1`,
+  // `x++`, and logical assignments.
+  const varDeclarationStarts = collectHoistedVarDeclarationStarts(ast);
+  if (varDeclarationStarts.size === 0) {
+    return [];
+  }
+  const replacements = [];
+  const replacementKeys = new Set();
+
+  if (!markCommittedFnName) {
+    throw new Error(
+      "collectFutureVarWriteReplacements expected a commit marker binding name",
+    );
+  }
+
+  const addReplacement = (start, end, text) => {
+    const key = `${start}:${end}`;
+    if (!replacementKeys.has(key)) {
+      replacementKeys.add(key);
+      replacements.push({ start, end, text });
+    }
+  };
+
+  const getFutureVarName = (identifier) => {
+    if (!identifier || identifier.type !== "Identifier") {
+      return null;
+    }
+
+    const declarationStart = varDeclarationStarts.get(identifier.name);
+    if (
+      declarationStart === undefined ||
+      identifier.start >= declarationStart
+    ) {
+      return null;
+    }
+
+    return identifier.name;
+  };
+
+  const instrumentUpdateExpression = (node, identifier) => {
+    const bindingName = getFutureVarName(identifier);
+    if (!bindingName) {
+      return false;
+    }
+
+    addReplacement(
+      node.start,
+      node.end,
+      `(${markCommittedFnName}(${JSON.stringify(bindingName)}), ${code.slice(
+        node.start,
+        node.end,
+      )})`,
+    );
+    return true;
+  };
+
+  const instrumentAssignmentExpression = (node) => {
+    if (node.left.type !== "Identifier") {
+      return false;
+    }
+
+    const bindingName = getFutureVarName(node.left);
+    if (!bindingName) {
+      return false;
+    }
+
+    if (
+      node.operator === "&&=" ||
+      node.operator === "||=" ||
+      node.operator === "??="
+    ) {
+      if (!helperDeclarations) {
+        throw new Error(
+          "collectFutureVarWriteReplacements expected helperDeclarations for logical assignment rewriting",
+        );
+      }
+
+      const helperName = nextInternalBindingName();
+      helperDeclarations.push(`let ${helperName};`);
+      const shortCircuitOperator =
+        node.operator === "&&="
+          ? "&&"
+          : node.operator === "||="
+            ? "||"
+            : "??";
+      addReplacement(
+        node.start,
+        node.end,
+        `((${helperName} = ${node.left.name}), ${helperName} ${shortCircuitOperator} ((${node.left.name} = ${code.slice(node.right.start, node.right.end)}), ${buildMarkCommittedExpression([bindingName], markCommittedFnName)}, ${node.left.name}))`,
+      );
+      return true;
+    }
+
+    addReplacement(
+      node.start,
+      node.end,
+      `((${code.slice(node.start, node.end)}), ${buildMarkCommittedExpression([bindingName], markCommittedFnName)}, ${node.left.name})`,
+    );
+    return true;
+  };
+
+  const unwrapParenthesizedExpression = (node) => {
+    let current = node;
+    while (current?.type === "ParenthesizedExpression") {
+      current = current.expression;
+    }
+    return current;
+  };
+
+  for (const statement of ast.body ?? []) {
+    if (statement.type !== "ExpressionStatement") {
+      continue;
+    }
+
+    const expression = unwrapParenthesizedExpression(statement.expression);
+    if (!expression) {
+      continue;
+    }
+
+    if (
+      expression.type === "UpdateExpression" &&
+      expression.argument.type === "Identifier"
+    ) {
+      instrumentUpdateExpression(expression, expression.argument);
+      continue;
+    }
+
+    if (expression.type === "AssignmentExpression") {
+      instrumentAssignmentExpression(expression);
+    }
+  }
+
+  return replacements;
+}
+
+function instrumentCurrentBindings(
+  code,
+  ast,
+  currentBindings,
+  priorBindings,
+  markCommittedFnName,
+) {
+  if (currentBindings.length === 0) {
+    return code;
+  }
+
+  const replacements = [];
+
+  for (const stmt of ast.body ?? []) {
+    if (stmt.type === "VariableDeclaration") {
+      replacements.push({
+        start: stmt.start,
+        end: stmt.end,
+        text: instrumentVariableDeclarationSource(
+          code,
+          stmt,
+          markCommittedFnName,
+        ),
+      });
+      continue;
+    }
+
+    if (stmt.type === "FunctionDeclaration" && stmt.id) {
+      replacements.push({
+        start: stmt.start,
+        end: stmt.end,
+        // Keep function source text stable for things like `foo.toString()`.
+        // Pre-declaration uses are tracked separately by instrumenting the
+        // top-level expressions that actually read the hoisted function value.
+        text: `${code.slice(stmt.start, stmt.end)}\n;${markCommittedFnName}(${JSON.stringify(stmt.id.name)});`,
+      });
+      continue;
+    }
+
+    if (stmt.type === "ClassDeclaration" && stmt.id) {
+      replacements.push({
+        start: stmt.start,
+        end: stmt.end,
+        text: `${code.slice(stmt.start, stmt.end)}\n;${markCommittedFnName}(${JSON.stringify(stmt.id.name)});`,
+      });
+      continue;
+    }
+
+    if (
+      stmt.type === "ForStatement" &&
+      stmt.init &&
+      stmt.init.type === "VariableDeclaration" &&
+      stmt.init.kind === "var"
+    ) {
+      replacements.push({
+        start: stmt.start,
+        end: stmt.end,
+        text: `${code.slice(stmt.start, stmt.init.start)}${instrumentVariableDeclarationSource(
+          code,
+          stmt.init,
+          markCommittedFnName,
+        )}${code.slice(stmt.init.end, stmt.end)}`,
+      });
+      continue;
+    }
+
+    if (
+      (stmt.type === "ForInStatement" || stmt.type === "ForOfStatement") &&
+      stmt.left &&
+      stmt.left.type === "VariableDeclaration" &&
+      stmt.left.kind === "var"
+    ) {
+      const names = stmt.left.declarations.flatMap((decl) =>
+        collectPatternBindingNames(decl.id),
+      );
+      if (names.length > 0) {
+        const guardName = nextInternalBindingName();
+        replacements.push({
+          start: stmt.start,
+          end: stmt.end,
+          // Mark top-level `for...in` / `for...of` vars on the first body
+          // execution instead of every iteration. This keeps hot loops cheap
+          // after the first pass while still preserving vars for the common
+          // case where the loop actually ran before a later throw.
+          //
+          // The tradeoff is that `for (var x of []) {}` in a failed cell will
+          // not carry `x` forward as `undefined`, because the body never runs
+          // and the one-time marker never fires. We accept that edge case:
+          // `var` is redeclarable, and the only lost state is an unassigned
+          // `undefined` from an empty top-level loop in a cell that later
+          // fails.
+          text: `let ${guardName} = true;\n${code.slice(
+            stmt.start,
+            stmt.body.start,
+          )}${instrumentLoopBody(
+            code,
+            stmt.body,
+            names,
+            guardName,
+            markCommittedFnName,
+          )}`,
+        });
+      }
+    }
+  }
+
+  return applyReplacements(code, replacements);
+}
+
 async function buildModuleSource(code) {
   const meriyah = await meriyahPromise;
   const ast = meriyah.parseModule(code, {
     next: true,
     module: true,
-    ranges: false,
+    ranges: true,
     loc: false,
     disableWebCompat: true,
   });
   const currentBindings = collectBindings(ast);
   const priorBindings = previousModule ? previousBindings : [];
+  const helperDeclarations = [];
+  const markCommittedFnName = nextInternalBindingName();
+  const markPreludeCompletedFnName = nextInternalBindingName();
+  helperDeclarations.push(
+    // `import.meta` is syntax-level and cannot be shadowed by user bindings
+    // like `const globalThis = ...`, so alias the marker helper through it
+    // once in the prelude and use that stable local binding everywhere.
+    // Then delete the raw import.meta hooks so user code cannot spoof
+    // committed bindings by calling them directly.
+    `const ${markCommittedFnName} = import.meta.__codexInternalMarkCommittedBindings;`,
+    `const ${markPreludeCompletedFnName} = import.meta.__codexInternalMarkPreludeCompleted;`,
+    "delete import.meta.__codexInternalMarkCommittedBindings;",
+    "delete import.meta.__codexInternalMarkPreludeCompleted;",
+  );
+  const writeInstrumentedCode = applyReplacements(
+    code,
+    collectFutureVarWriteReplacements(code, ast, {
+      helperDeclarations,
+      markCommittedFnName,
+    }),
+  );
+  const instrumentedAst = meriyah.parseModule(writeInstrumentedCode, {
+    next: true,
+    module: true,
+    ranges: true,
+    loc: false,
+    disableWebCompat: true,
+  });
+  const instrumentedCode = instrumentCurrentBindings(
+    writeInstrumentedCode,
+    instrumentedAst,
+    currentBindings,
+    priorBindings,
+    markCommittedFnName,
+  );
 
   let prelude = "";
   if (previousModule && priorBindings.length) {
@@ -578,6 +1014,10 @@ async function buildModuleSource(code) {
       .join("\n");
     prelude += "\n";
   }
+  if (helperDeclarations.length > 0) {
+    prelude += `${helperDeclarations.join("\n")}\n`;
+  }
+  prelude += `${markPreludeCompletedFnName}();\n`;
 
   const mergedBindings = new Map();
   for (const binding of priorBindings) {
@@ -596,7 +1036,60 @@ async function buildModuleSource(code) {
     name,
     kind,
   }));
-  return { source: `${prelude}${code}${exportStmt}`, nextBindings };
+  return {
+    source: `${prelude}${instrumentedCode}${exportStmt}`,
+    currentBindings,
+    nextBindings,
+    priorBindings,
+  };
+}
+
+function canReadCommittedBinding(module, binding) {
+  if (
+    !module ||
+    binding.kind === "var" ||
+    binding.kind === "function"
+  ) {
+    return false;
+  }
+
+  return tryReadBindingValue(module, binding.name).ok;
+}
+// Failed cells keep prior bindings plus the current-cell bindings whose
+// initialization definitely ran before the throw. That means:
+// - lexical bindings (`const` / `let` / `class`) can fall back to namespace
+//   readability, which preserves names whose initialization already completed
+//   even when a later step in the same declarator throws
+// - `var` / `function` bindings only persist when an explicit declaration-site
+//   or write-site marker fired, so unreached hoisted bindings do not become
+//   ghost bindings in later cells
+function collectCommittedBindings(
+  module,
+  priorBindings,
+  currentBindings,
+  committedCurrentBindingNames,
+) {
+  const mergedBindings = new Map();
+  let committedCurrentBindingCount = 0;
+
+  for (const binding of priorBindings) {
+    mergedBindings.set(binding.name, binding.kind);
+  }
+
+  for (const binding of currentBindings) {
+    if (
+      committedCurrentBindingNames.has(binding.name) ||
+      canReadCommittedBinding(module, binding)
+    ) {
+      mergedBindings.set(binding.name, binding.kind);
+      committedCurrentBindingCount += 1;
+    }
+  }
+
+  return {
+    bindings: Array.from(mergedBindings, ([name, kind]) => ({ name, kind })),
+    committedCurrentBindingCount,
+  };
 }
 
 function send(message) {
@@ -735,15 +1228,27 @@ function parseImageDetail(detail) {
   return detail;
 }
 
+function normalizeEmitImageUrl(value) {
+  if (typeof value !== "string" || !value) {
+    throw new Error("codex.emitImage expected a non-empty image_url");
+  }
+  if (!/^data:/i.test(value)) {
+    throw new Error("codex.emitImage only accepts data URLs");
+  }
+  return value;
+}
+
 function parseInputImageItem(value) {
   if (!isPlainObject(value) || value.type !== "input_image") {
     return null;
   }
-  if (typeof value.image_url !== "string" || !value.image_url) {
-    throw new Error("codex.emitImage expected a non-empty image_url");
-  }
   return {
-    images: [{ image_url: value.image_url, detail: parseImageDetail(value.detail) }],
+    images: [
+      {
+        image_url: normalizeEmitImageUrl(value.image_url),
+        detail: parseImageDetail(value.detail),
+      },
+    ],
     textCount: 0,
   };
 }
@@ -760,11 +1265,8 @@ function parseContentItems(items) {
       throw new Error("codex.emitImage received malformed content items");
     }
     if (item.type === "input_image") {
-      if (typeof item.image_url !== "string" || !item.image_url) {
-        throw new Error("codex.emitImage expected a non-empty image_url");
-      }
       images.push({
-        image_url: item.image_url,
+        image_url: normalizeEmitImageUrl(item.image_url),
         detail: parseImageDetail(item.detail),
       });
       continue;
@@ -815,7 +1317,7 @@ function normalizeMcpImageData(data, mimeType) {
   if (typeof data !== "string" || !data) {
     throw new Error("codex.emitImage expected MCP image data");
   }
-  if (data.startsWith("data:")) {
+  if (/^data:/i.test(data)) {
     return data;
   }
   const normalizedMimeType =
@@ -882,10 +1384,7 @@ function requireSingleImage(parsed) {
 
 function normalizeEmitImageValue(value) {
   if (typeof value === "string") {
-    if (!value) {
-      throw new Error("codex.emitImage expected a non-empty image URL");
-    }
-    return { image_url: value };
+    return { image_url: normalizeEmitImageUrl(value) };
   }
 
   const directItem = parseInputImageItem(value);
@@ -1012,9 +1511,32 @@ async function handleExec(message) {
     };
   };
 
+  let module = null;
+  /** @type {Binding[]} */
+  let currentBindings = [];
+  /** @type {Binding[]} */
+  let nextBindings = [];
+  /** @type {Binding[]} */
+  let priorBindings = previousBindings;
+  let moduleLinked = false;
+  let preludeCompleted = false;
+  const committedCurrentBindingNames = new Set();
+  const markCommittedBindings = (...names) => {
+    for (const name of names) {
+      committedCurrentBindingNames.add(name);
+    }
+  };
+  const markPreludeCompleted = () => {
+    preludeCompleted = true;
+  };
+
   try {
     const code = typeof message.code === "string" ? message.code : "";
-    const { source, nextBindings } = await buildModuleSource(code);
+    const builtSource = await buildModuleSource(code);
+    const source = builtSource.source;
+    currentBindings = builtSource.currentBindings;
+    nextBindings = builtSource.nextBindings;
+    priorBindings = builtSource.priorBindings;
     let output = "";
 
     context.codex = { tmpDir, tool, emitImage };
@@ -1025,11 +1547,13 @@ async function handleExec(message) {
         process.cwd(),
         `.codex_js_repl_cell_${cellCounter++}.mjs`,
       );
-      const module = new SourceTextModule(source, {
+      module = new SourceTextModule(source, {
         context,
         identifier: cellIdentifier,
         initializeImportMeta(meta, mod) {
           setImportMeta(meta, mod, true);
+          meta.__codexInternalMarkCommittedBindings = markCommittedBindings;
+          meta.__codexInternalMarkPreludeCompleted = markPreludeCompleted;
         },
         importModuleDynamically(specifier, referrer) {
           return importResolved(resolveSpecifier(specifier, referrer?.identifier));
@@ -1059,6 +1583,7 @@ async function handleExec(message) {
           `Top-level static import "${specifier}" is not supported in js_repl. Use await import("${specifier}") instead.`,
         );
       });
+      moduleLinked = true;
 
       await module.evaluate();
       if (pendingBackgroundTasks.size > 0) {
@@ -1070,10 +1595,11 @@ async function handleExec(message) {
           throw firstUnhandledBackgroundError.error;
         }
       }
-      previousModule = module;
-      previousBindings = nextBindings;
       output = logs.join("\n");
     });
+
+    previousModule = module;
+    previousBindings = nextBindings;
 
     send({
       type: "exec_result",
@@ -1083,6 +1609,29 @@ async function handleExec(message) {
       error: null,
     });
   } catch (error) {
+    const { bindings: committedBindings, committedCurrentBindingCount } =
+      collectCommittedBindings(
+      moduleLinked ? module : null,
+      priorBindings,
+      currentBindings,
+      committedCurrentBindingNames,
+    );
+    // Preserve the last successfully linked module across link-time failures.
+    // A module whose link step failed cannot safely back @prev because reading
+    // its namespace throws before evaluation ever begins. Likewise, if a
+    // linked module failed before its prelude recreated carried bindings, keep
+    // the old module so @prev still points at the last cell whose prelude and
+    // body actually established the carried values. Once the prelude has run,
+    // promote the failed module even if it only updated existing bindings.
+    if (
+      module &&
+      moduleLinked &&
+      (committedCurrentBindingCount > 0 ||
+        (preludeCompleted && priorBindings.length > 0))
+    ) {
+      previousModule = module;
+      previousBindings = committedBindings;
+    }
     send({
       type: "exec_result",
       id: message.id,

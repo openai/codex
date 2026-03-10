@@ -28,6 +28,64 @@ def multiplatform_binaries(name, platforms = PLATFORMS):
         tags = ["manual"],
     )
 
+def _workspace_root_test_impl(ctx):
+    is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
+    launcher = ctx.actions.declare_file(ctx.label.name + ".bat" if is_windows else ctx.label.name)
+    test_bin = ctx.executable.test_bin
+    workspace_root_marker = ctx.file.workspace_root_marker
+    launcher_template = ctx.file._windows_launcher_template if is_windows else ctx.file._bash_launcher_template
+    ctx.actions.expand_template(
+        template = launcher_template,
+        output = launcher,
+        is_executable = True,
+        substitutions = {
+            "__TEST_BIN__": test_bin.short_path,
+            "__WORKSPACE_ROOT_MARKER__": workspace_root_marker.short_path,
+        },
+    )
+
+    runfiles = ctx.runfiles(files = [test_bin, workspace_root_marker]).merge(ctx.attr.test_bin[DefaultInfo].default_runfiles)
+
+    return [
+        DefaultInfo(
+            executable = launcher,
+            files = depset([launcher]),
+            runfiles = runfiles,
+        ),
+        RunEnvironmentInfo(
+            environment = ctx.attr.env,
+        ),
+    ]
+
+workspace_root_test = rule(
+    implementation = _workspace_root_test_impl,
+    test = True,
+    attrs = {
+        "env": attr.string_dict(),
+        "test_bin": attr.label(
+            cfg = "target",
+            executable = True,
+            mandatory = True,
+        ),
+        "workspace_root_marker": attr.label(
+            allow_single_file = True,
+            mandatory = True,
+        ),
+        "_windows_constraint": attr.label(
+            default = "@platforms//os:windows",
+            providers = [platform_common.ConstraintValueInfo],
+        ),
+        "_bash_launcher_template": attr.label(
+            allow_single_file = True,
+            default = "//:workspace_root_test_launcher.sh.tpl",
+        ),
+        "_windows_launcher_template": attr.label(
+            allow_single_file = True,
+            default = "//:workspace_root_test_launcher.bat.tpl",
+        ),
+    },
+)
+
 def codex_rust_crate(
         name,
         crate_name,
@@ -80,6 +138,9 @@ def codex_rust_crate(
             `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
     """
     test_env = {
+        # The launcher resolves an absolute workspace root at runtime so
+        # manifest-only platforms like macOS still point Insta at the real
+        # `codex-rs` checkout.
         "INSTA_WORKSPACE_ROOT": ".",
         "INSTA_SNAPSHOT_PATH": "src",
     }
@@ -122,14 +183,29 @@ def codex_rust_crate(
             visibility = ["//visibility:public"],
         )
 
+        unit_test_binary = name + "-unit-tests-bin"
         rust_test(
-            name = name + "-unit-tests",
+            name = unit_test_binary,
             crate = name,
-            env = test_env,
             deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
-            rustc_flags = rustc_flags_extra,
+            # Bazel has emitted both `codex-rs/<crate>/...` and
+            # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
+            # prefix so the workspace-root launcher sees Cargo-like metadata
+            # such as `tui/src/...`.
+            rustc_flags = rustc_flags_extra + [
+                "--remap-path-prefix=../codex-rs=",
+                "--remap-path-prefix=codex-rs=",
+            ],
             rustc_env = rustc_env,
             data = test_data_extra,
+            tags = test_tags + ["manual"],
+        )
+
+        workspace_root_test(
+            name = name + "-unit-tests",
+            env = test_env,
+            test_bin = ":" + unit_test_binary,
+            workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
             tags = test_tags,
         )
 
@@ -173,13 +249,17 @@ def codex_rust_crate(
             data = native.glob(["tests/**"], allow_empty = True) + sanitized_binaries + test_data_extra,
             compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
             deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
-            # Keep `file!()` paths Cargo-like (`core/tests/...`) instead of
-            # Bazel workspace-prefixed (`codex-rs/core/tests/...`) for snapshot parity.
-            rustc_flags = rustc_flags_extra + ["--remap-path-prefix=codex-rs="],
+            # Bazel has emitted both `codex-rs/<crate>/...` and
+            # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
+            # prefix so Insta records Cargo-like metadata such as `core/tests/...`.
+            rustc_flags = rustc_flags_extra + [
+                "--remap-path-prefix=../codex-rs=",
+                "--remap-path-prefix=codex-rs=",
+            ],
             rustc_env = rustc_env,
             # Important: do not merge `test_env` here. Its unit-test-only
-            # `INSTA_WORKSPACE_ROOT="."` can point integration tests at the
-            # runfiles cwd and cause false `.snap.new` churn on Linux.
+            # `INSTA_WORKSPACE_ROOT="codex-rs"` is tuned for unit tests that
+            # execute from the repo root and can misplace integration snapshots.
             env = cargo_env,
             tags = test_tags,
         )

@@ -27,7 +27,6 @@ pub(crate) fn new_debug_config_output(
         let SessionNetworkProxyRuntime {
             http_addr,
             socks_addr,
-            admin_addr,
         } = proxy;
         let all_proxy = session_all_proxy_url(
             http_addr,
@@ -40,7 +39,6 @@ pub(crate) fn new_debug_config_output(
         );
         lines.push(format!("    - HTTP_PROXY  = http://{http_addr}").into());
         lines.push(format!("    - ALL_PROXY   = {all_proxy}").into());
-        lines.push(format!("    - ADMIN_PROXY = http://{admin_addr}").into());
     }
 
     PlainHistoryCell::new(lines)
@@ -331,9 +329,9 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         socks_port,
         allow_upstream_proxy,
         dangerously_allow_non_loopback_proxy,
-        dangerously_allow_non_loopback_admin,
         dangerously_allow_all_unix_sockets,
         allowed_domains,
+        managed_allowed_domains_only,
         denied_domains,
         allow_unix_sockets,
         allow_local_binding,
@@ -356,11 +354,6 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
             "dangerously_allow_non_loopback_proxy={dangerously_allow_non_loopback_proxy}"
         ));
     }
-    if let Some(dangerously_allow_non_loopback_admin) = dangerously_allow_non_loopback_admin {
-        parts.push(format!(
-            "dangerously_allow_non_loopback_admin={dangerously_allow_non_loopback_admin}"
-        ));
-    }
     if let Some(dangerously_allow_all_unix_sockets) = dangerously_allow_all_unix_sockets {
         parts.push(format!(
             "dangerously_allow_all_unix_sockets={dangerously_allow_all_unix_sockets}"
@@ -368,6 +361,11 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     }
     if let Some(allowed_domains) = allowed_domains {
         parts.push(format!("allowed_domains=[{}]", allowed_domains.join(", ")));
+    }
+    if let Some(managed_allowed_domains_only) = managed_allowed_domains_only {
+        parts.push(format!(
+            "managed_allowed_domains_only={managed_allowed_domains_only}"
+        ));
     }
     if let Some(denied_domains) = denied_domains {
         parts.push(format!("denied_domains=[{}]", denied_domains.join(", ")));

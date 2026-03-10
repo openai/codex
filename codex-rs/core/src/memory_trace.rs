@@ -6,7 +6,7 @@ use crate::error::CodexErr;
 use crate::error::Result;
 use codex_api::RawMemory as ApiRawMemory;
 use codex_api::RawMemoryMetadata as ApiRawMemoryMetadata;
-use codex_otel::OtelManager;
+use codex_otel::SessionTelemetry;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use serde_json::Map;
@@ -38,7 +38,7 @@ pub async fn build_memories_from_trace_files(
     trace_paths: &[PathBuf],
     model_info: &ModelInfo,
     effort: Option<ReasoningEffortConfig>,
-    otel_manager: &OtelManager,
+    session_telemetry: &SessionTelemetry,
 ) -> Result<Vec<BuiltMemory>> {
     if trace_paths.is_empty() {
         return Ok(Vec::new());
@@ -51,7 +51,7 @@ pub async fn build_memories_from_trace_files(
 
     let raw_memories = prepared.iter().map(|trace| trace.payload.clone()).collect();
     let output = client
-        .summarize_memories(raw_memories, model_info, effort, otel_manager)
+        .summarize_memories(raw_memories, model_info, effort, session_telemetry)
         .await?;
     if output.len() != prepared.len() {
         return Err(CodexErr::InvalidRequest(format!(
