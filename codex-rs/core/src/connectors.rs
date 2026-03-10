@@ -294,7 +294,7 @@ pub fn connector_display_label(connector: &AppInfo) -> String {
 }
 
 pub fn connector_mention_slug(connector: &AppInfo) -> String {
-    connector_name_slug(&connector_display_label(connector))
+    sanitize_name(&connector_display_label(connector))
 }
 
 pub(crate) fn accessible_connectors_from_mcp_tools(
@@ -307,10 +307,10 @@ pub(crate) fn accessible_connectors_from_mcp_tools(
             return None;
         }
         let connector_id = tool.connector_id.as_deref()?;
-        let connector_name = normalize_connector_value(tool.connector_name.as_deref());
         Some((
             connector_id.to_string(),
-            connector_name,
+            normalize_connector_value(tool.connector_name.as_deref()),
+            normalize_connector_value(tool.connector_description.as_deref()),
             tool.plugin_display_names.clone(),
         ))
     });
@@ -474,14 +474,6 @@ pub(crate) fn codex_app_tool_is_enabled(
     .enabled
 }
 
-pub(crate) fn filter_codex_apps_tools_by_policy(
-    mut mcp_tools: HashMap<String, crate::mcp_connection_manager::ToolInfo>,
-    config: &Config,
-) -> HashMap<String, crate::mcp_connection_manager::ToolInfo> {
-    mcp_tools.retain(|_, tool_info| codex_app_tool_is_enabled(config, tool_info));
-    mcp_tools
-}
-
 const DISALLOWED_CONNECTOR_IDS: &[&str] = &[
     "asdk_app_6938a94a61d881918ef32cb999ff937c",
     "connector_2b0a9009c9c64bf9933a3dae3f2b1254",
@@ -611,23 +603,38 @@ fn app_tool_policy_from_apps_config(
 
 fn collect_accessible_connectors<I>(tools: I) -> Vec<AppInfo>
 where
-    I: IntoIterator<Item = (String, Option<String>, Vec<String>)>,
+    I: IntoIterator<Item = (String, Option<String>, Option<String>, Vec<String>)>,
 {
-    let mut connectors: HashMap<String, (String, BTreeSet<String>)> = HashMap::new();
-    for (connector_id, connector_name, plugin_display_names) in tools {
+    let mut connectors: HashMap<String, (AppInfo, BTreeSet<String>)> = HashMap::new();
+    for (connector_id, connector_name, connector_description, plugin_display_names) in tools {
         let connector_name = connector_name.unwrap_or_else(|| connector_id.clone());
-        if let Some((existing_name, existing_plugin_display_names)) =
-            connectors.get_mut(&connector_id)
-        {
-            if existing_name == &connector_id && connector_name != connector_id {
-                *existing_name = connector_name;
+        if let Some((existing, existing_plugin_display_names)) = connectors.get_mut(&connector_id) {
+            if existing.name == connector_id && connector_name != connector_id {
+                existing.name = connector_name;
+            }
+            if existing.description.is_none() && connector_description.is_some() {
+                existing.description = connector_description;
             }
             existing_plugin_display_names.extend(plugin_display_names);
         } else {
             connectors.insert(
-                connector_id,
+                connector_id.clone(),
                 (
-                    connector_name,
+                    AppInfo {
+                        id: connector_id.clone(),
+                        name: connector_name,
+                        description: connector_description,
+                        logo_url: None,
+                        logo_url_dark: None,
+                        distribution_channel: None,
+                        branding: None,
+                        app_metadata: None,
+                        labels: None,
+                        install_url: None,
+                        is_accessible: true,
+                        is_enabled: true,
+                        plugin_display_names: Vec::new(),
+                    },
                     plugin_display_names
                         .into_iter()
                         .collect::<BTreeSet<String>>(),
@@ -636,24 +643,12 @@ where
         }
     }
     let mut accessible: Vec<AppInfo> = connectors
-        .into_iter()
-        .map(
-            |(connector_id, (connector_name, plugin_display_names))| AppInfo {
-                id: connector_id.clone(),
-                name: connector_name.clone(),
-                description: None,
-                logo_url: None,
-                logo_url_dark: None,
-                distribution_channel: None,
-                branding: None,
-                app_metadata: None,
-                labels: None,
-                install_url: Some(connector_install_url(&connector_name, &connector_id)),
-                is_accessible: true,
-                is_enabled: true,
-                plugin_display_names: plugin_display_names.into_iter().collect(),
-            },
-        )
+        .into_values()
+        .map(|(mut connector, plugin_display_names)| {
+            connector.plugin_display_names = plugin_display_names.into_iter().collect();
+            connector.install_url = Some(connector_install_url(&connector.name, &connector.id));
+            connector
+        })
         .collect();
     accessible.sort_by(|left, right| {
         right
@@ -696,11 +691,11 @@ fn normalize_connector_value(value: Option<&str>) -> Option<String> {
 }
 
 pub fn connector_install_url(name: &str, connector_id: &str) -> String {
-    let slug = connector_name_slug(name);
+    let slug = sanitize_name(name);
     format!("https://chatgpt.com/apps/{slug}/{connector_id}")
 }
 
-pub fn connector_name_slug(name: &str) -> String {
+pub fn sanitize_name(name: &str) -> String {
     let mut normalized = String::with_capacity(name.len());
     for character in name.chars() {
         if character.is_ascii_alphanumeric() {
@@ -728,10 +723,12 @@ mod tests {
     use crate::config::types::AppToolConfig;
     use crate::config::types::AppToolsConfig;
     use crate::config::types::AppsDefaultConfig;
+    use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
     use crate::mcp_connection_manager::ToolInfo;
     use pretty_assertions::assert_eq;
     use rmcp::model::JsonObject;
     use rmcp::model::Tool;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     fn annotations(
@@ -813,6 +810,7 @@ mod tests {
             tool: test_tool_definition(tool_name),
             connector_id: Some(connector_id.to_string()),
             connector_name: connector_name.map(ToOwned::to_owned),
+            connector_description: None,
             plugin_display_names: plugin_names(plugin_display_names),
         }
     }
@@ -874,6 +872,7 @@ mod tests {
                     tool: test_tool_definition("echo"),
                     connector_id: None,
                     connector_name: None,
+                    connector_description: None,
                     plugin_display_names: plugin_names(&["ignored"]),
                 },
             ),
@@ -926,6 +925,51 @@ mod tests {
                 is_accessible: true,
                 is_enabled: true,
                 plugin_display_names: plugin_names(&["alpha", "beta", "sample"]),
+            }]
+        );
+    }
+
+    #[test]
+    fn accessible_connectors_from_mcp_tools_preserves_description() {
+        let mcp_tools = HashMap::from([(
+            "mcp__codex_apps__calendar_create_event".to_string(),
+            ToolInfo {
+                server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                tool_name: "calendar_create_event".to_string(),
+                tool: Tool {
+                    name: "calendar_create_event".to_string().into(),
+                    title: None,
+                    description: Some("Create a calendar event".into()),
+                    input_schema: Arc::new(JsonObject::default()),
+                    output_schema: None,
+                    annotations: None,
+                    execution: None,
+                    icons: None,
+                    meta: None,
+                },
+                connector_id: Some("calendar".to_string()),
+                connector_name: Some("Calendar".to_string()),
+                connector_description: Some("Plan events".to_string()),
+                plugin_display_names: Vec::new(),
+            },
+        )]);
+
+        assert_eq!(
+            accessible_connectors_from_mcp_tools(&mcp_tools),
+            vec![AppInfo {
+                id: "calendar".to_string(),
+                name: "Calendar".to_string(),
+                description: Some("Plan events".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some(connector_install_url("Calendar", "calendar")),
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: Vec::new(),
             }]
         );
     }

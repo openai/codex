@@ -721,6 +721,7 @@ mod tests {
                 id: None,
                 call_id: "c1".to_string(),
                 name: "tool".to_string(),
+                namespace: None,
                 arguments: "{}".to_string(),
             },
             assistant_msg("a4"),

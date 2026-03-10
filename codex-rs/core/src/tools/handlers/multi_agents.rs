@@ -1117,6 +1117,7 @@ mod tests {
             tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
             call_id: "call-1".to_string(),
             tool_name: tool_name.to_string(),
+            tool_namespace: None,
             payload,
         }
     }

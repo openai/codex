@@ -271,6 +271,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
         ResponseItem::FunctionCall {
             id: None,
             name: "view_image".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
         },
@@ -332,6 +333,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
         ResponseItem::FunctionCall {
             id: None,
             name: "view_image".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
         },
@@ -547,6 +549,7 @@ fn remove_first_item_removes_matching_output_for_function_call() {
         ResponseItem::FunctionCall {
             id: None,
             name: "do_it".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
         },
@@ -570,6 +573,7 @@ fn remove_first_item_removes_matching_call_for_output() {
         ResponseItem::FunctionCall {
             id: None,
             name: "do_it".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-2".to_string(),
         },
@@ -586,6 +590,7 @@ fn remove_last_item_removes_matching_call_for_output() {
         ResponseItem::FunctionCall {
             id: None,
             name: "do_it".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-delete-last".to_string(),
         },
@@ -1059,6 +1064,7 @@ fn normalize_adds_missing_output_for_function_call() {
     let items = vec![ResponseItem::FunctionCall {
         id: None,
         name: "do_it".to_string(),
+        namespace: None,
         arguments: "{}".to_string(),
         call_id: "call-x".to_string(),
     }];
@@ -1072,6 +1078,7 @@ fn normalize_adds_missing_output_for_function_call() {
             ResponseItem::FunctionCall {
                 id: None,
                 name: "do_it".to_string(),
+                namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
             },
@@ -1193,6 +1200,7 @@ fn normalize_mixed_inserts_and_removals() {
         ResponseItem::FunctionCall {
             id: None,
             name: "f1".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
         },
@@ -1233,6 +1241,7 @@ fn normalize_mixed_inserts_and_removals() {
             ResponseItem::FunctionCall {
                 id: None,
                 name: "f1".to_string(),
+                namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "c1".to_string(),
             },
@@ -1276,6 +1285,7 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
     let items = vec![ResponseItem::FunctionCall {
         id: None,
         name: "do_it".to_string(),
+        namespace: None,
         arguments: "{}".to_string(),
         call_id: "call-x".to_string(),
     }];
@@ -1287,6 +1297,7 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
             ResponseItem::FunctionCall {
                 id: None,
                 name: "do_it".to_string(),
+                namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
             },
@@ -1365,6 +1376,7 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
         ResponseItem::FunctionCall {
             id: None,
             name: "f1".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
         },

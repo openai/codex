@@ -141,12 +141,14 @@ fn response_item_records_turn_ttft(item: &ResponseItem) -> bool {
         ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::ToolSearchCall { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::GhostSnapshot { .. }
         | ResponseItem::Compaction { .. } => true,
         ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::ToolSearchOutput { .. }
         | ResponseItem::Other => false,
     }
 }
@@ -237,6 +239,7 @@ mod tests {
             &ResponseItem::FunctionCall {
                 id: None,
                 name: "shell".to_string(),
+                namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-1".to_string(),
             }

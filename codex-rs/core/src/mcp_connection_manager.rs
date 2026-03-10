@@ -82,6 +82,8 @@ use crate::codex::INITIAL_SUBMIT_ID;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
 use crate::connectors::is_connector_id_allowed;
+use crate::connectors::sanitize_name;
+
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
 ///
@@ -201,6 +203,7 @@ pub(crate) struct ToolInfo {
     pub(crate) connector_name: Option<String>,
     #[serde(default)]
     pub(crate) plugin_display_names: Vec<String>,
+    pub(crate) connector_description: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1086,7 +1089,7 @@ impl McpConnectionManager {
         self.list_all_tools()
             .await
             .get(tool_name)
-            .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()))
+            .map(|tool| (tool.server_name.clone(), tool.tool.name.to_string()))
     }
 
     pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
@@ -1172,49 +1175,12 @@ fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<ToolInfo> {
         .collect()
 }
 
-pub(crate) fn filter_codex_apps_mcp_tools_only(
-    mcp_tools: &HashMap<String, ToolInfo>,
-    connectors: &[crate::connectors::AppInfo],
-) -> HashMap<String, ToolInfo> {
-    let allowed: HashSet<&str> = connectors
-        .iter()
-        .map(|connector| connector.id.as_str())
-        .collect();
-
-    mcp_tools
-        .iter()
-        .filter(|(_, tool)| {
-            if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
-                return false;
-            }
-            let Some(connector_id) = tool.connector_id.as_deref() else {
-                return false;
-            };
-            allowed.contains(connector_id)
-        })
-        .map(|(name, tool)| (name.clone(), tool.clone()))
-        .collect()
-}
-
 pub(crate) fn filter_non_codex_apps_mcp_tools_only(
     mcp_tools: &HashMap<String, ToolInfo>,
 ) -> HashMap<String, ToolInfo> {
     mcp_tools
         .iter()
         .filter(|(_, tool)| tool.server_name != CODEX_APPS_MCP_SERVER_NAME)
-        .map(|(name, tool)| (name.clone(), tool.clone()))
-        .collect()
-}
-
-pub(crate) fn filter_mcp_tools_by_name(
-    mcp_tools: &HashMap<String, ToolInfo>,
-    selected_tools: &[String],
-) -> HashMap<String, ToolInfo> {
-    let allowed: HashSet<&str> = selected_tools.iter().map(String::as_str).collect();
-
-    mcp_tools
-        .iter()
-        .filter(|(name, _)| allowed.contains(name.as_str()))
         .map(|(name, tool)| (name.clone(), tool.clone()))
         .collect()
 }
@@ -1563,7 +1529,9 @@ async fn list_tools_for_client_uncached(
         .tools
         .into_iter()
         .map(|tool| {
+            let tool_name = sanitize_name(&tool.tool.name);
             let connector_name = tool.connector_name;
+            let connector_description = tool.connector_description;
             let mut tool_def = tool.tool;
             if let Some(title) = tool_def.title.as_deref() {
                 let normalized_title =
@@ -1574,11 +1542,12 @@ async fn list_tools_for_client_uncached(
             }
             ToolInfo {
                 server_name: server_name.to_owned(),
-                tool_name: tool_def.name.to_string(),
+                tool_name: tool_name.to_owned(),
                 tool: tool_def,
                 connector_id: tool.connector_id,
                 connector_name,
                 plugin_display_names: Vec::new(),
+                connector_description,
             }
         })
         .collect();
@@ -1693,6 +1662,7 @@ mod tests {
             connector_id: None,
             connector_name: None,
             plugin_display_names: Vec::new(),
+            connector_description: None,
         }
     }
 

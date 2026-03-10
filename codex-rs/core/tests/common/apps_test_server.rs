@@ -12,6 +12,7 @@ use wiremock::matchers::path_regex;
 
 const CONNECTOR_ID: &str = "calendar";
 const CONNECTOR_NAME: &str = "Calendar";
+const CONNECTOR_DESCRIPTION: &str = "Plan events and manage your calendar.";
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const SERVER_NAME: &str = "codex-apps-test";
 const SERVER_VERSION: &str = "1.0.0";
@@ -31,7 +32,12 @@ impl AppsTestServer {
         connector_name: &str,
     ) -> Result<Self> {
         mount_oauth_metadata(server).await;
-        mount_streamable_http_json_rpc(server, connector_name.to_string()).await;
+        mount_streamable_http_json_rpc(
+            server,
+            connector_name.to_string(),
+            CONNECTOR_DESCRIPTION.to_string(),
+        )
+        .await;
         Ok(Self {
             chatgpt_base_url: server.uri(),
         })
@@ -50,16 +56,24 @@ async fn mount_oauth_metadata(server: &MockServer) {
         .await;
 }
 
-async fn mount_streamable_http_json_rpc(server: &MockServer, connector_name: String) {
+async fn mount_streamable_http_json_rpc(
+    server: &MockServer,
+    connector_name: String,
+    connector_description: String,
+) {
     Mock::given(method("POST"))
         .and(path_regex("^/api/codex/apps/?$"))
-        .respond_with(CodexAppsJsonRpcResponder { connector_name })
+        .respond_with(CodexAppsJsonRpcResponder {
+            connector_name,
+            connector_description,
+        })
         .mount(server)
         .await;
 }
 
 struct CodexAppsJsonRpcResponder {
     connector_name: String,
+    connector_description: String,
 }
 
 impl Respond for CodexAppsJsonRpcResponder {
@@ -126,7 +140,8 @@ impl Respond for CodexAppsJsonRpcResponder {
                                 },
                                 "_meta": {
                                     "connector_id": CONNECTOR_ID,
-                                    "connector_name": self.connector_name.clone()
+                                    "connector_name": self.connector_name.clone(),
+                                    "connector_description": self.connector_description.clone()
                                 }
                             },
                             {
@@ -142,11 +157,39 @@ impl Respond for CodexAppsJsonRpcResponder {
                                 },
                                 "_meta": {
                                     "connector_id": CONNECTOR_ID,
-                                    "connector_name": self.connector_name.clone()
+                                    "connector_name": self.connector_name.clone(),
+                                    "connector_description": self.connector_description.clone()
                                 }
                             }
                         ],
                         "nextCursor": null
+                    }
+                }))
+            }
+            "tools/call" => {
+                let id = body.get("id").cloned().unwrap_or(Value::Null);
+                let tool_name = body
+                    .pointer("/params/name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let title = body
+                    .pointer("/params/arguments/title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let starts_at = body
+                    .pointer("/params/arguments/starts_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{
+                            "type": "text",
+                            "text": format!("called {tool_name} for {title} at {starts_at}")
+                        }],
+                        "isError": false
                     }
                 }))
             }

@@ -422,6 +422,7 @@ It is important to remember:
 "#
         .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["input".to_string()]),
