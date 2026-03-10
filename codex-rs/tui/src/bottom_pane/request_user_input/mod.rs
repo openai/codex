@@ -795,12 +795,35 @@ impl RequestUserInputOverlay {
         }
     }
 
+    fn finish_next_request_matching(
+        &mut self,
+        mut keep: impl FnMut(&ThreadUserInputRequest) -> bool,
+    ) {
+        while let Some(next) = self.queue.pop_front() {
+            if !keep(&next) {
+                continue;
+            }
+            self.thread_id = next.thread_id;
+            self.request = next.request;
+            self.reset_for_request();
+            self.ensure_focus_available();
+            self.restore_current_draft();
+            return;
+        }
+        self.done = true;
+    }
+
     fn interrupt_current_request(&mut self) {
+        let interrupted_thread_id = self.thread_id;
+        let interrupted_turn_id = self.request.turn_id.clone();
         self.app_event_tx.send(AppEvent::SubmitThreadOp {
             thread_id: self.thread_id,
             op: Op::Interrupt,
         });
-        self.finish_current_request();
+        self.finish_next_request_matching(|queued| {
+            !(queued.thread_id == interrupted_thread_id
+                && queued.request.turn_id == interrupted_turn_id)
+        });
     }
 
     fn close_unanswered_confirmation(&mut self) {
@@ -1618,6 +1641,48 @@ mod tests {
         assert!(!overlay.done, "expected queued requests to remain visible");
         assert_eq!(overlay.request.turn_id, "turn-2");
         assert_eq!(overlay.queue.len(), 1);
+        expect_interrupt_only(&mut rx, interrupted_thread_id);
+    }
+
+    #[test]
+    fn interrupt_skips_queued_requests_from_same_turn() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "First")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let interrupted_thread_id = overlay.thread_id;
+        overlay.try_consume_user_input_request(ThreadUserInputRequest {
+            thread_id: interrupted_thread_id,
+            request: RequestUserInputEvent {
+                call_id: "call-2".to_string(),
+                turn_id: "turn-1".to_string(),
+                questions: vec![question_with_options("q2", "Second stale")],
+            },
+        });
+        overlay.try_consume_user_input_request(ThreadUserInputRequest {
+            thread_id: ThreadId::new(),
+            request: RequestUserInputEvent {
+                call_id: "call-3".to_string(),
+                turn_id: "turn-2".to_string(),
+                questions: vec![question_with_options("q3", "Third live")],
+            },
+        });
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+        assert!(
+            !overlay.done,
+            "expected next live request to remain visible"
+        );
+        assert_eq!(overlay.request.turn_id, "turn-2");
+        assert!(
+            overlay.queue.is_empty(),
+            "expected stale same-turn request to be dropped"
+        );
         expect_interrupt_only(&mut rx, interrupted_thread_id);
     }
 

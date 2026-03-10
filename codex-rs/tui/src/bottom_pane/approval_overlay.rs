@@ -421,6 +421,12 @@ impl ApprovalOverlay {
     }
 
     fn try_handle_shortcut(&mut self, key_event: &KeyEvent) -> bool {
+        if matches!(
+            self.view.as_ref(),
+            Some(ApprovalOverlayView::Permissions { .. })
+        ) {
+            return false;
+        }
         match key_event {
             KeyEvent {
                 kind: KeyEventKind::Press,
@@ -961,6 +967,7 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc::error::TryRecvError;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn absolute_path(path: &str) -> AbsolutePathBuf {
@@ -1110,6 +1117,37 @@ mod tests {
             matches!(event, AppEvent::SelectAgentThread(id) if id == thread_id),
             true
         );
+    }
+
+    #[test]
+    fn permissions_picker_allows_o_key_for_search() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(
+            ApprovalRequest::Permissions {
+                thread_id: ThreadId::new(),
+                thread_label: Some("Robie [explorer]".to_string()),
+                id: "permission-request".to_string(),
+                reason: Some("need permissions".to_string()),
+                permissions: PermissionProfile {
+                    macos: Some(MacOsSeatbeltProfileExtensions {
+                        macos_automation: MacOsAutomationPermission::All,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            },
+            tx,
+            Features::with_defaults(),
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        let Some(ApprovalOverlayView::Permissions { picker }) = view.view.as_ref() else {
+            panic!("expected permissions picker view");
+        };
+        assert_eq!(picker.search_query(), "o".to_string());
     }
 
     #[test]
