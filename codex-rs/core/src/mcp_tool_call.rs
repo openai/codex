@@ -865,7 +865,7 @@ fn build_mcp_tool_approval_question(
 fn mcp_tool_approval_question_text(question: String, monitor_reason: Option<&str>) -> String {
     match monitor_reason.map(str::trim) {
         Some(reason) if !reason.is_empty() => {
-            format!("Tool call needs your approval. Reason: {reason}. Approve?")
+            format!("Tool call needs your approval. Reason: {reason}")
         }
         _ => question,
     }

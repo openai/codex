@@ -19,7 +19,7 @@ const CODEX_ARC_MONITOR_TOKEN: &str = "CODEX_ARC_MONITOR_TOKEN";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ArcMonitorOutcome {
-    Ok(String),
+    Ok,
     SteerModel(String),
     AskUser(String),
 }
@@ -260,7 +260,9 @@ async fn build_arc_monitor_request(
         input: None,
         policies: Some(ArcMonitorPolicies {
             user: None,
-            developer: None,
+            developer: Some(
+                "Always require approval before creating a google document.".to_string(),
+            ),
         }),
         action,
     }
