@@ -454,6 +454,10 @@ pub struct Config {
     /// Machine-local realtime audio device preferences used by realtime voice.
     pub realtime_audio: RealtimeAudioConfig,
 
+    /// Replaces the built-in realtime start instructions inserted into
+    /// developer messages when realtime becomes active.
+    pub realtime_start_instructions: Option<String>,
+
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport base URL (the `Op::RealtimeConversation`
     /// `/v1/realtime`
@@ -1224,6 +1228,10 @@ pub struct ConfigToml {
     /// Machine-local realtime audio device preferences used by realtime voice.
     #[serde(default)]
     pub audio: Option<RealtimeAudioToml>,
+
+    /// Replaces the built-in realtime start instructions inserted into
+    /// developer messages when realtime becomes active.
+    pub realtime_start_instructions: Option<String>,
 
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport base URL (the `Op::RealtimeConversation`
@@ -2446,6 +2454,7 @@ impl Config {
                     microphone: audio.microphone,
                     speaker: audio.speaker,
                 }),
+            realtime_start_instructions: cfg.realtime_start_instructions,
             experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
             experimental_realtime_ws_model: cfg.experimental_realtime_ws_model,
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,

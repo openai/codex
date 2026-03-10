@@ -2250,6 +2250,10 @@
       },
       "type": "object"
     },
+    "realtime_start_instructions": {
+      "description": "Replaces the built-in realtime start instructions inserted into developer messages when realtime becomes active.",
+      "type": "string"
+    },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",
       "type": "string"

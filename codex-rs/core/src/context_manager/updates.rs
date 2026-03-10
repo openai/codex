@@ -75,7 +75,15 @@ pub(crate) fn build_realtime_update_item(
         next.realtime_active,
     ) {
         (Some(true), false) => Some(DeveloperInstructions::realtime_end_message("inactive")),
-        (Some(false), true) | (None, true) => Some(DeveloperInstructions::realtime_start_message()),
+        (Some(false), true) | (None, true) => Some(
+            next.config
+                .realtime_start_instructions
+                .as_deref()
+                .map_or_else(
+                    DeveloperInstructions::realtime_start_message,
+                    DeveloperInstructions::realtime_start_message_with_instructions,
+                ),
+        ),
         (Some(true), true) | (Some(false), false) => None,
         (None, false) => previous_turn_settings
             .and_then(|settings| settings.realtime_active)

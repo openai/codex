@@ -3034,6 +3034,42 @@ async fn build_settings_update_items_emits_realtime_start_when_session_becomes_l
 }
 
 #[tokio::test]
+async fn build_settings_update_items_uses_custom_realtime_start_instructions() {
+    let (session, previous_context) = make_session_and_context().await;
+    let previous_context = Arc::new(previous_context);
+    let mut current_context = previous_context
+        .with_model(
+            previous_context.model_info.slug.clone(),
+            &session.services.models_manager,
+        )
+        .await;
+    current_context.realtime_active = true;
+    Arc::make_mut(&mut current_context.config).realtime_start_instructions =
+        Some("custom realtime start instructions".to_string());
+
+    let update_items = session
+        .build_settings_update_items(
+            Some(&previous_context.to_turn_context_item()),
+            &current_context,
+        )
+        .await;
+
+    let developer_texts = developer_input_texts(&update_items);
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("custom realtime start instructions")),
+        "expected a realtime start update to use custom instructions, got {developer_texts:?}"
+    );
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("<realtime_conversation>")),
+        "expected a realtime start update to preserve the wrapper, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
 async fn build_settings_update_items_emits_realtime_end_when_session_stops_being_live() {
     let (session, mut previous_context) = make_session_and_context().await;
     previous_context.realtime_active = true;
