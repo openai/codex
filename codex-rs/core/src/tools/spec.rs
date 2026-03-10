@@ -27,6 +27,7 @@ use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -77,6 +78,7 @@ pub(crate) struct ToolsConfig {
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
+    pub available_models: Vec<ModelPreset>,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -182,6 +184,7 @@ impl ToolsConfig {
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
+            available_models: Vec::new(),
         }
     }
 
@@ -204,6 +207,11 @@ impl ToolsConfig {
         let mut nested = self.clone();
         nested.code_mode_enabled = false;
         nested
+    }
+
+    pub fn with_available_models(mut self, available_models: Vec<ModelPreset>) -> Self {
+        self.available_models = available_models;
+        self
     }
 }
 
@@ -724,6 +732,7 @@ fn create_collab_input_items_schema() -> JsonSchema {
 }
 
 fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
+    let available_models_description = spawn_agent_models_description(&config.available_models);
     let properties = BTreeMap::from([
         (
             "message".to_string(),
@@ -752,11 +761,28 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
                 ),
             },
         ),
+        (
+            "model".to_string(),
+            JsonSchema::String {
+                description: Some(format!(
+                    "Optional model override for the new agent. Replaces the inherited model. Available picker models:\n{available_models_description}"
+                )),
+            },
+        ),
+        (
+            "reasoning_effort".to_string(),
+            JsonSchema::String {
+                description: Some(format!(
+                    "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort. If model is set without reasoning_effort, the child uses that model's default reasoning effort. Available options by model:\n{available_models_description}"
+                )),
+            },
+        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
-        description: r#"Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
+        description: r#"
+        Only use `spawn_agent` if and only if the user explicitly asked for sub-agents or parallel agent work. Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
 
 ### When to delegate vs. do the subtask yourself
 - First, quickly analyze the overall user task and form a succinct high-level plan. Identify which tasks are immediate blockers on the critical path, and which tasks are sidecar tasks that are needed but can run in parallel without blocking the next local step. As part of that plan, explicitly decide what immediate task you should do locally right now. Do this planning step before delegating to agents so you do not hand off the immediate blocking task to a submodel and then waste time waiting on it.
@@ -794,6 +820,35 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             additional_properties: Some(false.into()),
         },
     })
+}
+
+fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
+    let visible_models: Vec<&ModelPreset> =
+        models.iter().filter(|model| model.show_in_picker).collect();
+    if visible_models.is_empty() {
+        return "No picker-visible models are currently loaded.".to_string();
+    }
+
+    visible_models
+        .into_iter()
+        .map(|model| {
+            let efforts = model
+                .supported_reasoning_efforts
+                .iter()
+                .map(|preset| format!("{} ({})", preset.effort, preset.description))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "- {} (`{}`): {} Default reasoning effort: {}. Supported reasoning efforts: {}.",
+                model.display_name,
+                model.model,
+                model.description,
+                model.default_reasoning_effort,
+                efforts
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn create_spawn_agents_on_csv_tool() -> ToolSpec {
@@ -2172,6 +2227,7 @@ mod tests {
     use crate::config::test_config;
     use crate::models_manager::manager::ModelsManager;
     use crate::models_manager::model_info::with_config_overrides;
+    use crate::test_support::all_model_presets;
     use crate::tools::registry::ConfiguredToolSpec;
     use codex_protocol::openai_models::InputModality;
     use codex_protocol::openai_models::ModelInfo;
@@ -2428,6 +2484,61 @@ mod tests {
                 "spawn_agents_on_csv",
             ],
         );
+    }
+
+    #[test]
+    fn spawn_agent_tool_includes_model_and_reasoning_effort_descriptions() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Collab);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        })
+        .with_available_models(all_model_presets().clone());
+        let tool = create_spawn_agent_tool(&tools_config);
+
+        let ToolSpec::Function(tool) = tool else {
+            panic!("spawn_agent should be a function tool");
+        };
+        let JsonSchema::Object { properties, .. } = tool.parameters else {
+            panic!("spawn_agent parameters should be an object");
+        };
+        let JsonSchema::String {
+            description: Some(model_description),
+        } = properties
+            .get("model")
+            .expect("model property should exist")
+        else {
+            panic!("model property should be a described string");
+        };
+        let JsonSchema::String {
+            description: Some(reasoning_description),
+        } = properties
+            .get("reasoning_effort")
+            .expect("reasoning_effort property should exist")
+        else {
+            panic!("reasoning_effort property should be a described string");
+        };
+
+        let picker_model = all_model_presets()
+            .iter()
+            .find(|preset| preset.show_in_picker)
+            .expect("expected a picker model");
+        let hidden_model = all_model_presets()
+            .iter()
+            .find(|preset| !preset.show_in_picker)
+            .expect("expected a hidden model");
+
+        assert!(model_description.contains(&format!("`{}`", picker_model.model)));
+        assert!(model_description.contains(picker_model.description.as_str()));
+        assert!(!model_description.contains(&format!("`{}`", hidden_model.model)));
+        assert!(reasoning_description.contains("Supported reasoning efforts"));
+        assert!(reasoning_description.contains("Default reasoning effort"));
     }
 
     #[test]

@@ -2228,6 +2228,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         session_configuration.provider.clone(),
         &session_configuration,
         per_turn_config,
+        services
+            .models_manager
+            .try_list_models()
+            .unwrap_or_default(),
         model_info,
         None,
         "turn_id".to_string(),
@@ -2785,6 +2789,10 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         session_configuration.provider.clone(),
         &session_configuration,
         per_turn_config,
+        services
+            .models_manager
+            .try_list_models()
+            .unwrap_or_default(),
         model_info,
         None,
         "turn_id".to_string(),

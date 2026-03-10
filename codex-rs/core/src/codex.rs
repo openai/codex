@@ -316,6 +316,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
@@ -781,6 +782,7 @@ impl TurnContext {
         })
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
+        .with_available_models(models_manager.try_list_models().unwrap_or_default())
         .with_agent_roles(config.agent_roles.clone());
 
         Self {
@@ -946,6 +948,42 @@ pub(crate) struct SessionConfiguration {
 }
 
 impl SessionConfiguration {
+    pub(crate) fn from_config_for_tests(
+        config: Arc<Config>,
+        collaboration_mode: CollaborationMode,
+        model_info: &ModelInfo,
+    ) -> Self {
+        Self {
+            provider: config.model_provider.clone(),
+            collaboration_mode,
+            model_reasoning_summary: config.model_reasoning_summary,
+            developer_instructions: config.developer_instructions.clone(),
+            user_instructions: config.user_instructions.clone(),
+            service_tier: None,
+            personality: config.personality,
+            base_instructions: config
+                .base_instructions
+                .clone()
+                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            compact_prompt: config.compact_prompt.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
+            file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: config.permissions.network_sandbox_policy,
+            windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+            cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
+            original_config_do_not_use: config,
+            metrics_service_name: None,
+            app_server_client_name: None,
+            session_source: SessionSource::Exec,
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            inherited_shell_snapshot: None,
+        }
+    }
+
     pub(crate) fn codex_home(&self) -> &PathBuf {
         &self.codex_home
     }
@@ -1155,12 +1193,13 @@ impl Session {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn make_turn_context(
+    pub(crate) fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
         session_telemetry: &SessionTelemetry,
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
         per_turn_config: Config,
+        available_models: Vec<ModelPreset>,
         model_info: ModelInfo,
         network: Option<NetworkProxy>,
         sub_id: String,
@@ -1189,6 +1228,7 @@ impl Session {
         })
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
+        .with_available_models(available_models)
         .with_agent_roles(per_turn_config.agent_roles.clone());
 
         let cwd = session_configuration.cwd.clone();
@@ -1246,7 +1286,7 @@ impl Session {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn new(
+    pub(crate) async fn new(
         mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
@@ -2307,6 +2347,10 @@ impl Session {
             session_configuration.provider.clone(),
             &session_configuration,
             per_turn_config,
+            self.services
+                .models_manager
+                .try_list_models()
+                .unwrap_or_default(),
             model_info,
             self.services
                 .network_proxy
@@ -5151,6 +5195,12 @@ async fn spawn_review_thread(
     })
     .with_web_search_config(None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
+    .with_available_models(
+        sess.services
+            .models_manager
+            .try_list_models()
+            .unwrap_or_default(),
+    )
     .with_agent_roles(config.agent_roles.clone());
 
     let review_prompt = resolved.prompt.clone();
