@@ -5208,15 +5208,52 @@ impl CodexMessageProcessor {
 
     async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {
         let plugins_manager = self.thread_manager.plugins_manager();
-        let roots = params.cwds.unwrap_or_default();
+        let PluginListParams {
+            cwds,
+            force_remote_sync,
+        } = params;
+        let roots = cwds.unwrap_or_default();
 
-        let config = match self.load_latest_config(None).await {
+        let mut config = match self.load_latest_config(None).await {
             Ok(config) => config,
             Err(err) => {
                 self.outgoing.send_error(request_id, err).await;
                 return;
             }
         };
+
+        if force_remote_sync {
+            let auth = self.auth_manager.auth().await;
+            let sync_result = match plugins_manager
+                .sync_plugins_from_remote(&config, auth.as_ref())
+                .await
+            {
+                Ok(sync_result) => sync_result,
+                Err(err) => {
+                    self.send_internal_error(
+                        request_id,
+                        format!("failed to sync remote plugin state: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            info!(
+                installed_plugin_ids = ?sync_result.installed_plugin_ids,
+                enabled_plugin_ids = ?sync_result.enabled_plugin_ids,
+                disabled_plugin_ids = ?sync_result.disabled_plugin_ids,
+                uninstalled_plugin_ids = ?sync_result.uninstalled_plugin_ids,
+                "completed plugin/list remote sync"
+            );
+
+            config = match self.load_latest_config(None).await {
+                Ok(config) => config,
+                Err(err) => {
+                    self.outgoing.send_error(request_id, err).await;
+                    return;
+                }
+            };
+        }
 
         let data = match tokio::task::spawn_blocking(move || {
             let marketplaces = plugins_manager.list_marketplaces_for_config(&config, &roots)?;

@@ -2675,6 +2675,10 @@ pub struct PluginListParams {
     /// only home-scoped marketplaces and the official curated marketplace are considered.
     #[ts(optional = nullable)]
     pub cwds: Option<Vec<AbsolutePathBuf>>,
+    /// When true, reconcile the official curated marketplace against the remote plugin state
+    /// before listing marketplaces.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force_remote_sync: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -6298,6 +6302,32 @@ mod tests {
                         "extraUserRoots": ["/shared/skills", "/tmp/x"],
                     }
                 ],
+            }),
+        );
+    }
+
+    #[test]
+    fn plugin_list_params_serialization_uses_force_remote_sync() {
+        assert_eq!(
+            serde_json::to_value(PluginListParams {
+                cwds: None,
+                force_remote_sync: false,
+            })
+            .unwrap(),
+            json!({
+                "cwds": null,
+            }),
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginListParams {
+                cwds: Some(vec![AbsolutePathBuf::try_from("/repo").unwrap()]),
+                force_remote_sync: true,
+            })
+            .unwrap(),
+            json!({
+                "cwds": ["/repo"],
+                "forceRemoteSync": true,
             }),
         );
     }
