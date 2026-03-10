@@ -24,6 +24,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::request_permissions::PermissionGrantScope;
 use tracing::Span;
 
 use crate::protocol::CompactedItem;
@@ -2257,6 +2258,7 @@ async fn notify_request_permissions_response_ignores_unmatched_call_id() {
                     }),
                     ..Default::default()
                 },
+                scope: PermissionGrantScope::Turn,
             },
         )
         .await;

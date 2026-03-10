@@ -103,6 +103,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -3012,6 +3013,7 @@ impl Session {
         call_id: &str,
         response: RequestPermissionsResponse,
     ) {
+        let mut granted_for_session = None;
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -3019,13 +3021,24 @@ impl Session {
                     let mut ts = at.turn_state.lock().await;
                     let entry = ts.remove_pending_request_permissions(call_id);
                     if entry.is_some() && !response.permissions.is_empty() {
-                        ts.record_granted_permissions(response.permissions.clone());
+                        match response.scope {
+                            PermissionGrantScope::Turn => {
+                                ts.record_granted_permissions(response.permissions.clone());
+                            }
+                            PermissionGrantScope::Session => {
+                                granted_for_session = Some(response.permissions.clone());
+                            }
+                        }
                     }
                     entry
                 }
                 None => None,
             }
         };
+        if let Some(permissions) = granted_for_session {
+            let mut state = self.state.lock().await;
+            state.record_granted_permissions(permissions);
+        }
         match entry {
             Some(tx_response) => {
                 tx_response.send(response).ok();
@@ -3041,6 +3054,11 @@ impl Session {
         let active = active.as_ref()?;
         let ts = active.turn_state.lock().await;
         ts.granted_permissions()
+    }
+
+    pub(crate) async fn granted_session_permissions(&self) -> Option<PermissionProfile> {
+        let state = self.state.lock().await;
+        state.granted_permissions()
     }
 
     pub async fn notify_dynamic_tool_response(&self, call_id: &str, response: DynamicToolResponse) {
