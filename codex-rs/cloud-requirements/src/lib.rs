@@ -62,12 +62,12 @@ fn refresher_task_slot() -> &'static Mutex<Option<JoinHandle<()>>> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FetchCloudRequirementsStatus {
+enum RetryableFailureKind {
     BackendClientInit,
     Request { status_code: Option<u16> },
 }
 
-impl FetchCloudRequirementsStatus {
+impl RetryableFailureKind {
     fn status_code(self) -> Option<u16> {
         match self {
             Self::BackendClientInit => None,
@@ -77,9 +77,12 @@ impl FetchCloudRequirementsStatus {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum FetchCloudRequirementsError {
-    Retryable(FetchCloudRequirementsStatus),
-    Unauthorized(CloudRequirementsLoadError),
+enum FetchAttemptError {
+    Retryable(RetryableFailureKind),
+    Unauthorized {
+        status_code: Option<u16>,
+        error: CloudRequirementsLoadError,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -183,7 +186,7 @@ trait RequirementsFetcher: Send + Sync {
     async fn fetch_requirements(
         &self,
         auth: &CodexAuth,
-    ) -> Result<Option<String>, FetchCloudRequirementsError>;
+    ) -> Result<Option<String>, FetchAttemptError>;
 }
 
 struct BackendRequirementsFetcher {
@@ -201,7 +204,7 @@ impl RequirementsFetcher for BackendRequirementsFetcher {
     async fn fetch_requirements(
         &self,
         auth: &CodexAuth,
-    ) -> Result<Option<String>, FetchCloudRequirementsError> {
+    ) -> Result<Option<String>, FetchAttemptError> {
         let client = BackendClient::from_auth(self.base_url.clone(), auth)
             .inspect_err(|err| {
                 tracing::warn!(
@@ -209,25 +212,21 @@ impl RequirementsFetcher for BackendRequirementsFetcher {
                     "Failed to construct backend client for cloud requirements"
                 );
             })
-            .map_err(|_| {
-                FetchCloudRequirementsError::Retryable(
-                    FetchCloudRequirementsStatus::BackendClientInit,
-                )
-            })?;
+            .map_err(|_| FetchAttemptError::Retryable(RetryableFailureKind::BackendClientInit))?;
 
         let response = client
             .get_config_requirements_file()
             .await
             .inspect_err(|err| tracing::warn!(error = %err, "Failed to fetch cloud requirements"))
             .map_err(|err| {
+                let status_code = err.status().map(|status| status.as_u16());
                 if err.is_unauthorized() {
-                    FetchCloudRequirementsError::Unauthorized(CloudRequirementsLoadError::new(
-                        err.to_string(),
-                    ))
+                    FetchAttemptError::Unauthorized {
+                        status_code,
+                        error: CloudRequirementsLoadError::new(err.to_string()),
+                    }
                 } else {
-                    FetchCloudRequirementsError::Retryable(FetchCloudRequirementsStatus::Request {
-                        status_code: parse_http_status_code(err.to_string().as_str()),
-                    })
+                    FetchAttemptError::Retryable(RetryableFailureKind::Request { status_code })
                 }
             })?;
 
@@ -279,14 +278,7 @@ impl CloudRequirementsService {
                     self.timeout.as_secs()
                 );
                 tracing::error!("{message}");
-                if let Some(metrics) = codex_otel::metrics::global() {
-                    let _ = metrics.counter(
-                        "codex.cloud_requirements.load_failure",
-                        1,
-                        &[("trigger", "startup")],
-                    );
-                }
-                emit_load_metric("startup", "timeout");
+                emit_load_metric("startup", "error");
             })
             .map_err(|_| {
                 CloudRequirementsLoadError::new(format!(
@@ -309,7 +301,7 @@ impl CloudRequirementsService {
                     elapsed_ms = started_at.elapsed().as_millis(),
                     "Cloud requirements load completed (none)"
                 );
-                emit_load_metric("startup", "none");
+                emit_load_metric("startup", "success");
             }
         }
 
@@ -364,10 +356,10 @@ impl CloudRequirementsService {
                     emit_fetch_attempt_metric(trigger, attempt, "success", None);
                     contents
                 }
-                Err(FetchCloudRequirementsError::Retryable(status)) => {
+                Err(FetchAttemptError::Retryable(status)) => {
                     let status_code = status.status_code();
                     last_status_code = status_code;
-                    emit_fetch_attempt_metric(trigger, attempt, "failure", status_code);
+                    emit_fetch_attempt_metric(trigger, attempt, "error", status_code);
                     if attempt < CLOUD_REQUIREMENTS_MAX_ATTEMPTS {
                         tracing::warn!(
                             status = ?status,
@@ -380,8 +372,9 @@ impl CloudRequirementsService {
                     attempt += 1;
                     continue;
                 }
-                Err(FetchCloudRequirementsError::Unauthorized(err)) => {
-                    emit_fetch_attempt_metric(trigger, attempt, "unauthorized", None);
+                Err(FetchAttemptError::Unauthorized { status_code, error }) => {
+                    last_status_code = status_code;
+                    emit_fetch_attempt_metric(trigger, attempt, "unauthorized", status_code);
                     if auth_recovery.has_next() {
                         tracing::warn!(
                             attempt,
@@ -394,6 +387,13 @@ impl CloudRequirementsService {
                                     tracing::error!(
                                         "Auth recovery succeeded but no auth is available for cloud requirements"
                                     );
+                                    emit_fetch_final_metric(
+                                        trigger,
+                                        "error",
+                                        "auth_recovery_missing_auth",
+                                        attempt,
+                                        status_code,
+                                    );
                                     return Err(CloudRequirementsLoadError::new(
                                         CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE,
                                     ));
@@ -405,6 +405,13 @@ impl CloudRequirementsService {
                                 tracing::warn!(
                                     error = %failed,
                                     "Failed to recover from unauthorized cloud requirements request"
+                                );
+                                emit_fetch_final_metric(
+                                    trigger,
+                                    "error",
+                                    "auth_recovery_permanent",
+                                    attempt,
+                                    status_code,
                                 );
                                 return Err(CloudRequirementsLoadError::new(failed.message));
                             }
@@ -425,10 +432,16 @@ impl CloudRequirementsService {
                     }
 
                     tracing::warn!(
-                        error = %err,
+                        error = %error,
                         "Cloud requirements request was unauthorized and no auth recovery is available"
                     );
-                    emit_fetch_final_metric(trigger, "failure", attempt, last_status_code);
+                    emit_fetch_final_metric(
+                        trigger,
+                        "error",
+                        "auth_recovery_unavailable",
+                        attempt,
+                        status_code,
+                    );
                     return Err(CloudRequirementsLoadError::new(
                         CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE,
                     ));
@@ -440,7 +453,13 @@ impl CloudRequirementsService {
                     Ok(requirements) => requirements,
                     Err(err) => {
                         tracing::error!(error = %err, "Failed to parse cloud requirements");
-                        emit_fetch_final_metric(trigger, "failure", attempt, last_status_code);
+                        emit_fetch_final_metric(
+                            trigger,
+                            "error",
+                            "parse_error",
+                            attempt,
+                            last_status_code,
+                        );
                         return Err(CloudRequirementsLoadError::new(
                             CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE,
                         ));
@@ -454,14 +473,14 @@ impl CloudRequirementsService {
                 tracing::warn!(error = %err, "Failed to write cloud requirements cache");
             }
 
-            let outcome = if requirements.is_some() { "success" } else { "none" };
-            emit_fetch_final_metric(trigger, outcome, attempt, None);
+            emit_fetch_final_metric(trigger, "success", "none", attempt, None);
             return Ok(requirements);
         }
 
         emit_fetch_final_metric(
             trigger,
-            "failure",
+            "error",
+            "request_retry_exhausted",
             CLOUD_REQUIREMENTS_MAX_ATTEMPTS,
             last_status_code,
         );
@@ -484,7 +503,7 @@ impl CloudRequirementsService {
                     tracing::error!(
                         "Timed out refreshing cloud requirements cache from remote; keeping existing cache"
                     );
-                    emit_load_metric("refresh", "timeout");
+                    emit_load_metric("refresh", "error");
                 }
             }
         }
@@ -504,22 +523,14 @@ impl CloudRequirementsService {
         }
 
         match self.fetch_with_retries(auth, "refresh").await {
-            Ok(Some(_)) => emit_load_metric("refresh", "success"),
-            Ok(None) => emit_load_metric("refresh", "none"),
+            Ok(_) => emit_load_metric("refresh", "success"),
             Err(err) => {
                 tracing::error!(
                     path = %self.cache_path.display(),
                     error = %err,
                     "Failed to refresh cloud requirements cache from remote"
                 );
-                if let Some(metrics) = codex_otel::metrics::global() {
-                    let _ = metrics.counter(
-                        "codex.cloud_requirements.load_failure",
-                        1,
-                        &[("trigger", "refresh")],
-                    );
-                }
-                emit_load_metric("refresh", "failure");
+                emit_load_metric("refresh", "error");
             }
         }
         true
@@ -686,19 +697,6 @@ fn parse_cloud_requirements(
     }
 }
 
-fn parse_http_status_code(message: &str) -> Option<u16> {
-    let marker = "failed: ";
-    let start = message.find(marker)? + marker.len();
-    let digits: String = message[start..]
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect();
-    if digits.len() != 3 {
-        return None;
-    }
-    digits.parse::<u16>().ok()
-}
-
 fn emit_fetch_attempt_metric(
     trigger: &str,
     attempt: usize,
@@ -721,6 +719,7 @@ fn emit_fetch_attempt_metric(
 fn emit_fetch_final_metric(
     trigger: &str,
     outcome: &str,
+    reason: &str,
     attempt_count: usize,
     status_code: Option<u16>,
 ) {
@@ -731,6 +730,7 @@ fn emit_fetch_final_metric(
         vec![
             ("trigger", trigger.to_string()),
             ("outcome", outcome.to_string()),
+            ("reason", reason.to_string()),
             ("attempt_count", attempt_count_tag),
             ("status_code", status_code_tag),
         ],
@@ -740,7 +740,10 @@ fn emit_fetch_final_metric(
 fn emit_load_metric(trigger: &str, outcome: &str) {
     emit_metric(
         CLOUD_REQUIREMENTS_LOAD_METRIC,
-        vec![("trigger", trigger.to_string()), ("outcome", outcome.to_string())],
+        vec![
+            ("trigger", trigger.to_string()),
+            ("outcome", outcome.to_string()),
+        ],
     );
 }
 
@@ -919,10 +922,8 @@ mod tests {
         contents.and_then(|contents| parse_cloud_requirements(contents).ok().flatten())
     }
 
-    fn request_error() -> FetchCloudRequirementsError {
-        FetchCloudRequirementsError::Retryable(FetchCloudRequirementsStatus::Request {
-            status_code: None,
-        })
+    fn request_error() -> FetchAttemptError {
+        FetchAttemptError::Retryable(RetryableFailureKind::Request { status_code: None })
     }
 
     struct StaticFetcher {
@@ -934,7 +935,7 @@ mod tests {
         async fn fetch_requirements(
             &self,
             _auth: &CodexAuth,
-        ) -> Result<Option<String>, FetchCloudRequirementsError> {
+        ) -> Result<Option<String>, FetchAttemptError> {
             Ok(self.contents.clone())
         }
     }
@@ -946,20 +947,19 @@ mod tests {
         async fn fetch_requirements(
             &self,
             _auth: &CodexAuth,
-        ) -> Result<Option<String>, FetchCloudRequirementsError> {
+        ) -> Result<Option<String>, FetchAttemptError> {
             pending::<()>().await;
             Ok(None)
         }
     }
 
     struct SequenceFetcher {
-        responses:
-            tokio::sync::Mutex<VecDeque<Result<Option<String>, FetchCloudRequirementsError>>>,
+        responses: tokio::sync::Mutex<VecDeque<Result<Option<String>, FetchAttemptError>>>,
         request_count: AtomicUsize,
     }
 
     impl SequenceFetcher {
-        fn new(responses: Vec<Result<Option<String>, FetchCloudRequirementsError>>) -> Self {
+        fn new(responses: Vec<Result<Option<String>, FetchAttemptError>>) -> Self {
             Self {
                 responses: tokio::sync::Mutex::new(VecDeque::from(responses)),
                 request_count: AtomicUsize::new(0),
@@ -972,7 +972,7 @@ mod tests {
         async fn fetch_requirements(
             &self,
             _auth: &CodexAuth,
-        ) -> Result<Option<String>, FetchCloudRequirementsError> {
+        ) -> Result<Option<String>, FetchAttemptError> {
             self.request_count.fetch_add(1, Ordering::SeqCst);
             let mut responses = self.responses.lock().await;
             responses.pop_front().unwrap_or(Ok(None))
@@ -990,7 +990,7 @@ mod tests {
         async fn fetch_requirements(
             &self,
             auth: &CodexAuth,
-        ) -> Result<Option<String>, FetchCloudRequirementsError> {
+        ) -> Result<Option<String>, FetchAttemptError> {
             self.request_count.fetch_add(1, Ordering::SeqCst);
             if matches!(
                 auth.get_token().as_deref(),
@@ -998,9 +998,10 @@ mod tests {
             ) {
                 Ok(Some(self.contents.clone()))
             } else {
-                Err(FetchCloudRequirementsError::Unauthorized(
-                    CloudRequirementsLoadError::new("GET /config/requirements failed: 401"),
-                ))
+                Err(FetchAttemptError::Unauthorized {
+                    status_code: Some(401),
+                    error: CloudRequirementsLoadError::new("GET /config/requirements failed: 401"),
+                })
             }
         }
     }
@@ -1015,11 +1016,12 @@ mod tests {
         async fn fetch_requirements(
             &self,
             _auth: &CodexAuth,
-        ) -> Result<Option<String>, FetchCloudRequirementsError> {
+        ) -> Result<Option<String>, FetchAttemptError> {
             self.request_count.fetch_add(1, Ordering::SeqCst);
-            Err(FetchCloudRequirementsError::Unauthorized(
-                CloudRequirementsLoadError::new(self.message.clone()),
-            ))
+            Err(FetchAttemptError::Unauthorized {
+                status_code: Some(401),
+                error: CloudRequirementsLoadError::new(self.message.clone()),
+            })
         }
     }
 
