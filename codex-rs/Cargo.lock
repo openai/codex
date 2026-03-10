@@ -2055,9 +2055,12 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "codex-config",
  "codex-protocol",
  "futures",
  "pretty_assertions",
+ "regex",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "tempfile",

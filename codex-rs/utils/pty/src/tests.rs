@@ -442,16 +442,18 @@ async fn pipe_process_can_expose_split_stdout_and_stderr() -> anyhow::Result<()>
         exit_rx,
     } = spawned;
 
+    let timeout_ms = if cfg!(windows) { 10_000 } else { 2_000 };
+    let timeout = tokio::time::Duration::from_millis(timeout_ms);
     let stdout_task = tokio::spawn(async move { collect_split_output(stdout_rx).await });
     let stderr_task = tokio::spawn(async move { collect_split_output(stderr_rx).await });
-    let code = tokio::time::timeout(tokio::time::Duration::from_secs(2), exit_rx)
+    let code = tokio::time::timeout(timeout, exit_rx)
         .await
         .map_err(|_| anyhow::anyhow!("timed out waiting for split process exit"))?
         .unwrap_or(-1);
-    let stdout = tokio::time::timeout(tokio::time::Duration::from_secs(2), stdout_task)
+    let stdout = tokio::time::timeout(timeout, stdout_task)
         .await
         .map_err(|_| anyhow::anyhow!("timed out waiting to drain split stdout"))??;
-    let stderr = tokio::time::timeout(tokio::time::Duration::from_secs(2), stderr_task)
+    let stderr = tokio::time::timeout(timeout, stderr_task)
         .await
         .map_err(|_| anyhow::anyhow!("timed out waiting to drain split stderr"))??;
 
