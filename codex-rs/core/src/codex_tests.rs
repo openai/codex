@@ -89,8 +89,10 @@ use std::time::Duration as StdDuration;
 #[path = "codex_tests_guardian.rs"]
 mod guardian_tests;
 
+use codex_protocol::models::function_call_output_content_items_to_text;
+
 fn expect_text_tool_output(output: &FunctionToolOutput) -> String {
-    output.body.to_text().unwrap_or_default()
+    function_call_output_content_items_to_text(&output.body).unwrap_or_default()
 }
 
 struct InstructionsTestCase {

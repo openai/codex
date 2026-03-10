@@ -1026,7 +1026,11 @@ mod tests {
     }
 
     fn expect_text_output(output: FunctionToolOutput) -> (String, Option<bool>) {
-        (output.body.to_text().unwrap_or_default(), output.success)
+        (
+            codex_protocol::models::function_call_output_content_items_to_text(&output.body)
+                .unwrap_or_default(),
+            output.success,
+        )
     }
 
     #[tokio::test]

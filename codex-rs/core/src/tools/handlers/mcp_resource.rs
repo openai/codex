@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::function_call_output_content_items_to_text;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::PaginatedRequestParams;
@@ -299,7 +300,8 @@ async fn handle_list_resources(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let content = output.body.to_text().unwrap_or_default();
+                let content =
+                    function_call_output_content_items_to_text(&output.body).unwrap_or_default();
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,
@@ -404,7 +406,8 @@ async fn handle_list_resource_templates(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let content = output.body.to_text().unwrap_or_default();
+                let content =
+                    function_call_output_content_items_to_text(&output.body).unwrap_or_default();
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,
@@ -494,7 +497,8 @@ async fn handle_read_resource(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let content = output.body.to_text().unwrap_or_default();
+                let content =
+                    function_call_output_content_items_to_text(&output.body).unwrap_or_default();
                 let duration = start.elapsed();
                 emit_tool_call_end(
                     &session,

@@ -16,6 +16,7 @@ use codex_execpolicy::Evaluation;
 use codex_execpolicy::RuleMatch;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -34,7 +35,7 @@ use std::sync::Arc;
 use tempfile::tempdir;
 
 fn expect_text_output(output: &FunctionToolOutput) -> String {
-    output.body.to_text().unwrap_or_default()
+    function_call_output_content_items_to_text(&output.body).unwrap_or_default()
 }
 
 #[tokio::test]

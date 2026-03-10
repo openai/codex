@@ -10,6 +10,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ShellToolCallParams;
+use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_utils_string::take_bytes_at_char_boundary;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -93,16 +94,14 @@ impl ToolOutput for McpToolOutput {
 }
 
 pub struct FunctionToolOutput {
-    pub body: FunctionCallOutputBody,
+    pub body: Vec<FunctionCallOutputContentItem>,
     pub success: Option<bool>,
 }
 
 impl FunctionToolOutput {
     pub fn from_text(text: String, success: Option<bool>) -> Self {
         Self {
-            body: FunctionCallOutputBody::ContentItems(vec![
-                FunctionCallOutputContentItem::InputText { text },
-            ]),
+            body: vec![FunctionCallOutputContentItem::InputText { text }],
             success,
         }
     }
@@ -112,7 +111,7 @@ impl FunctionToolOutput {
         success: Option<bool>,
     ) -> Self {
         Self {
-            body: FunctionCallOutputBody::ContentItems(content),
+            body: content,
             success,
         }
     }
@@ -120,7 +119,9 @@ impl FunctionToolOutput {
 
 impl ToolOutput for FunctionToolOutput {
     fn log_preview(&self) -> String {
-        telemetry_preview(&self.body.to_text().unwrap_or_default())
+        telemetry_preview(
+            &function_call_output_content_items_to_text(&self.body).unwrap_or_default(),
+        )
     }
 
     fn success_for_logging(&self) -> bool {
@@ -136,9 +137,16 @@ impl ToolOutput for FunctionToolOutput {
 fn function_tool_response(
     call_id: &str,
     payload: &ToolPayload,
-    body: FunctionCallOutputBody,
+    body: Vec<FunctionCallOutputContentItem>,
     success: Option<bool>,
 ) -> ResponseInputItem {
+    let body = match body.as_slice() {
+        [FunctionCallOutputContentItem::InputText { text }] => {
+            FunctionCallOutputBody::Text(text.clone())
+        }
+        _ => FunctionCallOutputBody::ContentItems(body),
+    };
+
     if matches!(payload, ToolPayload::Custom { .. }) {
         return ResponseInputItem::CustomToolCallOutput {
             call_id: call_id.to_string(),
@@ -208,10 +216,8 @@ mod tests {
         match response {
             ResponseInputItem::CustomToolCallOutput { call_id, output } => {
                 assert_eq!(call_id, "call-42");
-                let expected = vec![FunctionCallOutputContentItem::InputText {
-                    text: "patched".to_string(),
-                }];
-                assert_eq!(output.content_items(), Some(expected.as_slice()));
+                assert_eq!(output.content_items(), None);
+                assert_eq!(output.body.to_text().as_deref(), Some("patched"));
                 assert_eq!(output.success, Some(true));
             }
             other => panic!("expected CustomToolCallOutput, got {other:?}"),
@@ -229,10 +235,8 @@ mod tests {
         match response {
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 assert_eq!(call_id, "fn-1");
-                let expected = vec![FunctionCallOutputContentItem::InputText {
-                    text: "ok".to_string(),
-                }];
-                assert_eq!(output.content_items(), Some(expected.as_slice()));
+                assert_eq!(output.content_items(), None);
+                assert_eq!(output.body.to_text().as_deref(), Some("ok"));
                 assert_eq!(output.success, Some(true));
             }
             other => panic!("expected FunctionCallOutput, got {other:?}"),
@@ -294,6 +298,10 @@ mod tests {
         );
 
         assert_eq!(output.log_preview(), "preview");
+        assert_eq!(
+            function_call_output_content_items_to_text(&output.body),
+            Some("preview".to_string())
+        );
     }
 
     #[test]
