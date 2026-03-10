@@ -19,6 +19,7 @@ use std::path::Path;
 use std::process::Stdio;
 use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
+use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio::process::Command;
 use tokio::time::Duration;
@@ -40,8 +41,7 @@ async fn websocket_transport_routes_per_connection_handshake_and_responses() -> 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
 
-    let bind_addr = reserve_local_addr()?;
-    let mut process = spawn_websocket_server(codex_home.path(), bind_addr).await?;
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
 
     let mut ws1 = connect_websocket(bind_addr).await?;
     let mut ws2 = connect_websocket(bind_addr).await?;
@@ -86,8 +86,7 @@ async fn websocket_transport_serves_health_endpoints_on_same_listener() -> Resul
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
 
-    let bind_addr = reserve_local_addr()?;
-    let mut process = spawn_websocket_server(codex_home.path(), bind_addr).await?;
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
     let client = reqwest::Client::new();
 
     let readyz = http_get(&client, bind_addr, "/readyz").await?;
@@ -108,15 +107,12 @@ async fn websocket_transport_serves_health_endpoints_on_same_listener() -> Resul
     Ok(())
 }
 
-pub(super) async fn spawn_websocket_server(
-    codex_home: &Path,
-    bind_addr: SocketAddr,
-) -> Result<Child> {
+pub(super) async fn spawn_websocket_server(codex_home: &Path) -> Result<(Child, SocketAddr)> {
     let program = codex_utils_cargo_bin::cargo_bin("codex-app-server")
         .context("should find app-server binary")?;
     let mut cmd = Command::new(program);
     cmd.arg("--listen")
-        .arg(format!("ws://{bind_addr}"))
+        .arg("ws://127.0.0.1:0")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -127,23 +123,57 @@ pub(super) async fn spawn_websocket_server(
         .spawn()
         .context("failed to spawn websocket app-server process")?;
 
-    if let Some(stderr) = process.stderr.take() {
-        let mut stderr_reader = tokio::io::BufReader::new(stderr).lines();
-        tokio::spawn(async move {
-            while let Ok(Some(line)) = stderr_reader.next_line().await {
-                eprintln!("[websocket app-server stderr] {line}");
+    let stderr = process
+        .stderr
+        .take()
+        .context("failed to capture websocket app-server stderr")?;
+    let mut stderr_reader = BufReader::new(stderr).lines();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let bind_addr = loop {
+        let line = timeout(
+            deadline.saturating_duration_since(Instant::now()),
+            stderr_reader.next_line(),
+        )
+        .await
+        .context("timed out waiting for websocket app-server to report bound websocket address")?
+        .context("failed to read websocket app-server stderr")?
+        .context("websocket app-server exited before reporting bound websocket address")?;
+        eprintln!("[websocket app-server stderr] {line}");
+
+        let stripped_line = {
+            let mut stripped = String::with_capacity(line.len());
+            let mut chars = line.chars().peekable();
+            while let Some(ch) = chars.next() {
+                if ch == '\u{1b}' && matches!(chars.peek(), Some(&'[')) {
+                    chars.next();
+                    for next in chars.by_ref() {
+                        if ('@'..='~').contains(&next) {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                stripped.push(ch);
             }
-        });
-    }
+            stripped
+        };
 
-    Ok(process)
-}
+        if let Some(bind_addr) = stripped_line
+            .split_whitespace()
+            .find_map(|token| token.strip_prefix("ws://"))
+            .and_then(|addr| addr.parse::<SocketAddr>().ok())
+        {
+            break bind_addr;
+        }
+    };
 
-pub(super) fn reserve_local_addr() -> Result<SocketAddr> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let addr = listener.local_addr()?;
-    drop(listener);
-    Ok(addr)
+    tokio::spawn(async move {
+        while let Ok(Some(line)) = stderr_reader.next_line().await {
+            eprintln!("[websocket app-server stderr] {line}");
+        }
+    });
+
+    Ok((process, bind_addr))
 }
 
 pub(super) async fn connect_websocket(bind_addr: SocketAddr) -> Result<WsClient> {
