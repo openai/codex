@@ -7,35 +7,21 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::openai_models::ReasoningEffort;
 use once_cell::sync::Lazy;
-use serde::Deserialize;
-use serde_json::Value;
-use tokio::sync::Mutex;
+use serde_json;
 
 use crate::AuthManager;
 use crate::CodexAuth;
 use crate::ModelProviderInfo;
 use crate::ThreadManager;
-use crate::built_in_model_providers;
-use crate::codex::make_session_and_context_for_tests_with_agent_control;
-use crate::config::AgentRoleConfig;
 use crate::config::Config;
-use crate::function_tool::FunctionCallError;
 use crate::models_manager::collaboration_mode_presets;
 use crate::models_manager::manager::ModelsManager;
 use crate::thread_manager;
-use crate::tools::context::FunctionToolOutput;
-use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolPayload;
-use crate::tools::handlers::MultiAgentHandler;
-use crate::tools::registry::ToolHandler;
-use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec;
 
 static TEST_MODEL_PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
@@ -103,127 +89,4 @@ pub fn builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
     collaboration_mode_presets::builtin_collaboration_mode_presets(
         collaboration_mode_presets::CollaborationModesConfig::default(),
     )
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct SpawnAgentTestSetup {
-    pub requested_model: Option<String>,
-    pub requested_reasoning_effort: Option<ReasoningEffort>,
-    pub inherited_model: Option<String>,
-    pub inherited_reasoning_effort: Option<ReasoningEffort>,
-    pub role_name: Option<String>,
-    pub role_model: Option<String>,
-    pub role_reasoning_effort: Option<ReasoningEffort>,
-}
-
-pub async fn spawn_agent_snapshot_for_tests(
-    setup: SpawnAgentTestSetup,
-) -> Result<crate::ThreadConfigSnapshot, String> {
-    #[derive(Deserialize)]
-    struct SpawnAgentResult {
-        agent_id: String,
-    }
-
-    let manager = ThreadManager::with_models_provider_for_tests(
-        CodexAuth::from_api_key("dummy"),
-        built_in_model_providers()["openai"].clone(),
-    );
-    let (session, mut turn) =
-        make_session_and_context_for_tests_with_agent_control(manager.agent_control()).await;
-
-    if let Some(role_name) = &setup.role_name {
-        let Some(role_model) = setup.role_model.as_ref() else {
-            panic!("role_model should be set when role_name is set");
-        };
-        let Some(role_reasoning_effort) = setup.role_reasoning_effort else {
-            panic!("role_reasoning_effort should be set when role_name is set");
-        };
-        tokio::fs::create_dir_all(&turn.config.codex_home)
-            .await
-            .unwrap_or_else(|err| panic!("codex home should be created: {err}"));
-        let role_path = turn.config.codex_home.join(format!("{role_name}.toml"));
-        tokio::fs::write(
-            &role_path,
-            format!(
-                "model = \"{role_model}\"\nmodel_reasoning_effort = \"{role_reasoning_effort}\"\n"
-            ),
-        )
-        .await
-        .unwrap_or_else(|err| panic!("role config should be written: {err}"));
-
-        let mut config = (*turn.config).clone();
-        config.agent_roles.insert(
-            role_name.clone(),
-            AgentRoleConfig {
-                description: None,
-                config_file: Some(role_path),
-                nickname_candidates: None,
-            },
-        );
-        turn.config = Arc::new(config);
-    }
-
-    if let Some(inherited_model) = setup.inherited_model.as_ref() {
-        let mut config = (*turn.config).clone();
-        config.model = Some(inherited_model.clone());
-        if let Some(inherited_reasoning_effort) = setup.inherited_reasoning_effort {
-            config.model_reasoning_effort = Some(inherited_reasoning_effort);
-            turn.reasoning_effort = Some(inherited_reasoning_effort);
-        }
-        turn.model_info = session
-            .services
-            .models_manager
-            .get_model_info(inherited_model, &config)
-            .await;
-        turn.config = Arc::new(config);
-    }
-
-    let mut arguments = serde_json::Map::from_iter([(
-        "message".to_string(),
-        Value::String("inspect this repo".to_string()),
-    )]);
-    if let Some(role_name) = setup.role_name {
-        arguments.insert("agent_type".to_string(), Value::String(role_name));
-    }
-    if let Some(requested_model) = setup.requested_model {
-        arguments.insert("model".to_string(), Value::String(requested_model));
-    }
-    if let Some(requested_reasoning_effort) = setup.requested_reasoning_effort {
-        arguments.insert(
-            "reasoning_effort".to_string(),
-            serde_json::to_value(requested_reasoning_effort)
-                .unwrap_or_else(|err| panic!("reasoning effort should serialize: {err}")),
-        );
-    }
-
-    let output = MultiAgentHandler
-        .handle(ToolInvocation {
-            session,
-            turn: Arc::new(turn),
-            tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
-            call_id: "call-1".to_string(),
-            tool_name: "spawn_agent".to_string(),
-            payload: ToolPayload::Function {
-                arguments: Value::Object(arguments).to_string(),
-            },
-        })
-        .await
-        .map_err(|err| match err {
-            FunctionCallError::RespondToModel(message) => message,
-            _ => err.to_string(),
-        })?;
-
-    let FunctionToolOutput { body, .. } = output;
-    let output_text = codex_protocol::models::function_call_output_content_items_to_text(&body)
-        .unwrap_or_default();
-    let result: SpawnAgentResult = serde_json::from_str(&output_text)
-        .unwrap_or_else(|err| panic!("spawn_agent result should be json: {err}"));
-    let agent_id = ThreadId::from_string(&result.agent_id)
-        .unwrap_or_else(|err| panic!("agent_id should be valid: {err}"));
-
-    let thread = manager
-        .get_thread(agent_id)
-        .await
-        .unwrap_or_else(|err| panic!("spawned agent thread should exist: {err}"));
-    Ok(thread.config_snapshot().await)
 }

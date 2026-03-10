@@ -10,6 +10,7 @@ use crate::config_loader::Sourced;
 use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
+use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;

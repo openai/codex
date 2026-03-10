@@ -23,14 +23,11 @@ use crate::compact::InitialContextInjection;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
-use crate::config::ConfigBuilder;
-use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::FEATURES;
 use crate::features::Feature;
 use crate::features::maybe_push_unstable_features_warning;
-use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -157,6 +154,7 @@ use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
+use crate::config::ManagedFeatures;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
@@ -1068,102 +1066,6 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
-}
-
-pub(crate) async fn make_session_and_context_for_tests_with_agent_control(
-    agent_control: AgentControl,
-) -> (Arc<Session>, TurnContext) {
-    let (tx_event, _rx_event) = async_channel::unbounded();
-    let codex_home = tempfile::tempdir().expect("create temp dir");
-    let config = Arc::new(
-        ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .build()
-            .await
-            .expect("load default test config"),
-    );
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    let models_manager = Arc::new(ModelsManager::new(
-        config.codex_home.clone(),
-        auth_manager.clone(),
-        None,
-        CollaborationModesConfig::default(),
-    ));
-    let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
-    let model_info = ModelsManager::construct_model_info_offline_for_tests(model.as_str(), &config);
-    let session_configuration = SessionConfiguration::from_config_for_tests(
-        Arc::clone(&config),
-        CollaborationMode {
-            mode: ModeKind::Default,
-            settings: Settings {
-                model,
-                reasoning_effort: config.model_reasoning_effort,
-                developer_instructions: None,
-            },
-        },
-        &model_info,
-    );
-    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
-    let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
-        config.codex_home.clone(),
-        Arc::clone(&plugins_manager),
-        config.bundled_skills_enabled(),
-    ));
-    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
-    let session = Session::new(
-        session_configuration.clone(),
-        Arc::clone(&config),
-        auth_manager.clone(),
-        Arc::clone(&models_manager),
-        ExecPolicyManager::default(),
-        tx_event,
-        agent_status_tx,
-        InitialHistory::New,
-        SessionSource::Exec,
-        Arc::clone(&skills_manager),
-        Arc::clone(&plugins_manager),
-        Arc::clone(&mcp_manager),
-        Arc::new(FileWatcher::noop()),
-        agent_control,
-    )
-    .await
-    .expect("session should be created");
-
-    let per_turn_config = Session::build_per_turn_config(&session_configuration);
-    let model_info = ModelsManager::construct_model_info_offline_for_tests(
-        session_configuration.collaboration_mode.model(),
-        &per_turn_config,
-    );
-    let js_repl = Arc::new(JsReplHandle::with_node_path(
-        config.js_repl_node_path.clone(),
-        config.js_repl_node_module_dirs.clone(),
-    ));
-    let skills_outcome = Arc::new(
-        session
-            .services
-            .skills_manager
-            .skills_for_config(&per_turn_config),
-    );
-    let turn_context = Session::make_turn_context(
-        Some(auth_manager),
-        &session.services.session_telemetry,
-        session_configuration.provider.clone(),
-        &session_configuration,
-        per_turn_config,
-        session
-            .services
-            .models_manager
-            .try_list_models()
-            .unwrap_or_default(),
-        model_info,
-        None,
-        "turn_id".to_string(),
-        js_repl,
-        skills_outcome,
-    );
-
-    (session, turn_context)
 }
 
 impl Session {

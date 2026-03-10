@@ -121,7 +121,6 @@ mod shell_serialization;
 mod shell_snapshot;
 mod skill_approval;
 mod skills;
-mod spawn_agent_model_overrides;
 mod sqlite_state;
 mod stream_error_allows_next_turn;
 mod stream_no_completed;

@@ -6,6 +6,7 @@ use crate::exec::ExecParams;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
 use crate::guardian::GUARDIAN_SUBAGENT_NAME;
+use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::protocol::AskForApproval;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::FunctionToolOutput;
