@@ -14,6 +14,10 @@ use crate::tools::context::ToolPayload;
 use crate::tools::js_repl::resolve_compatible_node;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::formatted_truncate_text_content_items_with_policy;
+use crate::truncate::truncate_function_output_items_with_policy;
+use crate::unified_exec::resolve_max_tokens;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use serde::Deserialize;
 use serde::Serialize;
@@ -72,6 +76,8 @@ enum NodeToHostMessage {
     },
     Result {
         content_items: Vec<JsonValue>,
+        #[serde(default)]
+        max_output_tokens_per_exec_call: Option<usize>,
     },
 }
 
@@ -88,6 +94,7 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
     section.push_str("- Direct tool calls remain available while `code_mode` is enabled.\n");
     section.push_str("- `code_mode` uses the same Node runtime resolution as `js_repl`. If needed, point `js_repl_node_path` at the Node binary you want Codex to use.\n");
     section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to their code-mode result values.\n");
+    section.push_str("- Import `set_max_output_tokens_per_exec_call` from `@openai/code_mode` to set the token budget used to truncate the final Rust-side result of the current `code_mode` execution. The default is `10000`. This guards the overall `code_mode` output, not individual nested tool invocations. When truncation happens, the final text uses the unified-exec style `Original token count:` / `Output:` wrapper and the usual `…N tokens truncated…` marker.\n");
     section.push_str(
         "- Function tools require JSON object arguments. Freeform tools require raw strings.\n",
     );
@@ -187,8 +194,14 @@ async fn execute_node(
                 };
                 write_message(&mut stdin, &response).await?;
             }
-            NodeToHostMessage::Result { content_items } => {
-                final_content_items = Some(output_content_items_from_json_values(content_items)?);
+            NodeToHostMessage::Result {
+                content_items,
+                max_output_tokens_per_exec_call,
+            } => {
+                final_content_items = Some(truncate_code_mode_result(
+                    output_content_items_from_json_values(content_items)?,
+                    max_output_tokens_per_exec_call,
+                ));
                 break;
             }
         }
@@ -259,6 +272,32 @@ fn build_source(user_code: &str, enabled_tools: &[EnabledTool]) -> Result<String
             &enabled_tools_json,
         )
         .replace("__CODE_MODE_USER_CODE_PLACEHOLDER__", user_code))
+}
+
+fn truncate_code_mode_result(
+    items: Vec<FunctionCallOutputContentItem>,
+    max_output_tokens_per_exec_call: Option<usize>,
+) -> Vec<FunctionCallOutputContentItem> {
+    let max_output_tokens = resolve_max_tokens(max_output_tokens_per_exec_call);
+    if items
+        .iter()
+        .all(|item| matches!(item, FunctionCallOutputContentItem::InputText { .. }))
+    {
+        let (mut truncated_items, original_token_count) =
+            formatted_truncate_text_content_items_with_policy(
+                &items,
+                TruncationPolicy::Tokens(max_output_tokens),
+            );
+        if let Some(original_token_count) = original_token_count
+            && let Some(FunctionCallOutputContentItem::InputText { text }) =
+                truncated_items.first_mut()
+        {
+            *text = format!("Original token count: {original_token_count}\nOutput:\n{text}");
+        }
+        return truncated_items;
+    }
+
+    truncate_function_output_items_with_policy(&items, TruncationPolicy::Tokens(max_output_tokens))
 }
 
 async fn build_enabled_tools(exec: &ExecContext) -> Vec<EnabledTool> {
