@@ -7,16 +7,13 @@ The generated wire-model layer is currently sourced from the bundled v2 schema a
 ## Install
 
 ```bash
-cd sdk/python-runtime
-python -m pip install -e .
-
 cd sdk/python
 python -m pip install -e .
 ```
 
 Published SDK builds pin an exact `codex-cli-bin` runtime dependency. For local
-repo development, either install a staged runtime package too or pass
-`AppServerConfig(codex_bin=...)`.
+repo development, make `codex` available on `PATH` or pass
+`AppServerConfig(codex_bin=...)` to point at a local build explicitly.
 
 ## Quickstart
 
@@ -54,6 +51,10 @@ The repo no longer checks `codex` binaries into `sdk/python`.
 Published SDK builds are pinned to an exact `codex-cli-bin` package version,
 and that runtime package carries the platform-specific binary for the target
 wheel.
+
+For local repo development, the checked-in `sdk/python-runtime` package is only
+a template for staged release artifacts. Editable installs should use a local
+`codex` on `PATH` or an explicit `codex_bin` override instead.
 
 ## Maintainer workflow (refresh binaries/types)
 

@@ -34,6 +34,7 @@ Use `thread(...)` for simple continuation. Use `thread_resume(...)` when you nee
 Common causes:
 
 - published runtime package (`codex-cli-bin`) is not installed
+- local `codex` is not available on `PATH`
 - local `codex_bin` override points to a missing file
 - local auth/session is missing
 - incompatible/old app-server

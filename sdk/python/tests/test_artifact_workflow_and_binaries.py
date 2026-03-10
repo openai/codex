@@ -154,7 +154,64 @@ def test_default_runtime_is_resolved_from_installed_runtime_package(tmp_path: Pa
     fake_binary = tmp_path / ("codex.exe" if client_module.os.name == "nt" else "codex")
     fake_binary.write_text("")
     monkeypatch.setattr(client_module, "_installed_codex_path", lambda: fake_binary)
+    monkeypatch.setattr(client_module.shutil, "which", lambda _: None)
 
     config = client_module.AppServerConfig()
     assert config.codex_bin is None
     assert client_module._resolve_codex_bin(config) == fake_binary
+
+
+def test_explicit_codex_bin_override_takes_priority(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from codex_app_server import client as client_module
+
+    explicit_binary = tmp_path / ("custom-codex.exe" if client_module.os.name == "nt" else "custom-codex")
+    explicit_binary.write_text("")
+    monkeypatch.setattr(
+        client_module,
+        "_installed_codex_path",
+        lambda: (_ for _ in ()).throw(AssertionError("packaged runtime should not be used")),
+    )
+    monkeypatch.setattr(client_module.shutil, "which", lambda _: None)
+
+    config = client_module.AppServerConfig(codex_bin=str(explicit_binary))
+    assert client_module._resolve_codex_bin(config) == explicit_binary
+
+
+def test_default_runtime_falls_back_to_codex_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from codex_app_server import client as client_module
+
+    path_binary = tmp_path / ("codex.exe" if client_module.os.name == "nt" else "codex")
+    path_binary.write_text("")
+    monkeypatch.setattr(
+        client_module,
+        "_installed_codex_path",
+        lambda: (_ for _ in ()).throw(FileNotFoundError("missing packaged runtime")),
+    )
+    monkeypatch.setattr(client_module.shutil, "which", lambda _: str(path_binary))
+
+    config = client_module.AppServerConfig()
+    assert client_module._resolve_codex_bin(config) == path_binary
+
+
+def test_default_runtime_error_mentions_supported_resolution_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_app_server import client as client_module
+
+    monkeypatch.setattr(
+        client_module,
+        "_installed_codex_path",
+        lambda: (_ for _ in ()).throw(FileNotFoundError("missing packaged runtime")),
+    )
+    monkeypatch.setattr(client_module.shutil, "which", lambda _: None)
+
+    with pytest.raises(FileNotFoundError) as exc_info:
+        client_module._resolve_codex_bin(client_module.AppServerConfig())
+
+    assert str(exc_info.value) == (
+        "Unable to locate Codex. Install the published SDK build with its "
+        "codex-cli-bin dependency, make `codex` available on PATH for local "
+        "development, or set AppServerConfig.codex_bin explicitly."
+    )

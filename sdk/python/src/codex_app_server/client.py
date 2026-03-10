@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import threading
 import uuid
@@ -91,13 +92,27 @@ def _installed_codex_path() -> Path:
 
 
 def _resolve_codex_bin(config: "AppServerConfig") -> Path:
-    codex_bin = Path(config.codex_bin) if config.codex_bin is not None else _installed_codex_path()
-    if not codex_bin.exists():
-        raise FileNotFoundError(
-            f"Codex binary not found at {codex_bin}. Install {RUNTIME_PKG_NAME} or set "
-            "AppServerConfig.codex_bin explicitly."
-        )
-    return codex_bin
+    if config.codex_bin is not None:
+        codex_bin = Path(config.codex_bin)
+        if not codex_bin.exists():
+            raise FileNotFoundError(
+                f"Codex binary not found at {codex_bin}. Set AppServerConfig.codex_bin "
+                "to a valid binary path."
+            )
+        return codex_bin
+
+    try:
+        return _installed_codex_path()
+    except FileNotFoundError:
+        path_codex = shutil.which("codex")
+        if path_codex is not None:
+            return Path(path_codex)
+
+    raise FileNotFoundError(
+        "Unable to locate Codex. Install the published SDK build with its "
+        f"{RUNTIME_PKG_NAME} dependency, make `codex` available on PATH for local "
+        "development, or set AppServerConfig.codex_bin explicitly."
+    )
 
 
 @dataclass(slots=True)

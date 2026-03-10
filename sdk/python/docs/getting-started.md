@@ -7,9 +7,6 @@ This is the fastest path from install to a multi-turn thread using the minimal S
 From repo root:
 
 ```bash
-cd sdk/python-runtime
-python -m pip install -e .
-
 cd sdk/python
 python -m pip install -e .
 ```
@@ -17,7 +14,7 @@ python -m pip install -e .
 Requirements:
 
 - Python `>=3.10`
-- installed `codex-cli-bin` runtime package, or an explicit `codex_bin` override
+- local `codex` on `PATH`, or an explicit `codex_bin` override
 - Local Codex auth/session configured
 
 ## 2) Run your first turn
