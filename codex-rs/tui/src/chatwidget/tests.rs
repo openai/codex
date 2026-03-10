@@ -18,6 +18,7 @@ use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_core::CodexAuth;
+use codex_core::config::ApprovalReviewPolicy;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
@@ -8482,6 +8483,46 @@ async fn permissions_selection_can_disable_smart_approvals() {
             .iter()
             .any(|event| matches!(event, AppEvent::UpdateFeatureFlags { .. })),
         "expected permissions selection to leave feature flags unchanged: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn permissions_selection_sends_approval_review_policy_in_override_turn_context() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.notices.hide_full_access_warning = Some(true);
+    chat.set_feature_enabled(Feature::GuardianApproval, true);
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let op = std::iter::from_fn(|| op_rx.try_recv().ok())
+        .find_map(|event| match event {
+            Op::OverrideTurnContext { .. } => Some(event),
+            _ => None,
+        })
+        .expect("expected OverrideTurnContext op");
+
+    assert_eq!(
+        op,
+        Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: Some(AskForApproval::OnRequest),
+            approval_review_policy: Some(ApprovalReviewPolicy::AutoOnly),
+            sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        }
     );
 }
 

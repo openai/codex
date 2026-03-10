@@ -5,6 +5,7 @@
 
 use crate::config_loader::RequirementSource;
 pub use codex_protocol::config_types::AltScreenMode;
+pub use codex_protocol::config_types::ApprovalReviewPolicy;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::ServiceTier;
@@ -35,24 +36,6 @@ pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
 pub enum WindowsSandboxModeToml {
     Elevated,
     Unelevated,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum ApprovalReviewPolicy {
-    #[default]
-    ManualOnly,
-    AutoOnly,
-}
-
-impl fmt::Display for ApprovalReviewPolicy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let value = match self {
-            Self::ManualOnly => "manual-only",
-            Self::AutoOnly => "auto-only",
-        };
-        write!(f, "{value}")
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]

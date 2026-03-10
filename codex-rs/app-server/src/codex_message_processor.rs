@@ -5868,6 +5868,7 @@ impl CodexMessageProcessor {
 
         let has_any_overrides = params.cwd.is_some()
             || params.approval_policy.is_some()
+            || params.approval_review_policy.is_some()
             || params.sandbox_policy.is_some()
             || params.model.is_some()
             || params.service_tier.is_some()
@@ -5885,6 +5886,9 @@ impl CodexMessageProcessor {
                     Op::OverrideTurnContext {
                         cwd: params.cwd,
                         approval_policy: params.approval_policy.map(AskForApproval::to_core),
+                        approval_review_policy: params
+                            .approval_review_policy
+                            .map(ApprovalReviewPolicy::to_core),
                         sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
                         windows_sandbox_level: None,
                         model: params.model,

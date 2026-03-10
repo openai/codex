@@ -71,6 +71,17 @@ pub enum SandboxMode {
 )]
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case")]
+pub enum ApprovalReviewPolicy {
+    #[default]
+    ManualOnly,
+    AutoOnly,
+}
+
+#[derive(
+    Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, JsonSchema, TS,
+)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
 pub enum WindowsSandboxLevel {
     #[default]
     Disabled,

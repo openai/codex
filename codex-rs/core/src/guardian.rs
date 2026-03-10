@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_protocol::approvals::NetworkApprovalProtocol;
+use codex_protocol::config_types::ApprovalReviewPolicy;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
@@ -94,6 +95,7 @@ fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
 /// guardian reviewer instead of surfacing them to the user.
 pub(crate) fn routes_approval_to_guardian(turn: &TurnContext) -> bool {
     turn.approval_policy.value() == AskForApproval::OnRequest
+        && turn.config.approval_review_policy == ApprovalReviewPolicy::AutoOnly
         && turn.features.enabled(Feature::GuardianApproval)
 }
 

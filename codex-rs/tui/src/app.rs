@@ -1000,6 +1000,7 @@ impl App {
                     .send(AppEvent::CodexOp(Op::OverrideTurnContext {
                         cwd: None,
                         approval_policy: None,
+                        approval_review_policy: None,
                         sandbox_policy: None,
                         windows_sandbox_level: Some(windows_sandbox_level),
                         model: None,
@@ -2909,6 +2910,7 @@ impl App {
                                     Op::OverrideTurnContext {
                                         cwd: None,
                                         approval_policy: None,
+                                        approval_review_policy: None,
                                         sandbox_policy: None,
                                         windows_sandbox_level: Some(windows_sandbox_level),
                                         model: None,
@@ -2932,6 +2934,9 @@ impl App {
                                     Op::OverrideTurnContext {
                                         cwd: None,
                                         approval_policy: Some(preset.approval),
+                                        approval_review_policy: Some(
+                                            self.config.approval_review_policy,
+                                        ),
                                         sandbox_policy: Some(preset.sandbox.clone()),
                                         windows_sandbox_level: Some(windows_sandbox_level),
                                         model: None,

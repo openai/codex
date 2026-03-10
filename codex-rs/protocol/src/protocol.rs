@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
+use crate::config_types::ApprovalReviewPolicy;
 use crate::config_types::CollaborationMode;
 use crate::config_types::ModeKind;
 use crate::config_types::Personality;
@@ -283,6 +284,10 @@ pub enum Op {
         /// Updated command approval policy.
         #[serde(skip_serializing_if = "Option::is_none")]
         approval_policy: Option<AskForApproval>,
+
+        /// Updated approval review policy for future approval prompts.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        approval_review_policy: Option<ApprovalReviewPolicy>,
 
         /// Updated sandbox policy for tool calls.
         #[serde(skip_serializing_if = "Option::is_none")]
