@@ -1206,6 +1206,27 @@ fn resolve_permission_config_syntax(
     })
 }
 
+fn apply_managed_filesystem_constraints(
+    file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
+    filesystem_constraints: &crate::config_loader::FilesystemConstraints,
+) {
+    for deny_read in &filesystem_constraints.deny_read {
+        let deny_entry = codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Path {
+                path: deny_read.clone(),
+            },
+            access: codex_protocol::permissions::FileSystemAccessMode::None,
+        };
+        if !file_system_sandbox_policy
+            .entries
+            .iter()
+            .any(|existing| existing == &deny_entry)
+        {
+            file_system_sandbox_policy.entries.push(deny_entry);
+        }
+    }
+}
+
 /// Optional overrides for user configuration (e.g., from CLI flags).
 #[derive(Default, Debug, Clone)]
 pub struct ConfigOverrides {
@@ -1407,6 +1428,7 @@ impl Config {
             exec_policy: _,
             enforce_residency,
             network: network_requirements,
+            filesystem: filesystem_requirements,
         } = config_layer_stack.requirements().clone();
 
         let (user_instructions, user_instructions_path) =
@@ -1909,6 +1931,34 @@ impl Config {
             &mut constrained_approval_policy,
             &mut startup_warnings,
         )?;
+        if let Some(Sourced {
+            value: filesystem_requirements,
+            source: filesystem_requirements_source,
+        }) = filesystem_requirements.as_ref()
+            && !filesystem_requirements.deny_read.is_empty()
+        {
+            let requirement_source = filesystem_requirements_source.clone();
+            constrained_sandbox_policy
+                .value
+                .add_validator(move |policy| match policy {
+                    SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => Ok(()),
+                    SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                        Err(ConstraintError::InvalidValue {
+                            field_name: "sandbox_mode",
+                            candidate: policy.to_string(),
+                            allowed: "[read-only, workspace-write]".to_string(),
+                            requirement_source: requirement_source.clone(),
+                        })
+                    }
+                })
+                .map_err(std::io::Error::from)?;
+
+            if cfg!(target_os = "windows") {
+                startup_warnings.push(format!(
+                    "managed filesystem deny_read from {filesystem_requirements_source} is only enforced for direct file tools on Windows; shell subprocess reads are not sandboxed"
+                ));
+            }
+        }
         apply_requirement_constrained_value(
             "approvals_reviewer",
             approvals_reviewer,
@@ -1962,15 +2012,26 @@ impl Config {
             main_execve_wrapper_exe.as_ref(),
         );
         let effective_sandbox_policy = constrained_sandbox_policy.value.get().clone();
-        let effective_file_system_sandbox_policy =
+        let mut effective_file_system_sandbox_policy =
             if effective_sandbox_policy == original_sandbox_policy {
                 file_system_sandbox_policy
             } else {
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_read_denies(
                     &effective_sandbox_policy,
                     resolved_cwd.as_path(),
+                    &file_system_sandbox_policy,
                 )
             };
+        if let Some(Sourced {
+            value: filesystem_requirements,
+            ..
+        }) = filesystem_requirements.as_ref()
+        {
+            apply_managed_filesystem_constraints(
+                &mut effective_file_system_sandbox_policy,
+                filesystem_requirements,
+            );
+        }
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
             .with_additional_readable_roots(resolved_cwd.as_path(), &helper_readable_roots);
         let effective_network_sandbox_policy =

@@ -30,6 +30,7 @@ pub use config_requirements::ConfigRequirementsToml;
 pub use config_requirements::ConfigRequirementsWithSources;
 pub use config_requirements::ConstrainedWithSource;
 pub use config_requirements::FeatureRequirementsToml;
+pub use config_requirements::FilesystemConstraints;
 pub use config_requirements::McpServerIdentity;
 pub use config_requirements::McpServerRequirement;
 pub use config_requirements::NetworkConstraints;

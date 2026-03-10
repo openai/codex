@@ -2,6 +2,7 @@ use crate::codex::TurnContext;
 use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
 use crate::shell::Shell;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use serde::Deserialize;
@@ -16,6 +17,7 @@ pub(crate) struct EnvironmentContext {
     pub current_date: Option<String>,
     pub timezone: Option<String>,
     pub network: Option<NetworkContext>,
+    pub deny_read_paths: Vec<String>,
     pub subagents: Option<String>,
 }
 
@@ -32,6 +34,7 @@ impl EnvironmentContext {
         current_date: Option<String>,
         timezone: Option<String>,
         network: Option<NetworkContext>,
+        deny_read_paths: Vec<String>,
         subagents: Option<String>,
     ) -> Self {
         Self {
@@ -40,6 +43,7 @@ impl EnvironmentContext {
             current_date,
             timezone,
             network,
+            deny_read_paths,
             subagents,
         }
     }
@@ -53,6 +57,7 @@ impl EnvironmentContext {
             current_date,
             timezone,
             network,
+            deny_read_paths,
             subagents,
             shell: _,
         } = other;
@@ -60,6 +65,7 @@ impl EnvironmentContext {
             && self.current_date == *current_date
             && self.timezone == *timezone
             && self.network == *network
+            && self.deny_read_paths == *deny_read_paths
             && self.subagents == *subagents
     }
 
@@ -70,6 +76,8 @@ impl EnvironmentContext {
     ) -> Self {
         let before_network = Self::network_from_turn_context_item(before);
         let after_network = Self::network_from_turn_context(after);
+        let before_deny_read_paths = Vec::new();
+        let after_deny_read_paths = deny_read_paths(&after.file_system_sandbox_policy, &after.cwd);
         let cwd = if before.cwd.as_path() != after.cwd.as_path() {
             Some(after.cwd.to_path_buf())
         } else {
@@ -82,12 +90,18 @@ impl EnvironmentContext {
         } else {
             before_network
         };
+        let deny_read_paths = if before_deny_read_paths != after_deny_read_paths {
+            after_deny_read_paths
+        } else {
+            before_deny_read_paths
+        };
         EnvironmentContext::new(
             cwd,
             shell.clone(),
             current_date,
             timezone,
             network,
+            deny_read_paths,
             /*subagents*/ None,
         )
     }
@@ -99,6 +113,7 @@ impl EnvironmentContext {
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
             Self::network_from_turn_context(turn_context),
+            deny_read_paths(&turn_context.file_system_sandbox_policy, &turn_context.cwd),
             /*subagents*/ None,
         )
     }
@@ -110,6 +125,7 @@ impl EnvironmentContext {
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),
+            Vec::new(),
             /*subagents*/ None,
         )
     }
@@ -166,6 +182,9 @@ impl EnvironmentContext {
     /// <environment_context>
     ///   <cwd>...</cwd>
     ///   <shell>...</shell>
+    ///   <deny_read_paths>
+    ///     <path>...</path>
+    ///   </deny_read_paths>
     /// </environment_context>
     /// ```
     pub fn serialize_to_xml(self) -> String {
@@ -198,6 +217,13 @@ impl EnvironmentContext {
                 // lines.push("  <network enabled=\"false\" />".to_string());
             }
         }
+        if !self.deny_read_paths.is_empty() {
+            lines.push("  <deny_read_paths>".to_string());
+            for path in &self.deny_read_paths {
+                lines.push(format!("    <path>{path}</path>"));
+            }
+            lines.push("  </deny_read_paths>".to_string());
+        }
         if let Some(subagents) = self.subagents {
             lines.push("  <subagents>".to_string());
             lines.extend(subagents.lines().map(|line| format!("    {line}")));
@@ -211,6 +237,17 @@ impl From<EnvironmentContext> for ResponseItem {
     fn from(ec: EnvironmentContext) -> Self {
         ENVIRONMENT_CONTEXT_FRAGMENT.into_message(ec.serialize_to_xml())
     }
+}
+
+fn deny_read_paths(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &std::path::Path,
+) -> Vec<String> {
+    file_system_sandbox_policy
+        .get_unreadable_roots_with_cwd(cwd)
+        .into_iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect()
 }
 
 #[cfg(test)]

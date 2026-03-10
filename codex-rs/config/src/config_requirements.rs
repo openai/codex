@@ -88,6 +88,8 @@ pub struct ConfigRequirements {
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
     /// Managed network constraints derived from requirements.
     pub network: Option<Sourced<NetworkConstraints>>,
+    /// Managed filesystem constraints derived from requirements.
+    pub filesystem: Option<Sourced<FilesystemConstraints>>,
 }
 
 impl Default for ConfigRequirements {
@@ -117,6 +119,7 @@ impl Default for ConfigRequirements {
                 /*source*/ None,
             ),
             network: None,
+            filesystem: None,
         }
     }
 }
@@ -412,6 +415,31 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
     }
 }
 
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct FilesystemRequirementsToml {
+    pub deny_read: Option<Vec<AbsolutePathBuf>>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct PermissionsRequirementsToml {
+    pub filesystem: Option<FilesystemRequirementsToml>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilesystemConstraints {
+    pub deny_read: Vec<AbsolutePathBuf>,
+}
+
+impl From<PermissionsRequirementsToml> for FilesystemConstraints {
+    fn from(value: PermissionsRequirementsToml) -> Self {
+        let deny_read = value
+            .filesystem
+            .and_then(|filesystem| filesystem.deny_read)
+            .unwrap_or_default();
+        Self { deny_read }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum WebSearchModeRequirement {
@@ -514,6 +542,7 @@ pub struct ConfigRequirementsToml {
     pub enforce_residency: Option<ResidencyRequirement>,
     #[serde(rename = "experimental_network")]
     pub network: Option<NetworkRequirementsToml>,
+    pub permissions: Option<PermissionsRequirementsToml>,
     pub guardian_policy_config: Option<String>,
 }
 
@@ -551,6 +580,7 @@ pub struct ConfigRequirementsWithSources {
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
     pub network: Option<Sourced<NetworkRequirementsToml>>,
+    pub permissions: Option<Sourced<PermissionsRequirementsToml>>,
     pub guardian_policy_config: Option<Sourced<String>>,
 }
 
@@ -583,6 +613,7 @@ impl ConfigRequirementsWithSources {
             rules: _,
             enforce_residency: _,
             network: _,
+            permissions: _,
             guardian_policy_config: _,
         } = &other;
 
@@ -608,6 +639,7 @@ impl ConfigRequirementsWithSources {
                 rules,
                 enforce_residency,
                 network,
+                permissions,
                 guardian_policy_config,
             }
         );
@@ -633,6 +665,7 @@ impl ConfigRequirementsWithSources {
             rules,
             enforce_residency,
             network,
+            permissions,
             guardian_policy_config,
         } = self;
         ConfigRequirementsToml {
@@ -646,6 +679,7 @@ impl ConfigRequirementsWithSources {
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
             network: network.map(|sourced| sourced.value),
+            permissions: permissions.map(|sourced| sourced.value),
             guardian_policy_config: guardian_policy_config.map(|sourced| sourced.value),
         }
     }
@@ -702,6 +736,7 @@ impl ConfigRequirementsToml {
             && self.rules.is_none()
             && self.enforce_residency.is_none()
             && self.network.is_none()
+            && self.permissions.is_none()
             && self
                 .guardian_policy_config
                 .as_deref()
@@ -724,6 +759,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             rules,
             enforce_residency,
             network,
+            permissions,
             guardian_policy_config: _guardian_policy_config,
         } = toml;
 
@@ -929,6 +965,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             let Sourced { value, source } = sourced_network;
             Sourced::new(NetworkConstraints::from(value), source)
         });
+        let filesystem = permissions.map(|sourced_permissions| {
+            let Sourced { value, source } = sourced_permissions;
+            Sourced::new(FilesystemConstraints::from(value), source)
+        });
         Ok(ConfigRequirements {
             approval_policy,
             approvals_reviewer,
@@ -939,6 +979,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             exec_policy,
             enforce_residency,
             network,
+            filesystem,
         })
     }
 }
@@ -977,6 +1018,7 @@ mod tests {
             rules,
             enforce_residency,
             network,
+            permissions,
             guardian_policy_config,
         } = toml;
         ConfigRequirementsWithSources {
@@ -996,6 +1038,7 @@ mod tests {
             enforce_residency: enforce_residency
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             network: network.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            permissions: permissions.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             guardian_policy_config: guardian_policy_config
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
@@ -1037,6 +1080,7 @@ mod tests {
             rules: None,
             enforce_residency: Some(enforce_residency),
             network: None,
+            permissions: None,
             guardian_policy_config: Some(guardian_policy_config.clone()),
         };
 
@@ -1067,6 +1111,7 @@ mod tests {
                 rules: None,
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
                 network: None,
+                permissions: None,
                 guardian_policy_config: Some(Sourced::new(guardian_policy_config, source)),
             }
         );
@@ -1103,6 +1148,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
                 guardian_policy_config: None,
             }
         );
@@ -1147,6 +1193,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
                 guardian_policy_config: None,
             }
         );
@@ -1226,6 +1273,43 @@ allowed_approvals_reviewers = ["user"]
         )?;
 
         assert!(!requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_filesystem_deny_read_requirements() -> Result<()> {
+        let deny_read_0 = if cfg!(windows) {
+            r"C:\Users\viyatb\.gitconfig"
+        } else {
+            "/home/viyatb/.gitconfig"
+        };
+        let deny_read_1 = if cfg!(windows) {
+            r"C:\Users\viyatb\.ssh"
+        } else {
+            "/home/viyatb/.ssh"
+        };
+        let toml_str = format!(
+            r#"
+            [permissions.filesystem]
+            deny_read = [{deny_read_0:?}, {deny_read_1:?}]
+        "#
+        );
+
+        let config: ConfigRequirementsToml = from_str(&toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(
+            requirements.filesystem,
+            Some(Sourced::new(
+                FilesystemConstraints {
+                    deny_read: vec![
+                        AbsolutePathBuf::from_absolute_path(deny_read_0)?,
+                        AbsolutePathBuf::from_absolute_path(deny_read_1)?,
+                    ],
+                },
+                RequirementSource::Unknown,
+            ))
+        );
         Ok(())
     }
 
