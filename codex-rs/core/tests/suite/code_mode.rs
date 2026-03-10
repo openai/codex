@@ -89,7 +89,12 @@ add_content(JSON.stringify(await exec_command({ cmd: "printf code_mode_exec_mark
         "code_mode call failed unexpectedly: {output}"
     );
     let parsed: Value = serde_json::from_str(&output)?;
-    assert_eq!(parsed.get("chunk_id").and_then(Value::as_str), None);
+    assert!(
+        parsed
+            .get("chunk_id")
+            .and_then(Value::as_str)
+            .is_some_and(|chunk_id| !chunk_id.is_empty())
+    );
     assert_eq!(
         parsed.get("output").and_then(Value::as_str),
         Some("code_mode_exec_marker"),

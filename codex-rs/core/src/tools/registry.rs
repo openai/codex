@@ -142,13 +142,6 @@ impl ToolRegistry {
     //     }
     // }
 
-    pub async fn dispatch(
-        &self,
-        invocation: ToolInvocation,
-    ) -> Result<ResponseInputItem, FunctionCallError> {
-        Ok(self.dispatch_any(invocation).await?.into_response())
-    }
-
     pub(crate) async fn dispatch_any(
         &self,
         invocation: ToolInvocation,
