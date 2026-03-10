@@ -21,7 +21,6 @@ use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
-use crate::markdown::append_markdown_with_cwd;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
@@ -376,31 +375,29 @@ impl HistoryCell for UserHistoryCell {
 pub(crate) struct ReasoningSummaryCell {
     _header: String,
     content: String,
-    cwd: Option<PathBuf>,
+    /// Session cwd used to render local file links inside the reasoning body.
+    cwd: PathBuf,
     transcript_only: bool,
 }
 
 impl ReasoningSummaryCell {
-    pub(crate) fn new(
-        header: String,
-        content: String,
-        cwd: Option<PathBuf>,
-        transcript_only: bool,
-    ) -> Self {
+    /// Create a reasoning summary cell that will render local file links relative to the session
+    /// cwd active when the summary was recorded.
+    pub(crate) fn new(header: String, content: String, cwd: &Path, transcript_only: bool) -> Self {
         Self {
             _header: header,
             content,
-            cwd,
+            cwd: cwd.to_path_buf(),
             transcript_only,
         }
     }
 
     fn lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        append_markdown_with_cwd(
+        append_markdown(
             &self.content,
             Some((width as usize).saturating_sub(2)),
-            self.cwd.as_deref(),
+            Some(self.cwd.as_path()),
             &mut lines,
         );
         let summary_style = Style::default().dim().italic();
@@ -1006,11 +1003,15 @@ pub(crate) fn padded_emoji(emoji: &str) -> String {
 #[derive(Debug)]
 struct TooltipHistoryCell {
     tip: String,
+    cwd: PathBuf,
 }
 
 impl TooltipHistoryCell {
-    fn new(tip: String) -> Self {
-        Self { tip }
+    fn new(tip: String, cwd: &Path) -> Self {
+        Self {
+            tip,
+            cwd: cwd.to_path_buf(),
+        }
     }
 }
 
@@ -1025,6 +1026,7 @@ impl HistoryCell for TooltipHistoryCell {
         append_markdown(
             &format!("**Tip:** {}", self.tip),
             Some(wrap_width),
+            Some(self.cwd.as_path()),
             &mut lines,
         );
 
@@ -1117,7 +1119,7 @@ pub(crate) fn new_session_info(
                         matches!(config.service_tier, Some(ServiceTier::Fast)),
                     )
                 })
-                .map(TooltipHistoryCell::new)
+                .map(|tip| TooltipHistoryCell::new(tip, &config.cwd))
         {
             parts.push(Box::new(tooltips));
         }
@@ -2055,8 +2057,12 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     PlanUpdateCell { explanation, plan }
 }
 
-pub(crate) fn new_proposed_plan(plan_markdown: String, cwd: Option<PathBuf>) -> ProposedPlanCell {
-    ProposedPlanCell { plan_markdown, cwd }
+/// Create a proposed-plan cell that snapshots the session cwd for later markdown rendering.
+pub(crate) fn new_proposed_plan(plan_markdown: String, cwd: &Path) -> ProposedPlanCell {
+    ProposedPlanCell {
+        plan_markdown,
+        cwd: cwd.to_path_buf(),
+    }
 }
 
 pub(crate) fn new_proposed_plan_stream(
@@ -2072,7 +2078,8 @@ pub(crate) fn new_proposed_plan_stream(
 #[derive(Debug)]
 pub(crate) struct ProposedPlanCell {
     plan_markdown: String,
-    cwd: Option<PathBuf>,
+    /// Session cwd used to keep local file-link display aligned with live streamed plan rendering.
+    cwd: PathBuf,
 }
 
 #[derive(Debug)]
@@ -2091,10 +2098,10 @@ impl HistoryCell for ProposedPlanCell {
         let plan_style = proposed_plan_style();
         let wrap_width = width.saturating_sub(4).max(1) as usize;
         let mut body: Vec<Line<'static>> = Vec::new();
-        append_markdown_with_cwd(
+        append_markdown(
             &self.plan_markdown,
             Some(wrap_width),
-            self.cwd.as_deref(),
+            Some(self.cwd.as_path()),
             &mut body,
         );
         if body.is_empty() {
@@ -2246,10 +2253,15 @@ pub(crate) fn new_image_generation_call(
     PlainHistoryCell { lines }
 }
 
+/// Create the reasoning history cell emitted at the end of a reasoning block.
+///
+/// The helper snapshots `cwd` into the returned cell so local file links render the same way they
+/// did while the turn was live, even if rendering happens after other app state has advanced.
 pub(crate) fn new_reasoning_summary_block(
     full_reasoning_buffer: String,
-    cwd: Option<PathBuf>,
+    cwd: &Path,
 ) -> Box<dyn HistoryCell> {
+    let cwd = cwd.to_path_buf();
     let full_reasoning_buffer = full_reasoning_buffer.trim();
     if let Some(open) = full_reasoning_buffer.find("**") {
         let after_open = &full_reasoning_buffer[(open + 2)..];
@@ -2260,10 +2272,12 @@ pub(crate) fn new_reasoning_summary_block(
             if after_close_idx < full_reasoning_buffer.len() {
                 let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
                 let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
+                // Preserve the session cwd so local file links render the same way in the
+                // collapsed reasoning block as they did while streaming live content.
                 return Box::new(ReasoningSummaryCell::new(
                     header_buffer,
                     summary_buffer,
-                    cwd,
+                    &cwd,
                     false,
                 ));
             }
@@ -2272,7 +2286,7 @@ pub(crate) fn new_reasoning_summary_block(
     Box::new(ReasoningSummaryCell::new(
         "".to_string(),
         full_reasoning_buffer.to_string(),
-        cwd,
+        &cwd,
         true,
     ))
 }
@@ -2486,6 +2500,12 @@ mod tests {
             .build()
             .await
             .expect("config")
+    }
+
+    fn test_cwd() -> PathBuf {
+        // These tests only need a stable absolute cwd; using temp_dir() avoids baking Unix- or
+        // Windows-specific root semantics into the fixtures.
+        std::env::temp_dir()
     }
 
     fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
@@ -4019,7 +4039,7 @@ mod tests {
     fn reasoning_summary_block() {
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
-            None,
+            &test_cwd(),
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -4035,7 +4055,7 @@ mod tests {
         let cell: Box<dyn HistoryCell> = Box::new(ReasoningSummaryCell::new(
             "High level reasoning".to_string(),
             summary.to_string(),
-            None,
+            &test_cwd(),
             false,
         ));
         let width: u16 = 24;
@@ -4076,7 +4096,8 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
-        let cell = new_reasoning_summary_block("Detailed reasoning goes here.".to_string(), None);
+        let cell =
+            new_reasoning_summary_block("Detailed reasoning goes here.".to_string(), &test_cwd());
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• Detailed reasoning goes here."]);
@@ -4089,7 +4110,7 @@ mod tests {
         config.model_supports_reasoning_summaries = Some(true);
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
-            None,
+            &test_cwd(),
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -4098,8 +4119,10 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_falls_back_when_header_is_missing() {
-        let cell =
-            new_reasoning_summary_block("**High level reasoning without closing".to_string(), None);
+        let cell = new_reasoning_summary_block(
+            "**High level reasoning without closing".to_string(),
+            &test_cwd(),
+        );
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• **High level reasoning without closing"]);
@@ -4109,7 +4132,7 @@ mod tests {
     fn reasoning_summary_block_falls_back_when_summary_is_missing() {
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**".to_string(),
-            None,
+            &test_cwd(),
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -4117,7 +4140,7 @@ mod tests {
 
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**\n\n  ".to_string(),
-            None,
+            &test_cwd(),
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -4128,7 +4151,7 @@ mod tests {
     fn reasoning_summary_block_splits_header_and_summary_when_present() {
         let cell = new_reasoning_summary_block(
             "**High level plan**\n\nWe should fix the bug next.".to_string(),
-            None,
+            &test_cwd(),
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
