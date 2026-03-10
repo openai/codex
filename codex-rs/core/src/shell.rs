@@ -90,22 +90,62 @@ impl Eq for Shell {}
 
 #[cfg(unix)]
 fn get_user_shell_path() -> Option<PathBuf> {
-    use libc::getpwuid;
-    use libc::getuid;
+    let uid = unsafe { libc::getuid() };
     use std::ffi::CStr;
+    use std::mem::MaybeUninit;
+    use std::ptr;
 
-    unsafe {
-        let uid = getuid();
-        let pw = getpwuid(uid);
+    let mut passwd = MaybeUninit::<libc::passwd>::uninit();
 
-        if !pw.is_null() {
-            let shell_path = CStr::from_ptr((*pw).pw_shell)
+    // We cannot use getpwuid here: it returns pointers into libc-managed
+    // storage, which is not safe to read concurrently on all targets (the musl
+    // static build used by the CLI can segfault when parallel callers race on
+    // that buffer). getpwuid_r keeps the passwd data in caller-owned memory.
+    let suggested_buffer_len = unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) };
+    let buffer_len = usize::try_from(suggested_buffer_len)
+        .ok()
+        .filter(|len| *len > 0)
+        .unwrap_or(1024);
+    let mut buffer = vec![0; buffer_len];
+
+    loop {
+        let mut result = ptr::null_mut();
+        let status = unsafe {
+            libc::getpwuid_r(
+                uid,
+                passwd.as_mut_ptr(),
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &mut result,
+            )
+        };
+
+        if status == 0 {
+            if result.is_null() {
+                return None;
+            }
+
+            let passwd = unsafe { passwd.assume_init_ref() };
+            if passwd.pw_shell.is_null() {
+                return None;
+            }
+
+            let shell_path = unsafe { CStr::from_ptr(passwd.pw_shell) }
                 .to_string_lossy()
                 .into_owned();
-            Some(PathBuf::from(shell_path))
-        } else {
-            None
+            return Some(PathBuf::from(shell_path));
         }
+
+        if status != libc::ERANGE {
+            return None;
+        }
+
+        // Retry with a larger buffer until libc can materialize the passwd entry.
+        let new_len = buffer.len().checked_mul(2)?;
+        if new_len > 1024 * 1024 {
+            return None;
+        }
+        buffer.resize(new_len, 0);
     }
 }
 
@@ -500,7 +540,7 @@ mod tests {
     }
 
     #[test]
-    fn finds_poweshell() {
+    fn finds_powershell() {
         if !cfg!(windows) {
             return;
         }

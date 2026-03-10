@@ -6694,6 +6694,13 @@ impl CodexMessageProcessor {
             None => None,
         };
 
+        if let Some(chatgpt_user_id) = self
+            .auth_manager
+            .auth_cached()
+            .and_then(|auth| auth.get_chatgpt_user_id())
+        {
+            tracing::info!(target: "feedback_tags", chatgpt_user_id);
+        }
         let snapshot = self.feedback.snapshot(conversation_id);
         let thread_id = snapshot.thread_id.clone();
         let sqlite_feedback_logs = if include_logs {

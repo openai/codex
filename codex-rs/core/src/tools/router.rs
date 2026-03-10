@@ -4,15 +4,16 @@ use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::sandboxing::SandboxPermissions;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::build_specs;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -145,6 +146,21 @@ impl ToolRouter {
         call: ToolCall,
         source: ToolCallSource,
     ) -> Result<ResponseInputItem, FunctionCallError> {
+        Ok(self
+            .dispatch_tool_call_with_code_mode_result(session, turn, tracker, call, source)
+            .await?
+            .into_response())
+    }
+
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn dispatch_tool_call_with_code_mode_result(
+        &self,
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        tracker: SharedTurnDiffTracker,
+        call: ToolCall,
+        source: ToolCallSource,
+    ) -> Result<AnyToolResult, FunctionCallError> {
         let ToolCall {
             tool_name,
             call_id,
@@ -161,7 +177,7 @@ impl ToolRouter {
                 "direct tool calls are disabled; use js_repl and codex.tool(...) instead"
                     .to_string(),
             );
-            return Ok(Self::failure_response(
+            return Ok(Self::failure_result(
                 failure_call_id,
                 payload_outputs_custom,
                 err,
@@ -177,10 +193,10 @@ impl ToolRouter {
             payload,
         };
 
-        match self.registry.dispatch(invocation).await {
+        match self.registry.dispatch_any(invocation).await {
             Ok(response) => Ok(response),
             Err(FunctionCallError::Fatal(message)) => Err(FunctionCallError::Fatal(message)),
-            Err(err) => Ok(Self::failure_response(
+            Err(err) => Ok(Self::failure_result(
                 failure_call_id,
                 payload_outputs_custom,
                 err,
@@ -188,27 +204,27 @@ impl ToolRouter {
         }
     }
 
-    fn failure_response(
+    fn failure_result(
         call_id: String,
         payload_outputs_custom: bool,
         err: FunctionCallError,
-    ) -> ResponseInputItem {
+    ) -> AnyToolResult {
         let message = err.to_string();
         if payload_outputs_custom {
-            ResponseInputItem::CustomToolCallOutput {
+            AnyToolResult {
                 call_id,
-                output: codex_protocol::models::FunctionCallOutputPayload {
-                    body: FunctionCallOutputBody::Text(message),
-                    success: Some(false),
+                payload: ToolPayload::Custom {
+                    input: String::new(),
                 },
+                result: Box::new(FunctionToolOutput::from_text(message, Some(false))),
             }
         } else {
-            ResponseInputItem::FunctionCallOutput {
+            AnyToolResult {
                 call_id,
-                output: codex_protocol::models::FunctionCallOutputPayload {
-                    body: FunctionCallOutputBody::Text(message),
-                    success: Some(false),
+                payload: ToolPayload::Function {
+                    arguments: "{}".to_string(),
                 },
+                result: Box::new(FunctionToolOutput::from_text(message, Some(false))),
             }
         }
     }

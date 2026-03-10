@@ -22,11 +22,18 @@ function __codexCloneContentItem(item) {
   }
 }
 
-function __codexNormalizeContentItems(value) {
+function __codexNormalizeRawContentItems(value) {
   if (Array.isArray(value)) {
-    return value.flatMap((entry) => __codexNormalizeContentItems(entry));
+    return value.flatMap((entry) => __codexNormalizeRawContentItems(entry));
   }
   return [__codexCloneContentItem(value)];
+}
+
+function __codexNormalizeContentItems(value) {
+  if (typeof value === 'string') {
+    return [{ type: 'input_text', text: value }];
+  }
+  return __codexNormalizeRawContentItems(value);
 }
 
 Object.defineProperty(globalThis, '__codexContentItems', {

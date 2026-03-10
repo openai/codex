@@ -10,7 +10,6 @@ use crate::tools::registry::ToolKind;
 use codex_protocol::models::McpToolOutput;
 
 pub struct McpHandler;
-
 #[async_trait]
 impl ToolHandler for McpHandler {
     type Output = McpToolOutput;
