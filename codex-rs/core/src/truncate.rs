@@ -265,17 +265,8 @@ fn truncate_with_byte_estimate(s: &str, policy: TruncationPolicy) -> String {
 }
 
 fn split_string(s: &str, beginning_bytes: usize, end_bytes: usize) -> (usize, &str, &str) {
-    let (removed_chars, prefix_end, suffix_start) =
-        split_string_bounds(s, beginning_bytes, end_bytes);
-    let before = &s[..prefix_end];
-    let after = &s[suffix_start..];
-
-    (removed_chars, before, after)
-}
-
-fn split_string_bounds(s: &str, beginning_bytes: usize, end_bytes: usize) -> (usize, usize, usize) {
     if s.is_empty() {
-        return (0, 0, 0);
+        return (0, "", "");
     }
 
     let len = s.len();
@@ -307,7 +298,10 @@ fn split_string_bounds(s: &str, beginning_bytes: usize, end_bytes: usize) -> (us
         suffix_start = prefix_end;
     }
 
-    (removed_chars, prefix_end, suffix_start)
+    let before = &s[..prefix_end];
+    let after = &s[suffix_start..];
+
+    (removed_chars, before, after)
 }
 
 fn format_truncation_marker(policy: TruncationPolicy, removed_count: u64) -> String {
