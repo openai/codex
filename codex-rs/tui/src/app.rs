@@ -852,6 +852,9 @@ impl App {
                 Feature::WindowsSandbox | Feature::WindowsSandboxElevated
             )
         });
+        let mut approval_policy_override = None;
+        let mut approval_review_policy_override = None;
+        let mut sandbox_policy_override = None;
         let approval_review_policy_config_scope = || {
             let effective_config = self.config.config_layer_stack.effective_config();
             let root_configured = effective_config
@@ -962,6 +965,7 @@ impl App {
                         permissions_history_label = Some("Default");
                     }
                 }
+                approval_review_policy_override = Some(self.config.approval_review_policy);
             }
             if feature == Feature::GuardianApproval && effective_enabled {
                 if let Err(err) = self
@@ -1016,8 +1020,36 @@ impl App {
                         value: "workspace-write".into(),
                     },
                 ]);
+                approval_policy_override = Some(AskForApproval::OnRequest);
+                sandbox_policy_override = Some(smart_approvals_sandbox.clone());
             }
             builder = builder.set_feature_enabled(feature_key, effective_enabled);
+        }
+
+        if approval_policy_override.is_some()
+            || approval_review_policy_override.is_some()
+            || sandbox_policy_override.is_some()
+        {
+            let op = Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: approval_policy_override,
+                approval_review_policy: approval_review_policy_override,
+                sandbox_policy: sandbox_policy_override,
+                windows_sandbox_level: None,
+                model: None,
+                effort: None,
+                summary: None,
+                service_tier: None,
+                collaboration_mode: None,
+                personality: None,
+            };
+            let replay_state_op =
+                ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
+            let submitted = self.chat_widget.submit_op(op);
+            if submitted && let Some(op) = replay_state_op.as_ref() {
+                self.note_active_thread_outbound_op(op).await;
+                self.refresh_pending_thread_approvals().await;
+            }
         }
 
         if windows_sandbox_changed {
@@ -5339,9 +5371,21 @@ mod tests {
         );
         assert_eq!(app.runtime_approval_policy_override, None);
         assert_eq!(app.runtime_sandbox_policy_override, None);
-        assert!(
-            op_rx.try_recv().is_err(),
-            "feature toggle should not patch the active session"
+        assert_eq!(
+            op_rx.try_recv(),
+            Ok(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: Some(AskForApproval::OnRequest),
+                approval_review_policy: Some(ApprovalReviewPolicy::AutoOnly),
+                sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
+                windows_sandbox_level: None,
+                model: None,
+                effort: None,
+                summary: None,
+                service_tier: None,
+                collaboration_mode: None,
+                personality: None,
+            })
         );
         let cell = match app_event_rx.try_recv() {
             Ok(AppEvent::InsertHistoryCell(cell)) => cell,
@@ -5421,9 +5465,21 @@ mod tests {
             ApprovalReviewPolicy::ManualOnly
         );
         assert_eq!(app.runtime_approval_policy_override, None);
-        assert!(
-            op_rx.try_recv().is_err(),
-            "feature toggle should not patch the active session"
+        assert_eq!(
+            op_rx.try_recv(),
+            Ok(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                approval_review_policy: Some(ApprovalReviewPolicy::ManualOnly),
+                sandbox_policy: None,
+                windows_sandbox_level: None,
+                model: None,
+                effort: None,
+                summary: None,
+                service_tier: None,
+                collaboration_mode: None,
+                personality: None,
+            })
         );
         let cell = match app_event_rx.try_recv() {
             Ok(AppEvent::InsertHistoryCell(cell)) => cell,
@@ -5487,9 +5543,21 @@ mod tests {
                 .get(),
             &SandboxPolicy::new_workspace_write_policy()
         );
-        assert!(
-            op_rx.try_recv().is_err(),
-            "feature toggle should not patch the active session"
+        assert_eq!(
+            op_rx.try_recv(),
+            Ok(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: Some(AskForApproval::OnRequest),
+                approval_review_policy: Some(ApprovalReviewPolicy::ManualOnly),
+                sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
+                windows_sandbox_level: None,
+                model: None,
+                effort: None,
+                summary: None,
+                service_tier: None,
+                collaboration_mode: None,
+                personality: None,
+            })
         );
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
@@ -5535,9 +5603,21 @@ mod tests {
             app.chat_widget.config_ref().approval_review_policy,
             ApprovalReviewPolicy::ManualOnly
         );
-        assert!(
-            op_rx.try_recv().is_err(),
-            "feature toggle should not patch the active session"
+        assert_eq!(
+            op_rx.try_recv(),
+            Ok(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                approval_review_policy: Some(ApprovalReviewPolicy::ManualOnly),
+                sandbox_policy: None,
+                windows_sandbox_level: None,
+                model: None,
+                effort: None,
+                summary: None,
+                service_tier: None,
+                collaboration_mode: None,
+                personality: None,
+            })
         );
         assert!(
             app_event_rx.try_recv().is_err(),
@@ -5581,9 +5661,21 @@ mod tests {
             app.chat_widget.config_ref().approval_review_policy,
             ApprovalReviewPolicy::ManualOnly
         );
-        assert!(
-            op_rx.try_recv().is_err(),
-            "feature toggle should not patch the active session"
+        assert_eq!(
+            op_rx.try_recv(),
+            Ok(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: Some(AskForApproval::OnRequest),
+                approval_review_policy: Some(ApprovalReviewPolicy::ManualOnly),
+                sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
+                windows_sandbox_level: None,
+                model: None,
+                effort: None,
+                summary: None,
+                service_tier: None,
+                collaboration_mode: None,
+                personality: None,
+            })
         );
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
@@ -5649,11 +5741,18 @@ mod tests {
         );
         assert!(
             op_rx.try_recv().is_err(),
-            "feature toggle should not patch the active session"
+            "rejected feature disable should not patch the active session"
         );
+        let app_events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
         assert!(
-            app_event_rx.try_recv().is_err(),
-            "rejected feature disable should not emit a permissions history update"
+            !app_events.iter().any(|event| match event {
+                AppEvent::InsertHistoryCell(cell) => cell
+                    .display_lines(120)
+                    .iter()
+                    .any(|line| line.to_string().contains("Permissions updated to")),
+                _ => false,
+            }),
+            "rejected feature disable should not emit a permissions history update: {app_events:?}"
         );
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
