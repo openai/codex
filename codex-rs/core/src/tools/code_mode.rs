@@ -401,12 +401,9 @@ fn content_items_from_response_input(
         ResponseInputItem::CustomToolCallOutput { output, .. } => {
             content_items_from_function_output(output)
         }
-        ResponseInputItem::McpToolCallOutput { result, .. } => match result {
-            Ok(result) => {
-                content_items_from_function_output(FunctionCallOutputPayload::from(&result))
-            }
-            Err(error) => vec![FunctionCallOutputContentItem::InputText { text: error }],
-        },
+        ResponseInputItem::McpToolCallOutput { output, .. } => {
+            content_items_from_function_output(output.into_function_call_output_payload())
+        }
     }
 }
 

@@ -620,29 +620,23 @@ impl JsReplManager {
                     output,
                 )
             }
-            ResponseInputItem::McpToolCallOutput { result, .. } => match result {
-                Ok(result) => {
-                    let output = FunctionCallOutputPayload::from(result);
-                    let mut summary = Self::summarize_function_output_payload(
-                        "mcp_tool_call_output",
-                        JsReplToolCallPayloadKind::McpResult,
-                        &output,
-                    );
-                    summary.payload_item_count = Some(result.content.len());
-                    summary.structured_content_present = Some(result.structured_content.is_some());
-                    summary.result_is_error = Some(result.is_error.unwrap_or(false));
-                    summary
-                }
-                Err(error) => {
-                    let mut summary = Self::summarize_text_payload(
-                        Some("mcp_tool_call_output"),
-                        JsReplToolCallPayloadKind::McpErrorResult,
-                        error,
-                    );
-                    summary.result_is_error = Some(true);
-                    summary
-                }
-            },
+            ResponseInputItem::McpToolCallOutput { output, .. } => {
+                let function_output = output.as_function_call_output_payload();
+                let payload_kind = if output.success {
+                    JsReplToolCallPayloadKind::McpResult
+                } else {
+                    JsReplToolCallPayloadKind::McpErrorResult
+                };
+                let mut summary = Self::summarize_function_output_payload(
+                    "mcp_tool_call_output",
+                    payload_kind,
+                    &function_output,
+                );
+                summary.payload_item_count = Some(output.content.len());
+                summary.structured_content_present = Some(output.structured_content.is_some());
+                summary.result_is_error = Some(!output.success);
+                summary
+            }
         }
     }
 
