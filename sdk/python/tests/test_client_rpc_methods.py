@@ -74,7 +74,7 @@ def test_notifications_are_typed_with_canonical_v2_methods() -> None:
 def test_unknown_notifications_fall_back_to_unknown_payloads() -> None:
     client = AppServerClient()
     event = client._coerce_notification(
-        "codex/event/turn_aborted",
+        "unknown/notification",
         {
             "id": "evt-1",
             "conversationId": "thread-1",
@@ -82,7 +82,7 @@ def test_unknown_notifications_fall_back_to_unknown_payloads() -> None:
         },
     )
 
-    assert event.method == "codex/event/turn_aborted"
+    assert event.method == "unknown/notification"
     assert isinstance(event.payload, UnknownNotification)
     assert event.payload.params["msg"] == {"type": "turn_aborted"}
 
