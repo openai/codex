@@ -19,6 +19,8 @@ from .v2_all import ErrorNotification
 from .v2_all import FileChangeOutputDeltaNotification
 from .v2_all import FuzzyFileSearchSessionCompletedNotification
 from .v2_all import FuzzyFileSearchSessionUpdatedNotification
+from .v2_all import HookCompletedNotification
+from .v2_all import HookStartedNotification
 from .v2_all import ItemCompletedNotification
 from .v2_all import ItemStartedNotification
 from .v2_all import McpServerOauthLoginCompletedNotification
@@ -61,6 +63,8 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "error": ErrorNotification,
     "fuzzyFileSearch/sessionCompleted": FuzzyFileSearchSessionCompletedNotification,
     "fuzzyFileSearch/sessionUpdated": FuzzyFileSearchSessionUpdatedNotification,
+    "hook/completed": HookCompletedNotification,
+    "hook/started": HookStartedNotification,
     "item/agentMessage/delta": AgentMessageDeltaNotification,
     "item/commandExecution/outputDelta": CommandExecutionOutputDeltaNotification,
     "item/commandExecution/terminalInteraction": TerminalInteractionNotification,

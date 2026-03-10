@@ -241,6 +241,7 @@ class Reject(BaseModel):
         populate_by_name=True,
     )
     mcp_elicitations: bool
+    request_permissions: bool | None = False
     rules: bool
     sandbox_approval: bool
 
@@ -390,110 +391,114 @@ class Method20(Enum):
 
 
 class Method21(Enum):
-    turn_start = "turn/start"
+    plugin_uninstall = "plugin/uninstall"
 
 
 class Method22(Enum):
-    turn_steer = "turn/steer"
+    turn_start = "turn/start"
 
 
 class Method23(Enum):
-    turn_interrupt = "turn/interrupt"
+    turn_steer = "turn/steer"
 
 
 class Method24(Enum):
-    review_start = "review/start"
+    turn_interrupt = "turn/interrupt"
 
 
 class Method25(Enum):
-    model_list = "model/list"
+    review_start = "review/start"
 
 
 class Method26(Enum):
-    experimental_feature_list = "experimentalFeature/list"
+    model_list = "model/list"
 
 
 class Method27(Enum):
-    mcp_server_oauth_login = "mcpServer/oauth/login"
+    experimental_feature_list = "experimentalFeature/list"
 
 
 class Method28(Enum):
-    config_mcp_server_reload = "config/mcpServer/reload"
+    mcp_server_oauth_login = "mcpServer/oauth/login"
 
 
 class Method29(Enum):
-    mcp_server_status_list = "mcpServerStatus/list"
+    config_mcp_server_reload = "config/mcpServer/reload"
 
 
 class Method30(Enum):
-    windows_sandbox_setup_start = "windowsSandbox/setupStart"
+    mcp_server_status_list = "mcpServerStatus/list"
 
 
 class Method31(Enum):
-    account_login_start = "account/login/start"
+    windows_sandbox_setup_start = "windowsSandbox/setupStart"
 
 
 class Method32(Enum):
-    account_login_cancel = "account/login/cancel"
+    account_login_start = "account/login/start"
 
 
 class Method33(Enum):
-    account_logout = "account/logout"
+    account_login_cancel = "account/login/cancel"
 
 
 class Method34(Enum):
-    account_rate_limits_read = "account/rateLimits/read"
+    account_logout = "account/logout"
 
 
 class Method35(Enum):
-    feedback_upload = "feedback/upload"
+    account_rate_limits_read = "account/rateLimits/read"
 
 
 class Method36(Enum):
-    command_exec = "command/exec"
+    feedback_upload = "feedback/upload"
 
 
 class Method37(Enum):
-    command_exec_write = "command/exec/write"
+    command_exec = "command/exec"
 
 
 class Method38(Enum):
-    command_exec_terminate = "command/exec/terminate"
+    command_exec_write = "command/exec/write"
 
 
 class Method39(Enum):
-    command_exec_resize = "command/exec/resize"
+    command_exec_terminate = "command/exec/terminate"
 
 
 class Method40(Enum):
-    config_read = "config/read"
+    command_exec_resize = "command/exec/resize"
 
 
 class Method41(Enum):
-    external_agent_config_detect = "externalAgentConfig/detect"
+    config_read = "config/read"
 
 
 class Method42(Enum):
-    external_agent_config_import = "externalAgentConfig/import"
+    external_agent_config_detect = "externalAgentConfig/detect"
 
 
 class Method43(Enum):
-    config_value_write = "config/value/write"
+    external_agent_config_import = "externalAgentConfig/import"
 
 
 class Method44(Enum):
-    config_batch_write = "config/batchWrite"
+    config_value_write = "config/value/write"
 
 
 class Method45(Enum):
-    config_requirements_read = "configRequirements/read"
+    config_batch_write = "config/batchWrite"
 
 
 class Method46(Enum):
-    account_read = "account/read"
+    config_requirements_read = "configRequirements/read"
 
 
 class Method47(Enum):
+    account_read = "account/read"
+
+
+class Method48(Enum):
     fuzzy_file_search = "fuzzyFileSearch"
 
 
@@ -1593,37 +1598,15 @@ class Type82(Enum):
 
 
 class Type83(Enum):
-    agent_message_content_delta = "agent_message_content_delta"
-
-
-class EventMsg65(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    delta: str
-    item_id: str
-    thread_id: str
-    turn_id: str
-    type: Type83 = Field(..., title="AgentMessageContentDeltaEventMsgType")
+    hook_started = "hook_started"
 
 
 class Type84(Enum):
-    plan_delta = "plan_delta"
-
-
-class EventMsg66(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    delta: str
-    item_id: str
-    thread_id: str
-    turn_id: str
-    type: Type84 = Field(..., title="PlanDeltaEventMsgType")
+    hook_completed = "hook_completed"
 
 
 class Type85(Enum):
-    reasoning_content_delta = "reasoning_content_delta"
+    agent_message_content_delta = "agent_message_content_delta"
 
 
 class EventMsg67(BaseModel):
@@ -1632,17 +1615,47 @@ class EventMsg67(BaseModel):
     )
     delta: str
     item_id: str
-    summary_index: int | None = 0
     thread_id: str
     turn_id: str
-    type: Type85 = Field(..., title="ReasoningContentDeltaEventMsgType")
+    type: Type85 = Field(..., title="AgentMessageContentDeltaEventMsgType")
 
 
 class Type86(Enum):
-    reasoning_raw_content_delta = "reasoning_raw_content_delta"
+    plan_delta = "plan_delta"
 
 
 class EventMsg68(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    delta: str
+    item_id: str
+    thread_id: str
+    turn_id: str
+    type: Type86 = Field(..., title="PlanDeltaEventMsgType")
+
+
+class Type87(Enum):
+    reasoning_content_delta = "reasoning_content_delta"
+
+
+class EventMsg69(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    delta: str
+    item_id: str
+    summary_index: int | None = 0
+    thread_id: str
+    turn_id: str
+    type: Type87 = Field(..., title="ReasoningContentDeltaEventMsgType")
+
+
+class Type88(Enum):
+    reasoning_raw_content_delta = "reasoning_raw_content_delta"
+
+
+class EventMsg70(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
@@ -1651,46 +1664,46 @@ class EventMsg68(BaseModel):
     item_id: str
     thread_id: str
     turn_id: str
-    type: Type86 = Field(..., title="ReasoningRawContentDeltaEventMsgType")
-
-
-class Type87(Enum):
-    collab_agent_spawn_begin = "collab_agent_spawn_begin"
-
-
-class Type88(Enum):
-    collab_agent_spawn_end = "collab_agent_spawn_end"
+    type: Type88 = Field(..., title="ReasoningRawContentDeltaEventMsgType")
 
 
 class Type89(Enum):
-    collab_agent_interaction_begin = "collab_agent_interaction_begin"
+    collab_agent_spawn_begin = "collab_agent_spawn_begin"
 
 
 class Type90(Enum):
-    collab_agent_interaction_end = "collab_agent_interaction_end"
+    collab_agent_spawn_end = "collab_agent_spawn_end"
 
 
 class Type91(Enum):
-    collab_waiting_begin = "collab_waiting_begin"
+    collab_agent_interaction_begin = "collab_agent_interaction_begin"
 
 
 class Type92(Enum):
-    collab_waiting_end = "collab_waiting_end"
+    collab_agent_interaction_end = "collab_agent_interaction_end"
 
 
 class Type93(Enum):
-    collab_close_begin = "collab_close_begin"
+    collab_waiting_begin = "collab_waiting_begin"
 
 
 class Type94(Enum):
-    collab_close_end = "collab_close_end"
+    collab_waiting_end = "collab_waiting_end"
 
 
 class Type95(Enum):
-    collab_resume_begin = "collab_resume_begin"
+    collab_close_begin = "collab_close_begin"
 
 
 class Type96(Enum):
+    collab_close_end = "collab_close_end"
+
+
+class Type97(Enum):
+    collab_resume_begin = "collab_resume_begin"
+
+
+class Type98(Enum):
     collab_resume_end = "collab_resume_end"
 
 
@@ -1778,7 +1791,7 @@ class FeedbackUploadResponse(BaseModel):
     thread_id: str = Field(..., alias="threadId")
 
 
-class Type97(Enum):
+class Type99(Enum):
     add = "add"
 
 
@@ -1787,10 +1800,10 @@ class FileChange1(BaseModel):
         populate_by_name=True,
     )
     content: str
-    type: Type97 = Field(..., title="AddFileChangeType")
+    type: Type99 = Field(..., title="AddFileChangeType")
 
 
-class Type98(Enum):
+class Type100(Enum):
     delete = "delete"
 
 
@@ -1799,10 +1812,10 @@ class FileChange2(BaseModel):
         populate_by_name=True,
     )
     content: str
-    type: Type98 = Field(..., title="DeleteFileChangeType")
+    type: Type100 = Field(..., title="DeleteFileChangeType")
 
 
-class Type99(Enum):
+class Type101(Enum):
     update = "update"
 
 
@@ -1811,7 +1824,7 @@ class FileChange3(BaseModel):
         populate_by_name=True,
     )
     move_path: str | None = None
-    type: Type99 = Field(..., title="UpdateFileChangeType")
+    type: Type101 = Field(..., title="UpdateFileChangeType")
     unified_diff: str
 
 
@@ -1928,6 +1941,43 @@ class HistoryEntry(BaseModel):
     ts: conint(ge=0)
 
 
+class HookEventName(Enum):
+    session_start = "sessionStart"
+    stop = "stop"
+
+
+class HookExecutionMode(Enum):
+    sync = "sync"
+    async_ = "async"
+
+
+class HookHandlerType(Enum):
+    command = "command"
+    prompt = "prompt"
+    agent = "agent"
+
+
+class HookOutputEntryKind(Enum):
+    warning = "warning"
+    stop = "stop"
+    feedback = "feedback"
+    context = "context"
+    error = "error"
+
+
+class HookRunStatus(Enum):
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    blocked = "blocked"
+    stopped = "stopped"
+
+
+class HookScope(Enum):
+    thread = "thread"
+    turn = "turn"
+
+
 class ImageDetail(Enum):
     auto = "auto"
     low = "low"
@@ -1976,7 +2026,7 @@ class ListMcpServerStatusParams(BaseModel):
     )
 
 
-class Type102(Enum):
+class Type104(Enum):
     exec = "exec"
 
 
@@ -1987,7 +2037,7 @@ class LocalShellAction1(BaseModel):
     command: List[str]
     env: Dict[str, Any] | None = None
     timeout_ms: conint(ge=0) | None = None
-    type: Type102 = Field(..., title="ExecLocalShellActionType")
+    type: Type104 = Field(..., title="ExecLocalShellActionType")
     user: str | None = None
     working_directory: str | None = None
 
@@ -2020,7 +2070,7 @@ class LoginAccountParams2(BaseModel):
     type: Type1 = Field(..., title="Chatgptv2::LoginAccountParamsType")
 
 
-class Type105(Enum):
+class Type107(Enum):
     chatgpt_auth_tokens = "chatgptAuthTokens"
 
 
@@ -2043,7 +2093,7 @@ class LoginAccountParams3(BaseModel):
         alias="chatgptPlanType",
         description="Optional plan type supplied by the client.\n\nWhen `null`, Codex attempts to derive the plan type from access-token claims. If unavailable, the plan defaults to `unknown`.",
     )
-    type: Type105 = Field(..., title="ChatgptAuthTokensv2::LoginAccountParamsType")
+    type: Type107 = Field(..., title="ChatgptAuthTokensv2::LoginAccountParamsType")
 
 
 class LoginAccountParams(
@@ -2081,7 +2131,7 @@ class LoginAccountResponse3(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Type105 = Field(..., title="ChatgptAuthTokensv2::LoginAccountResponseType")
+    type: Type107 = Field(..., title="ChatgptAuthTokensv2::LoginAccountResponseType")
 
 
 class LoginAccountResponse(
@@ -2391,7 +2441,7 @@ class ParsedCommand1(BaseModel):
     type: Type3 = Field(..., title="ReadParsedCommandType")
 
 
-class Type110(Enum):
+class Type112(Enum):
     list_files = "list_files"
 
 
@@ -2401,7 +2451,7 @@ class ParsedCommand2(BaseModel):
     )
     cmd: str
     path: str | None = None
-    type: Type110 = Field(..., title="ListFilesParsedCommandType")
+    type: Type112 = Field(..., title="ListFilesParsedCommandType")
 
 
 class ParsedCommand3(BaseModel):
@@ -2435,14 +2485,14 @@ class PatchChangeKind1(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Type97 = Field(..., title="AddPatchChangeKindType")
+    type: Type99 = Field(..., title="AddPatchChangeKindType")
 
 
 class PatchChangeKind2(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Type98 = Field(..., title="DeletePatchChangeKindType")
+    type: Type100 = Field(..., title="DeletePatchChangeKindType")
 
 
 class PatchChangeKind3(BaseModel):
@@ -2450,7 +2500,7 @@ class PatchChangeKind3(BaseModel):
         populate_by_name=True,
     )
     move_path: str | None = None
-    type: Type99 = Field(..., title="UpdatePatchChangeKindType")
+    type: Type101 = Field(..., title="UpdatePatchChangeKindType")
 
 
 class PatchChangeKind(
@@ -2537,7 +2587,7 @@ class PluginListParams(BaseModel):
     )
 
 
-class Type116(Enum):
+class Type118(Enum):
     local = "local"
 
 
@@ -2546,7 +2596,7 @@ class PluginSource1(BaseModel):
         populate_by_name=True,
     )
     path: AbsolutePathBuf
-    type: Type116 = Field(..., title="LocalPluginSourceType")
+    type: Type118 = Field(..., title="LocalPluginSourceType")
 
 
 class PluginSource(RootModel[PluginSource1]):
@@ -2568,6 +2618,16 @@ class PluginSummary(BaseModel):
     source: PluginSource
 
 
+class PluginUninstallParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    plugin_id: str = Field(..., alias="pluginId")
+
+
+PluginUninstallResponse = CodexAppServerProtocolV2
+
+
 class ProductSurface(Enum):
     chatgpt = "chatgpt"
     codex = "codex"
@@ -2584,7 +2644,7 @@ class RateLimitWindow(BaseModel):
     window_duration_mins: int | None = Field(None, alias="windowDurationMins")
 
 
-class Type117(Enum):
+class Type119(Enum):
     restricted = "restricted"
 
 
@@ -2596,10 +2656,10 @@ class ReadOnlyAccess1(BaseModel):
         True, alias="includePlatformDefaults"
     )
     readable_roots: List[AbsolutePathBuf] | None = Field([], alias="readableRoots")
-    type: Type117 = Field(..., title="RestrictedReadOnlyAccessType")
+    type: Type119 = Field(..., title="RestrictedReadOnlyAccessType")
 
 
-class Type118(Enum):
+class Type120(Enum):
     full_access = "fullAccess"
 
 
@@ -2607,7 +2667,7 @@ class ReadOnlyAccess2(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Type118 = Field(..., title="FullAccessReadOnlyAccessType")
+    type: Type120 = Field(..., title="FullAccessReadOnlyAccessType")
 
 
 class ReadOnlyAccess(RootModel[ReadOnlyAccess1 | ReadOnlyAccess2]):
@@ -2643,7 +2703,7 @@ class RealtimeEvent1(BaseModel):
     session_updated: SessionUpdated = Field(..., alias="SessionUpdated")
 
 
-class RealtimeEvent2(BaseModel):
+class RealtimeEvent4(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
         populate_by_name=True,
@@ -2651,7 +2711,7 @@ class RealtimeEvent2(BaseModel):
     audio_out: RealtimeAudioFrame = Field(..., alias="AudioOut")
 
 
-class RealtimeEvent3(BaseModel):
+class RealtimeEvent5(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
         populate_by_name=True,
@@ -2666,7 +2726,7 @@ class ConversationItemDone(BaseModel):
     item_id: str
 
 
-class RealtimeEvent4(BaseModel):
+class RealtimeEvent6(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
         populate_by_name=True,
@@ -2676,7 +2736,7 @@ class RealtimeEvent4(BaseModel):
     )
 
 
-class RealtimeEvent6(BaseModel):
+class RealtimeEvent8(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
         populate_by_name=True,
@@ -2684,22 +2744,19 @@ class RealtimeEvent6(BaseModel):
     error: str = Field(..., alias="Error")
 
 
-class RealtimeHandoffMessage(BaseModel):
+class RealtimeTranscriptDelta(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    delta: str
+
+
+class RealtimeTranscriptEntry(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     role: str
     text: str
-
-
-class RealtimeHandoffRequested(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    handoff_id: str
-    input_transcript: str
-    item_id: str
-    messages: List[RealtimeHandoffMessage]
 
 
 class ReasoningEffort(Enum):
@@ -2719,7 +2776,7 @@ class ReasoningEffortOption(BaseModel):
     reasoning_effort: ReasoningEffort = Field(..., alias="reasoningEffort")
 
 
-class Type119(Enum):
+class Type121(Enum):
     reasoning_text = "reasoning_text"
 
 
@@ -2728,10 +2785,10 @@ class ReasoningItemContent1(BaseModel):
         populate_by_name=True,
     )
     text: str
-    type: Type119 = Field(..., title="ReasoningTextReasoningItemContentType")
+    type: Type121 = Field(..., title="ReasoningTextReasoningItemContentType")
 
 
-class Type120(Enum):
+class Type122(Enum):
     text = "text"
 
 
@@ -2740,7 +2797,7 @@ class ReasoningItemContent2(BaseModel):
         populate_by_name=True,
     )
     text: str
-    type: Type120 = Field(..., title="TextReasoningItemContentType")
+    type: Type122 = Field(..., title="TextReasoningItemContentType")
 
 
 class ReasoningItemContent(RootModel[ReasoningItemContent1 | ReasoningItemContent2]):
@@ -2750,7 +2807,7 @@ class ReasoningItemContent(RootModel[ReasoningItemContent1 | ReasoningItemConten
     root: ReasoningItemContent1 | ReasoningItemContent2
 
 
-class Type121(Enum):
+class Type123(Enum):
     summary_text = "summary_text"
 
 
@@ -2759,7 +2816,7 @@ class ReasoningItemReasoningSummary1(BaseModel):
         populate_by_name=True,
     )
     text: str
-    type: Type121 = Field(..., title="SummaryTextReasoningItemReasoningSummaryType")
+    type: Type123 = Field(..., title="SummaryTextReasoningItemReasoningSummaryType")
 
 
 class ReasoningItemReasoningSummary(RootModel[ReasoningItemReasoningSummary1]):
@@ -2876,7 +2933,7 @@ class ResourceTemplate(BaseModel):
     uri_template: str = Field(..., alias="uriTemplate")
 
 
-class Type122(Enum):
+class Type124(Enum):
     message = "message"
 
 
@@ -2889,10 +2946,10 @@ class ResponseItem1(BaseModel):
     id: str | None = None
     phase: MessagePhase | None = None
     role: str
-    type: Type122 = Field(..., title="MessageResponseItemType")
+    type: Type124 = Field(..., title="MessageResponseItemType")
 
 
-class Type123(Enum):
+class Type125(Enum):
     reasoning = "reasoning"
 
 
@@ -2904,10 +2961,10 @@ class ResponseItem2(BaseModel):
     encrypted_content: str | None = None
     id: str
     summary: List[ReasoningItemReasoningSummary]
-    type: Type123 = Field(..., title="ReasoningResponseItemType")
+    type: Type125 = Field(..., title="ReasoningResponseItemType")
 
 
-class Type124(Enum):
+class Type126(Enum):
     local_shell_call = "local_shell_call"
 
 
@@ -2922,10 +2979,10 @@ class ResponseItem3(BaseModel):
         description="Legacy id field retained for compatibility with older payloads.",
     )
     status: LocalShellStatus
-    type: Type124 = Field(..., title="LocalShellCallResponseItemType")
+    type: Type126 = Field(..., title="LocalShellCallResponseItemType")
 
 
-class Type125(Enum):
+class Type127(Enum):
     function_call = "function_call"
 
 
@@ -2937,14 +2994,14 @@ class ResponseItem4(BaseModel):
     call_id: str
     id: str | None = None
     name: str
-    type: Type125 = Field(..., title="FunctionCallResponseItemType")
+    type: Type127 = Field(..., title="FunctionCallResponseItemType")
 
 
-class Type126(Enum):
+class Type128(Enum):
     function_call_output = "function_call_output"
 
 
-class Type127(Enum):
+class Type129(Enum):
     custom_tool_call = "custom_tool_call"
 
 
@@ -2957,18 +3014,18 @@ class ResponseItem6(BaseModel):
     input: str
     name: str
     status: str | None = None
-    type: Type127 = Field(..., title="CustomToolCallResponseItemType")
-
-
-class Type128(Enum):
-    custom_tool_call_output = "custom_tool_call_output"
-
-
-class Type129(Enum):
-    web_search_call = "web_search_call"
+    type: Type129 = Field(..., title="CustomToolCallResponseItemType")
 
 
 class Type130(Enum):
+    custom_tool_call_output = "custom_tool_call_output"
+
+
+class Type131(Enum):
+    web_search_call = "web_search_call"
+
+
+class Type132(Enum):
     image_generation_call = "image_generation_call"
 
 
@@ -2980,10 +3037,10 @@ class ResponseItem9(BaseModel):
     result: str
     revised_prompt: str | None = None
     status: str
-    type: Type130 = Field(..., title="ImageGenerationCallResponseItemType")
+    type: Type132 = Field(..., title="ImageGenerationCallResponseItemType")
 
 
-class Type131(Enum):
+class Type133(Enum):
     ghost_snapshot = "ghost_snapshot"
 
 
@@ -2992,10 +3049,10 @@ class ResponseItem10(BaseModel):
         populate_by_name=True,
     )
     ghost_commit: GhostCommit
-    type: Type131 = Field(..., title="GhostSnapshotResponseItemType")
+    type: Type133 = Field(..., title="GhostSnapshotResponseItemType")
 
 
-class Type132(Enum):
+class Type134(Enum):
     compaction = "compaction"
 
 
@@ -3004,10 +3061,10 @@ class ResponseItem11(BaseModel):
         populate_by_name=True,
     )
     encrypted_content: str
-    type: Type132 = Field(..., title="CompactionResponseItemType")
+    type: Type134 = Field(..., title="CompactionResponseItemType")
 
 
-class Type133(Enum):
+class Type135(Enum):
     other = "other"
 
 
@@ -3015,7 +3072,7 @@ class ResponseItem12(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Type133 = Field(..., title="OtherResponseItemType")
+    type: Type135 = Field(..., title="OtherResponseItemType")
 
 
 class ResponsesApiWebSearchAction1(BaseModel):
@@ -3027,7 +3084,7 @@ class ResponsesApiWebSearchAction1(BaseModel):
     type: Type5 = Field(..., title="SearchResponsesApiWebSearchActionType")
 
 
-class Type135(Enum):
+class Type137(Enum):
     open_page = "open_page"
 
 
@@ -3035,11 +3092,11 @@ class ResponsesApiWebSearchAction2(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Type135 = Field(..., title="OpenPageResponsesApiWebSearchActionType")
+    type: Type137 = Field(..., title="OpenPageResponsesApiWebSearchActionType")
     url: str | None = None
 
 
-class Type136(Enum):
+class Type138(Enum):
     find_in_page = "find_in_page"
 
 
@@ -3048,7 +3105,7 @@ class ResponsesApiWebSearchAction3(BaseModel):
         populate_by_name=True,
     )
     pattern: str | None = None
-    type: Type136 = Field(..., title="FindInPageResponsesApiWebSearchActionType")
+    type: Type138 = Field(..., title="FindInPageResponsesApiWebSearchActionType")
     url: str | None = None
 
 
@@ -3056,7 +3113,7 @@ class ResponsesApiWebSearchAction4(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Type133 = Field(..., title="OtherResponsesApiWebSearchActionType")
+    type: Type135 = Field(..., title="OtherResponsesApiWebSearchActionType")
 
 
 class ResponsesApiWebSearchAction(
@@ -3140,7 +3197,7 @@ class ReviewDelivery(Enum):
 ReviewLineRange = ByteRange
 
 
-class Type138(Enum):
+class Type140(Enum):
     uncommitted_changes = "uncommittedChanges"
 
 
@@ -3148,10 +3205,10 @@ class ReviewTarget1(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Type138 = Field(..., title="UncommittedChangesReviewTargetType")
+    type: Type140 = Field(..., title="UncommittedChangesReviewTargetType")
 
 
-class Type139(Enum):
+class Type141(Enum):
     base_branch = "baseBranch"
 
 
@@ -3160,10 +3217,10 @@ class ReviewTarget2(BaseModel):
         populate_by_name=True,
     )
     branch: str
-    type: Type139 = Field(..., title="BaseBranchReviewTargetType")
+    type: Type141 = Field(..., title="BaseBranchReviewTargetType")
 
 
-class Type140(Enum):
+class Type142(Enum):
     commit = "commit"
 
 
@@ -3176,10 +3233,10 @@ class ReviewTarget3(BaseModel):
         None,
         description="Optional human-readable label (e.g., commit subject) for UIs.",
     )
-    type: Type140 = Field(..., title="CommitReviewTargetType")
+    type: Type142 = Field(..., title="CommitReviewTargetType")
 
 
-class Type141(Enum):
+class Type143(Enum):
     custom = "custom"
 
 
@@ -3188,7 +3245,7 @@ class ReviewTarget4(BaseModel):
         populate_by_name=True,
     )
     instructions: str
-    type: Type141 = Field(..., title="CustomReviewTargetType")
+    type: Type143 = Field(..., title="CustomReviewTargetType")
 
 
 class ReviewTarget(
@@ -3206,7 +3263,7 @@ class SandboxMode(Enum):
     danger_full_access = "danger-full-access"
 
 
-class Type142(Enum):
+class Type144(Enum):
     danger_full_access = "dangerFullAccess"
 
 
@@ -3214,10 +3271,10 @@ class SandboxPolicy1(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Type142 = Field(..., title="DangerFullAccessSandboxPolicyType")
+    type: Type144 = Field(..., title="DangerFullAccessSandboxPolicyType")
 
 
-class Type143(Enum):
+class Type145(Enum):
     read_only = "readOnly"
 
 
@@ -3229,10 +3286,10 @@ class SandboxPolicy2(BaseModel):
         default_factory=lambda: ReadOnlyAccess.model_validate({"type": "fullAccess"})
     )
     network_access: bool | None = Field(False, alias="networkAccess")
-    type: Type143 = Field(..., title="ReadOnlySandboxPolicyType")
+    type: Type145 = Field(..., title="ReadOnlySandboxPolicyType")
 
 
-class Type144(Enum):
+class Type146(Enum):
     external_sandbox = "externalSandbox"
 
 
@@ -3241,10 +3298,10 @@ class SandboxPolicy3(BaseModel):
         populate_by_name=True,
     )
     network_access: NetworkAccess | None = Field("restricted", alias="networkAccess")
-    type: Type144 = Field(..., title="ExternalSandboxSandboxPolicyType")
+    type: Type146 = Field(..., title="ExternalSandboxSandboxPolicyType")
 
 
-class Type145(Enum):
+class Type147(Enum):
     workspace_write = "workspaceWrite"
 
 
@@ -3259,7 +3316,7 @@ class SandboxPolicy4(BaseModel):
         default_factory=lambda: ReadOnlyAccess.model_validate({"type": "fullAccess"}),
         alias="readOnlyAccess",
     )
-    type: Type145 = Field(..., title="WorkspaceWriteSandboxPolicyType")
+    type: Type147 = Field(..., title="WorkspaceWriteSandboxPolicyType")
     writable_roots: List[AbsolutePathBuf] | None = Field([], alias="writableRoots")
 
 
@@ -3282,309 +3339,317 @@ class SandboxWorkspaceWrite(BaseModel):
     writable_roots: List[str] | None = []
 
 
-class Method49(Enum):
+class Method50(Enum):
     thread_started = "thread/started"
 
 
-class Method50(Enum):
+class Method51(Enum):
     thread_status_changed = "thread/status/changed"
 
 
-class Method51(Enum):
+class Method52(Enum):
     thread_archived = "thread/archived"
 
 
-class Method52(Enum):
+class Method53(Enum):
     thread_unarchived = "thread/unarchived"
 
 
-class Method53(Enum):
+class Method54(Enum):
     thread_closed = "thread/closed"
 
 
-class Method54(Enum):
+class Method55(Enum):
     skills_changed = "skills/changed"
 
 
-class Method55(Enum):
+class Method56(Enum):
     thread_name_updated = "thread/name/updated"
 
 
-class Method56(Enum):
+class Method57(Enum):
     thread_token_usage_updated = "thread/tokenUsage/updated"
 
 
-class Method57(Enum):
+class Method58(Enum):
     turn_started = "turn/started"
 
 
-class Method58(Enum):
-    turn_completed = "turn/completed"
-
-
 class Method59(Enum):
-    turn_diff_updated = "turn/diff/updated"
+    hook_started = "hook/started"
 
 
 class Method60(Enum):
-    turn_plan_updated = "turn/plan/updated"
+    turn_completed = "turn/completed"
 
 
 class Method61(Enum):
-    item_started = "item/started"
+    hook_completed = "hook/completed"
 
 
 class Method62(Enum):
-    item_completed = "item/completed"
+    turn_diff_updated = "turn/diff/updated"
 
 
 class Method63(Enum):
-    item_agent_message_delta = "item/agentMessage/delta"
-
-
-class ServerNotification16(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    method: Method63 = Field(..., title="Item/agentMessage/deltaNotificationMethod")
-    params: AgentMessageDeltaNotification
+    turn_plan_updated = "turn/plan/updated"
 
 
 class Method64(Enum):
-    item_plan_delta = "item/plan/delta"
-
-
-class ServerNotification17(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    method: Method64 = Field(..., title="Item/plan/deltaNotificationMethod")
-    params: PlanDeltaNotification
+    item_started = "item/started"
 
 
 class Method65(Enum):
-    command_exec_output_delta = "command/exec/outputDelta"
+    item_completed = "item/completed"
 
 
 class Method66(Enum):
-    item_command_execution_output_delta = "item/commandExecution/outputDelta"
+    item_agent_message_delta = "item/agentMessage/delta"
+
+
+class ServerNotification18(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Method66 = Field(..., title="Item/agentMessage/deltaNotificationMethod")
+    params: AgentMessageDeltaNotification
+
+
+class Method67(Enum):
+    item_plan_delta = "item/plan/delta"
 
 
 class ServerNotification19(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method66 = Field(
-        ..., title="Item/commandExecution/outputDeltaNotificationMethod"
-    )
-    params: CommandExecutionOutputDeltaNotification
-
-
-class Method67(Enum):
-    item_command_execution_terminal_interaction = (
-        "item/commandExecution/terminalInteraction"
-    )
+    method: Method67 = Field(..., title="Item/plan/deltaNotificationMethod")
+    params: PlanDeltaNotification
 
 
 class Method68(Enum):
-    item_file_change_output_delta = "item/fileChange/outputDelta"
+    command_exec_output_delta = "command/exec/outputDelta"
+
+
+class Method69(Enum):
+    item_command_execution_output_delta = "item/commandExecution/outputDelta"
 
 
 class ServerNotification21(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method68 = Field(..., title="Item/fileChange/outputDeltaNotificationMethod")
-    params: FileChangeOutputDeltaNotification
-
-
-class Method69(Enum):
-    server_request_resolved = "serverRequest/resolved"
+    method: Method69 = Field(
+        ..., title="Item/commandExecution/outputDeltaNotificationMethod"
+    )
+    params: CommandExecutionOutputDeltaNotification
 
 
 class Method70(Enum):
-    item_mcp_tool_call_progress = "item/mcpToolCall/progress"
+    item_command_execution_terminal_interaction = (
+        "item/commandExecution/terminalInteraction"
+    )
+
+
+class Method71(Enum):
+    item_file_change_output_delta = "item/fileChange/outputDelta"
 
 
 class ServerNotification23(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method70 = Field(..., title="Item/mcpToolCall/progressNotificationMethod")
-    params: McpToolCallProgressNotification
+    method: Method71 = Field(..., title="Item/fileChange/outputDeltaNotificationMethod")
+    params: FileChangeOutputDeltaNotification
 
 
-class Method71(Enum):
-    mcp_server_oauth_login_completed = "mcpServer/oauthLogin/completed"
+class Method72(Enum):
+    server_request_resolved = "serverRequest/resolved"
 
 
-class ServerNotification24(BaseModel):
+class Method73(Enum):
+    item_mcp_tool_call_progress = "item/mcpToolCall/progress"
+
+
+class ServerNotification25(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method71 = Field(
+    method: Method73 = Field(..., title="Item/mcpToolCall/progressNotificationMethod")
+    params: McpToolCallProgressNotification
+
+
+class Method74(Enum):
+    mcp_server_oauth_login_completed = "mcpServer/oauthLogin/completed"
+
+
+class ServerNotification26(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Method74 = Field(
         ..., title="McpServer/oauthLogin/completedNotificationMethod"
     )
     params: McpServerOauthLoginCompletedNotification
 
 
-class Method72(Enum):
+class Method75(Enum):
     account_updated = "account/updated"
 
 
-class Method73(Enum):
+class Method76(Enum):
     account_rate_limits_updated = "account/rateLimits/updated"
 
 
-class Method74(Enum):
+class Method77(Enum):
     app_list_updated = "app/list/updated"
 
 
-class Method75(Enum):
+class Method78(Enum):
     item_reasoning_summary_text_delta = "item/reasoning/summaryTextDelta"
-
-
-class ServerNotification28(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    method: Method75 = Field(
-        ..., title="Item/reasoning/summaryTextDeltaNotificationMethod"
-    )
-    params: ReasoningSummaryTextDeltaNotification
-
-
-class Method76(Enum):
-    item_reasoning_summary_part_added = "item/reasoning/summaryPartAdded"
-
-
-class ServerNotification29(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    method: Method76 = Field(
-        ..., title="Item/reasoning/summaryPartAddedNotificationMethod"
-    )
-    params: ReasoningSummaryPartAddedNotification
-
-
-class Method77(Enum):
-    item_reasoning_text_delta = "item/reasoning/textDelta"
 
 
 class ServerNotification30(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method77 = Field(..., title="Item/reasoning/textDeltaNotificationMethod")
-    params: ReasoningTextDeltaNotification
+    method: Method78 = Field(
+        ..., title="Item/reasoning/summaryTextDeltaNotificationMethod"
+    )
+    params: ReasoningSummaryTextDeltaNotification
 
 
-class Method78(Enum):
-    thread_compacted = "thread/compacted"
+class Method79(Enum):
+    item_reasoning_summary_part_added = "item/reasoning/summaryPartAdded"
 
 
 class ServerNotification31(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method78 = Field(..., title="Thread/compactedNotificationMethod")
-    params: ContextCompactedNotification
+    method: Method79 = Field(
+        ..., title="Item/reasoning/summaryPartAddedNotificationMethod"
+    )
+    params: ReasoningSummaryPartAddedNotification
 
 
-class Method79(Enum):
-    model_rerouted = "model/rerouted"
+class Method80(Enum):
+    item_reasoning_text_delta = "item/reasoning/textDelta"
 
 
 class ServerNotification32(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method79 = Field(..., title="Model/reroutedNotificationMethod")
-    params: ModelReroutedNotification
+    method: Method80 = Field(..., title="Item/reasoning/textDeltaNotificationMethod")
+    params: ReasoningTextDeltaNotification
 
 
-class Method80(Enum):
-    deprecation_notice = "deprecationNotice"
+class Method81(Enum):
+    thread_compacted = "thread/compacted"
 
 
 class ServerNotification33(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method80 = Field(..., title="DeprecationNoticeNotificationMethod")
-    params: DeprecationNoticeNotification
-
-
-class Method81(Enum):
-    config_warning = "configWarning"
+    method: Method81 = Field(..., title="Thread/compactedNotificationMethod")
+    params: ContextCompactedNotification
 
 
 class Method82(Enum):
-    fuzzy_file_search_session_updated = "fuzzyFileSearch/sessionUpdated"
+    model_rerouted = "model/rerouted"
+
+
+class ServerNotification34(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Method82 = Field(..., title="Model/reroutedNotificationMethod")
+    params: ModelReroutedNotification
+
+
+class Method83(Enum):
+    deprecation_notice = "deprecationNotice"
 
 
 class ServerNotification35(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method82 = Field(
+    method: Method83 = Field(..., title="DeprecationNoticeNotificationMethod")
+    params: DeprecationNoticeNotification
+
+
+class Method84(Enum):
+    config_warning = "configWarning"
+
+
+class Method85(Enum):
+    fuzzy_file_search_session_updated = "fuzzyFileSearch/sessionUpdated"
+
+
+class ServerNotification37(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Method85 = Field(
         ..., title="FuzzyFileSearch/sessionUpdatedNotificationMethod"
     )
     params: FuzzyFileSearchSessionUpdatedNotification
 
 
-class Method83(Enum):
+class Method86(Enum):
     fuzzy_file_search_session_completed = "fuzzyFileSearch/sessionCompleted"
 
 
-class ServerNotification36(BaseModel):
+class ServerNotification38(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method83 = Field(
+    method: Method86 = Field(
         ..., title="FuzzyFileSearch/sessionCompletedNotificationMethod"
     )
     params: FuzzyFileSearchSessionCompletedNotification
 
 
-class Method84(Enum):
+class Method87(Enum):
     thread_realtime_started = "thread/realtime/started"
 
 
-class Method85(Enum):
+class Method88(Enum):
     thread_realtime_item_added = "thread/realtime/itemAdded"
 
 
-class Method86(Enum):
+class Method89(Enum):
     thread_realtime_output_audio_delta = "thread/realtime/outputAudio/delta"
 
 
-class Method87(Enum):
+class Method90(Enum):
     thread_realtime_error = "thread/realtime/error"
 
 
-class Method88(Enum):
+class Method91(Enum):
     thread_realtime_closed = "thread/realtime/closed"
 
 
-class Method89(Enum):
+class Method92(Enum):
     windows_world_writable_warning = "windows/worldWritableWarning"
 
 
-class Method90(Enum):
+class Method93(Enum):
     windows_sandbox_setup_completed = "windowsSandbox/setupCompleted"
 
 
-class Method91(Enum):
+class Method94(Enum):
     account_login_completed = "account/login/completed"
 
 
-class ServerNotification44(BaseModel):
+class ServerNotification46(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method91 = Field(..., title="Account/login/completedNotificationMethod")
+    method: Method94 = Field(..., title="Account/login/completedNotificationMethod")
     params: AccountLoginCompletedNotification
 
 
@@ -3854,11 +3919,11 @@ class ThreadId(RootModel[str]):
     root: str
 
 
-class Type146(Enum):
+class Type148(Enum):
     user_message = "userMessage"
 
 
-class Type147(Enum):
+class Type149(Enum):
     agent_message = "agentMessage"
 
 
@@ -3869,10 +3934,10 @@ class ThreadItem2(BaseModel):
     id: str
     phase: MessagePhase | None = None
     text: str
-    type: Type147 = Field(..., title="AgentMessageThreadItemType")
+    type: Type149 = Field(..., title="AgentMessageThreadItemType")
 
 
-class Type148(Enum):
+class Type150(Enum):
     plan = "plan"
 
 
@@ -3882,7 +3947,7 @@ class ThreadItem3(BaseModel):
     )
     id: str
     text: str
-    type: Type148 = Field(..., title="PlanThreadItemType")
+    type: Type150 = Field(..., title="PlanThreadItemType")
 
 
 class ThreadItem4(BaseModel):
@@ -3892,10 +3957,10 @@ class ThreadItem4(BaseModel):
     content: List[str] | None = []
     id: str
     summary: List[str] | None = []
-    type: Type123 = Field(..., title="ReasoningThreadItemType")
+    type: Type125 = Field(..., title="ReasoningThreadItemType")
 
 
-class Type150(Enum):
+class Type152(Enum):
     command_execution = "commandExecution"
 
 
@@ -3930,14 +3995,14 @@ class ThreadItem5(BaseModel):
         description="Identifier for the underlying PTY process (when available).",
     )
     status: CommandExecutionStatus
-    type: Type150 = Field(..., title="CommandExecutionThreadItemType")
+    type: Type152 = Field(..., title="CommandExecutionThreadItemType")
 
 
-class Type151(Enum):
+class Type153(Enum):
     file_change = "fileChange"
 
 
-class Type152(Enum):
+class Type154(Enum):
     mcp_tool_call = "mcpToolCall"
 
 
@@ -3957,10 +4022,10 @@ class ThreadItem7(BaseModel):
     server: str
     status: CollabAgentToolCallStatus
     tool: str
-    type: Type152 = Field(..., title="McpToolCallThreadItemType")
+    type: Type154 = Field(..., title="McpToolCallThreadItemType")
 
 
-class Type153(Enum):
+class Type155(Enum):
     dynamic_tool_call = "dynamicToolCall"
 
 
@@ -3981,18 +4046,18 @@ class ThreadItem8(BaseModel):
     status: CollabAgentToolCallStatus
     success: bool | None = None
     tool: str
-    type: Type153 = Field(..., title="DynamicToolCallThreadItemType")
-
-
-class Type154(Enum):
-    collab_agent_tool_call = "collabAgentToolCall"
-
-
-class Type155(Enum):
-    web_search = "webSearch"
+    type: Type155 = Field(..., title="DynamicToolCallThreadItemType")
 
 
 class Type156(Enum):
+    collab_agent_tool_call = "collabAgentToolCall"
+
+
+class Type157(Enum):
+    web_search = "webSearch"
+
+
+class Type158(Enum):
     image_view = "imageView"
 
 
@@ -4002,10 +4067,10 @@ class ThreadItem11(BaseModel):
     )
     id: str
     path: str
-    type: Type156 = Field(..., title="ImageViewThreadItemType")
+    type: Type158 = Field(..., title="ImageViewThreadItemType")
 
 
-class Type157(Enum):
+class Type159(Enum):
     image_generation = "imageGeneration"
 
 
@@ -4017,10 +4082,10 @@ class ThreadItem12(BaseModel):
     result: str
     revised_prompt: str | None = Field(None, alias="revisedPrompt")
     status: str
-    type: Type157 = Field(..., title="ImageGenerationThreadItemType")
+    type: Type159 = Field(..., title="ImageGenerationThreadItemType")
 
 
-class Type158(Enum):
+class Type160(Enum):
     entered_review_mode = "enteredReviewMode"
 
 
@@ -4030,10 +4095,10 @@ class ThreadItem13(BaseModel):
     )
     id: str
     review: str
-    type: Type158 = Field(..., title="EnteredReviewModeThreadItemType")
+    type: Type160 = Field(..., title="EnteredReviewModeThreadItemType")
 
 
-class Type159(Enum):
+class Type161(Enum):
     exited_review_mode = "exitedReviewMode"
 
 
@@ -4043,10 +4108,10 @@ class ThreadItem14(BaseModel):
     )
     id: str
     review: str
-    type: Type159 = Field(..., title="ExitedReviewModeThreadItemType")
+    type: Type161 = Field(..., title="ExitedReviewModeThreadItemType")
 
 
-class Type160(Enum):
+class Type162(Enum):
     context_compaction = "contextCompaction"
 
 
@@ -4055,7 +4120,7 @@ class ThreadItem15(BaseModel):
         populate_by_name=True,
     )
     id: str
-    type: Type160 = Field(..., title="ContextCompactionThreadItemType")
+    type: Type162 = Field(..., title="ContextCompactionThreadItemType")
 
 
 class ThreadLoadedListParams(BaseModel):
@@ -4263,7 +4328,7 @@ class ThreadStartParams(BaseModel):
     service_tier: ServiceTier | None = Field(None, alias="serviceTier")
 
 
-class Type161(Enum):
+class Type163(Enum):
     not_loaded = "notLoaded"
 
 
@@ -4271,10 +4336,10 @@ class ThreadStatus1(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Type161 = Field(..., title="NotLoadedThreadStatusType")
+    type: Type163 = Field(..., title="NotLoadedThreadStatusType")
 
 
-class Type162(Enum):
+class Type164(Enum):
     idle = "idle"
 
 
@@ -4282,10 +4347,10 @@ class ThreadStatus2(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Type162 = Field(..., title="IdleThreadStatusType")
+    type: Type164 = Field(..., title="IdleThreadStatusType")
 
 
-class Type163(Enum):
+class Type165(Enum):
     system_error = "systemError"
 
 
@@ -4293,10 +4358,10 @@ class ThreadStatus3(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Type163 = Field(..., title="SystemErrorThreadStatusType")
+    type: Type165 = Field(..., title="SystemErrorThreadStatusType")
 
 
-class Type164(Enum):
+class Type166(Enum):
     active = "active"
 
 
@@ -4305,7 +4370,7 @@ class ThreadStatus4(BaseModel):
         populate_by_name=True,
     )
     active_flags: List[ThreadActiveFlag] = Field(..., alias="activeFlags")
-    type: Type164 = Field(..., title="ActiveThreadStatusType")
+    type: Type166 = Field(..., title="ActiveThreadStatusType")
 
 
 class ThreadStatus(
@@ -4415,11 +4480,11 @@ TurnInterruptParams = ContextCompactedNotification
 TurnInterruptResponse = CodexAppServerProtocolV2
 
 
-class Type165(Enum):
+class Type167(Enum):
     user_message = "UserMessage"
 
 
-class Type166(Enum):
+class Type168(Enum):
     agent_message = "AgentMessage"
 
 
@@ -4433,10 +4498,10 @@ class TurnItem2(BaseModel):
         None,
         description="Optional phase metadata carried through from `ResponseItem::Message`.\n\nThis is currently used by TUI rendering to distinguish mid-turn commentary from a final answer and avoid status-indicator jitter.",
     )
-    type: Type166 = Field(..., title="AgentMessageTurnItemType")
+    type: Type168 = Field(..., title="AgentMessageTurnItemType")
 
 
-class Type167(Enum):
+class Type169(Enum):
     plan = "Plan"
 
 
@@ -4446,10 +4511,10 @@ class TurnItem3(BaseModel):
     )
     id: str
     text: str
-    type: Type167 = Field(..., title="PlanTurnItemType")
+    type: Type169 = Field(..., title="PlanTurnItemType")
 
 
-class Type168(Enum):
+class Type170(Enum):
     reasoning = "Reasoning"
 
 
@@ -4460,10 +4525,10 @@ class TurnItem4(BaseModel):
     id: str
     raw_content: List[str] | None = []
     summary_text: List[str]
-    type: Type168 = Field(..., title="ReasoningTurnItemType")
+    type: Type170 = Field(..., title="ReasoningTurnItemType")
 
 
-class Type169(Enum):
+class Type171(Enum):
     web_search = "WebSearch"
 
 
@@ -4474,10 +4539,10 @@ class TurnItem5(BaseModel):
     action: ResponsesApiWebSearchAction
     id: str
     query: str
-    type: Type169 = Field(..., title="WebSearchTurnItemType")
+    type: Type171 = Field(..., title="WebSearchTurnItemType")
 
 
-class Type170(Enum):
+class Type172(Enum):
     image_generation = "ImageGeneration"
 
 
@@ -4490,10 +4555,10 @@ class TurnItem6(BaseModel):
     revised_prompt: str | None = None
     saved_path: str | None = None
     status: str
-    type: Type170 = Field(..., title="ImageGenerationTurnItemType")
+    type: Type172 = Field(..., title="ImageGenerationTurnItemType")
 
 
-class Type171(Enum):
+class Type173(Enum):
     context_compaction = "ContextCompaction"
 
 
@@ -4502,7 +4567,7 @@ class TurnItem7(BaseModel):
         populate_by_name=True,
     )
     id: str
-    type: Type171 = Field(..., title="ContextCompactionTurnItemType")
+    type: Type173 = Field(..., title="ContextCompactionTurnItemType")
 
 
 class TurnPlanStepStatus(Enum):
@@ -4534,10 +4599,10 @@ class UserInput1(BaseModel):
         [],
         description="UI-defined spans within `text` used to render or persist special elements.",
     )
-    type: Type120 = Field(..., title="TextUserInputType")
+    type: Type122 = Field(..., title="TextUserInputType")
 
 
-class Type173(Enum):
+class Type175(Enum):
     image = "image"
 
 
@@ -4545,11 +4610,11 @@ class UserInput2(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Type173 = Field(..., title="ImageUserInputType")
+    type: Type175 = Field(..., title="ImageUserInputType")
     url: str
 
 
-class Type174(Enum):
+class Type176(Enum):
     local_image = "localImage"
 
 
@@ -4558,10 +4623,10 @@ class UserInput3(BaseModel):
         populate_by_name=True,
     )
     path: str
-    type: Type174 = Field(..., title="LocalImageUserInputType")
+    type: Type176 = Field(..., title="LocalImageUserInputType")
 
 
-class Type175(Enum):
+class Type177(Enum):
     skill = "skill"
 
 
@@ -4571,10 +4636,10 @@ class UserInput4(BaseModel):
     )
     name: str
     path: str
-    type: Type175 = Field(..., title="SkillUserInputType")
+    type: Type177 = Field(..., title="SkillUserInputType")
 
 
-class Type176(Enum):
+class Type178(Enum):
     mention = "mention"
 
 
@@ -4584,7 +4649,7 @@ class UserInput5(BaseModel):
     )
     name: str
     path: str
-    type: Type176 = Field(..., title="MentionUserInputType")
+    type: Type178 = Field(..., title="MentionUserInputType")
 
 
 class UserInput(
@@ -4611,7 +4676,7 @@ class WebSearchAction1(BaseModel):
     type: Type5 = Field(..., title="SearchWebSearchActionType")
 
 
-class Type178(Enum):
+class Type180(Enum):
     open_page = "openPage"
 
 
@@ -4619,11 +4684,11 @@ class WebSearchAction2(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Type178 = Field(..., title="OpenPageWebSearchActionType")
+    type: Type180 = Field(..., title="OpenPageWebSearchActionType")
     url: str | None = None
 
 
-class Type179(Enum):
+class Type181(Enum):
     find_in_page = "findInPage"
 
 
@@ -4632,7 +4697,7 @@ class WebSearchAction3(BaseModel):
         populate_by_name=True,
     )
     pattern: str | None = None
-    type: Type179 = Field(..., title="FindInPageWebSearchActionType")
+    type: Type181 = Field(..., title="FindInPageWebSearchActionType")
     url: str | None = None
 
 
@@ -4640,7 +4705,7 @@ class WebSearchAction4(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    type: Type133 = Field(..., title="OtherWebSearchActionType")
+    type: Type135 = Field(..., title="OtherWebSearchActionType")
 
 
 class WebSearchAction(
@@ -4965,22 +5030,22 @@ class ClientRequest21(BaseModel):
     params: PluginInstallParams
 
 
-class ClientRequest24(BaseModel):
+class ClientRequest22(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     id: RequestId
-    method: Method23 = Field(..., title="Turn/interruptRequestMethod")
+    method: Method21 = Field(..., title="Plugin/uninstallRequestMethod")
+    params: PluginUninstallParams
+
+
+class ClientRequest25(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Method24 = Field(..., title="Turn/interruptRequestMethod")
     params: TurnInterruptParams
-
-
-class ClientRequest26(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: RequestId
-    method: Method25 = Field(..., title="Model/listRequestMethod")
-    params: ModelListParams
 
 
 class ClientRequest27(BaseModel):
@@ -4988,8 +5053,8 @@ class ClientRequest27(BaseModel):
         populate_by_name=True,
     )
     id: RequestId
-    method: Method26 = Field(..., title="ExperimentalFeature/listRequestMethod")
-    params: ExperimentalFeatureListParams
+    method: Method26 = Field(..., title="Model/listRequestMethod")
+    params: ModelListParams
 
 
 class ClientRequest28(BaseModel):
@@ -4997,8 +5062,8 @@ class ClientRequest28(BaseModel):
         populate_by_name=True,
     )
     id: RequestId
-    method: Method27 = Field(..., title="McpServer/oauth/loginRequestMethod")
-    params: McpServerOauthLoginParams
+    method: Method27 = Field(..., title="ExperimentalFeature/listRequestMethod")
+    params: ExperimentalFeatureListParams
 
 
 class ClientRequest29(BaseModel):
@@ -5006,8 +5071,8 @@ class ClientRequest29(BaseModel):
         populate_by_name=True,
     )
     id: RequestId
-    method: Method28 = Field(..., title="Config/mcpServer/reloadRequestMethod")
-    params: None = None
+    method: Method28 = Field(..., title="McpServer/oauth/loginRequestMethod")
+    params: McpServerOauthLoginParams
 
 
 class ClientRequest30(BaseModel):
@@ -5015,8 +5080,8 @@ class ClientRequest30(BaseModel):
         populate_by_name=True,
     )
     id: RequestId
-    method: Method29 = Field(..., title="McpServerStatus/listRequestMethod")
-    params: ListMcpServerStatusParams
+    method: Method29 = Field(..., title="Config/mcpServer/reloadRequestMethod")
+    params: None = None
 
 
 class ClientRequest31(BaseModel):
@@ -5024,8 +5089,8 @@ class ClientRequest31(BaseModel):
         populate_by_name=True,
     )
     id: RequestId
-    method: Method30 = Field(..., title="WindowsSandbox/setupStartRequestMethod")
-    params: WindowsSandboxSetupStartParams
+    method: Method30 = Field(..., title="McpServerStatus/listRequestMethod")
+    params: ListMcpServerStatusParams
 
 
 class ClientRequest32(BaseModel):
@@ -5033,8 +5098,8 @@ class ClientRequest32(BaseModel):
         populate_by_name=True,
     )
     id: RequestId
-    method: Method31 = Field(..., title="Account/login/startRequestMethod")
-    params: LoginAccountParams
+    method: Method31 = Field(..., title="WindowsSandbox/setupStartRequestMethod")
+    params: WindowsSandboxSetupStartParams
 
 
 class ClientRequest33(BaseModel):
@@ -5042,8 +5107,8 @@ class ClientRequest33(BaseModel):
         populate_by_name=True,
     )
     id: RequestId
-    method: Method32 = Field(..., title="Account/login/cancelRequestMethod")
-    params: CancelLoginAccountParams
+    method: Method32 = Field(..., title="Account/login/startRequestMethod")
+    params: LoginAccountParams
 
 
 class ClientRequest34(BaseModel):
@@ -5051,8 +5116,8 @@ class ClientRequest34(BaseModel):
         populate_by_name=True,
     )
     id: RequestId
-    method: Method33 = Field(..., title="Account/logoutRequestMethod")
-    params: None = None
+    method: Method33 = Field(..., title="Account/login/cancelRequestMethod")
+    params: CancelLoginAccountParams
 
 
 class ClientRequest35(BaseModel):
@@ -5060,7 +5125,7 @@ class ClientRequest35(BaseModel):
         populate_by_name=True,
     )
     id: RequestId
-    method: Method34 = Field(..., title="Account/rateLimits/readRequestMethod")
+    method: Method34 = Field(..., title="Account/logoutRequestMethod")
     params: None = None
 
 
@@ -5069,17 +5134,17 @@ class ClientRequest36(BaseModel):
         populate_by_name=True,
     )
     id: RequestId
-    method: Method35 = Field(..., title="Feedback/uploadRequestMethod")
-    params: FeedbackUploadParams
+    method: Method35 = Field(..., title="Account/rateLimits/readRequestMethod")
+    params: None = None
 
 
-class ClientRequest38(BaseModel):
+class ClientRequest37(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     id: RequestId
-    method: Method37 = Field(..., title="Command/exec/writeRequestMethod")
-    params: CommandExecWriteParams
+    method: Method36 = Field(..., title="Feedback/uploadRequestMethod")
+    params: FeedbackUploadParams
 
 
 class ClientRequest39(BaseModel):
@@ -5087,17 +5152,17 @@ class ClientRequest39(BaseModel):
         populate_by_name=True,
     )
     id: RequestId
-    method: Method38 = Field(..., title="Command/exec/terminateRequestMethod")
-    params: CommandExecTerminateParams
+    method: Method38 = Field(..., title="Command/exec/writeRequestMethod")
+    params: CommandExecWriteParams
 
 
-class ClientRequest41(BaseModel):
+class ClientRequest40(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     id: RequestId
-    method: Method40 = Field(..., title="Config/readRequestMethod")
-    params: ConfigReadParams
+    method: Method39 = Field(..., title="Command/exec/terminateRequestMethod")
+    params: CommandExecTerminateParams
 
 
 class ClientRequest42(BaseModel):
@@ -5105,17 +5170,17 @@ class ClientRequest42(BaseModel):
         populate_by_name=True,
     )
     id: RequestId
-    method: Method41 = Field(..., title="ExternalAgentConfig/detectRequestMethod")
-    params: ExternalAgentConfigDetectParams
+    method: Method41 = Field(..., title="Config/readRequestMethod")
+    params: ConfigReadParams
 
 
-class ClientRequest46(BaseModel):
+class ClientRequest43(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     id: RequestId
-    method: Method45 = Field(..., title="ConfigRequirements/readRequestMethod")
-    params: None = None
+    method: Method42 = Field(..., title="ExternalAgentConfig/detectRequestMethod")
+    params: ExternalAgentConfigDetectParams
 
 
 class ClientRequest47(BaseModel):
@@ -5123,8 +5188,8 @@ class ClientRequest47(BaseModel):
         populate_by_name=True,
     )
     id: RequestId
-    method: Method46 = Field(..., title="Account/readRequestMethod")
-    params: GetAccountParams
+    method: Method46 = Field(..., title="ConfigRequirements/readRequestMethod")
+    params: None = None
 
 
 class ClientRequest48(BaseModel):
@@ -5132,7 +5197,16 @@ class ClientRequest48(BaseModel):
         populate_by_name=True,
     )
     id: RequestId
-    method: Method47 = Field(..., title="FuzzyFileSearchRequestMethod")
+    method: Method47 = Field(..., title="Account/readRequestMethod")
+    params: GetAccountParams
+
+
+class ClientRequest49(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Method48 = Field(..., title="FuzzyFileSearchRequestMethod")
     params: FuzzyFileSearchParams
 
 
@@ -5758,7 +5832,7 @@ class EventMsg60(BaseModel):
     user_facing_hint: str | None = None
 
 
-class EventMsg69(BaseModel):
+class EventMsg71(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
@@ -5768,10 +5842,10 @@ class EventMsg69(BaseModel):
         description="Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
     )
     sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
-    type: Type87 = Field(..., title="CollabAgentSpawnBeginEventMsgType")
+    type: Type89 = Field(..., title="CollabAgentSpawnBeginEventMsgType")
 
 
-class EventMsg70(BaseModel):
+class EventMsg72(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
@@ -5794,10 +5868,10 @@ class EventMsg70(BaseModel):
         ...,
         description="Last known status of the new agent reported to the sender agent.",
     )
-    type: Type88 = Field(..., title="CollabAgentSpawnEndEventMsgType")
+    type: Type90 = Field(..., title="CollabAgentSpawnEndEventMsgType")
 
 
-class EventMsg71(BaseModel):
+class EventMsg73(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
@@ -5808,10 +5882,10 @@ class EventMsg71(BaseModel):
     )
     receiver_thread_id: ThreadId = Field(..., description="Thread ID of the receiver.")
     sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
-    type: Type89 = Field(..., title="CollabAgentInteractionBeginEventMsgType")
+    type: Type91 = Field(..., title="CollabAgentInteractionBeginEventMsgType")
 
 
-class EventMsg72(BaseModel):
+class EventMsg74(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
@@ -5832,10 +5906,10 @@ class EventMsg72(BaseModel):
         ...,
         description="Last known status of the receiver agent reported to the sender agent.",
     )
-    type: Type90 = Field(..., title="CollabAgentInteractionEndEventMsgType")
+    type: Type92 = Field(..., title="CollabAgentInteractionEndEventMsgType")
 
 
-class EventMsg73(BaseModel):
+class EventMsg75(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
@@ -5847,10 +5921,10 @@ class EventMsg73(BaseModel):
         ..., description="Thread ID of the receivers."
     )
     sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
-    type: Type91 = Field(..., title="CollabWaitingBeginEventMsgType")
+    type: Type93 = Field(..., title="CollabWaitingBeginEventMsgType")
 
 
-class EventMsg74(BaseModel):
+class EventMsg76(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
@@ -5863,37 +5937,7 @@ class EventMsg74(BaseModel):
         ...,
         description="Last known status of the receiver agents reported to the sender agent.",
     )
-    type: Type92 = Field(..., title="CollabWaitingEndEventMsgType")
-
-
-class EventMsg75(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    call_id: str = Field(..., description="Identifier for the collab tool call.")
-    receiver_thread_id: ThreadId = Field(..., description="Thread ID of the receiver.")
-    sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
-    type: Type93 = Field(..., title="CollabCloseBeginEventMsgType")
-
-
-class EventMsg76(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    call_id: str = Field(..., description="Identifier for the collab tool call.")
-    receiver_agent_nickname: str | None = Field(
-        None, description="Optional nickname assigned to the receiver agent."
-    )
-    receiver_agent_role: str | None = Field(
-        None, description="Optional role assigned to the receiver agent."
-    )
-    receiver_thread_id: ThreadId = Field(..., description="Thread ID of the receiver.")
-    sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
-    status: AgentStatus = Field(
-        ...,
-        description="Last known status of the receiver agent reported to the sender agent before the close.",
-    )
-    type: Type94 = Field(..., title="CollabCloseEndEventMsgType")
+    type: Type94 = Field(..., title="CollabWaitingEndEventMsgType")
 
 
 class EventMsg77(BaseModel):
@@ -5901,15 +5945,9 @@ class EventMsg77(BaseModel):
         populate_by_name=True,
     )
     call_id: str = Field(..., description="Identifier for the collab tool call.")
-    receiver_agent_nickname: str | None = Field(
-        None, description="Optional nickname assigned to the receiver agent."
-    )
-    receiver_agent_role: str | None = Field(
-        None, description="Optional role assigned to the receiver agent."
-    )
     receiver_thread_id: ThreadId = Field(..., description="Thread ID of the receiver.")
     sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
-    type: Type95 = Field(..., title="CollabResumeBeginEventMsgType")
+    type: Type95 = Field(..., title="CollabCloseBeginEventMsgType")
 
 
 class EventMsg78(BaseModel):
@@ -5927,9 +5965,45 @@ class EventMsg78(BaseModel):
     sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
     status: AgentStatus = Field(
         ...,
+        description="Last known status of the receiver agent reported to the sender agent before the close.",
+    )
+    type: Type96 = Field(..., title="CollabCloseEndEventMsgType")
+
+
+class EventMsg79(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    call_id: str = Field(..., description="Identifier for the collab tool call.")
+    receiver_agent_nickname: str | None = Field(
+        None, description="Optional nickname assigned to the receiver agent."
+    )
+    receiver_agent_role: str | None = Field(
+        None, description="Optional role assigned to the receiver agent."
+    )
+    receiver_thread_id: ThreadId = Field(..., description="Thread ID of the receiver.")
+    sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
+    type: Type97 = Field(..., title="CollabResumeBeginEventMsgType")
+
+
+class EventMsg80(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    call_id: str = Field(..., description="Identifier for the collab tool call.")
+    receiver_agent_nickname: str | None = Field(
+        None, description="Optional nickname assigned to the receiver agent."
+    )
+    receiver_agent_role: str | None = Field(
+        None, description="Optional role assigned to the receiver agent."
+    )
+    receiver_thread_id: ThreadId = Field(..., description="Thread ID of the receiver.")
+    sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
+    status: AgentStatus = Field(
+        ...,
         description="Last known status of the receiver agent reported to the sender agent after resume.",
     )
-    type: Type96 = Field(..., title="CollabResumeEndEventMsgType")
+    type: Type98 = Field(..., title="CollabResumeEndEventMsgType")
 
 
 class ExperimentalFeature(BaseModel):
@@ -6026,6 +6100,42 @@ class GetAccountResponse(BaseModel):
     )
     account: Account | None = None
     requires_openai_auth: bool = Field(..., alias="requiresOpenaiAuth")
+
+
+class HookOutputEntry(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    kind: HookOutputEntryKind
+    text: str
+
+
+class HookRunSummary(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    completed_at: int | None = Field(None, alias="completedAt")
+    display_order: int = Field(..., alias="displayOrder")
+    duration_ms: int | None = Field(None, alias="durationMs")
+    entries: List[HookOutputEntry]
+    event_name: HookEventName = Field(..., alias="eventName")
+    execution_mode: HookExecutionMode = Field(..., alias="executionMode")
+    handler_type: HookHandlerType = Field(..., alias="handlerType")
+    id: str
+    scope: HookScope
+    source_path: str = Field(..., alias="sourcePath")
+    started_at: int = Field(..., alias="startedAt")
+    status: HookRunStatus
+    status_message: str | None = Field(None, alias="statusMessage")
+
+
+class HookStartedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    run: HookRunSummary
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str | None = Field(None, alias="turnId")
 
 
 class McpServerStatus(BaseModel):
@@ -6131,35 +6241,34 @@ class RateLimitSnapshot(BaseModel):
     secondary: RateLimitWindow | None = None
 
 
-class RealtimeEvent5(BaseModel):
+class RealtimeEvent2(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
         populate_by_name=True,
     )
-    handoff_requested: RealtimeHandoffRequested = Field(..., alias="HandoffRequested")
+    input_transcript_delta: RealtimeTranscriptDelta = Field(
+        ..., alias="InputTranscriptDelta"
+    )
 
 
-class RealtimeEvent(
-    RootModel[
-        RealtimeEvent1
-        | RealtimeEvent2
-        | RealtimeEvent3
-        | RealtimeEvent4
-        | RealtimeEvent5
-        | RealtimeEvent6
-    ]
-):
+class RealtimeEvent3(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    output_transcript_delta: RealtimeTranscriptDelta = Field(
+        ..., alias="OutputTranscriptDelta"
+    )
+
+
+class RealtimeHandoffRequested(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    root: (
-        RealtimeEvent1
-        | RealtimeEvent2
-        | RealtimeEvent3
-        | RealtimeEvent4
-        | RealtimeEvent5
-        | RealtimeEvent6
-    )
+    active_transcript: List[RealtimeTranscriptEntry]
+    handoff_id: str
+    input_transcript: str
+    item_id: str
 
 
 class RequestUserInputQuestion(BaseModel):
@@ -6181,7 +6290,7 @@ class ResponseItem8(BaseModel):
     action: ResponsesApiWebSearchAction | None = None
     id: str | None = None
     status: str | None = None
-    type: Type129 = Field(..., title="WebSearchCallResponseItemType")
+    type: Type131 = Field(..., title="WebSearchCallResponseItemType")
 
 
 class ReviewCodeLocation(BaseModel):
@@ -6275,7 +6384,7 @@ class ServerNotification3(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method50 = Field(..., title="Thread/status/changedNotificationMethod")
+    method: Method51 = Field(..., title="Thread/status/changedNotificationMethod")
     params: ThreadStatusChangedNotification
 
 
@@ -6283,7 +6392,7 @@ class ServerNotification4(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method51 = Field(..., title="Thread/archivedNotificationMethod")
+    method: Method52 = Field(..., title="Thread/archivedNotificationMethod")
     params: ThreadArchivedNotification
 
 
@@ -6291,7 +6400,7 @@ class ServerNotification5(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method52 = Field(..., title="Thread/unarchivedNotificationMethod")
+    method: Method53 = Field(..., title="Thread/unarchivedNotificationMethod")
     params: ThreadUnarchivedNotification
 
 
@@ -6299,7 +6408,7 @@ class ServerNotification6(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method53 = Field(..., title="Thread/closedNotificationMethod")
+    method: Method54 = Field(..., title="Thread/closedNotificationMethod")
     params: ThreadClosedNotification
 
 
@@ -6307,7 +6416,7 @@ class ServerNotification7(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method54 = Field(..., title="Skills/changedNotificationMethod")
+    method: Method55 = Field(..., title="Skills/changedNotificationMethod")
     params: SkillsChangedNotification
 
 
@@ -6315,107 +6424,115 @@ class ServerNotification8(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method55 = Field(..., title="Thread/name/updatedNotificationMethod")
+    method: Method56 = Field(..., title="Thread/name/updatedNotificationMethod")
     params: ThreadNameUpdatedNotification
 
 
-class ServerNotification12(BaseModel):
+class ServerNotification11(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method59 = Field(..., title="Turn/diff/updatedNotificationMethod")
+    method: Method59 = Field(..., title="Hook/startedNotificationMethod")
+    params: HookStartedNotification
+
+
+class ServerNotification14(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Method62 = Field(..., title="Turn/diff/updatedNotificationMethod")
     params: TurnDiffUpdatedNotification
-
-
-class ServerNotification18(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    method: Method65 = Field(..., title="Command/exec/outputDeltaNotificationMethod")
-    params: CommandExecOutputDeltaNotification
 
 
 class ServerNotification20(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method67 = Field(
-        ..., title="Item/commandExecution/terminalInteractionNotificationMethod"
-    )
-    params: TerminalInteractionNotification
+    method: Method68 = Field(..., title="Command/exec/outputDeltaNotificationMethod")
+    params: CommandExecOutputDeltaNotification
 
 
 class ServerNotification22(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method69 = Field(..., title="ServerRequest/resolvedNotificationMethod")
+    method: Method70 = Field(
+        ..., title="Item/commandExecution/terminalInteractionNotificationMethod"
+    )
+    params: TerminalInteractionNotification
+
+
+class ServerNotification24(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Method72 = Field(..., title="ServerRequest/resolvedNotificationMethod")
     params: ServerRequestResolvedNotification
 
 
-class ServerNotification25(BaseModel):
+class ServerNotification27(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method72 = Field(..., title="Account/updatedNotificationMethod")
+    method: Method75 = Field(..., title="Account/updatedNotificationMethod")
     params: AccountUpdatedNotification
 
 
-class ServerNotification34(BaseModel):
+class ServerNotification36(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method81 = Field(..., title="ConfigWarningNotificationMethod")
+    method: Method84 = Field(..., title="ConfigWarningNotificationMethod")
     params: ConfigWarningNotification
-
-
-class ServerNotification37(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    method: Method84 = Field(..., title="Thread/realtime/startedNotificationMethod")
-    params: ThreadRealtimeStartedNotification
-
-
-class ServerNotification38(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    method: Method85 = Field(..., title="Thread/realtime/itemAddedNotificationMethod")
-    params: ThreadRealtimeItemAddedNotification
 
 
 class ServerNotification39(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method86 = Field(
-        ..., title="Thread/realtime/outputAudio/deltaNotificationMethod"
-    )
-    params: ThreadRealtimeOutputAudioDeltaNotification
+    method: Method87 = Field(..., title="Thread/realtime/startedNotificationMethod")
+    params: ThreadRealtimeStartedNotification
 
 
 class ServerNotification40(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method87 = Field(..., title="Thread/realtime/errorNotificationMethod")
-    params: ThreadRealtimeErrorNotification
+    method: Method88 = Field(..., title="Thread/realtime/itemAddedNotificationMethod")
+    params: ThreadRealtimeItemAddedNotification
 
 
 class ServerNotification41(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method88 = Field(..., title="Thread/realtime/closedNotificationMethod")
-    params: ThreadRealtimeClosedNotification
+    method: Method89 = Field(
+        ..., title="Thread/realtime/outputAudio/deltaNotificationMethod"
+    )
+    params: ThreadRealtimeOutputAudioDeltaNotification
 
 
 class ServerNotification42(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method89 = Field(
+    method: Method90 = Field(..., title="Thread/realtime/errorNotificationMethod")
+    params: ThreadRealtimeErrorNotification
+
+
+class ServerNotification43(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Method91 = Field(..., title="Thread/realtime/closedNotificationMethod")
+    params: ThreadRealtimeClosedNotification
+
+
+class ServerNotification44(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Method92 = Field(
         ..., title="Windows/worldWritableWarningNotificationMethod"
     )
     params: WindowsWorldWritableWarningNotification
@@ -6493,7 +6610,7 @@ class ThreadItem1(BaseModel):
     )
     content: List[UserInput]
     id: str
-    type: Type146 = Field(..., title="UserMessageThreadItemType")
+    type: Type148 = Field(..., title="UserMessageThreadItemType")
 
 
 class ThreadItem6(BaseModel):
@@ -6503,7 +6620,7 @@ class ThreadItem6(BaseModel):
     changes: List[FileUpdateChange]
     id: str
     status: CommandExecutionStatus
-    type: Type151 = Field(..., title="FileChangeThreadItemType")
+    type: Type153 = Field(..., title="FileChangeThreadItemType")
 
 
 class ThreadItem9(BaseModel):
@@ -6536,7 +6653,7 @@ class ThreadItem9(BaseModel):
     tool: CollabAgentTool = Field(
         ..., description="Name of the collab tool that was invoked."
     )
-    type: Type154 = Field(..., title="CollabAgentToolCallThreadItemType")
+    type: Type156 = Field(..., title="CollabAgentToolCallThreadItemType")
 
 
 class ThreadItem10(BaseModel):
@@ -6546,7 +6663,7 @@ class ThreadItem10(BaseModel):
     action: WebSearchAction | None = None
     id: str
     query: str
-    type: Type155 = Field(..., title="WebSearchThreadItemType")
+    type: Type157 = Field(..., title="WebSearchThreadItemType")
 
 
 class ThreadItem(
@@ -6691,7 +6808,7 @@ class TurnItem1(BaseModel):
     )
     content: List[UserInput]
     id: str
-    type: Type165 = Field(..., title="UserMessageTurnItemType")
+    type: Type167 = Field(..., title="UserMessageTurnItemType")
 
 
 class TurnItem(
@@ -6873,57 +6990,57 @@ class ClientRequest12(BaseModel):
     params: ThreadListParams
 
 
-class ClientRequest22(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: RequestId
-    method: Method21 = Field(..., title="Turn/startRequestMethod")
-    params: TurnStartParams
-
-
 class ClientRequest23(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     id: RequestId
-    method: Method22 = Field(..., title="Turn/steerRequestMethod")
+    method: Method22 = Field(..., title="Turn/startRequestMethod")
+    params: TurnStartParams
+
+
+class ClientRequest24(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Method23 = Field(..., title="Turn/steerRequestMethod")
     params: TurnSteerParams
 
 
-class ClientRequest25(BaseModel):
+class ClientRequest26(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     id: RequestId
-    method: Method24 = Field(..., title="Review/startRequestMethod")
+    method: Method25 = Field(..., title="Review/startRequestMethod")
     params: ReviewStartParams
 
 
-class ClientRequest37(BaseModel):
+class ClientRequest38(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     id: RequestId
-    method: Method36 = Field(..., title="Command/execRequestMethod")
+    method: Method37 = Field(..., title="Command/execRequestMethod")
     params: CommandExecParams
 
 
-class ClientRequest40(BaseModel):
+class ClientRequest41(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     id: RequestId
-    method: Method39 = Field(..., title="Command/exec/resizeRequestMethod")
+    method: Method40 = Field(..., title="Command/exec/resizeRequestMethod")
     params: CommandExecResizeParams
 
 
-class ClientRequest44(BaseModel):
+class ClientRequest45(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     id: RequestId
-    method: Method43 = Field(..., title="Config/value/writeRequestMethod")
+    method: Method44 = Field(..., title="Config/value/writeRequestMethod")
     params: ConfigValueWriteParams
 
 
@@ -6959,14 +7076,6 @@ class ConfigWriteResponse(BaseModel):
     )
     status: WriteStatus
     version: str
-
-
-class EventMsg4(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    payload: RealtimeEvent
-    type: Type22 = Field(..., title="RealtimeConversationRealtimeEventMsgType")
 
 
 class EventMsg11(BaseModel):
@@ -7091,6 +7200,24 @@ class EventMsg64(BaseModel):
     type: Type82 = Field(..., title="ItemCompletedEventMsgType")
 
 
+class EventMsg65(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    run: HookRunSummary
+    turn_id: str | None = None
+    type: Type83 = Field(..., title="HookStartedEventMsgType")
+
+
+class EventMsg66(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    run: HookRunSummary
+    turn_id: str | None = None
+    type: Type84 = Field(..., title="HookCompletedEventMsgType")
+
+
 class ExternalAgentConfigDetectResponse(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -7136,6 +7263,9 @@ class GetAccountRateLimitsResponse(BaseModel):
         alias="rateLimitsByLimitId",
         description="Multi-bucket view keyed by metered `limit_id` (for example, `codex`).",
     )
+
+
+HookCompletedNotification = HookStartedNotification
 
 
 class ItemCompletedNotification(BaseModel):
@@ -7186,13 +7316,48 @@ class ProfileV2(BaseModel):
     web_search: WebSearchMode | None = None
 
 
+class RealtimeEvent7(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    handoff_requested: RealtimeHandoffRequested = Field(..., alias="HandoffRequested")
+
+
+class RealtimeEvent(
+    RootModel[
+        RealtimeEvent1
+        | RealtimeEvent2
+        | RealtimeEvent3
+        | RealtimeEvent4
+        | RealtimeEvent5
+        | RealtimeEvent6
+        | RealtimeEvent7
+        | RealtimeEvent8
+    ]
+):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: (
+        RealtimeEvent1
+        | RealtimeEvent2
+        | RealtimeEvent3
+        | RealtimeEvent4
+        | RealtimeEvent5
+        | RealtimeEvent6
+        | RealtimeEvent7
+        | RealtimeEvent8
+    )
+
+
 class ResponseItem5(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     call_id: str
     output: FunctionCallOutputPayload
-    type: Type126 = Field(..., title="FunctionCallOutputResponseItemType")
+    type: Type128 = Field(..., title="FunctionCallOutputResponseItemType")
 
 
 class ResponseItem7(BaseModel):
@@ -7201,7 +7366,7 @@ class ResponseItem7(BaseModel):
     )
     call_id: str
     output: FunctionCallOutputPayload
-    type: Type128 = Field(..., title="CustomToolCallOutputResponseItemType")
+    type: Type130 = Field(..., title="CustomToolCallOutputResponseItemType")
 
 
 class ResponseItem(
@@ -7255,7 +7420,7 @@ class ServerNotification9(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method56 = Field(..., title="Thread/tokenUsage/updatedNotificationMethod")
+    method: Method57 = Field(..., title="Thread/tokenUsage/updatedNotificationMethod")
     params: ThreadTokenUsageUpdatedNotification
 
 
@@ -7263,15 +7428,15 @@ class ServerNotification10(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method57 = Field(..., title="Turn/startedNotificationMethod")
+    method: Method58 = Field(..., title="Turn/startedNotificationMethod")
     params: TurnStartedNotification
 
 
-class ServerNotification11(BaseModel):
+class ServerNotification12(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method58 = Field(..., title="Turn/completedNotificationMethod")
+    method: Method60 = Field(..., title="Turn/completedNotificationMethod")
     params: TurnCompletedNotification
 
 
@@ -7279,47 +7444,55 @@ class ServerNotification13(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method60 = Field(..., title="Turn/plan/updatedNotificationMethod")
-    params: TurnPlanUpdatedNotification
-
-
-class ServerNotification14(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    method: Method61 = Field(..., title="Item/startedNotificationMethod")
-    params: ItemStartedNotification
+    method: Method61 = Field(..., title="Hook/completedNotificationMethod")
+    params: HookCompletedNotification
 
 
 class ServerNotification15(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method62 = Field(..., title="Item/completedNotificationMethod")
+    method: Method63 = Field(..., title="Turn/plan/updatedNotificationMethod")
+    params: TurnPlanUpdatedNotification
+
+
+class ServerNotification16(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Method64 = Field(..., title="Item/startedNotificationMethod")
+    params: ItemStartedNotification
+
+
+class ServerNotification17(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Method65 = Field(..., title="Item/completedNotificationMethod")
     params: ItemCompletedNotification
 
 
-class ServerNotification26(BaseModel):
+class ServerNotification28(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method73 = Field(..., title="Account/rateLimits/updatedNotificationMethod")
+    method: Method76 = Field(..., title="Account/rateLimits/updatedNotificationMethod")
     params: AccountRateLimitsUpdatedNotification
 
 
-class ServerNotification27(BaseModel):
+class ServerNotification29(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method74 = Field(..., title="App/list/updatedNotificationMethod")
+    method: Method77 = Field(..., title="App/list/updatedNotificationMethod")
     params: AppListUpdatedNotification
 
 
-class ServerNotification43(BaseModel):
+class ServerNotification45(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method90 = Field(
+    method: Method93 = Field(
         ..., title="WindowsSandbox/setupCompletedNotificationMethod"
     )
     params: WindowsSandboxSetupCompletedNotification
@@ -7461,21 +7634,21 @@ ThreadStartedNotification = ThreadMetadataUpdateResponse
 ThreadUnarchiveResponse = ThreadMetadataUpdateResponse
 
 
-class ClientRequest43(BaseModel):
+class ClientRequest44(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     id: RequestId
-    method: Method42 = Field(..., title="ExternalAgentConfig/importRequestMethod")
+    method: Method43 = Field(..., title="ExternalAgentConfig/importRequestMethod")
     params: ExternalAgentConfigImportParams
 
 
-class ClientRequest45(BaseModel):
+class ClientRequest46(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     id: RequestId
-    method: Method44 = Field(..., title="Config/batchWriteRequestMethod")
+    method: Method45 = Field(..., title="Config/batchWriteRequestMethod")
     params: ConfigBatchWriteParams
 
 
@@ -7529,6 +7702,7 @@ class ClientRequest(
         | ClientRequest46
         | ClientRequest47
         | ClientRequest48
+        | ClientRequest49
     ]
 ):
     model_config = ConfigDict(
@@ -7583,6 +7757,7 @@ class ClientRequest(
         | ClientRequest46
         | ClientRequest47
         | ClientRequest48
+        | ClientRequest49
     ) = Field(
         ..., description="Request from the client to the server.", title="ClientRequest"
     )
@@ -7626,6 +7801,14 @@ class ConfigReadResponse(BaseModel):
     origins: Dict[str, ConfigLayerMetadata]
 
 
+class EventMsg4(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    payload: RealtimeEvent
+    type: Type22 = Field(..., title="RealtimeConversationRealtimeEventMsgType")
+
+
 class EventMsg62(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -7647,7 +7830,7 @@ class ServerNotification2(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    method: Method49 = Field(..., title="Thread/startedNotificationMethod")
+    method: Method50 = Field(..., title="Thread/startedNotificationMethod")
     params: ThreadStartedNotification
 
 
@@ -7697,6 +7880,8 @@ class ServerNotification(
         | ServerNotification42
         | ServerNotification43
         | ServerNotification44
+        | ServerNotification45
+        | ServerNotification46
     ]
 ):
     model_config = ConfigDict(
@@ -7747,6 +7932,8 @@ class ServerNotification(
         | ServerNotification42
         | ServerNotification43
         | ServerNotification44
+        | ServerNotification45
+        | ServerNotification46
     ) = Field(
         ...,
         description="Notification sent from the server to the client.",
@@ -7882,6 +8069,8 @@ class EventMsg(
         | EventMsg76
         | EventMsg77
         | EventMsg78
+        | EventMsg79
+        | EventMsg80
     ]
 ):
     model_config = ConfigDict(
@@ -7966,6 +8155,8 @@ class EventMsg(
         | EventMsg76
         | EventMsg77
         | EventMsg78
+        | EventMsg79
+        | EventMsg80
     ) = Field(
         ...,
         description="Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",
