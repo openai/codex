@@ -86,6 +86,12 @@ pub(crate) enum AppEvent {
         event: Event,
     },
 
+    /// Insert a local-only history cell for a specific thread.
+    InsertThreadHistoryCell {
+        thread_id: ThreadId,
+        cell: Box<dyn HistoryCell>,
+    },
+
     /// Start a new session.
     NewSession,
 

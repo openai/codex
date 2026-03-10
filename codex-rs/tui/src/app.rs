@@ -271,6 +271,7 @@ struct ThreadEventSnapshot {
     session_configured: Option<Event>,
     events: Vec<Event>,
     input_state: Option<ThreadInputState>,
+    thread_history_cells: Vec<Arc<dyn HistoryCell>>,
 }
 
 #[derive(Debug)]
@@ -280,6 +281,7 @@ struct ThreadEventStore {
     user_message_ids: HashSet<String>,
     pending_interactive_replay: PendingInteractiveReplayState,
     input_state: Option<ThreadInputState>,
+    thread_history_cells: Vec<Arc<dyn HistoryCell>>,
     capacity: usize,
     active: bool,
 }
@@ -292,6 +294,7 @@ impl ThreadEventStore {
             user_message_ids: HashSet::new(),
             pending_interactive_replay: PendingInteractiveReplayState::default(),
             input_state: None,
+            thread_history_cells: Vec::new(),
             capacity,
             active: false,
         }
@@ -362,7 +365,12 @@ impl ThreadEventStore {
                 .cloned()
                 .collect(),
             input_state: self.input_state.clone(),
+            thread_history_cells: self.thread_history_cells.clone(),
         }
+    }
+
+    fn push_thread_history_cell(&mut self, cell: Arc<dyn HistoryCell>) {
+        self.thread_history_cells.push(cell);
     }
 
     fn note_outbound_op(&mut self, op: &Op) {
@@ -1825,11 +1833,38 @@ impl App {
         for event in snapshot.events {
             self.handle_codex_event_replay(event);
         }
+        if !snapshot.thread_history_cells.is_empty() {
+            self.has_emitted_history_lines = true;
+            self.transcript_cells.extend(snapshot.thread_history_cells);
+        }
         self.chat_widget.set_queue_autosend_suppressed(false);
         if resume_restored_queue {
             self.chat_widget.maybe_send_next_queued_input();
         }
         self.refresh_status_line();
+    }
+
+    fn insert_history_cell(&mut self, tui: &mut tui::Tui, cell: Arc<dyn HistoryCell>) {
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            t.insert_cell(cell.clone());
+            tui.frame_requester().schedule_frame();
+        }
+        self.transcript_cells.push(cell.clone());
+        let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+        if !display.is_empty() {
+            if !cell.is_stream_continuation() {
+                if self.has_emitted_history_lines {
+                    display.insert(0, Line::from(""));
+                } else {
+                    self.has_emitted_history_lines = true;
+                }
+            }
+            if self.overlay.is_some() {
+                self.deferred_history_lines.extend(display);
+            } else {
+                tui.insert_history_lines(display);
+            }
+        }
     }
 
     fn should_wait_for_initial_session(session_selection: &SessionSelection) -> bool {
@@ -2505,29 +2540,16 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => {
+                self.insert_history_cell(tui, cell.into());
+            }
+            AppEvent::InsertThreadHistoryCell { thread_id, cell } => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
-                    tui.frame_requester().schedule_frame();
+                if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+                    let mut store = channel.store.lock().await;
+                    store.push_thread_history_cell(cell.clone());
                 }
-                self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-                if !display.is_empty() {
-                    // Only insert a separating blank line for new cells that are not
-                    // part of an ongoing stream. Streaming continuations should not
-                    // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
-                        if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
-                        } else {
-                            self.has_emitted_history_lines = true;
-                        }
-                    }
-                    if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(display);
-                    } else {
-                        tui.insert_history_lines(display);
-                    }
+                if self.active_thread_id == Some(thread_id) {
+                    self.insert_history_cell(tui, cell);
                 }
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
@@ -4766,6 +4788,7 @@ mod tests {
                     }),
                 }],
                 input_state: Some(input_state),
+                thread_history_cells: Vec::new(),
             },
             true,
         );
@@ -4848,6 +4871,7 @@ mod tests {
                     }),
                 }],
                 input_state: Some(input_state),
+                thread_history_cells: Vec::new(),
             },
             false,
         );
@@ -4922,6 +4946,7 @@ mod tests {
                 session_configured: None,
                 events: vec![],
                 input_state: Some(input_state),
+                thread_history_cells: Vec::new(),
             },
             true,
         );
@@ -5012,6 +5037,7 @@ mod tests {
                     },
                 ],
                 input_state: Some(input_state),
+                thread_history_cells: Vec::new(),
             },
             true,
         );
@@ -5182,6 +5208,7 @@ mod tests {
                 session_configured: None,
                 events: vec![],
                 input_state: Some(input_state),
+                thread_history_cells: Vec::new(),
             },
             true,
         );
@@ -5282,6 +5309,7 @@ mod tests {
                 session_configured: None,
                 events: vec![],
                 input_state: Some(input_state),
+                thread_history_cells: Vec::new(),
             },
             true,
         );
@@ -5363,6 +5391,7 @@ mod tests {
                     }),
                 }],
                 input_state: Some(input_state),
+                thread_history_cells: Vec::new(),
             },
             true,
         );

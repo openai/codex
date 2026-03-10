@@ -767,13 +767,14 @@ impl RequestUserInputOverlay {
                 },
             },
         });
-        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-            history_cell::RequestUserInputResultCell {
+        self.app_event_tx.send(AppEvent::InsertThreadHistoryCell {
+            thread_id: self.thread_id,
+            cell: Box::new(history_cell::RequestUserInputResultCell {
                 questions: self.request.questions.clone(),
                 answers,
                 interrupted: false,
-            },
-        )));
+            }),
+        });
         self.finish_current_request();
     }
 
@@ -1602,7 +1603,7 @@ mod tests {
             .count();
         let history_count = events
             .iter()
-            .filter(|event| matches!(event, AppEvent::InsertHistoryCell(_)))
+            .filter(|event| matches!(event, AppEvent::InsertThreadHistoryCell { .. }))
             .count();
         assert_eq!(answer_count, 1);
         assert_eq!(history_count, 1);

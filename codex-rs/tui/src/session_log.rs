@@ -153,6 +153,16 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
             });
             LOGGER.write_json_line(value);
         }
+        AppEvent::InsertThreadHistoryCell { thread_id, cell } => {
+            let value = json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "insert_thread_history_cell",
+                "thread_id": thread_id.to_string(),
+                "lines": cell.transcript_lines(u16::MAX).len(),
+            });
+            LOGGER.write_json_line(value);
+        }
         AppEvent::StartFileSearch(query) => {
             let value = json!({
                 "ts": now_ts(),
