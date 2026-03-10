@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any
 
 from codex_app_server.client import AppServerClient, _params_dict
-from codex_app_server.generated.codex_event_types import CodexEventNotification
 from codex_app_server.generated.v2_all import ThreadListParams, ThreadTokenUsageUpdatedNotification
 from codex_app_server.models import UnknownNotification
 
@@ -72,7 +71,7 @@ def test_notifications_are_typed_with_canonical_v2_methods() -> None:
     assert event.payload.turn_id == "turn-1"
 
 
-def test_codex_event_notifications_are_typed() -> None:
+def test_unknown_notifications_fall_back_to_unknown_payloads() -> None:
     client = AppServerClient()
     event = client._coerce_notification(
         "codex/event/turn_aborted",
@@ -84,24 +83,8 @@ def test_codex_event_notifications_are_typed() -> None:
     )
 
     assert event.method == "codex/event/turn_aborted"
-    assert isinstance(event.payload, CodexEventNotification)
-    assert event.payload.msg.type == "turn_aborted"
-
-
-def test_codex_event_blank_ids_are_normalized_to_none() -> None:
-    client = AppServerClient()
-    event = client._coerce_notification(
-        "codex/event/mcp_startup_complete",
-        {
-            "id": "",
-            "conversationId": "",
-            "msg": {"type": "mcp_startup_complete"},
-        },
-    )
-
-    assert isinstance(event.payload, CodexEventNotification)
-    assert event.payload.id is None
-    assert event.payload.conversationId is None
+    assert isinstance(event.payload, UnknownNotification)
+    assert event.payload.params["msg"] == {"type": "turn_aborted"}
 
 
 def test_invalid_notification_payload_falls_back_to_unknown() -> None:

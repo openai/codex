@@ -47,7 +47,6 @@ def test_generate_types_wires_all_generation_steps() -> None:
     assert calls == [
         "generate_v2_all",
         "generate_notification_registry",
-        "generate_codex_event_types",
         "generate_public_api_flat_methods",
     ]
 

@@ -13,7 +13,6 @@ from typing import Callable, Iterable, Iterator, TypeVar
 from pydantic import BaseModel
 
 from .errors import AppServerError, TransportClosedError, map_jsonrpc_error
-from .generated.codex_event_types import CodexEventNotification
 from .generated.notification_registry import NOTIFICATION_MODELS
 from .generated.v2_all import (
     AgentMessageDeltaNotification,
@@ -42,7 +41,6 @@ from .models import (
     JsonObject,
     JsonValue,
     Notification,
-    TextTurnResult,
     UnknownNotification,
 )
 from .retry import retry_on_overload
@@ -345,14 +343,6 @@ class AppServerClient:
         }
         return self.request("turn/start", payload, response_model=TurnStartResponse)
 
-    def turn_text(
-        self,
-        thread_id: str,
-        text: str,
-        params: V2TurnStartParams | JsonObject | None = None,
-    ) -> TurnStartResponse:
-        return self.turn_start(thread_id, text, params=params)
-
     def turn_interrupt(self, thread_id: str, turn_id: str) -> TurnInterruptResponse:
         return self.request(
             "turn/interrupt",
@@ -419,75 +409,13 @@ class AppServerClient:
             if notification.method in target_methods:
                 return out
 
-    def run_text_turn(
-        self,
-        thread_id: str,
-        text: str,
-        params: V2TurnStartParams | JsonObject | None = None,
-    ) -> TextTurnResult:
-        started = self.turn_text(thread_id, text, params=params)
-        turn_id = started.turn.id
-
-        deltas: list[AgentMessageDeltaNotification] = []
-        completed: TurnCompletedNotification | None = None
-
-        while True:
-            notification = self.next_notification()
-            if (
-                notification.method == "item/agentMessage/delta"
-                and isinstance(notification.payload, AgentMessageDeltaNotification)
-                and notification.payload.turn_id == turn_id
-            ):
-                deltas.append(notification.payload)
-                continue
-            if (
-                notification.method == "turn/completed"
-                and isinstance(notification.payload, TurnCompletedNotification)
-                and notification.payload.turn.id == turn_id
-            ):
-                completed = notification.payload
-                break
-
-        if completed is None:
-            raise AppServerError("turn/completed notification not received")
-
-        return TextTurnResult(
-            thread_id=thread_id,
-            turn_id=turn_id,
-            deltas=deltas,
-            completed=completed,
-        )
-
-    def ask_result(
-        self,
-        text: str,
-        *,
-        model: str | None = None,
-        thread_id: str | None = None,
-    ) -> TextTurnResult:
-        active_thread_id = thread_id
-        if active_thread_id is None:
-            start_params = V2ThreadStartParams(model=model) if model else None
-            started = self.thread_start(start_params)
-            active_thread_id = started.thread.id
-        return self.run_text_turn(active_thread_id, text)
-
-    def ask(
-        self,
-        text: str,
-        *,
-        model: str | None = None,
-        thread_id: str | None = None,
-    ) -> TextTurnResult:
-        return self.ask_result(text, model=model, thread_id=thread_id)
-
     def stream_text(
         self,
         thread_id: str,
         text: str,
         params: V2TurnStartParams | JsonObject | None = None,
     ) -> Iterator[AgentMessageDeltaNotification]:
-        started = self.turn_text(thread_id, text, params=params)
+        started = self.turn_start(thread_id, text, params=params)
         turn_id = started.turn.id
         while True:
             notification = self.next_notification()
@@ -507,18 +435,6 @@ class AppServerClient:
 
     def _coerce_notification(self, method: str, params: object) -> Notification:
         params_dict = params if isinstance(params, dict) else {}
-
-        if method.startswith("codex/event/"):
-            event_params = dict(params_dict)
-            for key in ("id", "conversationId"):
-                value = event_params.get(key)
-                if isinstance(value, str) and value.strip() == "":
-                    event_params[key] = None
-            try:
-                payload = CodexEventNotification.model_validate(event_params)
-            except Exception:  # noqa: BLE001
-                return Notification(method=method, payload=UnknownNotification(params=params_dict))
-            return Notification(method=method, payload=payload)
 
         model = NOTIFICATION_MODELS.get(method)
         if model is None:
