@@ -3071,7 +3071,7 @@ impl CodexMessageProcessor {
                 }
             }
         } else {
-            let Some(thread) = loaded_thread else {
+            let Some(thread) = loaded_thread.as_ref() else {
                 self.send_invalid_request_error(
                     request_id,
                     format!("thread not loaded: {thread_uuid}"),
@@ -3125,11 +3125,21 @@ impl CodexMessageProcessor {
             }
         }
 
-        thread.status = resolve_thread_status(
-            self.thread_watch_manager
-                .loaded_status_for_thread(&thread.id)
-                .await,
-            false,
+        let has_live_in_progress_turn = if let Some(loaded_thread) = loaded_thread.as_ref() {
+            matches!(loaded_thread.agent_status().await, AgentStatus::Running)
+        } else {
+            false
+        };
+
+        let thread_status = self
+            .thread_watch_manager
+            .loaded_status_for_thread(&thread.id)
+            .await;
+
+        set_thread_status_and_interrupt_stale_turns(
+            &mut thread,
+            thread_status,
+            has_live_in_progress_turn,
         );
         let response = ThreadReadResponse { thread };
         self.outgoing.send_response(request_id, response).await;
@@ -3337,12 +3347,12 @@ impl CodexMessageProcessor {
                     .upsert_thread(thread.clone())
                     .await;
 
-                thread.status = resolve_thread_status(
-                    self.thread_watch_manager
-                        .loaded_status_for_thread(&thread.id)
-                        .await,
-                    false,
-                );
+                let thread_status = self
+                    .thread_watch_manager
+                    .loaded_status_for_thread(&thread.id)
+                    .await;
+
+                set_thread_status_and_interrupt_stale_turns(&mut thread, thread_status, false);
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -5293,15 +5303,53 @@ impl CodexMessageProcessor {
 
     async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {
         let plugins_manager = self.thread_manager.plugins_manager();
-        let roots = params.cwds.unwrap_or_default();
+        let PluginListParams {
+            cwds,
+            force_remote_sync,
+        } = params;
+        let roots = cwds.unwrap_or_default();
 
-        let config = match self.load_latest_config(None).await {
+        let mut config = match self.load_latest_config(None).await {
             Ok(config) => config,
             Err(err) => {
                 self.outgoing.send_error(request_id, err).await;
                 return;
             }
         };
+        let mut remote_sync_error = None;
+
+        if force_remote_sync {
+            let auth = self.auth_manager.auth().await;
+            match plugins_manager
+                .sync_plugins_from_remote(&config, auth.as_ref())
+                .await
+            {
+                Ok(sync_result) => {
+                    info!(
+                        installed_plugin_ids = ?sync_result.installed_plugin_ids,
+                        enabled_plugin_ids = ?sync_result.enabled_plugin_ids,
+                        disabled_plugin_ids = ?sync_result.disabled_plugin_ids,
+                        uninstalled_plugin_ids = ?sync_result.uninstalled_plugin_ids,
+                        "completed plugin/list remote sync"
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "plugin/list remote sync failed; returning local marketplace state"
+                    );
+                    remote_sync_error = Some(err.to_string());
+                }
+            }
+
+            config = match self.load_latest_config(None).await {
+                Ok(config) => config,
+                Err(err) => {
+                    self.outgoing.send_error(request_id, err).await;
+                    return;
+                }
+            };
+        }
 
         let data = match tokio::task::spawn_blocking(move || {
             let marketplaces = plugins_manager.list_marketplaces_for_config(&config, &roots)?;
@@ -5365,7 +5413,13 @@ impl CodexMessageProcessor {
         };
 
         self.outgoing
-            .send_response(request_id, PluginListResponse { marketplaces: data })
+            .send_response(
+                request_id,
+                PluginListResponse {
+                    marketplaces: data,
+                    remote_sync_error,
+                },
+            )
             .await;
     }
 
@@ -6493,6 +6547,7 @@ impl CodexMessageProcessor {
                         };
                         handle_thread_listener_command(
                             conversation_id,
+                            &conversation,
                             codex_home.as_path(),
                             &thread_state_manager,
                             &thread_state,
@@ -6862,8 +6917,10 @@ impl CodexMessageProcessor {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_thread_listener_command(
     conversation_id: ThreadId,
+    conversation: &Arc<CodexThread>,
     codex_home: &Path,
     thread_state_manager: &ThreadStateManager,
     thread_state: &Arc<Mutex<ThreadState>>,
@@ -6875,6 +6932,7 @@ async fn handle_thread_listener_command(
         ThreadListenerCommand::SendThreadResumeResponse(resume_request) => {
             handle_pending_thread_resume_request(
                 conversation_id,
+                conversation,
                 codex_home,
                 thread_state_manager,
                 thread_state,
@@ -6900,8 +6958,10 @@ async fn handle_thread_listener_command(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_pending_thread_resume_request(
     conversation_id: ThreadId,
+    conversation: &Arc<CodexThread>,
     codex_home: &Path,
     thread_state_manager: &ThreadStateManager,
     thread_state: &Arc<Mutex<ThreadState>>,
@@ -6921,9 +6981,11 @@ async fn handle_pending_thread_resume_request(
         active_turn_status = ?active_turn.as_ref().map(|turn| &turn.status),
         "composing running thread resume response"
     );
-    let mut has_in_progress_turn = active_turn
-        .as_ref()
-        .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
+    let has_live_in_progress_turn =
+        matches!(conversation.agent_status().await, AgentStatus::Running)
+            || active_turn
+                .as_ref()
+                .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
 
     let request_id = pending.request_id;
     let connection_id = request_id.connection_id;
@@ -6948,19 +7010,15 @@ async fn handle_pending_thread_resume_request(
         return;
     }
 
-    has_in_progress_turn = has_in_progress_turn
-        || thread
-            .turns
-            .iter()
-            .any(|turn| matches!(turn.status, TurnStatus::InProgress));
+    let thread_status = thread_watch_manager
+        .loaded_status_for_thread(&thread.id)
+        .await;
 
-    let status = resolve_thread_status(
-        thread_watch_manager
-            .loaded_status_for_thread(&thread.id)
-            .await,
-        has_in_progress_turn,
+    set_thread_status_and_interrupt_stale_turns(
+        &mut thread,
+        thread_status,
+        has_live_in_progress_turn,
     );
-    thread.status = status;
 
     match find_thread_name_by_id(codex_home, &conversation_id).await {
         Ok(thread_name) => thread.name = thread_name,
@@ -7056,6 +7114,22 @@ async fn resolve_pending_server_request(
 fn merge_turn_history_with_active_turn(turns: &mut Vec<Turn>, active_turn: Turn) {
     turns.retain(|turn| turn.id != active_turn.id);
     turns.push(active_turn);
+}
+
+fn set_thread_status_and_interrupt_stale_turns(
+    thread: &mut Thread,
+    loaded_status: ThreadStatus,
+    has_live_in_progress_turn: bool,
+) {
+    let status = resolve_thread_status(loaded_status, has_live_in_progress_turn);
+    if !matches!(status, ThreadStatus::Active { .. }) {
+        for turn in &mut thread.turns {
+            if matches!(turn.status, TurnStatus::InProgress) {
+                turn.status = TurnStatus::Interrupted;
+            }
+        }
+    }
+    thread.status = status;
 }
 
 fn collect_resume_override_mismatches(

@@ -242,9 +242,6 @@ pub(crate) fn rewrite_image_generation_calls_for_stateless_input(items: &mut Vec
                             text: format!("Prompt: {revised_prompt}"),
                         },
                         ContentItem::InputImage { image_url },
-                        ContentItem::InputText {
-                            text: "Saved to: CWD".to_string(),
-                        },
                     ],
                     end_turn: None,
                     phase: None,

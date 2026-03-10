@@ -249,7 +249,6 @@ function createModuleResolver(context, protocol, enabledTools, storedValues) {
     if (specifier === '@openai/code_mode' || specifier === 'openai/code_mode') {
       return codeModeModule;
     }
-
     const namespacedMatch = /^tools\/(.+)\.js$/.exec(specifier);
     if (!namespacedMatch) {
       throw new Error(`Unsupported import in code_mode: ${specifier}`);

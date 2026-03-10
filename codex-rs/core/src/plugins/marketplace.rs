@@ -106,6 +106,34 @@ pub fn list_marketplaces(
     list_marketplaces_with_home(additional_roots, home_dir().as_deref())
 }
 
+pub(crate) fn load_marketplace_summary(
+    path: &AbsolutePathBuf,
+) -> Result<MarketplaceSummary, MarketplaceError> {
+    let marketplace = load_marketplace(path)?;
+    let mut plugins = Vec::new();
+
+    for plugin in marketplace.plugins {
+        let source_path = resolve_plugin_source_path(path, plugin.source)?;
+        let source = MarketplacePluginSourceSummary::Local {
+            path: source_path.clone(),
+        };
+        let interface = load_plugin_manifest(source_path.as_path())
+            .and_then(|manifest| plugin_manifest_interface(&manifest, source_path.as_path()));
+
+        plugins.push(MarketplacePluginSummary {
+            name: plugin.name,
+            source,
+            interface,
+        });
+    }
+
+    Ok(MarketplaceSummary {
+        name: marketplace.name,
+        path: path.clone(),
+        plugins,
+    })
+}
+
 fn list_marketplaces_with_home(
     additional_roots: &[AbsolutePathBuf],
     home_dir: Option<&Path>,
@@ -113,29 +141,7 @@ fn list_marketplaces_with_home(
     let mut marketplaces = Vec::new();
 
     for marketplace_path in discover_marketplace_paths_from_roots(additional_roots, home_dir) {
-        let marketplace = load_marketplace(&marketplace_path)?;
-        let mut plugins = Vec::new();
-
-        for plugin in marketplace.plugins {
-            let source_path = resolve_plugin_source_path(&marketplace_path, plugin.source)?;
-            let source = MarketplacePluginSourceSummary::Local {
-                path: source_path.clone(),
-            };
-            let interface = load_plugin_manifest(source_path.as_path())
-                .and_then(|manifest| plugin_manifest_interface(&manifest, source_path.as_path()));
-
-            plugins.push(MarketplacePluginSummary {
-                name: plugin.name,
-                source,
-                interface,
-            });
-        }
-
-        marketplaces.push(MarketplaceSummary {
-            name: marketplace.name,
-            path: marketplace_path,
-            plugins,
-        });
+        marketplaces.push(load_marketplace_summary(&marketplace_path)?);
     }
 
     Ok(marketplaces)
