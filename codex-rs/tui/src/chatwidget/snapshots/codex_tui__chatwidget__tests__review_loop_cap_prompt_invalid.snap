@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: "render_bottom_popup(&chat, 70)"
+---
+▌ Set max fix attempts
+▌ Enter a positive integer.
+▌
+▌ 0
+
+Press enter to confirm or esc to go back

@@ -7,8 +7,8 @@ use crate::operations::resolve_head;
 use crate::operations::resolve_repository_root;
 use crate::operations::run_git_for_stdout;
 
-/// Returns the merge-base commit between `HEAD` and the latest version between local
-/// and remote of the provided branch, if both exist.
+/// Returns the merge-base commit between `HEAD` and the provided branch using
+/// only refs already available in the local repository.
 ///
 /// The function mirrors `git merge-base HEAD <branch>` but returns `Ok(None)` when
 /// the repository has no `HEAD` yet or when the branch cannot be resolved.
@@ -69,25 +69,8 @@ fn resolve_upstream_if_remote_ahead(
     repo_root: &Path,
     branch: &str,
 ) -> Result<Option<String>, GitToolingError> {
-    let upstream = match run_git_for_stdout(
-        repo_root,
-        vec![
-            OsString::from("rev-parse"),
-            OsString::from("--abbrev-ref"),
-            OsString::from("--symbolic-full-name"),
-            OsString::from(format!("{branch}@{{upstream}}")),
-        ],
-        None,
-    ) {
-        Ok(name) => {
-            let trimmed = name.trim();
-            if trimmed.is_empty() {
-                return Ok(None);
-            }
-            trimmed.to_string()
-        }
-        Err(GitToolingError::GitCommand { .. }) => return Ok(None),
-        Err(other) => return Err(other),
+    let Some(upstream) = resolve_upstream_branch(repo_root, branch)? else {
+        return Ok(None);
     };
 
     let counts = match run_git_for_stdout(
@@ -113,6 +96,39 @@ fn resolve_upstream_if_remote_ahead(
         Ok(Some(upstream))
     } else {
         Ok(None)
+    }
+}
+
+pub fn branch_upstream(repo_path: &Path, branch: &str) -> Result<Option<String>, GitToolingError> {
+    ensure_git_repository(repo_path)?;
+    let repo_root = resolve_repository_root(repo_path)?;
+    resolve_upstream_branch(repo_root.as_path(), branch)
+}
+
+fn resolve_upstream_branch(
+    repo_root: &Path,
+    branch: &str,
+) -> Result<Option<String>, GitToolingError> {
+    match run_git_for_stdout(
+        repo_root,
+        vec![
+            OsString::from("rev-parse"),
+            OsString::from("--abbrev-ref"),
+            OsString::from("--symbolic-full-name"),
+            OsString::from(format!("{branch}@{{upstream}}")),
+        ],
+        None,
+    ) {
+        Ok(name) => {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        Err(GitToolingError::GitCommand { .. }) => Ok(None),
+        Err(other) => Err(other),
     }
 }
 

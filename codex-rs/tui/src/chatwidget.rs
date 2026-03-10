@@ -64,11 +64,14 @@ use codex_core::features::Feature;
 use codex_core::find_thread_name_by_id;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::get_git_repo_root;
+use codex_core::git_info::get_has_changes;
+use codex_core::git_info::get_head_commit_hash;
 use codex_core::git_info::local_git_branches;
 use codex_core::mcp::McpManager;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::plugins::PluginsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
+use codex_core::review_format::render_review_output_text;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
 use codex_core::terminal::terminal_info;
@@ -125,6 +128,7 @@ use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -161,6 +165,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tracing::debug;
@@ -179,7 +184,6 @@ const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
 const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
-
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
 /// Apple Terminal, Warp, and VSCode integrated terminals intercept or silently
@@ -525,6 +529,49 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum ReviewSelectorMode {
+    #[default]
+    SingleReview,
+    ReviewLoop {
+        inline_instructions: Option<String>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ReviewLoopDraft {
+    target: ReviewTarget,
+    selector_inline_instructions: Option<String>,
+    extra_reviewer_instructions: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ReviewLoopSpec {
+    target: ReviewTarget,
+    extra_reviewer_instructions: Option<String>,
+    max_fix_attempts: Option<u32>,
+    requires_commit: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ReviewLoopStage {
+    Preparing,
+    Reviewing,
+    AwaitingFixTurn,
+    Fixing,
+    AwaitingCommitValidation,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ReviewLoopState {
+    generation: u64,
+    spec: ReviewLoopSpec,
+    stage: ReviewLoopStage,
+    fix_attempts_started: u32,
+    baseline_head_sha: Option<String>,
+    pending_review_output: Option<ReviewOutputEvent>,
+}
+
 /// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
 /// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
@@ -651,6 +698,9 @@ pub(crate) struct ChatWidget {
     quit_shortcut_key: Option<KeyBinding>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
+    review_selector_mode: ReviewSelectorMode,
+    pending_review_loop_draft: Option<ReviewLoopDraft>,
+    review_loop_state: Option<ReviewLoopState>,
     // Snapshot of token usage to restore after review mode exits.
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
     // Whether the next streamed assistant content should be preceded by a final message separator.
@@ -1613,10 +1663,19 @@ impl ChatWidget {
         self.unified_exec_wait_streak = None;
         self.request_redraw();
 
+        let review_loop_consumed_turn = if from_replay {
+            false
+        } else {
+            self.handle_review_loop_turn_complete()
+        };
         let had_pending_steers = !self.pending_steers.is_empty();
         self.refresh_pending_input_preview();
 
-        if !from_replay && self.queued_user_messages.is_empty() && !had_pending_steers {
+        if !from_replay
+            && !review_loop_consumed_turn
+            && self.queued_user_messages.is_empty()
+            && !had_pending_steers
+        {
             self.maybe_prompt_plan_implementation();
         }
         // Keep this flag for replayed completion events so a subsequent live TurnComplete can
@@ -1625,7 +1684,9 @@ impl ChatWidget {
             self.saw_plan_item_this_turn = false;
         }
         // If there is a queued user message, send exactly one now to begin the next turn.
-        self.maybe_send_next_queued_input();
+        if !review_loop_consumed_turn {
+            self.maybe_send_next_queued_input();
+        }
         // Emit a notification when the turn completes (suppressed if focused).
         self.notify(Notification::AgentTurnComplete {
             response: last_agent_message.unwrap_or_default(),
@@ -1918,6 +1979,7 @@ impl ChatWidget {
     }
 
     fn on_server_overloaded_error(&mut self, message: String) {
+        self.clear_review_loop_state();
         self.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
 
@@ -1933,6 +1995,7 @@ impl ChatWidget {
     }
 
     fn on_error(&mut self, message: String) {
+        self.clear_review_loop_state();
         self.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
         self.add_to_history(history_cell::new_error_event(message));
@@ -2019,6 +2082,7 @@ impl ChatWidget {
     /// When there are queued user messages, restore them into the composer
     /// separated by newlines rather than auto‑submitting the next one.
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
+        self.clear_review_loop_state();
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
         if reason == TurnAbortReason::Interrupted {
@@ -3228,6 +3292,9 @@ impl ChatWidget {
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
             is_review_mode: false,
+            review_selector_mode: ReviewSelectorMode::SingleReview,
+            pending_review_loop_draft: None,
+            review_loop_state: None,
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
@@ -3269,6 +3336,7 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(true);
         widget.sync_fast_command_enabled();
         widget.sync_personality_command_enabled();
+        widget.sync_review_loop_command_enabled();
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
@@ -3415,6 +3483,9 @@ impl ChatWidget {
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
             is_review_mode: false,
+            review_selector_mode: ReviewSelectorMode::SingleReview,
+            pending_review_loop_draft: None,
+            review_loop_state: None,
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
@@ -3452,6 +3523,7 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(true);
         widget.sync_fast_command_enabled();
         widget.sync_personality_command_enabled();
+        widget.sync_review_loop_command_enabled();
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
@@ -3586,6 +3658,9 @@ impl ChatWidget {
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
             is_review_mode: false,
+            review_selector_mode: ReviewSelectorMode::SingleReview,
+            pending_review_loop_draft: None,
+            review_loop_state: None,
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
@@ -3627,6 +3702,7 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(true);
         widget.sync_fast_command_enabled();
         widget.sync_personality_command_enabled();
+        widget.sync_review_loop_command_enabled();
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
@@ -3770,8 +3846,12 @@ impl ChatWidget {
                     else {
                         return;
                     };
-                    let should_submit_now =
-                        self.is_session_configured() && !self.is_plan_streaming_in_tui();
+                    // Plan-mode streaming and review loops cannot accept a new user turn yet.
+                    // Final-answer streaming uses pending steers instead, so those should still
+                    // submit immediately and remain visible in the pending preview.
+                    let should_submit_now = self.is_session_configured()
+                        && !self.is_plan_streaming_in_tui()
+                        && self.review_loop_state.is_none();
                     if should_submit_now {
                         // Submitted is emitted when user submits.
                         // Reset any reasoning header only when we are actually submitting a turn.
@@ -3879,7 +3959,12 @@ impl ChatWidget {
     }
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {
-        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+        if cmd == SlashCommand::ReviewLoop && self.review_loop_command_not_enabled() {
+            return;
+        }
+        if !cmd.available_during_task()
+            && (self.bottom_pane.is_task_running() || self.review_loop_state.is_some())
+        {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
                 cmd.command()
@@ -3933,6 +4018,9 @@ impl ChatWidget {
             }
             SlashCommand::Review => {
                 self.open_review_popup();
+            }
+            SlashCommand::ReviewLoop => {
+                self.open_review_loop_popup(None);
             }
             SlashCommand::Rename => {
                 self.session_telemetry
@@ -4213,11 +4301,16 @@ impl ChatWidget {
         args: String,
         _text_elements: Vec<TextElement>,
     ) {
+        if cmd == SlashCommand::ReviewLoop && self.review_loop_command_not_enabled() {
+            return;
+        }
         if !cmd.supports_inline_args() {
             self.dispatch_command(cmd);
             return;
         }
-        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+        if !cmd.available_during_task()
+            && (self.bottom_pane.is_task_running() || self.review_loop_state.is_some())
+        {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
                 cmd.command()
@@ -4312,8 +4405,18 @@ impl ChatWidget {
                             instructions: prepared_args,
                         },
                         user_facing_hint: None,
+                        validate_findings: false,
                     },
                 });
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::ReviewLoop if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(false)
+                else {
+                    return;
+                };
+                self.open_review_loop_popup(Some(prepared_args));
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
@@ -4330,6 +4433,20 @@ impl ChatWidget {
             }
             _ => self.dispatch_command(cmd),
         }
+    }
+
+    fn review_loop_command_not_enabled(&mut self) -> bool {
+        if self.config.features.enabled(Feature::ReviewLoop) {
+            return false;
+        }
+
+        self.add_info_message(
+            "Review loop is disabled.".to_string(),
+            Some("Enable the `review_loop` feature to use /review-loop.".to_string()),
+        );
+        self.bottom_pane.drain_pending_submission_state();
+        self.request_redraw();
+        true
     }
 
     fn show_rename_prompt(&mut self) {
@@ -4350,15 +4467,14 @@ impl ChatWidget {
             None,
             Box::new(move |name: String| {
                 let Some(name) = codex_core::util::normalize_thread_name(&name) else {
-                    tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_error_event("Thread name cannot be empty.".to_string()),
-                    )));
-                    return;
+                    return Err("Thread name cannot be empty.".to_string());
                 };
                 let cell = Self::rename_confirmation_cell(&name, thread_id);
                 tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
                 tx.send(AppEvent::CodexOp(Op::SetThreadName { name }));
+                Ok(())
             }),
+            None,
         );
 
         self.bottom_pane.show_view(Box::new(view));
@@ -4418,6 +4534,7 @@ impl ChatWidget {
         if !self.is_session_configured()
             || self.bottom_pane.is_task_running()
             || self.is_review_mode
+            || self.review_loop_state.is_some()
         {
             self.queued_user_messages.push_back(user_message);
             self.refresh_pending_input_preview();
@@ -4427,6 +4544,15 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        self.submit_user_message_with_collaboration_mode(user_message, None, None)
+    }
+
+    fn submit_user_message_with_collaboration_mode(
+        &mut self,
+        user_message: UserMessage,
+        collaboration_mode_override: Option<CollaborationMode>,
+        final_output_json_schema: Option<Value>,
+    ) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
@@ -4609,13 +4735,15 @@ impl ChatWidget {
         }
 
         let effective_mode = self.effective_collaboration_mode();
-        let collaboration_mode = if self.collaboration_modes_enabled() {
-            self.active_collaboration_mask
-                .as_ref()
-                .map(|_| effective_mode.clone())
-        } else {
-            None
-        };
+        let collaboration_mode = collaboration_mode_override.or_else(|| {
+            if self.collaboration_modes_enabled() {
+                self.active_collaboration_mask
+                    .as_ref()
+                    .map(|_| effective_mode.clone())
+            } else {
+                None
+            }
+        });
         let pending_steer = (!render_in_history).then(|| PendingSteer {
             user_message: UserMessage {
                 text: text.clone(),
@@ -4641,7 +4769,7 @@ impl ChatWidget {
             effort: effective_mode.reasoning_effort(),
             summary: None,
             service_tier,
-            final_output_json_schema: None,
+            final_output_json_schema,
             collaboration_mode,
             personality,
         };
@@ -5089,7 +5217,69 @@ impl ChatWidget {
                         .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
                 }
             }
+            if self.review_loop_state.is_some() {
+                if output.findings.is_empty() {
+                    if self.review_loop_state.as_ref().is_some_and(|state| {
+                        state.fix_attempts_started == 0
+                            && matches!(state.spec.target, ReviewTarget::Commit { .. })
+                            && output.overall_correctness.trim().is_empty()
+                            && output.overall_confidence_score == 0.0
+                    }) {
+                        self.clear_review_loop_state();
+                        self.add_error_message(
+                            "Review loop stopped because reviewer did not return valid structured output."
+                                .to_string(),
+                        );
+                    } else {
+                        self.clear_review_loop_state();
+                    }
+                } else {
+                    let stop_message = if let Some(state) = self.review_loop_state.as_mut() {
+                        if let Some(max_fix_attempts) = state.spec.max_fix_attempts
+                            && state.fix_attempts_started >= max_fix_attempts
+                        {
+                            Some(format!(
+                                "Review loop stopped after reaching the limit of {max_fix_attempts} fix attempt{}.",
+                                if max_fix_attempts == 1 { "" } else { "s" }
+                            ))
+                        } else {
+                            state.pending_review_output = Some(output);
+                            state.stage = ReviewLoopStage::AwaitingFixTurn;
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(message) = stop_message {
+                        self.clear_review_loop_state();
+                        self.add_info_message(message, None);
+                    }
+                }
+            }
             // Final message is rendered as part of the AgentMessage.
+        } else if let Some(failure_message) = review.failure_message {
+            self.flush_answer_stream_with_separator();
+            self.flush_interrupt_queue();
+            self.flush_active_cell();
+
+            let failure_message = failure_message.trim().to_string();
+            let failure_message = if failure_message.is_empty() {
+                "Review turn did not finish cleanly.".to_string()
+            } else {
+                failure_message
+            };
+            if self.review_loop_state.is_some() {
+                self.clear_review_loop_state();
+            } else {
+                tracing::debug!(
+                    "review failed cleanly; relying on final assistant message: {failure_message}"
+                );
+            }
+        } else if self.review_loop_state.is_some() {
+            self.clear_review_loop_state();
+            self.add_error_message(
+                "Review loop stopped because the review turn did not finish cleanly.".to_string(),
+            );
         }
 
         self.is_review_mode = false;
@@ -5209,6 +5399,107 @@ impl ChatWidget {
             .collect();
         self.bottom_pane
             .set_pending_input_preview(queued_messages, pending_steers);
+    }
+
+    fn handle_review_loop_turn_complete(&mut self) -> bool {
+        enum Action {
+            Stop(String),
+            SubmitFix(String),
+            ValidateCommit { generation: u64, cwd: PathBuf },
+            ReviewAgain,
+            Hold,
+            None,
+        }
+
+        let cwd = self.config.cwd.clone();
+        let action = {
+            let Some(state) = self.review_loop_state.as_mut() else {
+                return false;
+            };
+            match state.stage {
+                ReviewLoopStage::AwaitingFixTurn => match state.pending_review_output.take() {
+                    Some(review_output) => {
+                        state.fix_attempts_started += 1;
+                        state.stage = ReviewLoopStage::Fixing;
+                        let requires_commit = state.spec.requires_commit;
+                        let mut prompt = "Please implement fixes for these findings and rerun the relevant test suites to ensure they are passing.".to_string();
+                        let findings_text = render_review_output_text(&review_output);
+                        if !findings_text.trim().is_empty() {
+                            prompt.push_str("\n\n");
+                            prompt.push_str(&findings_text);
+                        }
+                        if requires_commit {
+                            prompt.push_str(
+                                "\n\nBefore finishing, commit the fixes in a new git commit so the next review pass includes them.",
+                            );
+                        }
+                        Action::SubmitFix(prompt)
+                    }
+                    None => Action::Stop(
+                        "Review loop stopped because the review findings were not available."
+                            .to_string(),
+                    ),
+                },
+                ReviewLoopStage::Fixing if state.spec.requires_commit => {
+                    state.stage = ReviewLoopStage::AwaitingCommitValidation;
+                    Action::ValidateCommit {
+                        generation: state.generation,
+                        cwd,
+                    }
+                }
+                ReviewLoopStage::Fixing => {
+                    state.stage = ReviewLoopStage::Reviewing;
+                    Action::ReviewAgain
+                }
+                ReviewLoopStage::AwaitingCommitValidation => Action::Hold,
+                ReviewLoopStage::Preparing | ReviewLoopStage::Reviewing => Action::None,
+            }
+        };
+
+        match action {
+            Action::Stop(message) => {
+                self.clear_review_loop_state();
+                self.add_error_message(message);
+                false
+            }
+            Action::SubmitFix(prompt) => {
+                self.reasoning_buffer.clear();
+                self.full_reasoning_buffer.clear();
+                self.set_status_header(String::from("Working"));
+                let default_collaboration_mode =
+                    collaboration_modes::default_mask(self.models_manager.as_ref())
+                        .map(|mask| self.current_collaboration_mode.apply_mask(&mask));
+                self.submit_user_message_with_collaboration_mode(
+                    prompt.into(),
+                    default_collaboration_mode,
+                    None,
+                );
+                true
+            }
+            Action::ValidateCommit { generation, cwd } => {
+                let tx = self.app_event_tx.clone();
+                tokio::spawn(async move {
+                    let head_sha = get_head_commit_hash(&cwd).await;
+                    let has_changes = get_has_changes(&cwd).await;
+                    tx.send(AppEvent::ReviewLoopCommitValidationResolved {
+                        generation,
+                        head_sha,
+                        has_changes,
+                    });
+                });
+                true
+            }
+            Action::ReviewAgain => {
+                if let Err(err) = self.submit_review_loop_review() {
+                    self.clear_review_loop_state();
+                    self.add_error_message(err);
+                    return false;
+                }
+                true
+            }
+            Action::Hold => true,
+            Action::None => false,
+        }
     }
 
     pub(crate) fn set_pending_thread_approvals(&mut self, threads: Vec<String>) {
@@ -7288,6 +7579,9 @@ impl ChatWidget {
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
         }
+        if feature == Feature::ReviewLoop {
+            self.sync_review_loop_command_enabled();
+        }
         if feature == Feature::Plugins {
             self.refresh_plugin_mentions();
         }
@@ -7475,6 +7769,11 @@ impl ChatWidget {
     fn sync_personality_command_enabled(&mut self) {
         self.bottom_pane
             .set_personality_command_enabled(self.config.features.enabled(Feature::Personality));
+    }
+
+    fn sync_review_loop_command_enabled(&mut self) {
+        self.bottom_pane
+            .set_review_loop_command_enabled(self.config.features.enabled(Feature::ReviewLoop));
     }
 
     fn current_model_supports_personality(&self) -> bool {
@@ -8115,7 +8414,7 @@ impl ChatWidget {
             return;
         }
         self.set_collaboration_mask(collaboration_mode);
-        let should_queue = self.is_plan_streaming_in_tui();
+        let should_queue = self.is_plan_streaming_in_tui() || self.review_loop_state.is_some();
         let user_message = UserMessage {
             text,
             local_images: Vec::new(),
@@ -8321,6 +8620,21 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_review_popup(&mut self) {
+        self.review_selector_mode = ReviewSelectorMode::SingleReview;
+        self.pending_review_loop_draft = None;
+        self.show_review_selector();
+    }
+
+    pub(crate) fn open_review_loop_popup(&mut self, inline_instructions: Option<String>) {
+        self.review_selector_mode = ReviewSelectorMode::ReviewLoop {
+            inline_instructions,
+        };
+        self.pending_review_loop_draft = None;
+        self.show_review_selector();
+    }
+
+    fn show_review_selector(&mut self) {
+        let selector_mode = self.review_selector_mode.clone();
         let mut items: Vec<SelectionItem> = Vec::new();
 
         items.push(SelectionItem {
@@ -8336,21 +8650,34 @@ impl ChatWidget {
             ..Default::default()
         });
 
+        let selector_mode_for_uncommitted = selector_mode.clone();
         items.push(SelectionItem {
             name: "Review uncommitted changes".to_string(),
-            actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::CodexOp(Op::Review {
-                    review_request: ReviewRequest {
-                        target: ReviewTarget::UncommittedChanges,
-                        user_facing_hint: None,
-                    },
-                }));
-            })],
+            actions: vec![Box::new(
+                move |tx: &AppEventSender| match &selector_mode_for_uncommitted {
+                    ReviewSelectorMode::SingleReview => {
+                        tx.send(AppEvent::CodexOp(Op::Review {
+                            review_request: ReviewRequest {
+                                target: ReviewTarget::UncommittedChanges,
+                                user_facing_hint: None,
+                                validate_findings: false,
+                            },
+                        }));
+                    }
+                    ReviewSelectorMode::ReviewLoop {
+                        inline_instructions,
+                    } => {
+                        tx.send(AppEvent::ReviewLoopTargetSelected {
+                            target: ReviewTarget::UncommittedChanges,
+                            inline_instructions: inline_instructions.clone(),
+                        });
+                    }
+                },
+            )],
             dismiss_on_select: true,
             ..Default::default()
         });
 
-        // New: Review a specific commit (opens commit picker)
         items.push(SelectionItem {
             name: "Review a commit".to_string(),
             actions: vec![Box::new({
@@ -8363,12 +8690,36 @@ impl ChatWidget {
             ..Default::default()
         });
 
+        let selector_mode_for_custom = selector_mode;
+        let custom_dismiss_on_select = matches!(
+            selector_mode_for_custom,
+            ReviewSelectorMode::ReviewLoop {
+                inline_instructions: Some(_)
+            }
+        );
         items.push(SelectionItem {
             name: "Custom review instructions".to_string(),
-            actions: vec![Box::new(move |tx| {
-                tx.send(AppEvent::OpenReviewCustomPrompt);
+            actions: vec![Box::new(move |tx| match &selector_mode_for_custom {
+                ReviewSelectorMode::SingleReview => {
+                    tx.send(AppEvent::OpenReviewCustomPrompt);
+                }
+                ReviewSelectorMode::ReviewLoop {
+                    inline_instructions: Some(inline_instructions),
+                } => {
+                    tx.send(AppEvent::ReviewLoopTargetSelected {
+                        target: ReviewTarget::Custom {
+                            instructions: inline_instructions.clone(),
+                        },
+                        inline_instructions: Some(inline_instructions.clone()),
+                    });
+                }
+                ReviewSelectorMode::ReviewLoop {
+                    inline_instructions: None,
+                } => {
+                    tx.send(AppEvent::OpenReviewCustomPrompt);
+                }
             })],
-            dismiss_on_select: false,
+            dismiss_on_select: custom_dismiss_on_select,
             ..Default::default()
         });
 
@@ -8381,6 +8732,7 @@ impl ChatWidget {
     }
 
     pub(crate) async fn show_review_branch_picker(&mut self, cwd: &Path) {
+        let selector_mode = self.review_selector_mode.clone();
         let branches = local_git_branches(cwd).await;
         let current_branch = current_branch_name(cwd)
             .await
@@ -8389,17 +8741,31 @@ impl ChatWidget {
 
         for option in branches {
             let branch = option.clone();
+            let selector_mode = selector_mode.clone();
             items.push(SelectionItem {
                 name: format!("{current_branch} -> {branch}"),
-                actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    tx3.send(AppEvent::CodexOp(Op::Review {
-                        review_request: ReviewRequest {
+                actions: vec![Box::new(move |tx3: &AppEventSender| match &selector_mode {
+                    ReviewSelectorMode::SingleReview => {
+                        tx3.send(AppEvent::CodexOp(Op::Review {
+                            review_request: ReviewRequest {
+                                target: ReviewTarget::BaseBranch {
+                                    branch: branch.clone(),
+                                },
+                                user_facing_hint: None,
+                                validate_findings: false,
+                            },
+                        }));
+                    }
+                    ReviewSelectorMode::ReviewLoop {
+                        inline_instructions,
+                    } => {
+                        tx3.send(AppEvent::ReviewLoopTargetSelected {
                             target: ReviewTarget::BaseBranch {
                                 branch: branch.clone(),
                             },
-                            user_facing_hint: None,
-                        },
-                    }));
+                            inline_instructions: inline_instructions.clone(),
+                        });
+                    }
                 })],
                 dismiss_on_select: true,
                 search_value: Some(option),
@@ -8418,6 +8784,7 @@ impl ChatWidget {
     }
 
     pub(crate) async fn show_review_commit_picker(&mut self, cwd: &Path) {
+        let selector_mode = self.review_selector_mode.clone();
         let commits = codex_core::git_info::recent_commits(cwd, 100).await;
 
         let mut items: Vec<SelectionItem> = Vec::with_capacity(commits.len());
@@ -8425,19 +8792,34 @@ impl ChatWidget {
             let subject = entry.subject.clone();
             let sha = entry.sha.clone();
             let search_val = format!("{subject} {sha}");
+            let selector_mode = selector_mode.clone();
 
             items.push(SelectionItem {
                 name: subject.clone(),
-                actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    tx3.send(AppEvent::CodexOp(Op::Review {
-                        review_request: ReviewRequest {
+                actions: vec![Box::new(move |tx3: &AppEventSender| match &selector_mode {
+                    ReviewSelectorMode::SingleReview => {
+                        tx3.send(AppEvent::CodexOp(Op::Review {
+                            review_request: ReviewRequest {
+                                target: ReviewTarget::Commit {
+                                    sha: sha.clone(),
+                                    title: Some(subject.clone()),
+                                },
+                                user_facing_hint: None,
+                                validate_findings: false,
+                            },
+                        }));
+                    }
+                    ReviewSelectorMode::ReviewLoop {
+                        inline_instructions,
+                    } => {
+                        tx3.send(AppEvent::ReviewLoopTargetSelected {
                             target: ReviewTarget::Commit {
                                 sha: sha.clone(),
                                 title: Some(subject.clone()),
                             },
-                            user_facing_hint: None,
-                        },
-                    }));
+                            inline_instructions: inline_instructions.clone(),
+                        });
+                    }
                 })],
                 dismiss_on_select: true,
                 search_value: Some(search_val),
@@ -8456,6 +8838,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn show_review_custom_prompt(&mut self) {
+        let selector_mode = self.review_selector_mode.clone();
         let tx = self.app_event_tx.clone();
         let view = CustomPromptView::new(
             "Custom review instructions".to_string(),
@@ -8464,19 +8847,349 @@ impl ChatWidget {
             Box::new(move |prompt: String| {
                 let trimmed = prompt.trim().to_string();
                 if trimmed.is_empty() {
-                    return;
+                    return Err("Review prompt cannot be empty.".to_string());
                 }
-                tx.send(AppEvent::CodexOp(Op::Review {
-                    review_request: ReviewRequest {
-                        target: ReviewTarget::Custom {
-                            instructions: trimmed,
-                        },
-                        user_facing_hint: None,
-                    },
-                }));
+                match &selector_mode {
+                    ReviewSelectorMode::SingleReview => {
+                        tx.send(AppEvent::CodexOp(Op::Review {
+                            review_request: ReviewRequest {
+                                target: ReviewTarget::Custom {
+                                    instructions: trimmed,
+                                },
+                                user_facing_hint: None,
+                                validate_findings: false,
+                            },
+                        }));
+                    }
+                    ReviewSelectorMode::ReviewLoop {
+                        inline_instructions,
+                    } => {
+                        tx.send(AppEvent::ReviewLoopTargetSelected {
+                            target: ReviewTarget::Custom {
+                                instructions: trimmed,
+                            },
+                            inline_instructions: inline_instructions.clone(),
+                        });
+                    }
+                }
+                Ok(())
             }),
+            None,
         );
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn on_review_loop_target_selected(
+        &mut self,
+        target: ReviewTarget,
+        inline_instructions: Option<String>,
+    ) {
+        let extra_reviewer_instructions = if matches!(target, ReviewTarget::Custom { .. }) {
+            None
+        } else {
+            inline_instructions
+                .as_deref()
+                .map(str::trim)
+                .filter(|instructions| !instructions.is_empty())
+                .map(str::to_string)
+        };
+        self.review_selector_mode = ReviewSelectorMode::SingleReview;
+        self.pending_review_loop_draft = Some(ReviewLoopDraft {
+            target,
+            selector_inline_instructions: inline_instructions,
+            extra_reviewer_instructions,
+        });
+        self.open_review_loop_cap_chooser();
+    }
+
+    pub(crate) fn open_review_loop_cap_chooser(&mut self) {
+        let Some(draft) = self.pending_review_loop_draft.clone() else {
+            self.add_error_message("Review loop settings are no longer available.".to_string());
+            return;
+        };
+        let mut items = Vec::new();
+        items.push(SelectionItem {
+            name: "Run until clean".to_string(),
+            description: Some("Repeat until the reviewer returns no findings.".to_string()),
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::StartReviewLoop {
+                    max_fix_attempts: None,
+                });
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+        items.push(SelectionItem {
+            name: "Set max fix attempts".to_string(),
+            description: Some("Stop after a fixed number of fix/review iterations.".to_string()),
+            actions: vec![Box::new(move |tx| {
+                tx.send(AppEvent::OpenReviewLoopCapPrompt);
+            })],
+            dismiss_on_select: false,
+            ..Default::default()
+        });
+        let inline_instructions = draft.selector_inline_instructions;
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Review loop settings".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            on_cancel: Some(Box::new(move |tx| {
+                tx.send(AppEvent::OpenReviewLoopSelector {
+                    inline_instructions: inline_instructions.clone(),
+                });
+            })),
+            ..Default::default()
+        });
+    }
+
+    pub(crate) fn open_review_loop_cap_prompt(&mut self) {
+        let tx = self.app_event_tx.clone();
+        let cancel_tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Set max fix attempts".to_string(),
+            "Type a positive integer and press Enter".to_string(),
+            Some("Review loop will stop after this many fix attempts.".to_string()),
+            Box::new(move |value: String| {
+                let Ok(max_fix_attempts) = value.parse::<u32>() else {
+                    return Err("Enter a positive integer.".to_string());
+                };
+                if max_fix_attempts == 0 {
+                    return Err("Enter a positive integer.".to_string());
+                }
+                tx.send(AppEvent::StartReviewLoop {
+                    max_fix_attempts: Some(max_fix_attempts),
+                });
+                Ok(())
+            }),
+            Some(Box::new(move || {
+                cancel_tx.send(AppEvent::OpenReviewLoopCapChooser);
+            })),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn start_review_loop(&mut self, max_fix_attempts: Option<u32>) {
+        let Some(draft) = self.pending_review_loop_draft.take() else {
+            self.add_error_message("Review loop target is no longer available.".to_string());
+            return;
+        };
+        self.review_selector_mode = ReviewSelectorMode::SingleReview;
+        let requires_commit = matches!(
+            draft.target,
+            ReviewTarget::BaseBranch { .. } | ReviewTarget::Commit { .. }
+        );
+        let mut rng = rand::rng();
+        let generation = rng.random();
+        self.review_loop_state = Some(ReviewLoopState {
+            generation,
+            spec: ReviewLoopSpec {
+                target: draft.target,
+                extra_reviewer_instructions: draft.extra_reviewer_instructions,
+                max_fix_attempts,
+                requires_commit,
+            },
+            stage: if requires_commit {
+                ReviewLoopStage::Preparing
+            } else {
+                ReviewLoopStage::Reviewing
+            },
+            fix_attempts_started: 0,
+            baseline_head_sha: None,
+            pending_review_output: None,
+        });
+        if requires_commit {
+            let tx = self.app_event_tx.clone();
+            let cwd = self.config.cwd.clone();
+            tokio::spawn(async move {
+                let head_sha = get_head_commit_hash(&cwd).await;
+                tx.send(AppEvent::ReviewLoopInitialHeadResolved {
+                    generation,
+                    head_sha,
+                });
+            });
+        } else if let Err(err) = self.submit_review_loop_review() {
+            self.clear_review_loop_state();
+            self.add_error_message(err);
+        }
+    }
+
+    pub(crate) fn on_review_loop_initial_head_resolved(
+        &mut self,
+        generation: u64,
+        head_sha: Option<String>,
+    ) {
+        let matches_generation = matches!(
+            self.review_loop_state.as_ref(),
+            Some(state)
+                if state.generation == generation && state.stage == ReviewLoopStage::Preparing
+        );
+        if !matches_generation {
+            return;
+        }
+        let Some(head_sha) = head_sha else {
+            self.clear_review_loop_state();
+            self.add_error_message(
+                "Review loop could not resolve HEAD for this repository.".to_string(),
+            );
+            self.maybe_send_next_queued_input();
+            return;
+        };
+        let Some(state) = self.review_loop_state.as_mut() else {
+            return;
+        };
+        state.baseline_head_sha = Some(head_sha);
+        state.stage = ReviewLoopStage::Reviewing;
+        if let Err(err) = self.submit_review_loop_review() {
+            self.clear_review_loop_state();
+            self.add_error_message(err);
+            self.maybe_send_next_queued_input();
+        }
+    }
+
+    pub(crate) fn on_review_loop_commit_validation_resolved(
+        &mut self,
+        generation: u64,
+        head_sha: Option<String>,
+        has_changes: Option<bool>,
+    ) {
+        let action = {
+            let Some(state) = self.review_loop_state.as_mut() else {
+                return;
+            };
+            if state.generation != generation
+                || state.stage != ReviewLoopStage::AwaitingCommitValidation
+            {
+                return;
+            }
+            if matches!(
+                (&state.baseline_head_sha, &head_sha),
+                (Some(previous_head), Some(current_head)) if previous_head != current_head
+            ) {
+                match has_changes {
+                    Some(false) => {
+                        state.baseline_head_sha = head_sha;
+                        state.stage = ReviewLoopStage::Reviewing;
+                        None
+                    }
+                    Some(true) => Some(
+                        "Review loop stopped because the fix turn created a new commit but left uncommitted changes."
+                            .to_string(),
+                    ),
+                    None => Some(
+                        "Review loop stopped because commit validation could not confirm a new commit."
+                            .to_string(),
+                    ),
+                }
+            } else {
+                Some(match has_changes {
+                    Some(true) => {
+                        "Review loop stopped because the fix turn ended with uncommitted changes and no new commit."
+                            .to_string()
+                    }
+                    Some(false) => {
+                        "Review loop stopped because the fix turn did not create a new commit."
+                            .to_string()
+                    }
+                    None => {
+                        "Review loop stopped because commit validation could not confirm a new commit."
+                            .to_string()
+                    }
+                })
+            }
+        };
+        if let Some(message) = action {
+            self.clear_review_loop_state();
+            self.add_error_message(message);
+            self.maybe_send_next_queued_input();
+            return;
+        }
+        if let Err(err) = self.submit_review_loop_review() {
+            self.clear_review_loop_state();
+            self.add_error_message(err);
+            self.maybe_send_next_queued_input();
+        }
+    }
+
+    fn clear_review_loop_state(&mut self) {
+        self.review_selector_mode = ReviewSelectorMode::SingleReview;
+        self.pending_review_loop_draft = None;
+        self.review_loop_state = None;
+    }
+
+    fn submit_review_loop_review(&mut self) -> Result<(), String> {
+        let Some(state) = self.review_loop_state.as_ref() else {
+            return Err("Review loop is no longer active.".to_string());
+        };
+        let extra_instructions = state.spec.extra_reviewer_instructions.as_deref();
+        let is_commit_follow_up = state.fix_attempts_started > 0
+            && matches!(state.spec.target, ReviewTarget::Commit { .. });
+        let request = match &state.spec.target {
+            ReviewTarget::UncommittedChanges | ReviewTarget::BaseBranch { .. }
+                if extra_instructions.is_none() =>
+            {
+                ReviewRequest {
+                    target: state.spec.target.clone(),
+                    user_facing_hint: None,
+                    validate_findings: true,
+                }
+            }
+            ReviewTarget::Commit { .. }
+                if state.fix_attempts_started == 0 && extra_instructions.is_none() =>
+            {
+                ReviewRequest {
+                    target: state.spec.target.clone(),
+                    user_facing_hint: None,
+                    validate_findings: false,
+                }
+            }
+            ReviewTarget::Custom { .. } => ReviewRequest {
+                target: state.spec.target.clone(),
+                user_facing_hint: None,
+                validate_findings: true,
+            },
+            ReviewTarget::Commit { sha, title } if is_commit_follow_up => {
+                let prompt = codex_core::review_prompts::commit_follow_up_review_prompt(
+                    sha,
+                    title.as_deref(),
+                    extra_instructions,
+                );
+                ReviewRequest {
+                    target: ReviewTarget::Custom {
+                        instructions: prompt,
+                    },
+                    user_facing_hint: Some(format!(
+                        "stack since {}",
+                        codex_core::review_prompts::user_facing_hint(&state.spec.target)
+                    )),
+                    validate_findings: true,
+                }
+            }
+            _ => {
+                let prompt =
+                    codex_core::review_prompts::review_prompt_with_additional_instructions(
+                        &state.spec.target,
+                        self.config.cwd.as_path(),
+                        extra_instructions,
+                    )
+                    .map_err(|err| format!("Failed to build review loop prompt: {err}"))?;
+                ReviewRequest {
+                    target: ReviewTarget::Custom {
+                        instructions: prompt,
+                    },
+                    user_facing_hint: Some(codex_core::review_prompts::user_facing_hint(
+                        &state.spec.target,
+                    )),
+                    validate_findings: true,
+                }
+            }
+        };
+        if self.submit_op(Op::Review {
+            review_request: request,
+        }) {
+            Ok(())
+        } else {
+            Err("Failed to start the next review-loop review.".to_string())
+        }
     }
 
     pub(crate) fn token_usage(&self) -> TokenUsage {
@@ -8822,6 +9535,7 @@ pub(crate) fn show_review_commit_picker_with_entries(
                             title: Some(subject.clone()),
                         },
                         user_facing_hint: None,
+                        validate_findings: false,
                     },
                 }));
             })],

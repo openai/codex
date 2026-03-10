@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: "render_bottom_popup(&chat, 70)"
+---
+  Review loop settings
+
+› 1. Run until clean       Repeat until the reviewer returns no
+                           findings.
+  2. Set max fix attempts  Stop after a fixed number of fix/review
+                           iterations.
+
+  Press enter to confirm or esc to go back

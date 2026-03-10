@@ -782,11 +782,7 @@ impl ThreadHistoryBuilder {
         &mut self,
         payload: &codex_protocol::protocol::ExitedReviewModeEvent,
     ) {
-        let review = payload
-            .review_output
-            .as_ref()
-            .map(render_review_output_text)
-            .unwrap_or_else(|| REVIEW_FALLBACK_MESSAGE.to_string());
+        let review = render_exited_review_mode_text(payload);
         let id = self.next_item_id();
         self.ensure_turn()
             .items
@@ -991,6 +987,22 @@ fn render_review_output_text(output: &ReviewOutputEvent) -> String {
     } else {
         explanation.to_string()
     }
+}
+
+fn render_exited_review_mode_text(
+    event: &codex_protocol::protocol::ExitedReviewModeEvent,
+) -> String {
+    if let Some(message) = event.failure_message.as_deref() {
+        let message = message.trim();
+        if !message.is_empty() {
+            return message.to_string();
+        }
+    }
+    event
+        .review_output
+        .as_ref()
+        .map(render_review_output_text)
+        .unwrap_or_else(|| REVIEW_FALLBACK_MESSAGE.to_string())
 }
 
 pub fn convert_patch_changes(
@@ -1311,6 +1323,32 @@ mod tests {
                 id: "item-1".into(),
                 text: "Final reply".into(),
                 phase: Some(MessagePhase::FinalAnswer),
+            }
+        );
+    }
+
+    #[test]
+    fn exited_review_mode_uses_explicit_failure_message() {
+        let events = vec![EventMsg::ExitedReviewMode(
+            codex_protocol::protocol::ExitedReviewModeEvent {
+                review_output: None,
+                failure_message: Some(
+                    "Review findings validation did not complete cleanly.".into(),
+                ),
+            },
+        )];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].items[0],
+            ThreadItem::ExitedReviewMode {
+                id: "item-1".into(),
+                review: "Review findings validation did not complete cleanly.".into(),
             }
         );
     }

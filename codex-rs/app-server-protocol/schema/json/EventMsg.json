@@ -2706,6 +2706,9 @@
                 "string",
                 "null"
               ]
+            },
+            "validate_findings": {
+              "type": "boolean"
             }
           },
           "required": [
@@ -2718,6 +2721,12 @@
         {
           "description": "Exited review mode with an optional final result to apply.",
           "properties": {
+            "failure_message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "review_output": {
               "anyOf": [
                 {
@@ -8576,6 +8585,9 @@
             "string",
             "null"
           ]
+        },
+        "validate_findings": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -8588,6 +8600,12 @@
     {
       "description": "Exited review mode with an optional final result to apply.",
       "properties": {
+        "failure_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "review_output": {
           "anyOf": [
             {

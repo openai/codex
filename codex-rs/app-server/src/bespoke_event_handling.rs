@@ -1309,10 +1309,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::ExitedReviewMode(review_event) => {
-            let review = match review_event.review_output {
-                Some(output) => render_review_output_text(&output),
-                None => REVIEW_FALLBACK_MESSAGE.to_string(),
-            };
+            let review = render_exited_review_mode_text(&review_event);
             let item = ThreadItem::ExitedReviewMode {
                 id: event_turn_id.clone(),
                 review,
@@ -2270,6 +2267,22 @@ fn render_review_output_text(output: &ReviewOutputEvent) -> String {
     } else {
         sections.join("\n\n")
     }
+}
+
+fn render_exited_review_mode_text(
+    event: &codex_protocol::protocol::ExitedReviewModeEvent,
+) -> String {
+    if let Some(message) = event.failure_message.as_deref() {
+        let message = message.trim();
+        if !message.is_empty() {
+            return message.to_string();
+        }
+    }
+    event
+        .review_output
+        .as_ref()
+        .map(render_review_output_text)
+        .unwrap_or_else(|| REVIEW_FALLBACK_MESSAGE.to_string())
 }
 
 fn map_file_change_approval_decision(

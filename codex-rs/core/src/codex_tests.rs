@@ -32,6 +32,7 @@ use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnCompleteEvent;
 use crate::protocol::UserMessageEvent;
+use crate::review_prompts::ResolvedReviewRequest;
 use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::rollout::recorder::RolloutRecorderParams;
@@ -3496,8 +3497,21 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
         text: "start review".to_string(),
         text_elements: Vec::new(),
     }];
-    sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
-        .await;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        ReviewTask::new(
+            false,
+            ResolvedReviewRequest {
+                target: codex_protocol::protocol::ReviewTarget::Custom {
+                    instructions: "start review".to_string(),
+                },
+                prompt: "start review".to_string(),
+                user_facing_hint: "start review".to_string(),
+            },
+        ),
+    )
+    .await;
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
@@ -3519,6 +3533,12 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
         match evt.msg {
             EventMsg::ExitedReviewMode(ev) => {
                 assert!(ev.review_output.is_none());
+                assert_eq!(
+                    ev.failure_message.as_deref(),
+                    Some(
+                        "Review was interrupted. Please re-run /review and wait for it to complete."
+                    )
+                );
                 exited_review_mode_idx = Some(event_idx);
             }
             EventMsg::TurnAborted(ev) => {

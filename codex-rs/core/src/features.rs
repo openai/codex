@@ -156,6 +156,8 @@ pub enum Feature {
     CollaborationModes,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
+    /// Enable `/review-loop` command.
+    ReviewLoop,
     /// Enable personality selection in the TUI.
     Personality,
     /// Enable native artifact tools.
@@ -733,6 +735,18 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "personality",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ToolCallMcpElicitation,
+        key: "tool_call_mcp_elicitation",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ReviewLoop,
+        key: "review_loop",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Artifact,

@@ -427,11 +427,11 @@ async fn handle_request_user_input(
     event: RequestUserInputEvent,
     cancel_token: &CancellationToken,
 ) {
+    let call_id = event.call_id.clone();
     let args = RequestUserInputArgs {
         questions: event.questions,
     };
-    let response_fut =
-        parent_session.request_user_input(parent_ctx, parent_ctx.sub_id.clone(), args);
+    let response_fut = parent_session.request_user_input(parent_ctx, call_id, args);
     let response = await_user_input_with_cancel(
         response_fut,
         parent_session,

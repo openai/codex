@@ -4986,6 +4986,7 @@ mod handlers {
         sub_id: String,
         review_request: ReviewRequest,
     ) {
+        let validate_findings = review_request.validate_findings;
         let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
         sess.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
             .await;
@@ -4998,6 +4999,7 @@ mod handlers {
                     turn_context.clone(),
                     sub_id,
                     resolved,
+                    validate_findings,
                 )
                 .await;
             }
@@ -5022,6 +5024,7 @@ async fn spawn_review_thread(
     parent_turn_context: Arc<TurnContext>,
     sub_id: String,
     resolved: crate::review_prompts::ResolvedReviewRequest,
+    validate_findings: bool,
 ) {
     let model = config
         .review_model
@@ -5144,12 +5147,18 @@ async fn spawn_review_thread(
     // TODO(ccunningham): Review turns currently rely on `spawn_task` for TurnComplete but do not
     // emit a parent TurnStarted. Consider giving review a full parent turn lifecycle
     // (TurnStarted + TurnComplete) for consistency with other standalone tasks.
-    sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
+    sess.spawn_task(
+        tc.clone(),
+        input,
+        ReviewTask::new(validate_findings, resolved.clone()),
+    )
+    .await;
 
     // Announce entering review mode so UIs can switch modes.
     let review_request = ReviewRequest {
         target: resolved.target,
         user_facing_hint: Some(resolved.user_facing_hint),
+        validate_findings,
     };
     sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
         .await;

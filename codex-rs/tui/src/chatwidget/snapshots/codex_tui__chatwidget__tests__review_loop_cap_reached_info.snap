@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: rendered
+---
+
+• Review loop stopped after reaching the limit of 1 fix attempt.

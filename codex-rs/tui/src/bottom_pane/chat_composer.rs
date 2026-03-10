@@ -405,6 +405,7 @@ pub(crate) struct ChatComposer {
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
+    review_loop_command_enabled: bool,
     windows_degraded_sandbox_active: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
@@ -441,7 +442,8 @@ impl ChatComposer {
             personality_command_enabled: self.personality_command_enabled,
             realtime_conversation_enabled: self.realtime_conversation_enabled,
             audio_device_selection_enabled: self.audio_device_selection_enabled,
-            allow_elevate_sandbox: self.windows_degraded_sandbox_active,
+            review_loop_command_enabled: self.review_loop_command_enabled,
+            allow_elevate_sandbox: !self.windows_degraded_sandbox_active,
         }
     }
 
@@ -525,6 +527,7 @@ impl ChatComposer {
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
+            review_loop_command_enabled: false,
             windows_degraded_sandbox_active: false,
             status_line_value: None,
             status_line_enabled: false,
@@ -607,6 +610,10 @@ impl ChatComposer {
         self.personality_command_enabled = enabled;
     }
 
+    pub fn set_review_loop_command_enabled(&mut self, enabled: bool) {
+        self.review_loop_command_enabled = enabled;
+    }
+
     pub fn set_realtime_conversation_enabled(&mut self, enabled: bool) {
         self.realtime_conversation_enabled = enabled;
     }
@@ -650,6 +657,20 @@ impl ChatComposer {
     pub fn set_windows_degraded_sandbox_active(&mut self, enabled: bool) {
         self.windows_degraded_sandbox_active = enabled;
     }
+
+    fn slash_command_popup_flags(&self) -> CommandPopupFlags {
+        CommandPopupFlags {
+            collaboration_modes_enabled: self.collaboration_modes_enabled,
+            connectors_enabled: self.connectors_enabled,
+            fast_command_enabled: self.fast_command_enabled,
+            personality_command_enabled: self.personality_command_enabled,
+            realtime_conversation_enabled: self.realtime_conversation_enabled,
+            audio_device_selection_enabled: self.audio_device_selection_enabled,
+            review_loop_command_enabled: self.review_loop_command_enabled,
+            windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
+        }
+    }
+
     fn layout_areas(&self, area: Rect) -> [Rect; 4] {
         let footer_props = self.footer_props();
         let footer_hint_height = self
@@ -3462,23 +3483,9 @@ impl ChatComposer {
             }
             _ => {
                 if is_editing_slash_command_name {
-                    let collaboration_modes_enabled = self.collaboration_modes_enabled;
-                    let connectors_enabled = self.connectors_enabled;
-                    let fast_command_enabled = self.fast_command_enabled;
-                    let personality_command_enabled = self.personality_command_enabled;
-                    let realtime_conversation_enabled = self.realtime_conversation_enabled;
-                    let audio_device_selection_enabled = self.audio_device_selection_enabled;
                     let mut command_popup = CommandPopup::new(
                         self.custom_prompts.clone(),
-                        CommandPopupFlags {
-                            collaboration_modes_enabled,
-                            connectors_enabled,
-                            fast_command_enabled,
-                            personality_command_enabled,
-                            realtime_conversation_enabled,
-                            audio_device_selection_enabled,
-                            windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
-                        },
+                        self.slash_command_popup_flags(),
                     );
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);

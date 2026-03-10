@@ -47,6 +47,7 @@ use crate::features::Feature;
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
 pub(crate) use regular::RegularTask;
+pub(crate) use review::REVIEW_FINDING_VALIDATOR_SUBAGENT;
 pub(crate) use review::ReviewTask;
 pub(crate) use undo::UndoTask;
 pub(crate) use user_shell::UserShellCommandMode;

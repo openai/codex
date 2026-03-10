@@ -1535,6 +1535,9 @@ impl HasLegacyEvent for EventMsg {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExitedReviewModeEvent {
     pub review_output: Option<ReviewOutputEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub failure_message: Option<String>,
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -2370,6 +2373,8 @@ pub struct ReviewRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub user_facing_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub validate_findings: bool,
 }
 
 /// Structured review result produced by a child review session.

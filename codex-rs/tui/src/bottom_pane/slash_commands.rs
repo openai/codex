@@ -16,6 +16,7 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) personality_command_enabled: bool,
     pub(crate) realtime_conversation_enabled: bool,
     pub(crate) audio_device_selection_enabled: bool,
+    pub(crate) review_loop_command_enabled: bool,
     pub(crate) allow_elevate_sandbox: bool,
 }
 
@@ -33,6 +34,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
         .filter(|(_, cmd)| flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings)
+        .filter(|(_, cmd)| flags.review_loop_command_enabled || *cmd != SlashCommand::ReviewLoop)
         .collect()
 }
 
@@ -64,6 +66,7 @@ mod tests {
             personality_command_enabled: true,
             realtime_conversation_enabled: true,
             audio_device_selection_enabled: true,
+            review_loop_command_enabled: true,
             allow_elevate_sandbox: true,
         }
     }
@@ -109,5 +112,20 @@ mod tests {
         let mut flags = all_enabled_flags();
         flags.audio_device_selection_enabled = false;
         assert_eq!(find_builtin_command("settings", flags), None);
+    }
+
+    #[test]
+    fn review_loop_command_is_hidden_when_disabled() {
+        let mut flags = all_enabled_flags();
+        flags.review_loop_command_enabled = false;
+        assert_eq!(find_builtin_command("review-loop", flags), None);
+    }
+
+    #[test]
+    fn review_loop_command_is_visible_when_enabled() {
+        assert_eq!(
+            find_builtin_command("review-loop", all_enabled_flags()),
+            Some(SlashCommand::ReviewLoop)
+        );
     }
 }

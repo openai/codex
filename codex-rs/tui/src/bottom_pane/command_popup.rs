@@ -42,6 +42,7 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) personality_command_enabled: bool,
     pub(crate) realtime_conversation_enabled: bool,
     pub(crate) audio_device_selection_enabled: bool,
+    pub(crate) review_loop_command_enabled: bool,
     pub(crate) windows_degraded_sandbox_active: bool,
 }
 
@@ -54,7 +55,8 @@ impl From<CommandPopupFlags> for slash_commands::BuiltinCommandFlags {
             personality_command_enabled: value.personality_command_enabled,
             realtime_conversation_enabled: value.realtime_conversation_enabled,
             audio_device_selection_enabled: value.audio_device_selection_enabled,
-            allow_elevate_sandbox: value.windows_degraded_sandbox_active,
+            review_loop_command_enabled: value.review_loop_command_enabled,
+            allow_elevate_sandbox: !value.windows_degraded_sandbox_active,
         }
     }
 }
@@ -511,6 +513,7 @@ mod tests {
                 personality_command_enabled: true,
                 realtime_conversation_enabled: false,
                 audio_device_selection_enabled: false,
+                review_loop_command_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -533,6 +536,7 @@ mod tests {
                 personality_command_enabled: true,
                 realtime_conversation_enabled: false,
                 audio_device_selection_enabled: false,
+                review_loop_command_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -555,6 +559,7 @@ mod tests {
                 personality_command_enabled: false,
                 realtime_conversation_enabled: false,
                 audio_device_selection_enabled: false,
+                review_loop_command_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -585,6 +590,7 @@ mod tests {
                 personality_command_enabled: true,
                 realtime_conversation_enabled: false,
                 audio_device_selection_enabled: false,
+                review_loop_command_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -607,6 +613,7 @@ mod tests {
                 personality_command_enabled: true,
                 realtime_conversation_enabled: true,
                 audio_device_selection_enabled: false,
+                review_loop_command_enabled: false,
                 windows_degraded_sandbox_active: false,
             },
         );
@@ -643,5 +650,61 @@ mod tests {
             !cmds.iter().any(|name| name.starts_with("debug")),
             "expected no /debug* command in popup menu, got {cmds:?}"
         );
+    }
+
+    #[test]
+    fn review_loop_command_hidden_when_disabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                fast_command_enabled: false,
+                personality_command_enabled: true,
+                realtime_conversation_enabled: false,
+                audio_device_selection_enabled: false,
+                review_loop_command_enabled: false,
+                windows_degraded_sandbox_active: false,
+            },
+        );
+        popup.on_composer_text_change("/review".to_string());
+
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                CommandItem::UserPrompt(_) => None,
+            })
+            .collect();
+        assert!(
+            !cmds.contains(&"review-loop"),
+            "expected '/review-loop' to be hidden when feature is disabled, got {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn review_loop_command_visible_when_enabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                fast_command_enabled: false,
+                personality_command_enabled: true,
+                realtime_conversation_enabled: false,
+                audio_device_selection_enabled: false,
+                review_loop_command_enabled: true,
+                windows_degraded_sandbox_active: false,
+            },
+        );
+        popup.on_composer_text_change("/review-loop".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "review-loop"),
+            other => {
+                panic!("expected review-loop to be selected for exact match, got {other:?}")
+            }
+        }
     }
 }

@@ -7,6 +7,7 @@ use crate::features::Feature;
 use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use crate::tasks::REVIEW_FINDING_VALIDATOR_SUBAGENT;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
 use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
@@ -85,6 +86,20 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) session_source: SessionSource,
 }
 
+fn session_source_allows_request_user_input(
+    session_source: &SessionSource,
+    features: &Features,
+) -> bool {
+    match session_source {
+        SessionSource::SubAgent(SubAgentSource::Other(label)) => {
+            label == REVIEW_FINDING_VALIDATOR_SUBAGENT
+                && features.enabled(Feature::DefaultModeRequestUserInput)
+        }
+        SessionSource::SubAgent(_) => false,
+        _ => true,
+    }
+}
+
 impl ToolsConfig {
     pub fn new(params: &ToolsConfigParams) -> Self {
         let ToolsConfigParams {
@@ -98,7 +113,8 @@ impl ToolsConfig {
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
-        let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
+        let include_request_user_input =
+            session_source_allows_request_user_input(session_source, features);
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool = features.enabled(Feature::Apps);
@@ -2417,6 +2433,43 @@ mod tests {
                 "report_agent_job_result",
             ],
         );
+        assert_lacks_tool_name(&tools, "request_user_input");
+    }
+
+    #[test]
+    fn test_build_specs_review_finding_validator_includes_request_user_input() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::DefaultModeRequestUserInput);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::SubAgent(SubAgentSource::Other(
+                REVIEW_FINDING_VALIDATOR_SUBAGENT.to_string(),
+            )),
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        assert_contains_tool_names(&tools, &["request_user_input"]);
+    }
+
+    #[test]
+    fn test_build_specs_review_finding_validator_omits_request_user_input_when_disabled() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let features = Features::with_defaults();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::SubAgent(SubAgentSource::Other(
+                REVIEW_FINDING_VALIDATOR_SUBAGENT.to_string(),
+            )),
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         assert_lacks_tool_name(&tools, "request_user_input");
     }
 

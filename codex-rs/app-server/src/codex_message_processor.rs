@@ -606,6 +606,7 @@ impl CodexMessageProcessor {
         let review_request = ReviewRequest {
             target: core_target,
             user_facing_hint: Some(hint.clone()),
+            validate_findings: false,
         };
 
         Ok((review_request, hint))

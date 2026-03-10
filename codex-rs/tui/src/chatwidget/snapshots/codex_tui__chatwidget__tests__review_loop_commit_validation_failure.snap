@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: rendered
+---
+
+■ Review loop stopped because the fix turn ended with uncommitted changes and no new commit.
