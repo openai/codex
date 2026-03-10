@@ -35,6 +35,7 @@ pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::GhostSnapshot { .. }
         | ResponseItem::Compaction { .. } => true,
         ResponseItem::Other => false,
@@ -53,6 +54,7 @@ pub(crate) fn should_persist_response_item_for_memories(item: &ResponseItem) -> 
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. } => true,
         ResponseItem::Reasoning { .. }
+        | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::GhostSnapshot { .. }
         | ResponseItem::Compaction { .. }
         | ResponseItem::Other => false,
@@ -116,6 +118,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::PatchApplyEnd(_)
         | EventMsg::McpToolCallEnd(_)
         | EventMsg::ViewImageToolCall(_)
+        | EventMsg::ImageGenerationEnd(_)
         | EventMsg::CollabAgentSpawnEnd(_)
         | EventMsg::CollabAgentInteractionEnd(_)
         | EventMsg::CollabWaitingEnd(_)
@@ -141,6 +144,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::TerminalInteraction(_)
         | EventMsg::ExecCommandOutputDelta(_)
         | EventMsg::ExecApprovalRequest(_)
+        | EventMsg::RequestPermissions(_)
         | EventMsg::RequestUserInput(_)
         | EventMsg::ElicitationRequest(_)
         | EventMsg::ApplyPatchApprovalRequest(_)
@@ -170,6 +174,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::CollabAgentInteractionBegin(_)
         | EventMsg::CollabWaitingBegin(_)
         | EventMsg::CollabCloseBegin(_)
-        | EventMsg::CollabResumeBegin(_) => None,
+        | EventMsg::CollabResumeBegin(_)
+        | EventMsg::ImageGenerationBegin(_) => None,
     }
 }

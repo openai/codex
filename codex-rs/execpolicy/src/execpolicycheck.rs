@@ -7,6 +7,7 @@ use clap::Parser;
 use serde::Serialize;
 
 use crate::Decision;
+use crate::MatchOptions;
 use crate::Policy;
 use crate::PolicyParser;
 use crate::RuleMatch;
@@ -22,6 +23,11 @@ pub struct ExecPolicyCheckCommand {
     #[arg(long)]
     pub pretty: bool,
 
+    /// Resolve absolute program paths against basename rules, gated by any
+    /// `host_executable()` definitions in the loaded policy files.
+    #[arg(long)]
+    pub resolve_host_executables: bool,
+
     /// Command tokens to check against the policy.
     #[arg(
         value_name = "COMMAND",
@@ -36,7 +42,13 @@ impl ExecPolicyCheckCommand {
     /// Load the policies for this command, evaluate the command, and render JSON output.
     pub fn run(&self) -> Result<()> {
         let policy = load_policies(&self.rules)?;
-        let matched_rules = policy.matches_for_command(&self.command, None);
+        let matched_rules = policy.matches_for_command_with_options(
+            &self.command,
+            None,
+            &MatchOptions {
+                resolve_host_executables: self.resolve_host_executables,
+            },
+        );
 
         let json = format_matches_json(&matched_rules, self.pretty)?;
         println!("{json}");

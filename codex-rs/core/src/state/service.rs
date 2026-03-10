@@ -9,8 +9,10 @@ use crate::client::ModelClient;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
 use crate::file_watcher::FileWatcher;
+use crate::mcp::McpManager;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
+use crate::plugins::PluginsManager;
 use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
 use crate::tools::network_approval::NetworkApprovalService;
@@ -18,7 +20,7 @@ use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_hooks::Hooks;
-use codex_otel::OtelManager;
+use codex_otel::SessionTelemetry;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
@@ -43,11 +45,13 @@ pub(crate) struct SessionServices {
     pub(crate) exec_policy: ExecPolicyManager,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
-    pub(crate) otel_manager: OtelManager,
+    pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
     #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) execve_session_approvals: RwLock<HashMap<AbsolutePathBuf, ExecveSessionApproval>>,
     pub(crate) skills_manager: Arc<SkillsManager>,
+    pub(crate) plugins_manager: Arc<PluginsManager>,
+    pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) file_watcher: Arc<FileWatcher>,
     pub(crate) agent_control: AgentControl,
     pub(crate) network_proxy: Option<StartedNetworkProxy>,

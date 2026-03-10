@@ -11,13 +11,16 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
+use crate::mcp::McpManager;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
+use crate::plugins::PluginsManager;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
+use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -132,6 +135,8 @@ pub(crate) struct ThreadManagerState {
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     skills_manager: Arc<SkillsManager>,
+    plugins_manager: Arc<PluginsManager>,
+    mcp_manager: Arc<McpManager>,
     file_watcher: Arc<FileWatcher>,
     session_source: SessionSource,
     // Captures submitted ops for testing purpose when test mode is enabled.
@@ -147,7 +152,12 @@ impl ThreadManager {
         collaboration_modes_config: CollaborationModesConfig,
     ) -> Self {
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
-        let skills_manager = Arc::new(SkillsManager::new(codex_home.clone()));
+        let plugins_manager = Arc::new(PluginsManager::new(codex_home.clone()));
+        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
+        let skills_manager = Arc::new(SkillsManager::new(
+            codex_home.clone(),
+            Arc::clone(&plugins_manager),
+        ));
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
         Self {
             state: Arc::new(ThreadManagerState {
@@ -160,6 +170,8 @@ impl ThreadManager {
                     collaboration_modes_config,
                 )),
                 skills_manager,
+                plugins_manager,
+                mcp_manager,
                 file_watcher,
                 auth_manager,
                 session_source,
@@ -199,7 +211,12 @@ impl ThreadManager {
         set_thread_manager_test_mode_for_tests(true);
         let auth_manager = AuthManager::from_auth_for_testing(auth);
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
-        let skills_manager = Arc::new(SkillsManager::new(codex_home.clone()));
+        let plugins_manager = Arc::new(PluginsManager::new(codex_home.clone()));
+        let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
+        let skills_manager = Arc::new(SkillsManager::new(
+            codex_home.clone(),
+            Arc::clone(&plugins_manager),
+        ));
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
         Self {
             state: Arc::new(ThreadManagerState {
@@ -211,6 +228,8 @@ impl ThreadManager {
                     provider,
                 )),
                 skills_manager,
+                plugins_manager,
+                mcp_manager,
                 file_watcher,
                 auth_manager,
                 session_source: SessionSource::Exec,
@@ -227,6 +246,14 @@ impl ThreadManager {
 
     pub fn skills_manager(&self) -> Arc<SkillsManager> {
         self.state.skills_manager.clone()
+    }
+
+    pub fn plugins_manager(&self) -> Arc<PluginsManager> {
+        self.state.plugins_manager.clone()
+    }
+
+    pub fn mcp_manager(&self) -> Arc<McpManager> {
+        self.state.mcp_manager.clone()
     }
 
     pub fn subscribe_file_watcher(&self) -> broadcast::Receiver<FileWatcherEvent> {
@@ -285,8 +312,9 @@ impl ThreadManager {
     }
 
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
-        self.start_thread_with_tools(config, Vec::new(), false)
-            .await
+        // Box delegated thread-spawn futures so these convenience wrappers do
+        // not inline the full spawn path into every caller's async state.
+        Box::pin(self.start_thread_with_tools(config, Vec::new(), false)).await
     }
 
     pub async fn start_thread_with_tools(
@@ -295,12 +323,12 @@ impl ThreadManager {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
-        self.start_thread_with_tools_and_service_name(
+        Box::pin(self.start_thread_with_tools_and_service_name(
             config,
             dynamic_tools,
             persist_extended_history,
             None,
-        )
+        ))
         .await
     }
 
@@ -311,17 +339,16 @@ impl ThreadManager {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
     ) -> CodexResult<NewThread> {
-        self.state
-            .spawn_thread(
-                config,
-                InitialHistory::New,
-                Arc::clone(&self.state.auth_manager),
-                self.agent_control(),
-                dynamic_tools,
-                persist_extended_history,
-                metrics_service_name,
-            )
-            .await
+        Box::pin(self.state.spawn_thread(
+            config,
+            InitialHistory::New,
+            Arc::clone(&self.state.auth_manager),
+            self.agent_control(),
+            dynamic_tools,
+            persist_extended_history,
+            metrics_service_name,
+        ))
+        .await
     }
 
     pub async fn resume_thread_from_rollout(
@@ -331,7 +358,7 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-        self.resume_thread_with_history(config, initial_history, auth_manager, false)
+        Box::pin(self.resume_thread_with_history(config, initial_history, auth_manager, false))
             .await
     }
 
@@ -342,17 +369,16 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
-        self.state
-            .spawn_thread(
-                config,
-                initial_history,
-                auth_manager,
-                self.agent_control(),
-                Vec::new(),
-                persist_extended_history,
-                None,
-            )
-            .await
+        Box::pin(self.state.spawn_thread(
+            config,
+            initial_history,
+            auth_manager,
+            self.agent_control(),
+            Vec::new(),
+            persist_extended_history,
+            None,
+        ))
+        .await
     }
 
     /// Removes the thread from the manager's internal map, though the thread is stored
@@ -384,17 +410,16 @@ impl ThreadManager {
     ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
         let history = truncate_before_nth_user_message(history, nth_user_message);
-        self.state
-            .spawn_thread(
-                config,
-                history,
-                Arc::clone(&self.state.auth_manager),
-                self.agent_control(),
-                Vec::new(),
-                persist_extended_history,
-                None,
-            )
-            .await
+        Box::pin(self.state.spawn_thread(
+            config,
+            history,
+            Arc::clone(&self.state.auth_manager),
+            self.agent_control(),
+            Vec::new(),
+            persist_extended_history,
+            None,
+        ))
+        .await
     }
 
     pub(crate) fn agent_control(&self) -> AgentControl {
@@ -447,13 +472,14 @@ impl ThreadManagerState {
         config: Config,
         agent_control: AgentControl,
     ) -> CodexResult<NewThread> {
-        self.spawn_new_thread_with_source(
+        Box::pin(self.spawn_new_thread_with_source(
             config,
             agent_control,
             self.session_source.clone(),
             false,
             None,
-        )
+            None,
+        ))
         .await
     }
 
@@ -464,8 +490,9 @@ impl ThreadManagerState {
         session_source: SessionSource,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
+        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     ) -> CodexResult<NewThread> {
-        self.spawn_thread_with_source(
+        Box::pin(self.spawn_thread_with_source(
             config,
             InitialHistory::New,
             Arc::clone(&self.auth_manager),
@@ -474,7 +501,8 @@ impl ThreadManagerState {
             Vec::new(),
             persist_extended_history,
             metrics_service_name,
-        )
+            inherited_shell_snapshot,
+        ))
         .await
     }
 
@@ -484,9 +512,10 @@ impl ThreadManagerState {
         rollout_path: PathBuf,
         agent_control: AgentControl,
         session_source: SessionSource,
+        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-        self.spawn_thread_with_source(
+        Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
             Arc::clone(&self.auth_manager),
@@ -495,7 +524,8 @@ impl ThreadManagerState {
             Vec::new(),
             false,
             None,
-        )
+            inherited_shell_snapshot,
+        ))
         .await
     }
 
@@ -506,8 +536,9 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         session_source: SessionSource,
         persist_extended_history: bool,
+        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     ) -> CodexResult<NewThread> {
-        self.spawn_thread_with_source(
+        Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
             Arc::clone(&self.auth_manager),
@@ -516,7 +547,8 @@ impl ThreadManagerState {
             Vec::new(),
             persist_extended_history,
             None,
-        )
+            inherited_shell_snapshot,
+        ))
         .await
     }
 
@@ -532,7 +564,7 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
     ) -> CodexResult<NewThread> {
-        self.spawn_thread_with_source(
+        Box::pin(self.spawn_thread_with_source(
             config,
             initial_history,
             auth_manager,
@@ -541,7 +573,8 @@ impl ThreadManagerState {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
-        )
+            None,
+        ))
         .await
     }
 
@@ -556,8 +589,11 @@ impl ThreadManagerState {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
+        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     ) -> CodexResult<NewThread> {
-        let watch_registration = self.file_watcher.register_config(&config);
+        let watch_registration = self
+            .file_watcher
+            .register_config(&config, self.skills_manager.as_ref());
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(
@@ -565,6 +601,8 @@ impl ThreadManagerState {
             auth_manager,
             Arc::clone(&self.models_manager),
             Arc::clone(&self.skills_manager),
+            Arc::clone(&self.plugins_manager),
+            Arc::clone(&self.mcp_manager),
             Arc::clone(&self.file_watcher),
             initial_history,
             session_source,
@@ -572,6 +610,7 @@ impl ThreadManagerState {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
+            inherited_shell_snapshot,
         )
         .await?;
         self.finalize_thread_spawn(codex, thread_id, watch_registration)
@@ -715,7 +754,7 @@ mod tests {
     #[tokio::test]
     async fn ignores_session_prefix_messages_when_truncating() {
         let (session, turn_context) = make_session_and_context().await;
-        let mut items = session.build_initial_context(&turn_context, None).await;
+        let mut items = session.build_initial_context(&turn_context).await;
         items.push(user_msg("feature request"));
         items.push(assistant_msg("ack"));
         items.push(user_msg("second question"));

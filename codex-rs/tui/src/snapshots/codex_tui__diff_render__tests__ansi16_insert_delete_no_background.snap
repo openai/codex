@@ -1,0 +1,8 @@
+---
+source: tui/src/diff_render.rs
+expression: terminal.backend()
+---
+"1 +added in ansi16 mode                 "
+"2 -deleted in ansi16 mode               "
+"                                        "
+"                                        "

@@ -20,9 +20,11 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
-use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::parse_arguments_with_base_path;
+use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -176,7 +178,9 @@ impl ToolHandler for ShellHandler {
 
         match payload {
             ToolPayload::Function { arguments } => {
-                let params: ShellToolCallParams = parse_arguments(&arguments)?;
+                let cwd = resolve_workdir_base_path(&arguments, turn.cwd.as_path())?;
+                let params: ShellToolCallParams =
+                    parse_arguments_with_base_path(&arguments, cwd.as_path())?;
                 let prefix_rule = params.prefix_rule.clone();
                 let exec_params =
                     Self::to_exec_params(&params, turn.as_ref(), session.conversation_id);
@@ -266,7 +270,9 @@ impl ToolHandler for ShellCommandHandler {
             )));
         };
 
-        let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
+        let cwd = resolve_workdir_base_path(&arguments, turn.cwd.as_path())?;
+        let params: ShellCommandToolCallParams =
+            parse_arguments_with_base_path(&arguments, cwd.as_path())?;
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
             turn.as_ref(),
@@ -327,19 +333,29 @@ impl ShellHandler {
         }
 
         let request_permission_enabled = session.features().enabled(Feature::RequestPermissions);
+        let effective_additional_permissions = apply_granted_turn_permissions(
+            session.as_ref(),
+            exec_params.sandbox_permissions,
+            additional_permissions,
+        )
+        .await;
         let normalized_additional_permissions = normalize_and_validate_additional_permissions(
             request_permission_enabled,
             turn.approval_policy.value(),
-            exec_params.sandbox_permissions,
-            additional_permissions,
+            effective_additional_permissions.sandbox_permissions,
+            effective_additional_permissions.additional_permissions,
+            effective_additional_permissions.permissions_preapproved,
             &exec_params.cwd,
         )
         .map_err(FunctionCallError::RespondToModel)?;
 
         // Approval policy guard for explicit escalation in non-OnRequest modes.
-        if exec_params
+        // Sticky turn permissions have already been approved, so they should
+        // continue through the normal exec approval flow for the command.
+        if effective_additional_permissions
             .sandbox_permissions
-            .requires_additional_permissions()
+            .requests_sandbox_override()
+            && !effective_additional_permissions.permissions_preapproved
             && !matches!(
                 turn.approval_policy.value(),
                 codex_protocol::protocol::AskForApproval::OnRequest
@@ -384,7 +400,11 @@ impl ShellHandler {
                 command: &exec_params.command,
                 approval_policy: turn.approval_policy.value(),
                 sandbox_policy: turn.sandbox_policy.get(),
-                sandbox_permissions: exec_params.sandbox_permissions,
+                sandbox_permissions: if effective_additional_permissions.permissions_preapproved {
+                    codex_protocol::models::SandboxPermissions::UseDefault
+                } else {
+                    effective_additional_permissions.sandbox_permissions
+                },
                 prefix_rule,
             })
             .await;
@@ -396,7 +416,7 @@ impl ShellHandler {
             env: exec_params.env.clone(),
             explicit_env_overrides,
             network: exec_params.network.clone(),
-            sandbox_permissions: exec_params.sandbox_permissions,
+            sandbox_permissions: effective_additional_permissions.sandbox_permissions,
             additional_permissions: normalized_additional_permissions,
             justification: exec_params.justification.clone(),
             exec_approval_requirement,

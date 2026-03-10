@@ -23,8 +23,15 @@ pub struct AppsTestServer {
 
 impl AppsTestServer {
     pub async fn mount(server: &MockServer) -> Result<Self> {
+        Self::mount_with_connector_name(server, CONNECTOR_NAME).await
+    }
+
+    pub async fn mount_with_connector_name(
+        server: &MockServer,
+        connector_name: &str,
+    ) -> Result<Self> {
         mount_oauth_metadata(server).await;
-        mount_streamable_http_json_rpc(server).await;
+        mount_streamable_http_json_rpc(server, connector_name.to_string()).await;
         Ok(Self {
             chatgpt_base_url: server.uri(),
         })
@@ -43,15 +50,17 @@ async fn mount_oauth_metadata(server: &MockServer) {
         .await;
 }
 
-async fn mount_streamable_http_json_rpc(server: &MockServer) {
+async fn mount_streamable_http_json_rpc(server: &MockServer, connector_name: String) {
     Mock::given(method("POST"))
         .and(path_regex("^/api/codex/apps/?$"))
-        .respond_with(CodexAppsJsonRpcResponder)
+        .respond_with(CodexAppsJsonRpcResponder { connector_name })
         .mount(server)
         .await;
 }
 
-struct CodexAppsJsonRpcResponder;
+struct CodexAppsJsonRpcResponder {
+    connector_name: String,
+}
 
 impl Respond for CodexAppsJsonRpcResponder {
     fn respond(&self, request: &Request) -> ResponseTemplate {
@@ -117,7 +126,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                                 },
                                 "_meta": {
                                     "connector_id": CONNECTOR_ID,
-                                    "connector_name": CONNECTOR_NAME
+                                    "connector_name": self.connector_name.clone()
                                 }
                             },
                             {
@@ -133,7 +142,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                                 },
                                 "_meta": {
                                     "connector_id": CONNECTOR_ID,
-                                    "connector_name": CONNECTOR_NAME
+                                    "connector_name": self.connector_name.clone()
                                 }
                             }
                         ],

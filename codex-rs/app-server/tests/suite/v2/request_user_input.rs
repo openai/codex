@@ -4,9 +4,11 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_request_user_input_sse_response;
 use app_test_support::to_response;
+use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -86,6 +88,7 @@ async fn request_user_input_round_trip() -> Result<()> {
     assert_eq!(params.turn_id, turn.id);
     assert_eq!(params.item_id, "call1");
     assert_eq!(params.questions.len(), 1);
+    let resolved_request_id = request_id.clone();
 
     mcp.send_response(
         request_id,
@@ -96,17 +99,31 @@ async fn request_user_input_round_trip() -> Result<()> {
         }),
     )
     .await?;
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("codex/event/task_complete"),
-    )
-    .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
+    let mut saw_resolved = false;
+    loop {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Notification(notification) = message else {
+            continue;
+        };
+        match notification.method.as_str() {
+            "serverRequest/resolved" => {
+                let resolved: ServerRequestResolvedNotification = serde_json::from_value(
+                    notification
+                        .params
+                        .clone()
+                        .expect("serverRequest/resolved params"),
+                )?;
+                assert_eq!(resolved.thread_id, thread.id);
+                assert_eq!(resolved.request_id, resolved_request_id);
+                saw_resolved = true;
+            }
+            "turn/completed" => {
+                assert!(saw_resolved, "serverRequest/resolved should arrive first");
+                break;
+            }
+            _ => {}
+        }
+    }
 
     Ok(())
 }

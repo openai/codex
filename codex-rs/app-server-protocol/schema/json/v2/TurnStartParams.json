@@ -214,6 +214,10 @@
                 "type": "fullAccess"
               }
             },
+            "networkAccess": {
+              "default": false,
+              "type": "boolean"
+            },
             "type": {
               "enum": [
                 "readOnly"
@@ -298,6 +302,13 @@
           "type": "object"
         }
       ]
+    },
+    "ServiceTier": {
+      "enum": [
+        "fast",
+        "flex"
+      ],
+      "type": "string"
     },
     "Settings": {
       "description": "Settings for a collaboration mode.",
@@ -538,6 +549,24 @@
         }
       ],
       "description": "Override the sandbox policy for this turn and subsequent turns."
+    },
+    "serviceTier": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Override the service tier for this turn and subsequent turns."
     },
     "summary": {
       "anyOf": [

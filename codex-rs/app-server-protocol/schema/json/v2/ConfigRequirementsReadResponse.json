@@ -81,6 +81,15 @@
               "type": "null"
             }
           ]
+        },
+        "featureRequirements": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -118,12 +127,6 @@
           ]
         },
         "dangerouslyAllowAllUnixSockets": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "dangerouslyAllowNonLoopbackAdmin": {
           "type": [
             "boolean",
             "null"

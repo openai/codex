@@ -31,6 +31,22 @@ fn custom_tool_output_text_and_success(
     (output.unwrap_or_default(), success)
 }
 
+fn assert_js_repl_ok(req: &ResponsesRequest, call_id: &str, expected_output: &str) {
+    let (output, success) = custom_tool_output_text_and_success(req, call_id);
+    assert_ne!(
+        success,
+        Some(false),
+        "js_repl call failed unexpectedly: {output}"
+    );
+    assert!(output.contains(expected_output), "output was: {output}");
+}
+
+fn assert_js_repl_err(req: &ResponsesRequest, call_id: &str, expected_output: &str) {
+    let (output, success) = custom_tool_output_text_and_success(req, call_id);
+    assert_ne!(success, Some(true), "js_repl call should fail: {output}");
+    assert!(output.contains(expected_output), "output was: {output}");
+}
+
 fn tool_names(body: &serde_json::Value) -> Vec<String> {
     body["tools"]
         .as_array()
@@ -75,29 +91,92 @@ async fn run_js_repl_turn(
     prompt: &str,
     calls: &[(&str, &str)],
 ) -> Result<ResponseMock> {
+    let mut mocks = run_js_repl_sequence(server, prompt, calls).await?;
+    Ok(mocks
+        .pop()
+        .expect("js_repl test should return a request mock"))
+}
+
+async fn run_js_repl_sequence(
+    server: &MockServer,
+    prompt: &str,
+    calls: &[(&str, &str)],
+) -> Result<Vec<ResponseMock>> {
+    anyhow::ensure!(
+        !calls.is_empty(),
+        "js_repl test must include at least one call"
+    );
+
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::JsRepl);
+        config
+            .features
+            .enable(Feature::JsRepl)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(server).await?;
 
-    let mut first_events = vec![ev_response_created("resp-1")];
-    for (call_id, js_input) in calls {
-        first_events.push(ev_custom_tool_call(call_id, "js_repl", js_input));
-    }
-    first_events.push(ev_completed("resp-1"));
-    responses::mount_sse_once(server, sse(first_events)).await;
-
-    let second_mock = responses::mount_sse_once(
+    responses::mount_sse_once(
         server,
         sse(vec![
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-2"),
+            ev_response_created("resp-1"),
+            ev_custom_tool_call(calls[0].0, "js_repl", calls[0].1),
+            ev_completed("resp-1"),
         ]),
     )
     .await;
 
+    let mut mocks = Vec::with_capacity(calls.len());
+    for (response_index, (call_id, js_input)) in calls.iter().enumerate().skip(1) {
+        let response_id = format!("resp-{}", response_index + 1);
+        let mock = responses::mount_sse_once(
+            server,
+            sse(vec![
+                ev_response_created(&response_id),
+                ev_custom_tool_call(call_id, "js_repl", js_input),
+                ev_completed(&response_id),
+            ]),
+        )
+        .await;
+        mocks.push(mock);
+    }
+
+    let final_response_id = format!("resp-{}", calls.len() + 1);
+    let final_mock = responses::mount_sse_once(
+        server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed(&final_response_id),
+        ]),
+    )
+    .await;
+    mocks.push(final_mock);
+
     test.submit_turn(prompt).await?;
-    Ok(second_mock)
+    Ok(mocks)
+}
+
+async fn assert_failed_cell_followup(
+    server: &MockServer,
+    prompt: &str,
+    failing_cell: &str,
+    followup_cell: &str,
+    expected_followup_output: &str,
+) -> Result<()> {
+    let mocks = run_js_repl_sequence(
+        server,
+        prompt,
+        &[("call-1", failing_cell), ("call-2", followup_cell)],
+    )
+    .await?;
+
+    assert_js_repl_err(&mocks[0].single_request(), "call-1", "boom");
+    assert_js_repl_ok(
+        &mocks[1].single_request(),
+        "call-2",
+        expected_followup_output,
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -112,7 +191,10 @@ async fn js_repl_is_not_advertised_when_startup_node_is_incompatible() -> Result
     let old_node = write_too_old_node_script(temp.path())?;
 
     let mut builder = test_codex().with_config(move |config| {
-        config.features.enable(Feature::JsRepl);
+        config
+            .features
+            .enable(Feature::JsRepl)
+            .expect("test config should allow feature update");
         config.js_repl_node_path = Some(old_node);
     });
     let test = builder.build(&server).await?;
@@ -159,65 +241,328 @@ async fn js_repl_is_not_advertised_when_startup_node_is_incompatible() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn js_repl_persists_top_level_bindings_and_supports_tla() -> Result<()> {
+async fn js_repl_persists_top_level_destructured_bindings_and_supports_tla() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::JsRepl);
-    });
-    let test = builder.build(&server).await?;
-
-    responses::mount_sse_once(
+    let mocks = run_js_repl_sequence(
         &server,
-        sse(vec![
-            ev_response_created("resp-1"),
-            ev_custom_tool_call(
+        "run js_repl twice",
+        &[
+            (
                 "call-1",
-                "js_repl",
-                "let x = await Promise.resolve(41); console.log(x);",
+                "const { context: liveContext, session } = await Promise.resolve({ context: 41, session: 1 }); console.log(liveContext + session);",
             ),
-            ev_completed("resp-1"),
-        ]),
+            ("call-2", "console.log(liveContext + session);"),
+        ],
     )
-    .await;
-    let second_mock = responses::mount_sse_once(
+    .await?;
+
+    assert_js_repl_ok(&mocks[0].single_request(), "call-1", "42");
+    assert_js_repl_ok(&mocks[1].single_request(), "call-2", "42");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn js_repl_failed_cells_commit_initialized_bindings_only() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mocks = run_js_repl_sequence(
         &server,
-        sse(vec![
-            ev_response_created("resp-2"),
-            ev_custom_tool_call("call-2", "js_repl", "console.log(x + 1);"),
-            ev_completed("resp-2"),
-        ]),
+        "run js_repl across a failed cell",
+        &[
+            ("call-1", "const base = 40; console.log(base);"),
+            (
+                "call-2",
+                "const { session } = await Promise.resolve({ session: 2 }); throw new Error(\"boom\"); const late = 99;",
+            ),
+            ("call-3", "console.log(base + session, typeof late);"),
+        ],
     )
-    .await;
-    let third_mock = responses::mount_sse_once(
+    .await?;
+
+    assert_js_repl_ok(&mocks[0].single_request(), "call-1", "40");
+    assert_js_repl_err(&mocks[1].single_request(), "call-2", "boom");
+    assert_js_repl_ok(&mocks[2].single_request(), "call-3", "42 undefined");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn js_repl_failed_cells_preserve_initialized_lexical_destructuring_bindings() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mocks = run_js_repl_sequence(
         &server,
-        sse(vec![
-            ev_assistant_message("msg-1", "done"),
-            ev_completed("resp-3"),
-        ]),
+        "run js_repl through partial destructuring failure",
+        &[
+            (
+                "call-1",
+                "const { a, b } = { a: 1, get b() { throw new Error(\"boom\"); } };",
+            ),
+            (
+                "call-2",
+                "let aValue; try { aValue = a; } catch (error) { aValue = error.name; } let bValue; try { bValue = b; } catch (error) { bValue = error.name; } console.log(aValue, bValue);",
+            ),
+        ],
     )
-    .await;
+    .await?;
 
-    test.submit_turn("run js_repl twice").await?;
+    assert_js_repl_err(&mocks[0].single_request(), "call-1", "boom");
+    assert_js_repl_ok(&mocks[1].single_request(), "call-2", "1 ReferenceError");
 
-    let req2 = second_mock.single_request();
-    let (first_output, first_success) = custom_tool_output_text_and_success(&req2, "call-1");
-    assert_ne!(
-        first_success,
-        Some(false),
-        "first js_repl call failed unexpectedly: {first_output}"
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn js_repl_link_failures_keep_prior_module_state() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mocks = run_js_repl_sequence(
+        &server,
+        "run js_repl across a link failure",
+        &[
+            ("call-1", "const answer = 41; console.log(answer);"),
+            ("call-2", "import value from \"./foo\";"),
+            ("call-3", "console.log(answer + 1);"),
+        ],
+    )
+    .await?;
+
+    assert_js_repl_ok(&mocks[0].single_request(), "call-1", "41");
+    assert_js_repl_err(
+        &mocks[1].single_request(),
+        "call-2",
+        "Top-level static import \"./foo\" is not supported in js_repl",
     );
-    assert!(first_output.contains("41"));
+    assert_js_repl_ok(&mocks[2].single_request(), "call-3", "42");
 
-    let req3 = third_mock.single_request();
-    let (second_output, second_success) = custom_tool_output_text_and_success(&req3, "call-2");
-    assert_ne!(
-        second_success,
-        Some(false),
-        "second js_repl call failed unexpectedly: {second_output}"
-    );
-    assert!(second_output.contains("42"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn js_repl_failed_cells_do_not_commit_unreached_hoisted_bindings() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mocks = run_js_repl_sequence(
+        &server,
+        "run js_repl through hoisted binding failure",
+        &[
+            (
+                "call-1",
+                "var early = 1; throw new Error(\"boom\"); var late = 2; function fn() { return 1; }",
+            ),
+            (
+                "call-2",
+                "const late = 40; const fn = 1; console.log(early + late + fn);",
+            ),
+        ],
+    )
+    .await?;
+
+    assert_js_repl_err(&mocks[0].single_request(), "call-1", "boom");
+    assert_js_repl_ok(&mocks[1].single_request(), "call-2", "42");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn js_repl_failed_cells_do_not_preserve_hoisted_function_reads_before_declaration()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mocks = run_js_repl_sequence(
+        &server,
+        "run js_repl through unsupported hoisted function reads",
+        &[
+            (
+                "call-1",
+                "foo(); throw new Error(\"boom\"); function foo() {}",
+            ),
+            (
+                "call-2",
+                "let value; try { foo; value = \"present\"; } catch (error) { value = error.name; } console.log(value);",
+            ),
+        ],
+    )
+    .await?;
+
+    assert_js_repl_err(&mocks[0].single_request(), "call-1", "boom");
+    assert_js_repl_ok(&mocks[1].single_request(), "call-2", "ReferenceError");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn js_repl_failed_cells_preserve_functions_when_declaration_sites_are_reached() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mocks = run_js_repl_sequence(
+        &server,
+        "run js_repl through supported function declaration persistence",
+        &[
+            ("call-1", "function foo() {} throw new Error(\"boom\");"),
+            ("call-2", "console.log(typeof foo);"),
+        ],
+    )
+    .await?;
+
+    assert_js_repl_err(&mocks[0].single_request(), "call-1", "boom");
+    assert_js_repl_ok(&mocks[1].single_request(), "call-2", "function");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn js_repl_failed_cells_preserve_prior_binding_writes_without_new_bindings() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mocks = run_js_repl_sequence(
+        &server,
+        "run js_repl through failed prior-binding writes",
+        &[
+            ("call-1", "let x = 1; console.log(x);"),
+            ("call-2", "x = 2; throw new Error(\"boom\");"),
+            ("call-3", "console.log(x);"),
+        ],
+    )
+    .await?;
+
+    assert_js_repl_ok(&mocks[0].single_request(), "call-1", "1");
+    assert_js_repl_err(&mocks[1].single_request(), "call-2", "boom");
+    assert_js_repl_ok(&mocks[2].single_request(), "call-3", "2");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn js_repl_failed_cells_var_persistence_boundaries() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let cases = [
+        (
+            "run js_repl through supported pre-declaration var writes",
+            "x = 5; y = 1; y += 2; z = 1; z++; throw new Error(\"boom\"); var x, y, z;",
+            "console.log(x, y, z);",
+            "5 3 2",
+        ),
+        (
+            "run js_repl through short-circuited logical var assignments",
+            "x &&= 1; y ||= 2; z ??= 3; throw new Error(\"boom\"); var x, y, z;",
+            "let xValue; try { xValue = x; } catch (error) { xValue = error.name; } console.log(xValue, y, z);",
+            "ReferenceError 2 3",
+        ),
+        (
+            "run js_repl through unsupported shadowed nested var writes",
+            "{ let x = 1; x = 2; } throw new Error(\"boom\"); var x;",
+            "let value; try { value = x; } catch (error) { value = error.name; } console.log(value);",
+            "ReferenceError",
+        ),
+        (
+            "run js_repl through unsupported nested assignment writes",
+            "x = (y = 1); throw new Error(\"boom\"); var x, y;",
+            "let yValue; try { yValue = y; } catch (error) { yValue = error.name; } console.log(x, yValue);",
+            "1 ReferenceError",
+        ),
+        (
+            "run js_repl through unsupported var destructuring recovery",
+            "var { a, b } = { a: 1, get b() { throw new Error(\"boom\"); } };",
+            "let aValue; try { aValue = a; } catch (error) { aValue = error.name; } let bValue; try { bValue = b; } catch (error) { bValue = error.name; } console.log(aValue, bValue);",
+            "ReferenceError ReferenceError",
+        ),
+    ];
+
+    for (prompt, failing_cell, followup_cell, expected_followup_output) in cases {
+        assert_failed_cell_followup(
+            &server,
+            prompt,
+            failing_cell,
+            followup_cell,
+            expected_followup_output,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn js_repl_failed_cells_commit_non_empty_loop_vars_but_skip_empty_loops() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mocks = run_js_repl_sequence(
+        &server,
+        "run js_repl through failed loop bindings",
+        &[
+            (
+                "call-1",
+                "for (var item of [2]) {} for (var emptyItem of []) {} throw new Error(\"boom\");",
+            ),
+            (
+                "call-2",
+                "let itemValue; try { itemValue = item; } catch (error) { itemValue = error.name; } let emptyValue; try { emptyValue = emptyItem; } catch (error) { emptyValue = error.name; } console.log(itemValue, emptyValue);",
+            ),
+        ],
+    )
+    .await?;
+
+    assert_js_repl_err(&mocks[0].single_request(), "call-1", "boom");
+    assert_js_repl_ok(&mocks[1].single_request(), "call-2", "2 ReferenceError");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn js_repl_keeps_function_to_string_stable() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mock = run_js_repl_turn(
+        &server,
+        "run js_repl through function toString",
+        &[(
+            "call-1",
+            "function foo() { return 1; } console.log(foo.toString());",
+        )],
+    )
+    .await?;
+
+    let req = mock.single_request();
+    assert_js_repl_ok(&req, "call-1", "function foo() { return 1; }");
+    let (output, _) = custom_tool_output_text_and_success(&req, "call-1");
+    assert!(!output.contains("__codexInternalMarkCommittedBindings"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn js_repl_allows_globalthis_shadowing_with_instrumented_bindings() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mock = run_js_repl_turn(
+        &server,
+        "run js_repl with shadowed globalThis",
+        &[(
+            "call-1",
+            "const globalThis = {}; const value = 1; console.log(typeof globalThis, value);",
+        )],
+    )
+    .await?;
+
+    let req = mock.single_request();
+    assert_js_repl_ok(&req, "call-1", "object 1");
 
     Ok(())
 }

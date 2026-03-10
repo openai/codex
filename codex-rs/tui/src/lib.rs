@@ -504,7 +504,7 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db_layer = codex_core::state_db::get_state_db(&config, None)
+    let log_db_layer = codex_core::state_db::get_state_db(&config)
         .await
         .map(|db| log_db::start(db).with_filter(env_filter()));
 
@@ -961,7 +961,7 @@ pub(crate) async fn read_session_cwd(
     thread_id: ThreadId,
     path: &Path,
 ) -> Option<PathBuf> {
-    if let Some(state_db_ctx) = get_state_db(config, None).await
+    if let Some(state_db_ctx) = get_state_db(config).await
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
     {
         return Some(metadata.cwd);
@@ -1148,15 +1148,8 @@ async fn load_config_or_exit_with_fallback_cwd(
     }
 }
 
-/// Determine if user has configured a sandbox / approval policy,
-/// or if the current cwd project is already trusted. If not, we need to
-/// show the trust screen.
+/// Determine if the user has decided whether to trust the current directory.
 fn should_show_trust_screen(config: &Config) -> bool {
-    if config.did_user_set_custom_approval_policy_or_sandbox_mode {
-        // Respect explicit approval/sandbox overrides made by the user.
-        return false;
-    }
-    // otherwise, show only if no trust decision has been made
     config.active_project.trust_level.is_none()
 }
 
@@ -1212,7 +1205,6 @@ mod tests {
     async fn windows_shows_trust_prompt_without_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
         config.set_windows_sandbox_enabled(false);
 
@@ -1228,7 +1220,6 @@ mod tests {
     async fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
         config.set_windows_sandbox_enabled(true);
 
@@ -1251,7 +1242,6 @@ mod tests {
         use codex_protocol::config_types::TrustLevel;
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig {
             trust_level: Some(TrustLevel::Untrusted),
         };
@@ -1271,6 +1261,7 @@ mod tests {
             .unwrap_or_else(|| "gpt-5.1".to_string());
         TurnContextItem {
             turn_id: None,
+            trace_id: None,
             cwd,
             current_date: None,
             timezone: None,
@@ -1280,6 +1271,7 @@ mod tests {
             model,
             personality: None,
             collaboration_mode: None,
+            realtime_active: Some(false),
             effort: config.model_reasoning_effort,
             summary: config
                 .model_reasoning_summary
@@ -1500,7 +1492,10 @@ trust_level = "untrusted"
     async fn read_session_cwd_prefers_sqlite_when_thread_id_present() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.features.enable(Feature::Sqlite);
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow sqlite");
 
         let thread_id = ThreadId::new();
         let rollout_cwd = temp_dir.path().join("rollout-cwd");
@@ -1524,7 +1519,6 @@ trust_level = "untrusted"
         let runtime = codex_state::StateRuntime::init(
             config.codex_home.clone(),
             config.model_provider_id.clone(),
-            None,
         )
         .await
         .map_err(std::io::Error::other)?;

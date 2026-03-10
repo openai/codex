@@ -41,6 +41,7 @@ use owo_colors::Style;
 use serde::Deserialize;
 use shlex::try_join;
 use std::collections::HashMap;
+use std::io::IsTerminal;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -447,6 +448,37 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_msg!(self, "🌐 Searched: {detail}");
                 }
             }
+            EventMsg::ImageGenerationBegin(generated) => {
+                ts_msg!(
+                    self,
+                    "{} {}",
+                    "image generation started".style(self.magenta),
+                    generated.call_id
+                );
+            }
+            EventMsg::ImageGenerationEnd(generated) => {
+                if !generated.result.is_empty()
+                    && !generated.result.starts_with("data:")
+                    && !generated.result.starts_with("http://")
+                    && !generated.result.starts_with("https://")
+                    && !generated.result.starts_with("file://")
+                {
+                    ts_msg!(
+                        self,
+                        "{} {} {}",
+                        "generated image".style(self.magenta),
+                        generated.call_id,
+                        generated.result.style(self.dimmed)
+                    );
+                } else {
+                    ts_msg!(
+                        self,
+                        "{} {}",
+                        "generated image".style(self.magenta),
+                        generated.call_id
+                    );
+                }
+            }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id,
                 auto_approved,
@@ -848,6 +880,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::UndoStarted(_)
             | EventMsg::ThreadRolledBack(_)
             | EventMsg::RequestUserInput(_)
+            | EventMsg::RequestPermissions(_)
             | EventMsg::CollabResumeBegin(_)
             | EventMsg::CollabResumeEnd(_)
             | EventMsg::RealtimeConversationStarted(_)
@@ -869,12 +902,17 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             );
         }
 
-        // If the user has not piped the final message to a file, they will see
-        // it twice: once written to stderr as part of the normal event
-        // processing, and once here on stdout. We print the token summary above
-        // to help break up the output visually in that case.
+        // In interactive terminals we already emitted the final assistant
+        // message on stderr during event processing. Preserve stdout emission
+        // only for non-interactive use so pipes and scripts still receive the
+        // final message.
         #[allow(clippy::print_stdout)]
-        if let Some(message) = &self.final_message {
+        if should_print_final_message_to_stdout(
+            self.final_message.as_deref(),
+            std::io::stdout().is_terminal(),
+            std::io::stderr().is_terminal(),
+        ) && let Some(message) = &self.final_message
+        {
             if message.ends_with('\n') {
                 print!("{message}");
             } else {
@@ -924,6 +962,7 @@ impl EventProcessorWithHumanOutput {
                 | EventMsg::UndoStarted(_)
                 | EventMsg::ThreadRolledBack(_)
                 | EventMsg::RequestUserInput(_)
+                | EventMsg::RequestPermissions(_)
                 | EventMsg::DynamicToolCallRequest(_)
                 | EventMsg::DynamicToolCallResponse(_)
         )
@@ -1023,6 +1062,14 @@ impl EventProcessorWithHumanOutput {
         self.progress_active = true;
         self.progress_last_len = line.len();
     }
+}
+
+fn should_print_final_message_to_stdout(
+    final_message: Option<&str>,
+    stdout_is_terminal: bool,
+    stderr_is_terminal: bool,
+) -> bool {
+    final_message.is_some() && !(stdout_is_terminal && stderr_is_terminal)
 }
 
 struct AgentJobProgressStats {
@@ -1190,5 +1237,43 @@ fn format_mcp_invocation(invocation: &McpInvocation) -> String {
         format!("{fq_tool_name}()")
     } else {
         format!("{fq_tool_name}({args_str})")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_print_final_message_to_stdout;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn suppresses_final_stdout_message_when_both_streams_are_terminals() {
+        assert_eq!(
+            should_print_final_message_to_stdout(Some("hello"), true, true),
+            false
+        );
+    }
+
+    #[test]
+    fn prints_final_stdout_message_when_stdout_is_not_terminal() {
+        assert_eq!(
+            should_print_final_message_to_stdout(Some("hello"), false, true),
+            true
+        );
+    }
+
+    #[test]
+    fn prints_final_stdout_message_when_stderr_is_not_terminal() {
+        assert_eq!(
+            should_print_final_message_to_stdout(Some("hello"), true, false),
+            true
+        );
+    }
+
+    #[test]
+    fn does_not_print_when_message_is_missing() {
+        assert_eq!(
+            should_print_final_message_to_stdout(None, false, false),
+            false
+        );
     }
 }

@@ -29,6 +29,17 @@ pub fn apply_rollout_item(
     }
 }
 
+/// Return whether this rollout item can mutate thread metadata stored in SQLite.
+pub fn rollout_item_affects_thread_metadata(item: &RolloutItem) -> bool {
+    match item {
+        RolloutItem::SessionMeta(_) | RolloutItem::TurnContext(_) => true,
+        RolloutItem::EventMsg(EventMsg::TokenCount(_) | EventMsg::UserMessage(_)) => true,
+        RolloutItem::EventMsg(_) | RolloutItem::ResponseItem(_) | RolloutItem::Compacted(_) => {
+            false
+        }
+    }
+}
+
 fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &SessionMetaLine) {
     if metadata.id != meta_line.meta.id {
         // Ignore session_meta lines that don't match the canonical thread ID,
@@ -242,6 +253,7 @@ mod tests {
                     model_provider: Some("openai".to_string()),
                     base_instructions: None,
                     dynamic_tools: None,
+                    memory_mode: None,
                 },
                 git: None,
             }),
@@ -251,6 +263,7 @@ mod tests {
             &mut metadata,
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
+                trace_id: None,
                 cwd: PathBuf::from("/parent/workspace"),
                 current_date: None,
                 timezone: None,
@@ -260,6 +273,7 @@ mod tests {
                 model: "gpt-5".to_string(),
                 personality: None,
                 collaboration_mode: None,
+                realtime_active: None,
                 effort: None,
                 summary: ReasoningSummary::Auto,
                 user_instructions: None,
@@ -287,6 +301,7 @@ mod tests {
             &mut metadata,
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
+                trace_id: None,
                 cwd: PathBuf::from("/fallback/workspace"),
                 current_date: None,
                 timezone: None,
@@ -296,6 +311,7 @@ mod tests {
                 model: "gpt-5".to_string(),
                 personality: None,
                 collaboration_mode: None,
+                realtime_active: None,
                 effort: None,
                 summary: ReasoningSummary::Auto,
                 user_instructions: None,

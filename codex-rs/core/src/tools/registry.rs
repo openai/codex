@@ -82,7 +82,7 @@ impl ToolRegistry {
     ) -> Result<ResponseInputItem, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
         let call_id_owned = invocation.call_id.clone();
-        let otel = invocation.turn.otel_manager.clone();
+        let otel = invocation.turn.session_telemetry.clone();
         let payload_for_response = invocation.payload.clone();
         let log_payload = payload_for_response.log_payload();
         let metric_tags = [
@@ -117,6 +117,14 @@ impl ToolRegistry {
         };
         let mcp_server_ref = mcp_server.as_deref();
         let mcp_server_origin_ref = mcp_server_origin.as_deref();
+
+        {
+            let mut active = invocation.session.active_turn.lock().await;
+            if let Some(active_turn) = active.as_mut() {
+                let mut turn_state = active_turn.turn_state.lock().await;
+                turn_state.tool_calls = turn_state.tool_calls.saturating_add(1);
+            }
+        }
 
         let handler = match self.handler(tool_name.as_ref()) {
             Some(handler) => handler,
@@ -379,6 +387,7 @@ async fn dispatch_after_tool_use_hook(
         .dispatch(HookPayload {
             session_id: session.conversation_id,
             cwd: turn.cwd.clone(),
+            client: turn.app_server_client_name.clone(),
             triggered_at: chrono::Utc::now(),
             hook_event: HookEvent::AfterToolUse {
                 event: HookEventAfterToolUse {

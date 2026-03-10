@@ -17,6 +17,10 @@ impl SessionTask for CompactTask {
         TaskKind::Compact
     }
 
+    fn span_name(&self) -> &'static str {
+        "session_task.compact"
+    }
+
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
@@ -26,14 +30,14 @@ impl SessionTask for CompactTask {
     ) -> Option<String> {
         let session = session.clone_session();
         let _ = if crate::compact::should_use_remote_compact_task(&ctx.provider) {
-            let _ = session.services.otel_manager.counter(
+            let _ = session.services.session_telemetry.counter(
                 "codex.task.compact",
                 1,
                 &[("type", "remote")],
             );
             crate::compact_remote::run_remote_compact_task(session.clone(), ctx).await
         } else {
-            let _ = session.services.otel_manager.counter(
+            let _ = session.services.session_telemetry.counter(
                 "codex.task.compact",
                 1,
                 &[("type", "local")],

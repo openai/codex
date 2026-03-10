@@ -14,7 +14,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
-use codex_otel::OtelManager;
+use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use tokio::fs;
 use tokio::process::Command;
@@ -40,7 +40,7 @@ impl ShellSnapshot {
         session_id: ThreadId,
         session_cwd: PathBuf,
         shell: &mut Shell,
-        otel_manager: OtelManager,
+        session_telemetry: SessionTelemetry,
     ) -> watch::Sender<Option<Arc<ShellSnapshot>>> {
         let (shell_snapshot_tx, shell_snapshot_rx) = watch::channel(None);
         shell.shell_snapshot = shell_snapshot_rx;
@@ -51,7 +51,7 @@ impl ShellSnapshot {
             session_cwd,
             shell.clone(),
             shell_snapshot_tx.clone(),
-            otel_manager,
+            session_telemetry,
         );
 
         shell_snapshot_tx
@@ -63,7 +63,7 @@ impl ShellSnapshot {
         session_cwd: PathBuf,
         shell: Shell,
         shell_snapshot_tx: watch::Sender<Option<Arc<ShellSnapshot>>>,
-        otel_manager: OtelManager,
+        session_telemetry: SessionTelemetry,
     ) {
         Self::spawn_snapshot_task(
             codex_home,
@@ -71,7 +71,7 @@ impl ShellSnapshot {
             session_cwd,
             shell,
             shell_snapshot_tx,
-            otel_manager,
+            session_telemetry,
         );
     }
 
@@ -81,12 +81,12 @@ impl ShellSnapshot {
         session_cwd: PathBuf,
         snapshot_shell: Shell,
         shell_snapshot_tx: watch::Sender<Option<Arc<ShellSnapshot>>>,
-        otel_manager: OtelManager,
+        session_telemetry: SessionTelemetry,
     ) {
         let snapshot_span = info_span!("shell_snapshot", thread_id = %session_id);
         tokio::spawn(
             async move {
-                let timer = otel_manager.start_timer("codex.shell_snapshot.duration_ms", &[]);
+                let timer = session_telemetry.start_timer("codex.shell_snapshot.duration_ms", &[]);
                 let snapshot = ShellSnapshot::try_new(
                     &codex_home,
                     session_id,
@@ -102,7 +102,7 @@ impl ShellSnapshot {
                 if let Some(failure_reason) = snapshot.as_ref().err() {
                     counter_tags.push(("failure_reason", *failure_reason));
                 }
-                otel_manager.counter("codex.shell_snapshot", 1, &counter_tags);
+                session_telemetry.counter("codex.shell_snapshot", 1, &counter_tags);
                 let _ = shell_snapshot_tx.send(snapshot.ok());
             }
             .instrument(snapshot_span),
@@ -360,19 +360,17 @@ alias_count=$(alias -p | wc -l | tr -d ' ')
 echo "# aliases $alias_count"
 alias -p
 echo ''
-export_lines=$(export -p | awk '
-/^(export|declare -x|typeset -x) / {
-  line=$0
-  name=line
-  sub(/^(export|declare -x|typeset -x) /, "", name)
-  sub(/=.*/, "", name)
-  if (name ~ /^(EXCLUDED_EXPORTS)$/) {
-    next
-  }
-  if (name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
-    print line
-  }
-}')
+export_lines=$(
+  while IFS= read -r name; do
+    if [[ "$name" =~ ^(EXCLUDED_EXPORTS)$ ]]; then
+      continue
+    fi
+    if [[ ! "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      continue
+    fi
+    declare -xp "$name" 2>/dev/null || true
+  done < <(compgen -e)
+)
 export_count=$(printf '%s\n' "$export_lines" | sed '/^$/d' | wc -l | tr -d ' ')
 echo "# exports $export_count"
 if [ -n "$export_lines" ]; then
@@ -672,6 +670,46 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn bash_snapshot_preserves_multiline_exports() -> Result<()> {
+        let multiline_cert = "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----";
+        let output = Command::new("/bin/bash")
+            .arg("-c")
+            .arg(bash_snapshot_script())
+            .env("BASH_ENV", "/dev/null")
+            .env("MULTILINE_CERT", multiline_cert)
+            .output()?;
+
+        assert!(output.status.success());
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("MULTILINE_CERT=") || stdout.contains("MULTILINE_CERT"),
+            "snapshot should include the multiline export name"
+        );
+
+        let dir = tempdir()?;
+        let snapshot_path = dir.path().join("snapshot.sh");
+        std::fs::write(&snapshot_path, stdout.as_bytes())?;
+
+        let validate = Command::new("/bin/bash")
+            .arg("-c")
+            .arg("set -e; . \"$1\"")
+            .arg("bash")
+            .arg(&snapshot_path)
+            .env("BASH_ENV", "/dev/null")
+            .output()?;
+
+        assert!(
+            validate.status.success(),
+            "snapshot validation failed: {}",
+            String::from_utf8_lossy(&validate.stderr)
+        );
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
         let dir = tempdir()?;
@@ -702,7 +740,13 @@ mod tests {
 
         let dir = tempdir()?;
         let home = dir.path();
-        fs::write(home.join(".bashrc"), "read -r ignored\n").await?;
+        let read_status_path = home.join("stdin-read-status");
+        let read_status_display = read_status_path.display();
+        // Persist the startup `read` exit status so the test can assert whether
+        // bash saw EOF on stdin after the snapshot process exits.
+        let bashrc =
+            format!("read -t 1 -r ignored\nprintf '%s' \"$?\" > \"{read_status_display}\"\n");
+        fs::write(home.join(".bashrc"), bashrc).await?;
 
         let shell = Shell {
             shell_type: ShellType::Bash,
@@ -715,10 +759,17 @@ mod tests {
             "HOME=\"{home_display}\"; export HOME; {}",
             bash_snapshot_script()
         );
-        let output =
-            run_script_with_timeout(&shell, &script, Duration::from_millis(500), true, home)
-                .await
-                .context("run snapshot command")?;
+        let output = run_script_with_timeout(&shell, &script, Duration::from_secs(2), true, home)
+            .await
+            .context("run snapshot command")?;
+        let read_status = fs::read_to_string(&read_status_path)
+            .await
+            .context("read stdin probe status")?;
+
+        assert_eq!(
+            read_status, "1",
+            "expected shell startup read to see EOF on stdin; status={read_status:?}"
+        );
 
         assert!(
             output.contains("# Snapshot file"),

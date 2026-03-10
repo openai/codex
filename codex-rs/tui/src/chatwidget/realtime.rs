@@ -41,14 +41,24 @@ impl RealtimeConversationUiState {
                 | RealtimeConversationPhase::Stopping
         )
     }
+
+    pub(super) fn is_active(&self) -> bool {
+        matches!(self.phase, RealtimeConversationPhase::Active)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct RenderedUserMessageEvent {
-    message: String,
-    remote_image_urls: Vec<String>,
-    local_images: Vec<PathBuf>,
-    text_elements: Vec<TextElement>,
+    pub(super) message: String,
+    pub(super) remote_image_urls: Vec<String>,
+    pub(super) local_images: Vec<PathBuf>,
+    pub(super) text_elements: Vec<TextElement>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct PendingSteerCompareKey {
+    pub(super) message: String,
+    pub(super) image_count: usize,
 }
 
 impl ChatWidget {
@@ -74,6 +84,78 @@ impl ChatWidget {
             event.text_elements.clone(),
             event.local_images.clone(),
             event.images.clone().unwrap_or_default(),
+        )
+    }
+
+    /// Build the compare key for a submitted pending steer without invoking the
+    /// expensive request-serialization path. Pending steers only need to match the
+    /// committed `ItemCompleted(UserMessage)` emitted after core drains input, which
+    /// preserves flattened text and total image count but not UI-only text ranges or
+    /// local image paths.
+    pub(super) fn pending_steer_compare_key_from_items(
+        items: &[UserInput],
+    ) -> PendingSteerCompareKey {
+        let mut message = String::new();
+        let mut image_count = 0;
+
+        for item in items {
+            match item {
+                UserInput::Text { text, .. } => message.push_str(text),
+                UserInput::Image { .. } | UserInput::LocalImage { .. } => image_count += 1,
+                UserInput::Skill { .. } | UserInput::Mention { .. } => {}
+                _ => {}
+            }
+        }
+
+        PendingSteerCompareKey {
+            message,
+            image_count,
+        }
+    }
+
+    pub(super) fn pending_steer_compare_key_from_item(
+        item: &codex_protocol::items::UserMessageItem,
+    ) -> PendingSteerCompareKey {
+        Self::pending_steer_compare_key_from_items(&item.content)
+    }
+
+    #[cfg(test)]
+    pub(super) fn rendered_user_message_event_from_inputs(
+        items: &[UserInput],
+    ) -> RenderedUserMessageEvent {
+        let mut message = String::new();
+        let mut remote_image_urls = Vec::new();
+        let mut local_images = Vec::new();
+        let mut text_elements = Vec::new();
+
+        for item in items {
+            match item {
+                UserInput::Text {
+                    text,
+                    text_elements: current_text_elements,
+                } => append_text_with_rebased_elements(
+                    &mut message,
+                    &mut text_elements,
+                    text,
+                    current_text_elements.iter().map(|element| {
+                        TextElement::new(
+                            element.byte_range,
+                            element.placeholder(text).map(str::to_string),
+                        )
+                    }),
+                ),
+                UserInput::Image { image_url } => remote_image_urls.push(image_url.clone()),
+                UserInput::LocalImage { path } => local_images.push(path.clone()),
+                UserInput::Skill { .. } | UserInput::Mention { .. } => {}
+                _ => {}
+            }
+        }
+
+        Self::rendered_user_message_event_from_parts(
+            message,
+            text_elements,
+            local_images,
+            remote_image_urls,
         )
     }
 
@@ -179,12 +261,13 @@ impl ChatWidget {
         ev: RealtimeConversationRealtimeEvent,
     ) {
         match ev.payload {
-            RealtimeEvent::SessionCreated { session_id } => {
+            RealtimeEvent::SessionUpdated { session_id, .. } => {
                 self.realtime_conversation.session_id = Some(session_id);
             }
-            RealtimeEvent::SessionUpdated { .. } => {}
             RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
             RealtimeEvent::ConversationItemAdded(_item) => {}
+            RealtimeEvent::ConversationItemDone { .. } => {}
+            RealtimeEvent::HandoffRequested(_) => {}
             RealtimeEvent::Error(message) => {
                 self.add_error_message(format!("Realtime voice error: {message}"));
                 self.reset_realtime_conversation_state();
@@ -278,8 +361,50 @@ impl ChatWidget {
     #[cfg(target_os = "linux")]
     fn start_realtime_local_audio(&mut self) {}
 
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    pub(crate) fn restart_realtime_audio_device(&mut self, kind: RealtimeAudioDeviceKind) {
+        if !self.realtime_conversation.is_active() {
+            return;
+        }
+
+        match kind {
+            RealtimeAudioDeviceKind::Microphone => {
+                self.stop_realtime_microphone();
+                self.start_realtime_local_audio();
+            }
+            RealtimeAudioDeviceKind::Speaker => {
+                self.stop_realtime_speaker();
+                match crate::voice::RealtimeAudioPlayer::start(&self.config) {
+                    Ok(player) => {
+                        self.realtime_conversation.audio_player = Some(player);
+                    }
+                    Err(err) => {
+                        self.add_error_message(format!("Failed to start speaker output: {err}"));
+                    }
+                }
+            }
+        }
+        self.request_redraw();
+    }
+
+    #[cfg(any(target_os = "linux", not(feature = "voice-input")))]
+    pub(crate) fn restart_realtime_audio_device(&mut self, kind: RealtimeAudioDeviceKind) {
+        let _ = kind;
+    }
+
     #[cfg(not(target_os = "linux"))]
     fn stop_realtime_local_audio(&mut self) {
+        self.stop_realtime_microphone();
+        self.stop_realtime_speaker();
+    }
+
+    #[cfg(target_os = "linux")]
+    fn stop_realtime_local_audio(&mut self) {
+        self.realtime_conversation.meter_placeholder_id = None;
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn stop_realtime_microphone(&mut self) {
         if let Some(flag) = self.realtime_conversation.capture_stop_flag.take() {
             flag.store(true, Ordering::Relaxed);
         }
@@ -289,13 +414,12 @@ impl ChatWidget {
         if let Some(id) = self.realtime_conversation.meter_placeholder_id.take() {
             self.remove_transcription_placeholder(&id);
         }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn stop_realtime_speaker(&mut self) {
         if let Some(player) = self.realtime_conversation.audio_player.take() {
             player.clear();
         }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn stop_realtime_local_audio(&mut self) {
-        self.realtime_conversation.meter_placeholder_id = None;
     }
 }

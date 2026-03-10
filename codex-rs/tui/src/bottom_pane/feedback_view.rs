@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 
+use codex_feedback::feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
+use codex_feedback::feedback_diagnostics::FeedbackDiagnostics;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -27,8 +29,8 @@ use super::popup_consts::standard_popup_hint_line;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
-const BASE_BUG_ISSUE_URL: &str =
-    "https://github.com/openai/codex/issues/new?template=2-bug-report.yml";
+const BASE_CLI_BUG_ISSUE_URL: &str =
+    "https://github.com/openai/codex/issues/new?template=3-cli.yml";
 /// Internal routing link for employee feedback follow-ups. This must not be shown to external users.
 const CODEX_FEEDBACK_INTERNAL_URL: &str = "http://go/codex-feedback-internal";
 
@@ -46,7 +48,7 @@ pub(crate) enum FeedbackAudience {
 /// both logs and rollout with classification + metadata.
 pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
-    snapshot: codex_feedback::CodexLogSnapshot,
+    snapshot: codex_feedback::FeedbackSnapshot,
     rollout_path: Option<PathBuf>,
     app_event_tx: AppEventSender,
     include_logs: bool,
@@ -61,7 +63,7 @@ pub(crate) struct FeedbackNoteView {
 impl FeedbackNoteView {
     pub(crate) fn new(
         category: FeedbackCategory,
-        snapshot: codex_feedback::CodexLogSnapshot,
+        snapshot: codex_feedback::FeedbackSnapshot,
         rollout_path: Option<PathBuf>,
         app_event_tx: AppEventSender,
         include_logs: bool,
@@ -87,7 +89,7 @@ impl FeedbackNoteView {
         } else {
             Some(note.as_str())
         };
-        let log_file_paths = if self.include_logs {
+        let attachment_paths = if self.include_logs {
             self.rollout_path.iter().cloned().collect::<Vec<_>>()
         } else {
             Vec::new()
@@ -100,8 +102,9 @@ impl FeedbackNoteView {
             classification,
             reason_opt,
             self.include_logs,
-            &log_file_paths,
+            &attachment_paths,
             Some(SessionSource::Cli),
+            None,
         );
 
         match result {
@@ -216,21 +219,21 @@ impl BottomPaneView for FeedbackNoteView {
 
 impl Renderable for FeedbackNoteView {
     fn desired_height(&self, width: u16) -> u16 {
-        1u16 + self.input_height(width) + 3u16
+        self.intro_lines(width).len() as u16 + self.input_height(width) + 2u16
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         if area.height < 2 || area.width <= 2 {
             return None;
         }
+        let intro_height = self.intro_lines(area.width).len() as u16;
         let text_area_height = self.input_height(area.width).saturating_sub(1);
         if text_area_height == 0 {
             return None;
         }
-        let top_line_count = 1u16; // title only
         let textarea_rect = Rect {
             x: area.x.saturating_add(2),
-            y: area.y.saturating_add(top_line_count).saturating_add(1),
+            y: area.y.saturating_add(intro_height).saturating_add(1),
             width: area.width.saturating_sub(2),
             height: text_area_height,
         };
@@ -243,23 +246,26 @@ impl Renderable for FeedbackNoteView {
             return;
         }
 
-        let (title, placeholder) = feedback_title_and_placeholder(self.category);
+        let intro_lines = self.intro_lines(area.width);
+        let (_, placeholder) = feedback_title_and_placeholder(self.category);
         let input_height = self.input_height(area.width);
 
-        // Title line
-        let title_area = Rect {
-            x: area.x,
-            y: area.y,
-            width: area.width,
-            height: 1,
-        };
-        let title_spans: Vec<Span<'static>> = vec![gutter(), title.bold()];
-        Paragraph::new(Line::from(title_spans)).render(title_area, buf);
+        for (offset, line) in intro_lines.iter().enumerate() {
+            Paragraph::new(line.clone()).render(
+                Rect {
+                    x: area.x,
+                    y: area.y.saturating_add(offset as u16),
+                    width: area.width,
+                    height: 1,
+                },
+                buf,
+            );
+        }
 
         // Input line
         let input_area = Rect {
             x: area.x,
-            y: area.y.saturating_add(1),
+            y: area.y.saturating_add(intro_lines.len() as u16),
             width: area.width,
             height: input_height,
         };
@@ -333,6 +339,18 @@ impl FeedbackNoteView {
         let text_height = self.textarea.desired_height(usable_width).clamp(1, 8);
         text_height.saturating_add(1).min(9)
     }
+
+    fn intro_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let (title, _) = feedback_title_and_placeholder(self.category);
+        vec![Line::from(vec![gutter(), title.bold()])]
+    }
+}
+
+pub(crate) fn should_show_feedback_connectivity_details(
+    category: FeedbackCategory,
+    diagnostics: &FeedbackDiagnostics,
+) -> bool {
+    category != FeedbackCategory::GoodResult && !diagnostics.is_empty()
 }
 
 fn gutter() -> Span<'static> {
@@ -389,7 +407,7 @@ fn issue_url_for_category(
         | FeedbackCategory::Other => Some(match feedback_audience {
             FeedbackAudience::OpenAiEmployee => slack_feedback_url(thread_id),
             FeedbackAudience::External => {
-                format!("{BASE_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}")
+                format!("{BASE_CLI_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}")
             }
         }),
         FeedbackCategory::GoodResult => None,
@@ -484,6 +502,7 @@ pub(crate) fn feedback_upload_consent_params(
     app_event_tx: AppEventSender,
     category: FeedbackCategory,
     rollout_path: Option<std::path::PathBuf>,
+    feedback_diagnostics: &FeedbackDiagnostics,
 ) -> super::SelectionViewParams {
     use super::popup_consts::standard_popup_hint_line;
     let yes_action: super::SelectionAction = Box::new({
@@ -520,6 +539,26 @@ pub(crate) fn feedback_upload_consent_params(
     {
         header_lines.push(Line::from(vec!["  • ".into(), name.into()]).into());
     }
+    if !feedback_diagnostics.is_empty() {
+        header_lines.push(
+            Line::from(vec![
+                "  • ".into(),
+                FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME.into(),
+            ])
+            .into(),
+        );
+    }
+    if should_show_feedback_connectivity_details(category, feedback_diagnostics) {
+        header_lines.push(Line::from("").into());
+        header_lines.push(Line::from("Connectivity diagnostics".bold()).into());
+        for diagnostic in feedback_diagnostics.diagnostics() {
+            header_lines
+                .push(Line::from(vec!["  - ".into(), diagnostic.headline.clone().into()]).into());
+            for detail in &diagnostic.details {
+                header_lines.push(Line::from(vec!["    - ".dim(), detail.clone().into()]).into());
+            }
+        }
+    }
 
     super::SelectionViewParams {
         footer_hint: Some(standard_popup_hint_line()),
@@ -536,7 +575,6 @@ pub(crate) fn feedback_upload_consent_params(
             },
             super::SelectionItem {
                 name: "No".to_string(),
-                description: Some("".to_string()),
                 actions: vec![no_action],
                 dismiss_on_select: true,
                 ..Default::default()
@@ -554,6 +592,8 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
+    use codex_feedback::feedback_diagnostics::FeedbackDiagnostic;
+    use pretty_assertions::assert_eq;
 
     fn render(view: &FeedbackNoteView, width: u16) -> String {
         let height = view.desired_height(width);
@@ -635,6 +675,62 @@ mod tests {
     }
 
     #[test]
+    fn feedback_view_with_connectivity_diagnostics() {
+        let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let diagnostics = FeedbackDiagnostics::new(vec![
+            FeedbackDiagnostic {
+                headline: "Proxy environment variables are set and may affect connectivity."
+                    .to_string(),
+                details: vec!["HTTP_PROXY = http://proxy.example.com:8080".to_string()],
+            },
+            FeedbackDiagnostic {
+                headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
+                details: vec!["OPENAI_BASE_URL = https://example.com/v1".to_string()],
+            },
+        ]);
+        let snapshot = codex_feedback::CodexFeedback::new()
+            .snapshot(None)
+            .with_feedback_diagnostics(diagnostics);
+        let view = FeedbackNoteView::new(
+            FeedbackCategory::Bug,
+            snapshot,
+            None,
+            tx,
+            false,
+            FeedbackAudience::External,
+        );
+        let rendered = render(&view, 60);
+
+        insta::assert_snapshot!("feedback_view_with_connectivity_diagnostics", rendered);
+    }
+
+    #[test]
+    fn should_show_feedback_connectivity_details_only_for_non_good_result_with_diagnostics() {
+        let diagnostics = FeedbackDiagnostics::new(vec![FeedbackDiagnostic {
+            headline: "Proxy environment variables are set and may affect connectivity."
+                .to_string(),
+            details: vec!["HTTP_PROXY = http://proxy.example.com:8080".to_string()],
+        }]);
+
+        assert_eq!(
+            should_show_feedback_connectivity_details(FeedbackCategory::Bug, &diagnostics),
+            true
+        );
+        assert_eq!(
+            should_show_feedback_connectivity_details(FeedbackCategory::GoodResult, &diagnostics),
+            false
+        );
+        assert_eq!(
+            should_show_feedback_connectivity_details(
+                FeedbackCategory::BadResult,
+                &FeedbackDiagnostics::default()
+            ),
+            false
+        );
+    }
+
+    #[test]
     fn issue_url_available_for_bug_bad_result_safety_check_and_other() {
         let bug_url = issue_url_for_category(
             FeedbackCategory::Bug,
@@ -675,10 +771,7 @@ mod tests {
         );
         let bug_url_non_employee =
             issue_url_for_category(FeedbackCategory::Bug, "t", FeedbackAudience::External);
-        let expected_external_url = format!("{BASE_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20t");
-        assert_eq!(
-            bug_url_non_employee.as_deref(),
-            Some(expected_external_url.as_str())
-        );
+        let expected_external_url = "https://github.com/openai/codex/issues/new?template=3-cli.yml&steps=Uploaded%20thread:%20t";
+        assert_eq!(bug_url_non_employee.as_deref(), Some(expected_external_url));
     }
 }

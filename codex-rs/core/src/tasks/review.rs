@@ -13,6 +13,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::SubAgentSource;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
@@ -43,6 +44,10 @@ impl SessionTask for ReviewTask {
         TaskKind::Review
     }
 
+    fn span_name(&self) -> &'static str {
+        "session_task.review"
+    }
+
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
@@ -53,7 +58,7 @@ impl SessionTask for ReviewTask {
         let _ = session
             .session
             .services
-            .otel_manager
+            .session_telemetry
             .counter("codex.task.review", 1, &[]);
 
         // Start sub-codex conversation and get the receiver for events.
@@ -95,7 +100,7 @@ async fn start_review_conversation(
     {
         panic!("by construction Constrained<WebSearchMode> must always support Disabled: {err}");
     }
-    sub_agent_config.features.disable(Feature::Collab);
+    let _ = sub_agent_config.features.disable(Feature::Collab);
 
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
@@ -114,6 +119,8 @@ async fn start_review_conversation(
         session.clone_session(),
         ctx.clone(),
         cancellation_token,
+        SubAgentSource::Review,
+        None,
         None,
     )
     .await)

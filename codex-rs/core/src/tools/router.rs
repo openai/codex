@@ -197,7 +197,10 @@ impl ToolRouter {
         if payload_outputs_custom {
             ResponseInputItem::CustomToolCallOutput {
                 call_id,
-                output: message,
+                output: codex_protocol::models::FunctionCallOutputPayload {
+                    body: FunctionCallOutputBody::Text(message),
+                    success: Some(false),
+                },
             }
         } else {
             ResponseInputItem::FunctionCallOutput {

@@ -21,6 +21,7 @@ pub mod responses;
 pub mod streaming_sse;
 pub mod test_codex;
 pub mod test_codex_exec;
+pub mod zsh_fork;
 
 #[ctor]
 fn enable_deterministic_unified_exec_process_ids_for_tests() {
@@ -470,6 +471,42 @@ macro_rules! skip_if_no_network {
                 "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
             );
             return $return_value;
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! codex_linux_sandbox_exe_or_skip {
+    () => {{
+        #[cfg(target_os = "linux")]
+        {
+            match codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox") {
+                Ok(path) => Some(path),
+                Err(err) => {
+                    eprintln!("codex-linux-sandbox binary not available, skipping test: {err}");
+                    return;
+                }
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
+    }};
+    ($return_value:expr $(,)?) => {{
+        #[cfg(target_os = "linux")]
+        {
+            match codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox") {
+                Ok(path) => Some(path),
+                Err(err) => {
+                    eprintln!("codex-linux-sandbox binary not available, skipping test: {err}");
+                    return $return_value;
+                }
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
         }
     }};
 }

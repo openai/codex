@@ -1,6 +1,7 @@
 use super::storage::rebuild_raw_memories_file_from_memories;
 use super::storage::sync_rollout_summaries_from_memories;
-use crate::config::types::DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL;
+use crate::config::types::DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION;
+use crate::memories::clear_memory_root_contents;
 use crate::memories::ensure_layout;
 use crate::memories::memory_root;
 use crate::memories::raw_memories_file;
@@ -64,6 +65,72 @@ fn stage_one_output_schema_requires_rollout_slug_and_keeps_it_nullable() {
 }
 
 #[tokio::test]
+async fn clear_memory_root_contents_preserves_root_directory() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path().join("memory");
+    let nested_dir = root.join("rollout_summaries");
+    tokio::fs::create_dir_all(&nested_dir)
+        .await
+        .expect("create rollout summaries dir");
+    tokio::fs::write(root.join("MEMORY.md"), "stale memory index\n")
+        .await
+        .expect("write memory index");
+    tokio::fs::write(nested_dir.join("rollout.md"), "stale rollout\n")
+        .await
+        .expect("write rollout summary");
+
+    clear_memory_root_contents(&root)
+        .await
+        .expect("clear memory root contents");
+
+    assert!(
+        tokio::fs::try_exists(&root)
+            .await
+            .expect("check memory root existence"),
+        "memory root should still exist after clearing contents"
+    );
+    let mut entries = tokio::fs::read_dir(&root)
+        .await
+        .expect("read memory root after clear");
+    assert!(
+        entries
+            .next_entry()
+            .await
+            .expect("read next entry")
+            .is_none(),
+        "memory root should be empty after clearing contents"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn clear_memory_root_contents_rejects_symlinked_root() {
+    let dir = tempdir().expect("tempdir");
+    let target = dir.path().join("outside");
+    tokio::fs::create_dir_all(&target)
+        .await
+        .expect("create symlink target dir");
+    let target_file = target.join("keep.txt");
+    tokio::fs::write(&target_file, "keep\n")
+        .await
+        .expect("write target file");
+
+    let root = dir.path().join("memory");
+    std::os::unix::fs::symlink(&target, &root).expect("create memory root symlink");
+
+    let err = clear_memory_root_contents(&root)
+        .await
+        .expect_err("symlinked memory root should be rejected");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        tokio::fs::try_exists(&target_file)
+            .await
+            .expect("check target file existence"),
+        "rejecting a symlinked memory root should not delete the symlink target"
+    );
+}
+
+#[tokio::test]
 async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only() {
     let dir = tempdir().expect("tempdir");
     let root = dir.path().join("memory");
@@ -95,14 +162,14 @@ async fn sync_rollout_summaries_and_raw_memories_file_keeps_latest_memories_only
     sync_rollout_summaries_from_memories(
         &root,
         &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
     )
     .await
     .expect("sync rollout summaries");
     rebuild_raw_memories_file_from_memories(
         &root,
         &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
     )
     .await
     .expect("rebuild raw memories");
@@ -201,7 +268,7 @@ async fn sync_rollout_summaries_uses_timestamp_hash_and_sanitized_slug_filename(
     sync_rollout_summaries_from_memories(
         &root,
         &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
     )
     .await
     .expect("sync rollout summaries");
@@ -304,14 +371,14 @@ task_outcome: success
     sync_rollout_summaries_from_memories(
         &root,
         &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
     )
     .await
     .expect("sync rollout summaries");
     rebuild_raw_memories_file_from_memories(
         &root,
         &memories,
-        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_GLOBAL,
+        DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION,
     )
     .await
     .expect("rebuild raw memories");
@@ -407,7 +474,6 @@ mod phase2 {
             let state_db = codex_state::StateRuntime::init(
                 config.codex_home.clone(),
                 config.model_provider_id.clone(),
-                None,
             )
             .await
             .expect("initialize state db");
@@ -790,7 +856,6 @@ mod phase2 {
         let state_db = codex_state::StateRuntime::init(
             config.codex_home.clone(),
             config.model_provider_id.clone(),
-            None,
         )
         .await
         .expect("initialize state db");

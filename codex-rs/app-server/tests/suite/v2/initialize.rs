@@ -1,16 +1,25 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_utils_cargo_bin::cargo_bin;
+use core_test_support::fs_wait;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use std::path::Path;
+use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -178,11 +187,97 @@ async fn initialize_opt_out_notification_methods_filters_notifications() -> Resu
     Ok(())
 }
 
+#[tokio::test]
+async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    let notify_file = codex_home.path().join("notify.json");
+    let notify_capture = cargo_bin("test_notify_capture")?;
+    let notify_capture = notify_capture
+        .to_str()
+        .expect("notify capture path should be valid UTF-8");
+    let notify_file = notify_file
+        .to_str()
+        .expect("notify output path should be valid UTF-8");
+    create_config_toml_with_extra(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &format!(
+            "notify = [{}, {}]",
+            toml_basic_string(notify_capture),
+            toml_basic_string(notify_file)
+        ),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(ClientInfo {
+            name: "xcode".to_string(),
+            title: Some("Xcode".to_string()),
+            version: "1.0.0".to_string(),
+        }),
+    )
+    .await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let notify_file = Path::new(notify_file);
+    fs_wait::wait_for_path_exists(notify_file, Duration::from_secs(5)).await?;
+    let payload_raw = tokio::fs::read_to_string(notify_file).await?;
+    let payload: Value = serde_json::from_str(&payload_raw)?;
+    assert_eq!(payload["client"], "xcode");
+
+    Ok(())
+}
+
 // Helper to create a config.toml pointing at the mock model server.
 fn create_config_toml(
     codex_home: &Path,
     server_uri: &str,
     approval_policy: &str,
+) -> std::io::Result<()> {
+    create_config_toml_with_extra(codex_home, server_uri, approval_policy, "")
+}
+
+fn create_config_toml_with_extra(
+    codex_home: &Path,
+    server_uri: &str,
+    approval_policy: &str,
+    extra: &str,
 ) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
@@ -195,6 +290,8 @@ sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
 
+{extra}
+
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"
@@ -204,4 +301,8 @@ stream_max_retries = 0
 "#
         ),
     )
+}
+
+fn toml_basic_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }

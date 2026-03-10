@@ -653,6 +653,10 @@
                 "type": "fullAccess"
               }
             },
+            "networkAccess": {
+              "default": false,
+              "type": "boolean"
+            },
             "type": {
               "enum": [
                 "readOnly"
@@ -737,6 +741,13 @@
           "type": "object"
         }
       ]
+    },
+    "ServiceTier": {
+      "enum": [
+        "fast",
+        "flex"
+      ],
+      "type": "string"
     },
     "SessionSource": {
       "oneOf": [
@@ -882,6 +893,10 @@
           "description": "Working directory captured for the thread.",
           "type": "string"
         },
+        "ephemeral": {
+          "description": "Whether the thread is ephemeral and should not be materialized on disk.",
+          "type": "boolean"
+        },
         "gitInfo": {
           "anyOf": [
             {
@@ -951,6 +966,7 @@
         "cliVersion",
         "createdAt",
         "cwd",
+        "ephemeral",
         "id",
         "modelProvider",
         "preview",
@@ -1442,6 +1458,40 @@
             "id": {
               "type": "string"
             },
+            "result": {
+              "type": "string"
+            },
+            "revisedPrompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "imageGeneration"
+              ],
+              "title": "ImageGenerationThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "title": "ImageGenerationThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
             "review": {
               "type": "string"
             },
@@ -1900,6 +1950,16 @@
     },
     "sandbox": {
       "$ref": "#/definitions/SandboxPolicy"
+    },
+    "serviceTier": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ServiceTier"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "thread": {
       "$ref": "#/definitions/Thread"

@@ -145,6 +145,16 @@
         },
         {
           "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "image_url": {
               "type": "string"
             },
@@ -214,6 +224,15 @@
         "preexisting_untracked_files"
       ],
       "type": "object"
+    },
+    "ImageDetail": {
+      "enum": [
+        "auto",
+        "low",
+        "high",
+        "original"
+      ],
+      "type": "string"
     },
     "LocalShellAction": {
       "oneOf": [
@@ -615,7 +634,7 @@
               "type": "string"
             },
             "output": {
-              "type": "string"
+              "$ref": "#/definitions/FunctionCallOutputPayload"
             },
             "type": {
               "enum": [
@@ -638,7 +657,7 @@
             "action": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/WebSearchAction"
+                  "$ref": "#/definitions/ResponsesApiWebSearchAction"
                 },
                 {
                   "type": "null"
@@ -670,6 +689,40 @@
             "type"
           ],
           "title": "WebSearchCallResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "image_generation_call"
+              ],
+              "title": "ImageGenerationCallResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "title": "ImageGenerationCallResponseItem",
           "type": "object"
         },
         {
@@ -730,15 +783,7 @@
         }
       ]
     },
-    "SandboxMode": {
-      "enum": [
-        "read-only",
-        "workspace-write",
-        "danger-full-access"
-      ],
-      "type": "string"
-    },
-    "WebSearchAction": {
+    "ResponsesApiWebSearchAction": {
       "oneOf": [
         {
           "properties": {
@@ -761,14 +806,14 @@
               "enum": [
                 "search"
               ],
-              "title": "SearchWebSearchActionType",
+              "title": "SearchResponsesApiWebSearchActionType",
               "type": "string"
             }
           },
           "required": [
             "type"
           ],
-          "title": "SearchWebSearchAction",
+          "title": "SearchResponsesApiWebSearchAction",
           "type": "object"
         },
         {
@@ -777,7 +822,7 @@
               "enum": [
                 "open_page"
               ],
-              "title": "OpenPageWebSearchActionType",
+              "title": "OpenPageResponsesApiWebSearchActionType",
               "type": "string"
             },
             "url": {
@@ -790,7 +835,7 @@
           "required": [
             "type"
           ],
-          "title": "OpenPageWebSearchAction",
+          "title": "OpenPageResponsesApiWebSearchAction",
           "type": "object"
         },
         {
@@ -805,7 +850,7 @@
               "enum": [
                 "find_in_page"
               ],
-              "title": "FindInPageWebSearchActionType",
+              "title": "FindInPageResponsesApiWebSearchActionType",
               "type": "string"
             },
             "url": {
@@ -818,7 +863,7 @@
           "required": [
             "type"
           ],
-          "title": "FindInPageWebSearchAction",
+          "title": "FindInPageResponsesApiWebSearchAction",
           "type": "object"
         },
         {
@@ -827,17 +872,32 @@
               "enum": [
                 "other"
               ],
-              "title": "OtherWebSearchActionType",
+              "title": "OtherResponsesApiWebSearchActionType",
               "type": "string"
             }
           },
           "required": [
             "type"
           ],
-          "title": "OtherWebSearchAction",
+          "title": "OtherResponsesApiWebSearchAction",
           "type": "object"
         }
       ]
+    },
+    "SandboxMode": {
+      "enum": [
+        "read-only",
+        "workspace-write",
+        "danger-full-access"
+      ],
+      "type": "string"
+    },
+    "ServiceTier": {
+      "enum": [
+        "fast",
+        "flex"
+      ],
+      "type": "string"
     }
   },
   "description": "There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.\n\nThe precedence is: history > path > thread_id. If using history or path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
@@ -904,6 +964,23 @@
       "anyOf": [
         {
           "$ref": "#/definitions/SandboxMode"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "serviceTier": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         {
           "type": "null"

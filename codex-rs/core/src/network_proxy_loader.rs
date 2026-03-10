@@ -1,6 +1,7 @@
 use crate::config::NetworkToml;
 use crate::config::PermissionsToml;
 use crate::config::find_codex_home;
+use crate::config::resolve_permission_profile;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
@@ -118,13 +119,7 @@ fn network_constraints_from_trusted_layers(
         }
 
         let parsed = network_tables_from_toml(&layer.config)?;
-        if let Some(network) = parsed.network {
-            apply_network_constraints(network, &mut constraints);
-        }
-        if let Some(network) = parsed
-            .permissions
-            .and_then(|permissions| permissions.network)
-        {
+        if let Some(network) = selected_network_from_tables(parsed)? {
             apply_network_constraints(network, &mut constraints);
         }
     }
@@ -146,11 +141,6 @@ fn apply_network_constraints(network: NetworkToml, constraints: &mut NetworkProx
         constraints.dangerously_allow_non_loopback_proxy =
             Some(dangerously_allow_non_loopback_proxy);
     }
-    if let Some(dangerously_allow_non_loopback_admin) = network.dangerously_allow_non_loopback_admin
-    {
-        constraints.dangerously_allow_non_loopback_admin =
-            Some(dangerously_allow_non_loopback_admin);
-    }
     if let Some(dangerously_allow_all_unix_sockets) = network.dangerously_allow_all_unix_sockets {
         constraints.dangerously_allow_all_unix_sockets = Some(dangerously_allow_all_unix_sockets);
     }
@@ -170,7 +160,7 @@ fn apply_network_constraints(network: NetworkToml, constraints: &mut NetworkProx
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct NetworkTablesToml {
-    network: Option<NetworkToml>,
+    default_permissions: Option<String>,
     permissions: Option<PermissionsToml>,
 }
 
@@ -181,16 +171,24 @@ fn network_tables_from_toml(value: &toml::Value) -> Result<NetworkTablesToml> {
         .context("failed to deserialize network tables from config")
 }
 
-fn apply_network_tables(config: &mut NetworkProxyConfig, parsed: NetworkTablesToml) {
-    if let Some(network) = parsed.network {
-        network.apply_to_network_proxy_config(config);
-    }
-    if let Some(network) = parsed
+fn selected_network_from_tables(parsed: NetworkTablesToml) -> Result<Option<NetworkToml>> {
+    let Some(default_permissions) = parsed.default_permissions else {
+        return Ok(None);
+    };
+
+    let permissions = parsed
         .permissions
-        .and_then(|permissions| permissions.network)
-    {
+        .context("default_permissions requires a `[permissions]` table for network settings")?;
+    let profile = resolve_permission_profile(&permissions, &default_permissions)
+        .map_err(anyhow::Error::from)?;
+    Ok(profile.network.clone())
+}
+
+fn apply_network_tables(config: &mut NetworkProxyConfig, parsed: NetworkTablesToml) -> Result<()> {
+    if let Some(network) = selected_network_from_tables(parsed)? {
         network.apply_to_network_proxy_config(config);
     }
+    Ok(())
 }
 
 fn config_from_layers(
@@ -200,7 +198,7 @@ fn config_from_layers(
     let mut config = NetworkProxyConfig::default();
     for layer in layers.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false) {
         let parsed = network_tables_from_toml(&layer.config)?;
-        apply_network_tables(&mut config, parsed);
+        apply_network_tables(&mut config, parsed)?;
     }
     apply_exec_policy_network_rules(&mut config, exec_policy);
     Ok(config)
@@ -315,17 +313,21 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn higher_precedence_network_table_beats_lower_permissions_network_table() {
-        let lower_permissions: toml::Value = toml::from_str(
+    fn higher_precedence_profile_network_beats_lower_profile_network() {
+        let lower_network: toml::Value = toml::from_str(
             r#"
-[permissions.network]
+default_permissions = "workspace"
+
+[permissions.workspace.network]
 allowed_domains = ["lower.example.com"]
 "#,
         )
         .expect("lower layer should parse");
         let higher_network: toml::Value = toml::from_str(
             r#"
-[network]
+default_permissions = "workspace"
+
+[permissions.workspace.network]
 allowed_domains = ["higher.example.com"]
 "#,
         )
@@ -334,12 +336,14 @@ allowed_domains = ["higher.example.com"]
         let mut config = NetworkProxyConfig::default();
         apply_network_tables(
             &mut config,
-            network_tables_from_toml(&lower_permissions).expect("lower layer should deserialize"),
-        );
+            network_tables_from_toml(&lower_network).expect("lower layer should deserialize"),
+        )
+        .expect("lower layer should apply");
         apply_network_tables(
             &mut config,
             network_tables_from_toml(&higher_network).expect("higher layer should deserialize"),
-        );
+        )
+        .expect("higher layer should apply");
 
         assert_eq!(config.network.allowed_domains, vec!["higher.example.com"]);
     }
@@ -387,15 +391,18 @@ allowed_domains = ["higher.example.com"]
     fn apply_network_constraints_includes_allow_all_unix_sockets_flag() {
         let config: toml::Value = toml::from_str(
             r#"
-[network]
+default_permissions = "workspace"
+
+[permissions.workspace.network]
 dangerously_allow_all_unix_sockets = true
 "#,
         )
-        .expect("network table should parse");
-        let network = network_tables_from_toml(&config)
-            .expect("network table should deserialize")
-            .network
-            .expect("network table should be present");
+        .expect("permissions profile should parse");
+        let network = selected_network_from_tables(
+            network_tables_from_toml(&config).expect("permissions profile should deserialize"),
+        )
+        .expect("permissions profile should select a network table")
+        .expect("network table should be present");
 
         let mut constraints = NetworkProxyConstraints::default();
         apply_network_constraints(network, &mut constraints);

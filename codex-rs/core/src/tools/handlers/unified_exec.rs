@@ -10,9 +10,12 @@ use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::parse_arguments_with_base_path;
+use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
@@ -136,7 +139,9 @@ impl ToolHandler for UnifiedExecHandler {
 
         let response = match tool_name.as_str() {
             "exec_command" => {
-                let args: ExecCommandArgs = parse_arguments(&arguments)?;
+                let cwd = resolve_workdir_base_path(&arguments, context.turn.cwd.as_path())?;
+                let args: ExecCommandArgs =
+                    parse_arguments_with_base_path(&arguments, cwd.as_path())?;
                 maybe_emit_implicit_skill_invocation(
                     session.as_ref(),
                     turn.as_ref(),
@@ -166,8 +171,19 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let request_permission_enabled =
                     session.features().enabled(Feature::RequestPermissions);
+                let effective_additional_permissions = apply_granted_turn_permissions(
+                    context.session.as_ref(),
+                    sandbox_permissions,
+                    additional_permissions,
+                )
+                .await;
 
-                if sandbox_permissions.requires_additional_permissions()
+                // Sticky turn permissions have already been approved, so they should
+                // continue through the normal exec approval flow for the command.
+                if effective_additional_permissions
+                    .sandbox_permissions
+                    .requests_sandbox_override()
+                    && !effective_additional_permissions.permissions_preapproved
                     && !matches!(
                         context.turn.approval_policy.value(),
                         codex_protocol::protocol::AskForApproval::OnRequest
@@ -183,13 +199,14 @@ impl ToolHandler for UnifiedExecHandler {
                 let workdir = workdir.filter(|value| !value.is_empty());
 
                 let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
-                let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
+                let cwd = workdir.clone().unwrap_or(cwd);
                 let normalized_additional_permissions =
                     match normalize_and_validate_additional_permissions(
                         request_permission_enabled,
                         context.turn.approval_policy.value(),
-                        sandbox_permissions,
-                        additional_permissions,
+                        effective_additional_permissions.sandbox_permissions,
+                        effective_additional_permissions.additional_permissions,
+                        effective_additional_permissions.permissions_preapproved,
                         &cwd,
                     ) {
                         Ok(normalized) => normalized,
@@ -225,8 +242,11 @@ impl ToolHandler for UnifiedExecHandler {
                             workdir,
                             network: context.turn.network.clone(),
                             tty,
-                            sandbox_permissions,
+                            sandbox_permissions: effective_additional_permissions
+                                .sandbox_permissions,
                             additional_permissions: normalized_additional_permissions,
+                            additional_permissions_preapproved: effective_additional_permissions
+                                .permissions_preapproved,
                             justification,
                             prefix_rule,
                         },
@@ -336,8 +356,15 @@ fn format_response(response: &UnifiedExecResponse) -> String {
 mod tests {
     use super::*;
     use crate::shell::default_user_shell;
+    use crate::tools::handlers::parse_arguments_with_base_path;
+    use crate::tools::handlers::resolve_workdir_base_path;
+    use codex_protocol::models::FileSystemPermissions;
+    use codex_protocol::models::PermissionProfile;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use std::fs;
     use std::sync::Arc;
+    use tempfile::tempdir;
 
     #[test]
     fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> {
@@ -417,6 +444,39 @@ mod tests {
         assert!(
             err.contains("login shell is disabled by config"),
             "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exec_command_args_resolve_relative_additional_permissions_against_workdir()
+    -> anyhow::Result<()> {
+        let cwd = tempdir()?;
+        let workdir = cwd.path().join("nested");
+        fs::create_dir_all(&workdir)?;
+        let expected_write = workdir.join("relative-write.txt");
+        let json = r#"{
+            "cmd": "echo hello",
+            "workdir": "nested",
+            "additional_permissions": {
+                "file_system": {
+                    "write": ["./relative-write.txt"]
+                }
+            }
+        }"#;
+
+        let base_path = resolve_workdir_base_path(json, cwd.path())?;
+        let args: ExecCommandArgs = parse_arguments_with_base_path(json, base_path.as_path())?;
+
+        assert_eq!(
+            args.additional_permissions,
+            Some(PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    read: None,
+                    write: Some(vec![AbsolutePathBuf::try_from(expected_write)?]),
+                }),
+                ..Default::default()
+            })
         );
         Ok(())
     }

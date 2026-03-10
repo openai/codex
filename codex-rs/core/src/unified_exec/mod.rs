@@ -49,6 +49,10 @@ pub(crate) fn set_deterministic_process_ids_for_tests(enabled: bool) {
 }
 
 pub(crate) use errors::UnifiedExecError;
+pub(crate) use process::NoopSpawnLifecycle;
+#[cfg(unix)]
+pub(crate) use process::SpawnLifecycle;
+pub(crate) use process::SpawnLifecycleHandle;
 pub(crate) use process::UnifiedExecProcess;
 
 pub(crate) const MIN_YIELD_TIME_MS: u64 = 250;
@@ -91,6 +95,7 @@ pub(crate) struct ExecCommandRequest {
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
+    pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
     pub prefix_rule: Option<Vec<String>>,
 }
@@ -201,6 +206,10 @@ mod tests {
         turn.sandbox_policy
             .set(SandboxPolicy::DangerFullAccess)
             .expect("test setup should allow updating sandbox policy");
+        turn.file_system_sandbox_policy =
+            codex_protocol::permissions::FileSystemSandboxPolicy::from(turn.sandbox_policy.get());
+        turn.network_sandbox_policy =
+            codex_protocol::permissions::NetworkSandboxPolicy::from(turn.sandbox_policy.get());
         (Arc::new(session), Arc::new(turn))
     }
 
@@ -232,6 +241,7 @@ mod tests {
                     tty: true,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     additional_permissions: None,
+                    additional_permissions_preapproved: false,
                     justification: None,
                     prefix_rule: None,
                 },

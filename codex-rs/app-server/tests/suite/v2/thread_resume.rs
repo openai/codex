@@ -1,15 +1,30 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_fake_rollout_with_text_elements;
+use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
+use app_test_support::create_mock_responses_server_sequence_unchecked;
+use app_test_support::create_shell_command_sse_response;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
 use chrono::Utc;
+use codex_app_server_protocol::AskForApproval;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::FileChangeApprovalDecision;
+use codex_app_server_protocol::FileChangeRequestApprovalResponse;
+use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::PatchApplyStatus;
+use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
+use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -19,22 +34,60 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::SessionSource as RolloutSessionSource;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
+use codex_state::StateRuntime;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::fs::FileTimes;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use uuid::Uuid;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
+
+async fn wait_for_responses_request_count(
+    server: &wiremock::MockServer,
+    expected_count: usize,
+) -> Result<()> {
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let Some(requests) = server.received_requests().await else {
+                anyhow::bail!("wiremock did not record requests");
+            };
+            let responses_request_count = requests
+                .iter()
+                .filter(|request| {
+                    request.method == "POST" && request.url.path().ends_with("/responses")
+                })
+                .count();
+            if responses_request_count == expected_count {
+                return Ok::<(), anyhow::Error>(());
+            }
+            if responses_request_count > expected_count {
+                anyhow::bail!(
+                    "expected exactly {expected_count} /responses requests, got {responses_request_count}"
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    Ok(())
+}
 
 #[tokio::test]
 async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
@@ -153,6 +206,194 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
         }
         other => panic!("expected user message item, got {other:?}"),
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let config_toml = codex_home.path().join("config.toml");
+    std::fs::write(
+        &config_toml,
+        format!(
+            r#"
+model = "gpt-5.2-codex"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[features]
+personality = true
+sqlite = true
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#,
+            server.uri()
+        ),
+    )?;
+
+    let repo_path = codex_home.path().join("repo");
+    std::fs::create_dir_all(&repo_path)?;
+    assert!(
+        Command::new("git")
+            .args(["init"])
+            .arg(&repo_path)
+            .status()?
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["checkout", "-B", "master"])
+            .status()?
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["config", "user.name", "Test User"])
+            .status()?
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["config", "user.email", "test@example.com"])
+            .status()?
+            .success()
+    );
+    std::fs::write(repo_path.join("README.md"), "test\n")?;
+    assert!(
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["add", "README.md"])
+            .status()?
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["commit", "-m", "initial"])
+            .status()?
+            .success()
+    );
+    let head_branch = Command::new("git")
+        .current_dir(&repo_path)
+        .args(["branch", "--show-current"])
+        .output()?;
+    assert_eq!(
+        String::from_utf8(head_branch.stdout)?.trim(),
+        "master",
+        "test repo should stay on master to verify resume ignores live HEAD"
+    );
+
+    let thread_id = Uuid::new_v4().to_string();
+    let conversation_id = ThreadId::from_string(&thread_id)?;
+    let rollout_path = rollout_path(codex_home.path(), "2025-01-05T12-00-00", &thread_id);
+    let rollout_dir = rollout_path.parent().expect("rollout parent directory");
+    std::fs::create_dir_all(rollout_dir)?;
+    let session_meta = SessionMeta {
+        id: conversation_id,
+        forked_from_id: None,
+        timestamp: "2025-01-05T12:00:00Z".to_string(),
+        cwd: repo_path.clone(),
+        originator: "codex".to_string(),
+        cli_version: "0.0.0".to_string(),
+        source: RolloutSessionSource::Cli,
+        agent_nickname: None,
+        agent_role: None,
+        model_provider: Some("mock_provider".to_string()),
+        base_instructions: None,
+        dynamic_tools: None,
+        memory_mode: None,
+    };
+    std::fs::write(
+        &rollout_path,
+        [
+            json!({
+                "timestamp": "2025-01-05T12:00:00Z",
+                "type": "session_meta",
+                "payload": serde_json::to_value(SessionMetaLine {
+                    meta: session_meta,
+                    git: None,
+                })?,
+            })
+            .to_string(),
+            json!({
+                "timestamp": "2025-01-05T12:00:00Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Saved user message"}]
+                }
+            })
+            .to_string(),
+            json!({
+                "timestamp": "2025-01-05T12:00:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "Saved user message",
+                    "kind": "plain"
+                }
+            })
+            .to_string(),
+        ]
+        .join("\n")
+            + "\n",
+    )?;
+    let state_db =
+        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
+    state_db.mark_backfill_complete(None).await?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let update_id = mcp
+        .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
+            thread_id: thread_id.clone(),
+            git_info: Some(ThreadMetadataGitInfoUpdateParams {
+                sha: None,
+                branch: Some(Some("feature/pr-branch".to_string())),
+                origin_url: None,
+            }),
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(update_id)),
+    )
+    .await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(
+        thread
+            .git_info
+            .as_ref()
+            .and_then(|git| git.branch.as_deref()),
+        Some("feature/pr-branch")
+    );
 
     Ok(())
 }
@@ -635,6 +876,308 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
         primary.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_replays_pending_command_execution_request_approval() -> Result<()> {
+    let responses = vec![
+        create_final_assistant_message_sse_response("seeded")?,
+        create_shell_command_sse_response(
+            vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ],
+            None,
+            Some(5000),
+            "call-1",
+        )?,
+        create_final_assistant_message_sse_response("done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut primary = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
+
+    let start_id = primary
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.1-codex-max".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let seed_turn_id = primary
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "seed history".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(seed_turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    primary.clear_message_buffer();
+
+    let running_turn_id = primary
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "run command".to_string(),
+                text_elements: Vec::new(),
+            }],
+            approval_policy: Some(AskForApproval::UnlessTrusted),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(running_turn_id)),
+    )
+    .await??;
+
+    let original_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::CommandExecutionRequestApproval { .. } = &original_request else {
+        panic!("expected CommandExecutionRequestApproval request, got {original_request:?}");
+    };
+
+    let resume_id = primary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed_thread,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(resumed_thread.id, thread.id);
+    assert!(
+        resumed_thread
+            .turns
+            .iter()
+            .any(|turn| matches!(turn.status, TurnStatus::InProgress))
+    );
+
+    let replayed_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_request_message(),
+    )
+    .await??;
+    pretty_assertions::assert_eq!(replayed_request, original_request);
+
+    let ServerRequest::CommandExecutionRequestApproval { request_id, .. } = replayed_request else {
+        panic!("expected CommandExecutionRequestApproval request");
+    };
+    primary
+        .send_response(
+            request_id,
+            serde_json::to_value(CommandExecutionRequestApprovalResponse {
+                decision: CommandExecutionApprovalDecision::Accept,
+            })?,
+        )
+        .await?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    wait_for_responses_request_count(&server, 3).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_replays_pending_file_change_request_approval() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+
+    let patch = r#"*** Begin Patch
+*** Add File: README.md
++new line
+*** End Patch
+"#;
+    let responses = vec![
+        create_final_assistant_message_sse_response("seeded")?,
+        create_apply_patch_sse_response(patch, "patch-call")?,
+        create_final_assistant_message_sse_response("done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    create_config_toml(&codex_home, &server.uri())?;
+
+    let mut primary = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
+
+    let start_id = primary
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.1-codex-max".to_string()),
+            cwd: Some(workspace.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let seed_turn_id = primary
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "seed history".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(workspace.clone()),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(seed_turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    primary.clear_message_buffer();
+
+    let running_turn_id = primary
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "apply patch".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(workspace.clone()),
+            approval_policy: Some(AskForApproval::UnlessTrusted),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(running_turn_id)),
+    )
+    .await??;
+
+    let original_started = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let notification = primary
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification =
+                serde_json::from_value(notification.params.clone().expect("item/started params"))?;
+            if let ThreadItem::FileChange { .. } = started.item {
+                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            }
+        }
+    })
+    .await??;
+    let expected_readme_path = workspace.join("README.md");
+    let expected_file_change = ThreadItem::FileChange {
+        id: "patch-call".to_string(),
+        changes: vec![codex_app_server_protocol::FileUpdateChange {
+            path: expected_readme_path.to_string_lossy().into_owned(),
+            kind: PatchChangeKind::Add,
+            diff: "new line\n".to_string(),
+        }],
+        status: PatchApplyStatus::InProgress,
+    };
+    assert_eq!(original_started, expected_file_change);
+
+    let original_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::FileChangeRequestApproval { .. } = &original_request else {
+        panic!("expected FileChangeRequestApproval request, got {original_request:?}");
+    };
+    primary.clear_message_buffer();
+
+    let resume_id = primary
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed_thread,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(resumed_thread.id, thread.id);
+    assert!(
+        resumed_thread
+            .turns
+            .iter()
+            .any(|turn| matches!(turn.status, TurnStatus::InProgress))
+    );
+
+    let replayed_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_request_message(),
+    )
+    .await??;
+    assert_eq!(replayed_request, original_request);
+
+    let ServerRequest::FileChangeRequestApproval { request_id, .. } = replayed_request else {
+        panic!("expected FileChangeRequestApproval request");
+    };
+    primary
+        .send_response(
+            request_id,
+            serde_json::to_value(FileChangeRequestApprovalResponse {
+                decision: FileChangeApprovalDecision::Accept,
+            })?,
+        )
+        .await?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        primary.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    wait_for_responses_request_count(&server, 3).await?;
 
     Ok(())
 }

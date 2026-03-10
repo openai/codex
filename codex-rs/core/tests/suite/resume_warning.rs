@@ -27,6 +27,7 @@ fn resume_history(
     let turn_id = "resume-warning-seed-turn".to_string();
     let turn_ctx = TurnContextItem {
         turn_id: Some(turn_id.clone()),
+        trace_id: None,
         cwd: config.cwd.clone(),
         current_date: None,
         timezone: None,
@@ -36,6 +37,7 @@ fn resume_history(
         model: previous_model.to_string(),
         personality: None,
         collaboration_mode: None,
+        realtime_active: None,
         effort: config.model_reasoning_effort,
         summary: config
             .model_reasoning_summary

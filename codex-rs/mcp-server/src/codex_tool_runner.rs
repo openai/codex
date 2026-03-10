@@ -115,6 +115,7 @@ pub async fn run_codex_tool_session(
             }],
             final_output_json_schema: None,
         },
+        trace: None,
     };
 
     if let Err(e) = thread.submit_with_id(submission).await {
@@ -227,6 +228,7 @@ async fn run_codex_tool_session_inner(
                             parsed_cmd,
                             network_approval_context: _,
                             additional_permissions: _,
+                            skill_metadata: _,
                             available_decisions: _,
                         } = ev;
                         handle_exec_approval_request(
@@ -351,6 +353,8 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::UserMessage(_)
                     | EventMsg::ShutdownComplete
                     | EventMsg::ViewImageToolCall(_)
+                    | EventMsg::ImageGenerationBegin(_)
+                    | EventMsg::ImageGenerationEnd(_)
                     | EventMsg::RawResponseItem(_)
                     | EventMsg::EnteredReviewMode(_)
                     | EventMsg::ItemStarted(_)
@@ -363,6 +367,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::UndoCompleted(_)
                     | EventMsg::ExitedReviewMode(_)
                     | EventMsg::RequestUserInput(_)
+                    | EventMsg::RequestPermissions(_)
                     | EventMsg::DynamicToolCallRequest(_)
                     | EventMsg::DynamicToolCallResponse(_)
                     | EventMsg::ContextCompacted(_)

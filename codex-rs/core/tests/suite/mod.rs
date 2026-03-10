@@ -96,6 +96,7 @@ mod pending_input;
 mod permissions_messages;
 mod personality;
 mod personality_migration;
+mod plugins;
 mod prompt_caching;
 mod quota_exceeded;
 mod read_file;
@@ -104,6 +105,8 @@ mod remote_models;
 mod request_compression;
 #[cfg(not(target_os = "windows"))]
 mod request_permissions;
+#[cfg(not(target_os = "windows"))]
+mod request_permissions_tool;
 mod request_user_input;
 mod resume;
 mod resume_warning;

@@ -94,7 +94,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
         return;
     }
 
-    turn_context.otel_manager.counter(
+    turn_context.session_telemetry.counter(
         "codex.skill.injected",
         1,
         &[
@@ -253,7 +253,6 @@ mod tests {
             dependencies: None,
             policy: None,
             permission_profile: None,
-            permissions: None,
             path_to_skills_md: skill_doc_path,
             scope: codex_protocol::protocol::SkillScope::User,
         }

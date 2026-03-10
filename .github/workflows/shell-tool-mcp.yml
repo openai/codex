@@ -146,9 +146,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/bolinfest/bash /tmp/bash
+          git clone https://git.savannah.gnu.org/git/bash /tmp/bash
           cd /tmp/bash
-          git fetch --depth 1 origin a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
           git checkout a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
           git apply "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/bash-exec-wrapper.patch"
           ./configure --without-bash-malloc
@@ -159,7 +158,7 @@ jobs:
           mkdir -p "$dest"
           cp bash "$dest/bash"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: shell-tool-mcp-bash-${{ matrix.target }}-${{ matrix.variant }}
           path: artifacts/**
@@ -188,9 +187,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/bolinfest/bash /tmp/bash
+          git clone https://git.savannah.gnu.org/git/bash /tmp/bash
           cd /tmp/bash
-          git fetch --depth 1 origin a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
           git checkout a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
           git apply "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/bash-exec-wrapper.patch"
           ./configure --without-bash-malloc
@@ -201,7 +199,7 @@ jobs:
           mkdir -p "$dest"
           cp bash "$dest/bash"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: shell-tool-mcp-bash-${{ matrix.target }}-${{ matrix.variant }}
           path: artifacts/**
@@ -327,7 +325,7 @@ jobs:
           grep -Fx "smoke-zsh" "$tmpdir/stdout.txt"
           grep -Fx "/bin/echo" "$tmpdir/wrapper.log"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: shell-tool-mcp-zsh-${{ matrix.target }}-${{ matrix.variant }}
           path: artifacts/**
@@ -405,7 +403,7 @@ jobs:
           grep -Fx "smoke-zsh" "$tmpdir/stdout.txt"
           grep -Fx "/bin/echo" "$tmpdir/wrapper.log"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: shell-tool-mcp-zsh-${{ matrix.target }}-${{ matrix.variant }}
           path: artifacts/**
@@ -443,7 +441,7 @@ jobs:
         run: pnpm --filter @openai/codex-shell-tool-mcp run build
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -502,7 +500,7 @@ jobs:
           filename=$(PACK_INFO="$pack_info" node -e 'const data = JSON.parse(process.env.PACK_INFO); console.log(data[0].filename);')
           mv "dist/npm/${filename}" "dist/npm/codex-shell-tool-mcp-npm-${PACKAGE_VERSION}.tgz"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: codex-shell-tool-mcp-npm
           path: dist/npm/codex-shell-tool-mcp-npm-${{ env.PACKAGE_VERSION }}.tgz
@@ -531,7 +529,7 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Download npm tarball
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: codex-shell-tool-mcp-npm
           path: dist/npm

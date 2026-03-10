@@ -4,6 +4,7 @@ members = [
     "ansi-escape",
     "async-utils",
     "app-server",
+    "app-server-client",
     "app-server-protocol",
     "app-server-test-client",
     "debug-client",
@@ -64,6 +65,8 @@ members = [
     "state",
     "codex-experimental-api-macros",
     "test-macros",
+    "package-manager",
+    "artifacts",
 ]
 resolver = "2"
 
@@ -81,7 +84,10 @@ license = "Apache-2.0"
 app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
+codex-artifacts = { path = "artifacts" }
+codex-package-manager = { path = "package-manager" }
 codex-app-server = { path = "app-server" }
+codex-app-server-client = { path = "app-server-client" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-app-server-test-client = { path = "app-server-test-client" }
 codex-apply-patch = { path = "apply-patch" }
@@ -174,9 +180,11 @@ dirs = "6"
 dotenvy = "0.15.7"
 dunce = "1.0.4"
 encoding_rs = "0.8.35"
+fd-lock = "4.0.4"
 env-flags = "0.1.1"
 env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
+flate2 = "1.1.4"
 futures = { version = "0.3", default-features = false }
 gethostname = "1.1.0"
 globset = "0.4"
@@ -237,7 +245,7 @@ sentry = "0.46.0"
 serde = "1"
 serde_json = "1"
 serde_path_to_error = "0.1.20"
-serde_with = "3.16"
+serde_with = "3.17"
 serde_yaml = "0.9"
 serial_test = "3.2.0"
 sha1 = "0.10.6"
@@ -257,11 +265,12 @@ sqlx = { version = "0.8.6", default-features = false, features = [
 ] }
 starlark = "0.13.0"
 strum = "0.27.2"
-strum_macros = "0.27.2"
+strum_macros = "0.28.0"
 supports-color = "3.0.2"
 syntect = "5"
 sys-locale = "0.3.2"
 tempfile = "3.23.0"
+tar = "0.4.44"
 test-log = "0.2.19"
 textwrap = "0.16.2"
 thiserror = "2.0.17"
@@ -348,7 +357,7 @@ ignored = [
     "icu_provider",
     "openssl-sys",
     "codex-utils-readiness",
-    "codex-secrets",
+    "codex-secrets"
 ]
 
 [profile.release]

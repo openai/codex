@@ -22,6 +22,16 @@
     },
     "Model": {
       "properties": {
+        "availabilityNux": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ModelAvailabilityNux"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "defaultReasoningEffort": {
           "$ref": "#/definitions/ReasoningEffort"
         },
@@ -68,6 +78,16 @@
             "string",
             "null"
           ]
+        },
+        "upgradeInfo": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ModelUpgradeInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -79,6 +99,46 @@
         "isDefault",
         "model",
         "supportedReasoningEfforts"
+      ],
+      "type": "object"
+    },
+    "ModelAvailabilityNux": {
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "type": "object"
+    },
+    "ModelUpgradeInfo": {
+      "properties": {
+        "migrationMarkdown": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "modelLink": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "upgradeCopy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "model"
       ],
       "type": "object"
     },

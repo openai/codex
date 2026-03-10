@@ -6,11 +6,13 @@ use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use futures::SinkExt;
 use futures::StreamExt;
+use reqwest::StatusCode;
 use serde_json::json;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -78,6 +80,34 @@ async fn websocket_transport_routes_per_connection_handshake_and_responses() -> 
     Ok(())
 }
 
+#[tokio::test]
+async fn websocket_transport_serves_health_endpoints_on_same_listener() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let bind_addr = reserve_local_addr()?;
+    let mut process = spawn_websocket_server(codex_home.path(), bind_addr).await?;
+    let client = reqwest::Client::new();
+
+    let readyz = http_get(&client, bind_addr, "/readyz").await?;
+    assert_eq!(readyz.status(), StatusCode::OK);
+
+    let healthz = http_get(&client, bind_addr, "/healthz").await?;
+    assert_eq!(healthz.status(), StatusCode::OK);
+
+    let mut ws = connect_websocket(bind_addr).await?;
+    send_initialize_request(&mut ws, 1, "ws_health_client").await?;
+    let init = read_response_for_id(&mut ws, 1).await?;
+    assert_eq!(init.id, RequestId::Integer(1));
+
+    process
+        .kill()
+        .await
+        .context("failed to stop websocket app-server process")?;
+    Ok(())
+}
+
 pub(super) async fn spawn_websocket_server(
     codex_home: &Path,
     bind_addr: SocketAddr,
@@ -132,6 +162,30 @@ pub(super) async fn connect_websocket(bind_addr: SocketAddr) -> Result<WsClient>
     }
 }
 
+async fn http_get(
+    client: &reqwest::Client,
+    bind_addr: SocketAddr,
+    path: &str,
+) -> Result<reqwest::Response> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match client
+            .get(format!("http://{bind_addr}{path}"))
+            .send()
+            .await
+            .with_context(|| format!("failed to GET http://{bind_addr}{path}"))
+        {
+            Ok(response) => return Ok(response),
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    bail!("failed to GET http://{bind_addr}{path}: {err}");
+                }
+                sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+}
+
 pub(super) async fn send_initialize_request(
     stream: &mut WsClient,
     id: i64,
@@ -174,6 +228,7 @@ pub(super) async fn send_request(
         id: RequestId::Integer(id),
         method: method.to_string(),
         params,
+        trace: None,
     });
     send_jsonrpc(stream, message).await
 }
@@ -201,6 +256,56 @@ pub(super) async fn read_response_for_id(
     }
 }
 
+pub(super) async fn read_notification_for_method(
+    stream: &mut WsClient,
+    method: &str,
+) -> Result<JSONRPCNotification> {
+    loop {
+        let message = read_jsonrpc_message(stream).await?;
+        if let JSONRPCMessage::Notification(notification) = message
+            && notification.method == method
+        {
+            return Ok(notification);
+        }
+    }
+}
+
+pub(super) async fn read_response_and_notification_for_method(
+    stream: &mut WsClient,
+    id: i64,
+    method: &str,
+) -> Result<(JSONRPCResponse, JSONRPCNotification)> {
+    let target_id = RequestId::Integer(id);
+    let mut response = None;
+    let mut notification = None;
+
+    while response.is_none() || notification.is_none() {
+        let message = read_jsonrpc_message(stream).await?;
+        match message {
+            JSONRPCMessage::Response(candidate) if candidate.id == target_id => {
+                response = Some(candidate);
+            }
+            JSONRPCMessage::Notification(candidate) if candidate.method == method => {
+                if notification.replace(candidate).is_some() {
+                    bail!(
+                        "received duplicate notification for method `{method}` before completing paired read"
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let Some(response) = response else {
+        bail!("response must be set before returning");
+    };
+    let Some(notification) = notification else {
+        bail!("notification must be set before returning");
+    };
+
+    Ok((response, notification))
+}
+
 async fn read_error_for_id(stream: &mut WsClient, id: i64) -> Result<JSONRPCError> {
     let target_id = RequestId::Integer(id);
     loop {
@@ -213,7 +318,7 @@ async fn read_error_for_id(stream: &mut WsClient, id: i64) -> Result<JSONRPCErro
     }
 }
 
-async fn read_jsonrpc_message(stream: &mut WsClient) -> Result<JSONRPCMessage> {
+pub(super) async fn read_jsonrpc_message(stream: &mut WsClient) -> Result<JSONRPCMessage> {
     loop {
         let frame = timeout(DEFAULT_READ_TIMEOUT, stream.next())
             .await
@@ -236,7 +341,7 @@ async fn read_jsonrpc_message(stream: &mut WsClient) -> Result<JSONRPCMessage> {
     }
 }
 
-async fn assert_no_message(stream: &mut WsClient, wait_for: Duration) -> Result<()> {
+pub(super) async fn assert_no_message(stream: &mut WsClient, wait_for: Duration) -> Result<()> {
     match timeout(wait_for, stream.next()).await {
         Ok(Some(Ok(frame))) => bail!("unexpected frame while waiting for silence: {frame:?}"),
         Ok(Some(Err(err))) => bail!("unexpected websocket read error: {err}"),

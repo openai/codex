@@ -57,10 +57,9 @@ async fn insert_state_db_thread(
     rollout_path: &Path,
     archived: bool,
 ) {
-    let runtime =
-        codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string(), None)
-            .await
-            .expect("state db should initialize");
+    let runtime = codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string())
+        .await
+        .expect("state db should initialize");
     runtime
         .mark_backfill_complete(None)
         .await
@@ -248,10 +247,9 @@ async fn find_thread_path_repairs_missing_db_row_after_filesystem_fallback() {
     let fs_rollout_path = home.join(format!("sessions/2025/01/03/rollout-{ts}-{uuid}.jsonl"));
 
     // Create an empty state DB so lookup takes the DB-first path and then falls back to files.
-    let _runtime =
-        codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string(), None)
-            .await
-            .expect("state db should initialize");
+    let _runtime = codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string())
+        .await
+        .expect("state db should initialize");
     _runtime
         .mark_backfill_complete(None)
         .await
@@ -279,10 +277,9 @@ async fn assert_state_db_rollout_path(
     thread_id: ThreadId,
     expected_path: Option<&Path>,
 ) {
-    let runtime =
-        codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string(), None)
-            .await
-            .expect("state db should initialize");
+    let runtime = codex_state::StateRuntime::init(home.to_path_buf(), TEST_PROVIDER.to_string())
+        .await
+        .expect("state db should initialize");
     let path = runtime
         .find_rollout_path_by_id(thread_id, Some(false))
         .await
@@ -1109,6 +1106,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 model_provider: Some("test-provider".into()),
                 base_instructions: None,
                 dynamic_tools: None,
+                memory_mode: None,
             },
             git: None,
         }),

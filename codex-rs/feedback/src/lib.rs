@@ -13,6 +13,8 @@ use anyhow::Result;
 use anyhow::anyhow;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
+use feedback_diagnostics::FeedbackDiagnostics;
 use tracing::Event;
 use tracing::Level;
 use tracing::field::Visit;
@@ -20,6 +22,8 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::registry::LookupSpan;
+
+pub mod feedback_diagnostics;
 
 const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
 const SENTRY_DSN: &str =
@@ -67,6 +71,7 @@ impl CodexFeedback {
     {
         tracing_subscriber::fmt::layer()
             .with_writer(self.make_writer())
+            .with_timer(tracing_subscriber::fmt::time::SystemTime)
             .with_ansi(false)
             .with_target(false)
             // Capture everything, regardless of the caller's `RUST_LOG`, so feedback includes the
@@ -88,7 +93,7 @@ impl CodexFeedback {
         .with_filter(Targets::new().with_target(FEEDBACK_TAGS_TARGET, Level::TRACE))
     }
 
-    pub fn snapshot(&self, session_id: Option<ThreadId>) -> CodexLogSnapshot {
+    pub fn snapshot(&self, session_id: Option<ThreadId>) -> FeedbackSnapshot {
         let bytes = {
             let guard = self.inner.ring.lock().expect("mutex poisoned");
             guard.snapshot_bytes()
@@ -97,9 +102,10 @@ impl CodexFeedback {
             let guard = self.inner.tags.lock().expect("mutex poisoned");
             guard.clone()
         };
-        CodexLogSnapshot {
+        FeedbackSnapshot {
             bytes,
             tags,
+            feedback_diagnostics: FeedbackDiagnostics::collect_from_env(),
             thread_id: session_id
                 .map(|id| id.to_string())
                 .unwrap_or("no-active-thread-".to_string() + &ThreadId::new().to_string()),
@@ -199,15 +205,33 @@ impl RingBuffer {
     }
 }
 
-pub struct CodexLogSnapshot {
+pub struct FeedbackSnapshot {
     bytes: Vec<u8>,
     tags: BTreeMap<String, String>,
+    feedback_diagnostics: FeedbackDiagnostics,
     pub thread_id: String,
 }
 
-impl CodexLogSnapshot {
+impl FeedbackSnapshot {
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    pub fn feedback_diagnostics(&self) -> &FeedbackDiagnostics {
+        &self.feedback_diagnostics
+    }
+
+    pub fn with_feedback_diagnostics(mut self, feedback_diagnostics: FeedbackDiagnostics) -> Self {
+        self.feedback_diagnostics = feedback_diagnostics;
+        self
+    }
+
+    pub fn feedback_diagnostics_attachment_text(&self, include_logs: bool) -> Option<String> {
+        if !include_logs {
+            return None;
+        }
+
+        self.feedback_diagnostics.attachment_text()
     }
 
     pub fn save_to_temp_file(&self) -> io::Result<PathBuf> {
@@ -224,17 +248,16 @@ impl CodexLogSnapshot {
         classification: &str,
         reason: Option<&str>,
         include_logs: bool,
-        extra_log_files: &[PathBuf],
+        extra_attachment_paths: &[PathBuf],
         session_source: Option<SessionSource>,
+        logs_override: Option<Vec<u8>>,
     ) -> Result<()> {
         use std::collections::BTreeMap;
-        use std::fs;
         use std::str::FromStr;
         use std::sync::Arc;
 
         use sentry::Client;
         use sentry::ClientOptions;
-        use sentry::protocol::Attachment;
         use sentry::protocol::Envelope;
         use sentry::protocol::EnvelopeItem;
         use sentry::protocol::Event;
@@ -308,16 +331,46 @@ impl CodexLogSnapshot {
         }
         envelope.add_item(EnvelopeItem::Event(event));
 
+        for attachment in
+            self.feedback_attachments(include_logs, extra_attachment_paths, logs_override)
+        {
+            envelope.add_item(EnvelopeItem::Attachment(attachment));
+        }
+
+        client.send_envelope(envelope);
+        client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
+        Ok(())
+    }
+
+    fn feedback_attachments(
+        &self,
+        include_logs: bool,
+        extra_attachment_paths: &[PathBuf],
+        logs_override: Option<Vec<u8>>,
+    ) -> Vec<sentry::protocol::Attachment> {
+        use sentry::protocol::Attachment;
+
+        let mut attachments = Vec::new();
+
         if include_logs {
-            envelope.add_item(EnvelopeItem::Attachment(Attachment {
-                buffer: self.bytes.clone(),
+            attachments.push(Attachment {
+                buffer: logs_override.unwrap_or_else(|| self.bytes.clone()),
                 filename: String::from("codex-logs.log"),
                 content_type: Some("text/plain".to_string()),
                 ty: None,
-            }));
+            });
         }
 
-        for path in extra_log_files {
+        if let Some(text) = self.feedback_diagnostics_attachment_text(include_logs) {
+            attachments.push(Attachment {
+                buffer: text.into_bytes(),
+                filename: FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME.to_string(),
+                content_type: Some("text/plain".to_string()),
+                ty: None,
+            });
+        }
+
+        for path in extra_attachment_paths {
             let data = match fs::read(path) {
                 Ok(data) => data,
                 Err(err) => {
@@ -329,22 +382,19 @@ impl CodexLogSnapshot {
                     continue;
                 }
             };
-            let fname = path
+            let filename = path
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "extra-log.log".to_string());
-            let content_type = "text/plain".to_string();
-            envelope.add_item(EnvelopeItem::Attachment(Attachment {
+            attachments.push(Attachment {
                 buffer: data,
-                filename: fname,
-                content_type: Some(content_type),
+                filename,
+                content_type: Some("text/plain".to_string()),
                 ty: None,
-            }));
+            });
         }
 
-        client.send_envelope(envelope);
-        client.flush(Some(Duration::from_secs(UPLOAD_TIMEOUT_SECS)));
-        Ok(())
+        attachments
     }
 }
 
@@ -429,7 +479,12 @@ impl Visit for FeedbackTagsVisitor {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+    use std::fs;
+
     use super::*;
+    use feedback_diagnostics::FeedbackDiagnostic;
+    use pretty_assertions::assert_eq;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
@@ -458,5 +513,60 @@ mod tests {
         let snap = fb.snapshot(None);
         pretty_assertions::assert_eq!(snap.tags.get("model").map(String::as_str), Some("gpt-5"));
         pretty_assertions::assert_eq!(snap.tags.get("cached").map(String::as_str), Some("true"));
+    }
+
+    #[test]
+    fn feedback_attachments_gate_connectivity_diagnostics() {
+        let extra_filename = format!("codex-feedback-extra-{}.jsonl", ThreadId::new());
+        let extra_path = std::env::temp_dir().join(&extra_filename);
+        fs::write(&extra_path, "rollout").expect("extra attachment should be written");
+
+        let snapshot_with_diagnostics = CodexFeedback::new()
+            .snapshot(None)
+            .with_feedback_diagnostics(FeedbackDiagnostics::new(vec![FeedbackDiagnostic {
+                headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
+                details: vec!["OPENAI_BASE_URL = https://example.com/v1".to_string()],
+            }]));
+
+        let attachments_with_diagnostics = snapshot_with_diagnostics.feedback_attachments(
+            true,
+            std::slice::from_ref(&extra_path),
+            Some(vec![1]),
+        );
+
+        assert_eq!(
+            attachments_with_diagnostics
+                .iter()
+                .map(|attachment| attachment.filename.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "codex-logs.log",
+                FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME,
+                extra_filename.as_str()
+            ]
+        );
+        assert_eq!(attachments_with_diagnostics[0].buffer, vec![1]);
+        assert_eq!(
+            attachments_with_diagnostics[1].buffer,
+            b"Connectivity diagnostics\n\n- OPENAI_BASE_URL is set and may affect connectivity.\n  - OPENAI_BASE_URL = https://example.com/v1".to_vec()
+        );
+        assert_eq!(attachments_with_diagnostics[2].buffer, b"rollout".to_vec());
+        assert_eq!(
+            OsStr::new(attachments_with_diagnostics[2].filename.as_str()),
+            OsStr::new(extra_filename.as_str())
+        );
+        let attachments_without_diagnostics = CodexFeedback::new()
+            .snapshot(None)
+            .feedback_attachments(true, &[], Some(vec![1]));
+
+        assert_eq!(
+            attachments_without_diagnostics
+                .iter()
+                .map(|attachment| attachment.filename.as_str())
+                .collect::<Vec<_>>(),
+            vec!["codex-logs.log"]
+        );
+        assert_eq!(attachments_without_diagnostics[0].buffer, vec![1]);
+        fs::remove_file(extra_path).expect("extra attachment should be removed");
     }
 }

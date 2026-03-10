@@ -12,6 +12,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseInputItem;
 use serde::Deserialize;
 use serde::Serialize;
@@ -35,6 +36,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecExpiration;
 use crate::exec_env::create_env;
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
@@ -104,6 +106,7 @@ pub struct JsReplArgs {
 #[derive(Clone, Debug)]
 pub struct JsExecResult {
     pub output: String,
+    pub content_items: Vec<FunctionCallOutputContentItem>,
 }
 
 struct KernelState {
@@ -125,6 +128,7 @@ struct ExecContext {
 #[derive(Default)]
 struct ExecToolCalls {
     in_flight: usize,
+    content_items: Vec<FunctionCallOutputContentItem>,
     notify: Arc<Notify>,
     cancel: CancellationToken,
 }
@@ -136,6 +140,7 @@ enum JsReplToolCallPayloadKind {
     FunctionText,
     FunctionContentItems,
     CustomText,
+    CustomContentItems,
     McpResult,
     McpErrorResult,
     Error,
@@ -369,6 +374,17 @@ impl JsReplManager {
         Some(state.cancel.clone())
     }
 
+    async fn record_exec_content_item(
+        exec_tool_calls: &Arc<Mutex<HashMap<String, ExecToolCalls>>>,
+        exec_id: &str,
+        content_item: FunctionCallOutputContentItem,
+    ) {
+        let mut calls = exec_tool_calls.lock().await;
+        if let Some(state) = calls.get_mut(exec_id) {
+            state.content_items.push(content_item);
+        }
+    }
+
     async fn finish_exec_tool_call(
         exec_tool_calls: &Arc<Mutex<HashMap<String, ExecToolCalls>>>,
         exec_id: &str,
@@ -592,11 +608,18 @@ impl JsReplManager {
                     output,
                 )
             }
-            ResponseInputItem::CustomToolCallOutput { output, .. } => Self::summarize_text_payload(
-                Some("custom_tool_call_output"),
-                JsReplToolCallPayloadKind::CustomText,
-                output,
-            ),
+            ResponseInputItem::CustomToolCallOutput { output, .. } => {
+                let payload_kind = if output.content_items().is_some() {
+                    JsReplToolCallPayloadKind::CustomContentItems
+                } else {
+                    JsReplToolCallPayloadKind::CustomText
+                };
+                Self::summarize_function_output_payload(
+                    "custom_tool_call_output",
+                    payload_kind,
+                    output,
+                )
+            }
             ResponseInputItem::McpToolCallOutput { result, .. } => match result {
                 Ok(result) => {
                     let output = FunctionCallOutputPayload::from(result);
@@ -769,7 +792,13 @@ impl JsReplManager {
         };
 
         match response {
-            ExecResultMessage::Ok { output } => Ok(JsExecResult { output }),
+            ExecResultMessage::Ok { content_items } => {
+                let (output, content_items) = split_exec_result_content_items(content_items);
+                Ok(JsExecResult {
+                    output,
+                    content_items,
+                })
+            }
             ExecResultMessage::Err { message } => Err(FunctionCallError::RespondToModel(message)),
         }
     }
@@ -823,7 +852,8 @@ impl JsReplManager {
             .network
             .is_some();
         let sandbox_type = sandbox.select_initial(
-            &turn.sandbox_policy,
+            &turn.file_system_sandbox_policy,
+            turn.network_sandbox_policy,
             SandboxablePreference::Auto,
             turn.windows_sandbox_level,
             has_managed_network_requirements,
@@ -832,6 +862,8 @@ impl JsReplManager {
             .transform(crate::sandboxing::SandboxTransformRequest {
                 spec,
                 policy: &turn.sandbox_policy,
+                file_system_policy: &turn.file_system_sandbox_policy,
+                network_policy: turn.network_sandbox_policy,
                 sandbox: sandbox_type,
                 enforce_managed_network: has_managed_network_requirements,
                 network: None,
@@ -1073,10 +1105,22 @@ impl JsReplManager {
                     error,
                 } => {
                     JsReplManager::wait_for_exec_tool_calls_map(&exec_tool_calls, &id).await;
+                    let content_items = {
+                        let calls = exec_tool_calls.lock().await;
+                        calls
+                            .get(&id)
+                            .map(|state| state.content_items.clone())
+                            .unwrap_or_default()
+                    };
                     let mut pending = pending_execs.lock().await;
                     if let Some(tx) = pending.remove(&id) {
                         let payload = if ok {
-                            ExecResultMessage::Ok { output }
+                            ExecResultMessage::Ok {
+                                content_items: build_exec_result_content_items(
+                                    output,
+                                    content_items,
+                                ),
+                            }
                         } else {
                             ExecResultMessage::Err {
                                 message: error
@@ -1087,6 +1131,58 @@ impl JsReplManager {
                     }
                     exec_contexts.lock().await.remove(&id);
                     JsReplManager::clear_exec_tool_calls_map(&exec_tool_calls, &id).await;
+                }
+                KernelToHost::EmitImage(req) => {
+                    let exec_id = req.exec_id.clone();
+                    let emit_id = req.id.clone();
+                    let response =
+                        if let Some(ctx) = exec_contexts.lock().await.get(&exec_id).cloned() {
+                            match validate_emitted_image_url(&req.image_url) {
+                                Ok(()) => {
+                                    let content_item = emitted_image_content_item(
+                                        ctx.turn.as_ref(),
+                                        req.image_url,
+                                        req.detail,
+                                    );
+                                    JsReplManager::record_exec_content_item(
+                                        &exec_tool_calls,
+                                        &exec_id,
+                                        content_item,
+                                    )
+                                    .await;
+                                    HostToKernel::EmitImageResult(EmitImageResult {
+                                        id: emit_id,
+                                        ok: true,
+                                        error: None,
+                                    })
+                                }
+                                Err(error) => HostToKernel::EmitImageResult(EmitImageResult {
+                                    id: emit_id,
+                                    ok: false,
+                                    error: Some(error),
+                                }),
+                            }
+                        } else {
+                            HostToKernel::EmitImageResult(EmitImageResult {
+                                id: emit_id,
+                                ok: false,
+                                error: Some("js_repl exec context not found".to_string()),
+                            })
+                        };
+
+                    if let Err(err) = JsReplManager::write_message(&stdin, &response).await {
+                        let snapshot =
+                            JsReplManager::kernel_debug_snapshot(&child, &recent_stderr).await;
+                        warn!(
+                            exec_id = %exec_id,
+                            emit_id = %req.id,
+                            error = %err,
+                            kernel_pid = ?snapshot.pid,
+                            kernel_status = %snapshot.status,
+                            kernel_stderr_tail = %snapshot.stderr_tail,
+                            "failed to reply to kernel emit_image request"
+                        );
+                    }
                 }
                 KernelToHost::RunTool(req) => {
                     let Some(reset_cancel) =
@@ -1300,41 +1396,6 @@ impl JsReplManager {
             .await
         {
             Ok(response) => {
-                if let ResponseInputItem::FunctionCallOutput { output, .. } = &response
-                    && let Some(items) = output.content_items()
-                {
-                    let mut has_image = false;
-                    let mut content = Vec::with_capacity(items.len());
-                    for item in items {
-                        match item {
-                            FunctionCallOutputContentItem::InputText { text } => {
-                                content.push(ContentItem::InputText { text: text.clone() });
-                            }
-                            FunctionCallOutputContentItem::InputImage { image_url } => {
-                                has_image = true;
-                                content.push(ContentItem::InputImage {
-                                    image_url: image_url.clone(),
-                                });
-                            }
-                        }
-                    }
-
-                    if has_image
-                        && session
-                            .inject_response_items(vec![ResponseInputItem::Message {
-                                role: "user".to_string(),
-                                content,
-                            }])
-                            .await
-                            .is_err()
-                    {
-                        warn!(
-                            tool_name = %tool_name,
-                            "js_repl tool call returned image content but there was no active turn to attach it to"
-                        );
-                    }
-                }
-
                 let summary = Self::summarize_tool_call_response(&response);
                 match serde_json::to_value(response) {
                     Ok(value) => {
@@ -1407,6 +1468,60 @@ impl JsReplManager {
     }
 }
 
+fn emitted_image_content_item(
+    turn: &TurnContext,
+    image_url: String,
+    detail: Option<ImageDetail>,
+) -> FunctionCallOutputContentItem {
+    FunctionCallOutputContentItem::InputImage {
+        image_url,
+        detail: detail.or_else(|| default_output_image_detail_for_turn(turn)),
+    }
+}
+
+fn validate_emitted_image_url(image_url: &str) -> Result<(), String> {
+    if image_url
+        .get(..5)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("data:"))
+    {
+        Ok(())
+    } else {
+        Err("codex.emitImage only accepts data URLs".to_string())
+    }
+}
+
+fn default_output_image_detail_for_turn(turn: &TurnContext) -> Option<ImageDetail> {
+    (turn.config.features.enabled(Feature::ImageDetailOriginal)
+        && turn.model_info.supports_image_detail_original)
+        .then_some(ImageDetail::Original)
+}
+
+fn build_exec_result_content_items(
+    output: String,
+    content_items: Vec<FunctionCallOutputContentItem>,
+) -> Vec<FunctionCallOutputContentItem> {
+    let mut all_content_items = Vec::with_capacity(content_items.len() + 1);
+    all_content_items.push(FunctionCallOutputContentItem::InputText { text: output });
+    all_content_items.extend(content_items);
+    all_content_items
+}
+
+fn split_exec_result_content_items(
+    mut content_items: Vec<FunctionCallOutputContentItem>,
+) -> (String, Vec<FunctionCallOutputContentItem>) {
+    match content_items.first() {
+        Some(FunctionCallOutputContentItem::InputText { .. }) => {
+            let FunctionCallOutputContentItem::InputText { text } = content_items.remove(0) else {
+                unreachable!("first content item should be input_text");
+            };
+            (text, content_items)
+        }
+        Some(FunctionCallOutputContentItem::InputImage { .. }) | None => {
+            (String::new(), content_items)
+        }
+    }
+}
+
 fn is_freeform_tool(specs: &[ToolSpec], name: &str) -> bool {
     specs
         .iter()
@@ -1428,6 +1543,7 @@ enum KernelToHost {
         error: Option<String>,
     },
     RunTool(RunToolRequest),
+    EmitImage(EmitImageRequest),
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1440,6 +1556,7 @@ enum HostToKernel {
         timeout_ms: Option<u64>,
     },
     RunToolResult(RunToolResult),
+    EmitImageResult(EmitImageResult),
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1460,10 +1577,31 @@ struct RunToolResult {
     error: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+struct EmitImageRequest {
+    id: String,
+    exec_id: String,
+    image_url: String,
+    #[serde(default)]
+    detail: Option<ImageDetail>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct EmitImageResult {
+    id: String,
+    ok: bool,
+    #[serde(default)]
+    error: Option<String>,
+}
+
 #[derive(Debug)]
 enum ExecResultMessage {
-    Ok { output: String },
-    Err { message: String },
+    Ok {
+        content_items: Vec<FunctionCallOutputContentItem>,
+    },
+    Err {
+        message: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -1594,6 +1732,7 @@ mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
     use crate::codex::make_session_and_context_with_dynamic_tools_and_rx;
+    use crate::features::Feature;
     use crate::protocol::AskForApproval;
     use crate::protocol::EventMsg;
     use crate::protocol::SandboxPolicy;
@@ -1601,15 +1740,25 @@ mod tests {
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
     use codex_protocol::dynamic_tools::DynamicToolSpec;
-    use codex_protocol::models::ContentItem;
     use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_protocol::models::FunctionCallOutputPayload;
+    use codex_protocol::models::ImageDetail;
     use codex_protocol::models::ResponseInputItem;
     use codex_protocol::openai_models::InputModality;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
     use tempfile::tempdir;
+
+    fn set_danger_full_access(turn: &mut crate::codex::TurnContext) {
+        turn.sandbox_policy
+            .set(SandboxPolicy::DangerFullAccess)
+            .expect("test setup should allow updating sandbox policy");
+        turn.file_system_sandbox_policy =
+            crate::protocol::FileSystemSandboxPolicy::from(turn.sandbox_policy.get());
+        turn.network_sandbox_policy =
+            crate::protocol::NetworkSandboxPolicy::from(turn.sandbox_policy.get());
+    }
 
     #[test]
     fn node_version_parses_v_prefix_and_suffix() {
@@ -1828,6 +1977,7 @@ mod tests {
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,abcd".to_string(),
+                    detail: None,
                 },
             ]),
         };
@@ -1839,6 +1989,90 @@ mod tests {
             JsReplToolCallResponseSummary {
                 response_type: Some("function_call_output".to_string()),
                 payload_kind: Some(JsReplToolCallPayloadKind::FunctionContentItems),
+                payload_text_preview: None,
+                payload_text_length: None,
+                payload_item_count: Some(1),
+                text_item_count: Some(0),
+                image_item_count: Some(1),
+                structured_content_present: None,
+                result_is_error: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn emitted_image_content_item_preserves_explicit_detail() {
+        let (_session, turn) = make_session_and_context().await;
+        let content_item = emitted_image_content_item(
+            &turn,
+            "data:image/png;base64,AAA".to_string(),
+            Some(ImageDetail::Low),
+        );
+        assert_eq!(
+            content_item,
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+                detail: Some(ImageDetail::Low),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn emitted_image_content_item_uses_turn_original_detail_when_enabled() {
+        let (_session, mut turn) = make_session_and_context().await;
+        Arc::make_mut(&mut turn.config)
+            .features
+            .enable(Feature::ImageDetailOriginal)
+            .expect("test config should allow feature update");
+        turn.model_info.supports_image_detail_original = true;
+
+        let content_item =
+            emitted_image_content_item(&turn, "data:image/png;base64,AAA".to_string(), None);
+
+        assert_eq!(
+            content_item,
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+                detail: Some(ImageDetail::Original),
+            }
+        );
+    }
+
+    #[test]
+    fn validate_emitted_image_url_accepts_case_insensitive_data_scheme() {
+        assert_eq!(
+            validate_emitted_image_url("DATA:image/png;base64,AAA"),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn validate_emitted_image_url_rejects_non_data_scheme() {
+        assert_eq!(
+            validate_emitted_image_url("https://example.com/image.png"),
+            Err("codex.emitImage only accepts data URLs".to_string())
+        );
+    }
+
+    #[test]
+    fn summarize_tool_call_response_for_multimodal_custom_output() {
+        let response = ResponseInputItem::CustomToolCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,abcd".to_string(),
+                    detail: None,
+                },
+            ]),
+        };
+
+        let actual = JsReplManager::summarize_tool_call_response(&response);
+
+        assert_eq!(
+            actual,
+            JsReplToolCallResponseSummary {
+                response_type: Some("custom_tool_call_output".to_string()),
+                payload_kind: Some(JsReplToolCallPayloadKind::CustomContentItems),
                 payload_text_preview: None,
                 payload_text_length: None,
                 payload_item_count: Some(1),
@@ -1939,7 +2173,11 @@ mod tests {
         // integration tests instead.
         cfg!(target_os = "macos")
     }
-    fn write_js_repl_test_package(base: &Path, name: &str, value: &str) -> anyhow::Result<()> {
+    fn write_js_repl_test_package_source(
+        base: &Path,
+        name: &str,
+        source: &str,
+    ) -> anyhow::Result<()> {
         let pkg_dir = base.join("node_modules").join(name);
         fs::create_dir_all(&pkg_dir)?;
         fs::write(
@@ -1948,10 +2186,29 @@ mod tests {
                 "{{\n  \"name\": \"{name}\",\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"exports\": {{\n    \"import\": \"./index.js\"\n  }}\n}}\n"
             ),
         )?;
-        fs::write(
-            pkg_dir.join("index.js"),
-            format!("export const value = \"{value}\";\n"),
+        fs::write(pkg_dir.join("index.js"), source)?;
+        Ok(())
+    }
+
+    fn write_js_repl_test_package(base: &Path, name: &str, value: &str) -> anyhow::Result<()> {
+        write_js_repl_test_package_source(
+            base,
+            name,
+            &format!("export const value = \"{value}\";\n"),
         )?;
+        Ok(())
+    }
+
+    fn write_js_repl_test_module(
+        base: &Path,
+        relative: &str,
+        contents: &str,
+    ) -> anyhow::Result<()> {
+        let module_path = base.join(relative);
+        if let Some(parent) = module_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(module_path, contents)?;
         Ok(())
     }
 
@@ -2220,9 +2477,7 @@ mod tests {
         turn.approval_policy
             .set(AskForApproval::Never)
             .expect("test setup should allow updating approval policy");
-        turn.sandbox_policy
-            .set(SandboxPolicy::DangerFullAccess)
-            .expect("test setup should allow updating sandbox policy");
+        set_danger_full_access(&mut turn);
 
         let session = Arc::new(session);
         let turn = Arc::new(turn);
@@ -2258,7 +2513,7 @@ console.log("cell-complete");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn js_repl_can_attach_image_via_view_image_tool() -> anyhow::Result<()> {
+    async fn js_repl_does_not_auto_attach_image_via_view_image_tool() -> anyhow::Result<()> {
         if !can_run_js_repl_runtime_tests().await {
             return Ok(());
         }
@@ -2274,9 +2529,7 @@ console.log("cell-complete");
         turn.approval_policy
             .set(AskForApproval::Never)
             .expect("test setup should allow updating approval policy");
-        turn.sandbox_policy
-            .set(SandboxPolicy::DangerFullAccess)
-            .expect("test setup should allow updating sandbox policy");
+        set_danger_full_access(&mut turn);
 
         let session = Arc::new(session);
         let turn = Arc::new(turn);
@@ -2295,7 +2548,6 @@ const png = Buffer.from(
 await fs.writeFile(imagePath, png);
 const out = await codex.tool("view_image", { path: imagePath });
 console.log(out.type);
-console.log(out.output?.body?.text ?? "");
 "#;
 
         let result = manager
@@ -2310,26 +2562,533 @@ console.log(out.output?.body?.text ?? "");
             )
             .await?;
         assert!(result.output.contains("function_call_output"));
-
-        let pending_input = session.get_pending_input().await;
-        let [ResponseInputItem::Message { role, content }] = pending_input.as_slice() else {
-            panic!(
-                "view_image should inject exactly one pending input message, got {pending_input:?}"
-            );
-        };
-        assert_eq!(role, "user");
-        let [ContentItem::InputImage { image_url }] = content.as_slice() else {
-            panic!(
-                "view_image should inject exactly one input_image content item, got {content:?}"
-            );
-        };
-        assert!(image_url.starts_with("data:image/png;base64,"));
+        assert!(result.content_items.is_empty());
+        assert!(session.get_pending_input().await.is_empty());
 
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn js_repl_can_attach_image_via_dynamic_tool_with_mixed_content() -> anyhow::Result<()> {
+    async fn js_repl_can_emit_image_via_view_image_tool() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, mut turn) = make_session_and_context().await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+        turn.approval_policy
+            .set(AskForApproval::Never)
+            .expect("test setup should allow updating approval policy");
+        set_danger_full_access(&mut turn);
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+const fs = await import("node:fs/promises");
+const path = await import("node:path");
+const imagePath = path.join(codex.tmpDir, "js-repl-view-image-explicit.png");
+const png = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+  "base64"
+);
+await fs.writeFile(imagePath, png);
+const out = await codex.tool("view_image", { path: imagePath });
+await codex.emitImage(out);
+console.log(out.type);
+"#;
+
+        let result = manager
+            .execute(
+                Arc::clone(&session),
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: Some(15_000),
+                },
+            )
+            .await?;
+        assert!(result.output.contains("function_call_output"));
+        assert_eq!(
+            result.content_items.as_slice(),
+            [FunctionCallOutputContentItem::InputImage {
+                image_url:
+                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+                        .to_string(),
+                detail: None,
+            }]
+            .as_slice()
+        );
+        assert!(session.get_pending_input().await.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_can_emit_image_from_bytes_and_mime_type() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn) = make_session_and_context().await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+const png = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+  "base64"
+);
+await codex.emitImage({ bytes: png, mimeType: "image/png" });
+"#;
+
+        let result = manager
+            .execute(
+                Arc::clone(&session),
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: Some(15_000),
+                },
+            )
+            .await?;
+        assert_eq!(
+            result.content_items.as_slice(),
+            [FunctionCallOutputContentItem::InputImage {
+                image_url:
+                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+                        .to_string(),
+                detail: None,
+            }]
+            .as_slice()
+        );
+        assert!(session.get_pending_input().await.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_can_emit_multiple_images_in_one_cell() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn) = make_session_and_context().await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+await codex.emitImage(
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+);
+await codex.emitImage(
+  "data:image/gif;base64,R0lGODdhAQABAIAAAP///////ywAAAAAAQABAAACAkQBADs="
+);
+"#;
+
+        let result = manager
+            .execute(
+                Arc::clone(&session),
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: Some(15_000),
+                },
+            )
+            .await?;
+        assert_eq!(
+            result.content_items.as_slice(),
+            [
+                FunctionCallOutputContentItem::InputImage {
+                    image_url:
+                        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+                            .to_string(),
+                    detail: None,
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image_url:
+                        "data:image/gif;base64,R0lGODdhAQABAIAAAP///////ywAAAAAAQABAAACAkQBADs="
+                            .to_string(),
+                    detail: None,
+                },
+            ]
+            .as_slice()
+        );
+        assert!(session.get_pending_input().await.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_waits_for_unawaited_emit_image_before_completion() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn) = make_session_and_context().await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+void codex.emitImage(
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+);
+console.log("cell-complete");
+"#;
+
+        let result = manager
+            .execute(
+                Arc::clone(&session),
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: Some(15_000),
+                },
+            )
+            .await?;
+        assert!(result.output.contains("cell-complete"));
+        assert_eq!(
+            result.content_items.as_slice(),
+            [FunctionCallOutputContentItem::InputImage {
+                image_url:
+                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+                        .to_string(),
+                detail: None,
+            }]
+            .as_slice()
+        );
+        assert!(session.get_pending_input().await.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_unawaited_emit_image_errors_fail_cell() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn) = make_session_and_context().await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+void codex.emitImage({ bytes: new Uint8Array(), mimeType: "image/png" });
+console.log("cell-complete");
+"#;
+
+        let err = manager
+            .execute(
+                Arc::clone(&session),
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: Some(15_000),
+                },
+            )
+            .await
+            .expect_err("unawaited invalid emitImage should fail");
+        assert!(err.to_string().contains("expected non-empty bytes"));
+        assert!(session.get_pending_input().await.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_caught_emit_image_error_does_not_fail_cell() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn) = make_session_and_context().await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+try {
+  await codex.emitImage({ bytes: new Uint8Array(), mimeType: "image/png" });
+} catch (error) {
+  console.log(error.message);
+}
+console.log("cell-complete");
+"#;
+
+        let result = manager
+            .execute(
+                Arc::clone(&session),
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: Some(15_000),
+                },
+            )
+            .await?;
+        assert!(result.output.contains("expected non-empty bytes"));
+        assert!(result.output.contains("cell-complete"));
+        assert!(result.content_items.is_empty());
+        assert!(session.get_pending_input().await.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_emit_image_requires_explicit_mime_type_for_bytes() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn) = make_session_and_context().await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+const png = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+  "base64"
+);
+await codex.emitImage({ bytes: png });
+"#;
+
+        let err = manager
+            .execute(
+                Arc::clone(&session),
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: Some(15_000),
+                },
+            )
+            .await
+            .expect_err("missing mimeType should fail");
+        assert!(err.to_string().contains("expected a non-empty mimeType"));
+        assert!(session.get_pending_input().await.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_emit_image_rejects_non_data_url() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn) = make_session_and_context().await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+await codex.emitImage("https://example.com/image.png");
+"#;
+
+        let err = manager
+            .execute(
+                Arc::clone(&session),
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: Some(15_000),
+                },
+            )
+            .await
+            .expect_err("non-data URLs should fail");
+        assert!(err.to_string().contains("only accepts data URLs"));
+        assert!(session.get_pending_input().await.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_emit_image_accepts_case_insensitive_data_url() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn) = make_session_and_context().await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+await codex.emitImage("DATA:image/png;base64,AAA");
+"#;
+
+        let result = manager
+            .execute(
+                Arc::clone(&session),
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: Some(15_000),
+                },
+            )
+            .await?;
+        assert_eq!(
+            result.content_items.as_slice(),
+            [FunctionCallOutputContentItem::InputImage {
+                image_url: "DATA:image/png;base64,AAA".to_string(),
+                detail: None,
+            }]
+            .as_slice()
+        );
+        assert!(session.get_pending_input().await.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_emit_image_rejects_invalid_detail() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn) = make_session_and_context().await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+const png = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+  "base64"
+);
+await codex.emitImage({ bytes: png, mimeType: "image/png", detail: "ultra" });
+"#;
+
+        let err = manager
+            .execute(
+                Arc::clone(&session),
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: Some(15_000),
+                },
+            )
+            .await
+            .expect_err("invalid detail should fail");
+        assert!(err.to_string().contains("expected detail to be one of"));
+        assert!(session.get_pending_input().await.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_emit_image_rejects_mixed_content() -> anyhow::Result<()> {
         if !can_run_js_repl_runtime_tests().await {
             return Ok(());
         }
@@ -2359,7 +3118,7 @@ console.log(out.output?.body?.text ?? "");
         let manager = turn.js_repl.manager().await?;
         let code = r#"
 const out = await codex.tool("inline_image", {});
-console.log(out.type);
+await codex.emitImage(out);
 "#;
         let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 
@@ -2402,24 +3161,12 @@ console.log(out.type);
             response_watcher,
         );
         response_watcher_result?;
-        let result = result?;
-        assert!(result.output.contains("function_call_output"));
-
-        let pending_input = session.get_pending_input().await;
-        assert_eq!(
-            pending_input,
-            vec![ResponseInputItem::Message {
-                role: "user".to_string(),
-                content: vec![
-                    ContentItem::InputText {
-                        text: "inline image note".to_string(),
-                    },
-                    ContentItem::InputImage {
-                        image_url: image_url.to_string(),
-                    },
-                ],
-            }]
+        let err = result.expect_err("mixed content should fail");
+        assert!(
+            err.to_string()
+                .contains("does not accept mixed text and image content")
         );
+        assert!(session.get_pending_input().await.is_empty());
 
         Ok(())
     }
@@ -2597,7 +3344,338 @@ console.log(out.type);
     }
 
     #[tokio::test]
-    async fn js_repl_rejects_path_specifiers() -> anyhow::Result<()> {
+    async fn js_repl_supports_relative_file_imports() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let cwd_dir = tempdir()?;
+        write_js_repl_test_module(
+            cwd_dir.path(),
+            "child.js",
+            "export const value = \"child\";\n",
+        )?;
+        write_js_repl_test_module(
+            cwd_dir.path(),
+            "parent.js",
+            "import { value as childValue } from \"./child.js\";\nexport const value = `${childValue}-parent`;\n",
+        )?;
+        write_js_repl_test_module(
+            cwd_dir.path(),
+            "local.mjs",
+            "export const value = \"mjs\";\n",
+        )?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let result = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "const parent = await import(\"./parent.js\"); const other = await import(\"./local.mjs\"); console.log(parent.value); console.log(other.value);".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(result.output.contains("child-parent"));
+        assert!(result.output.contains("mjs"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_supports_absolute_file_imports() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let module_dir = tempdir()?;
+        let cwd_dir = tempdir()?;
+        write_js_repl_test_module(
+            module_dir.path(),
+            "absolute.js",
+            "export const value = \"absolute\";\n",
+        )?;
+        let absolute_path_json =
+            serde_json::to_string(&module_dir.path().join("absolute.js").display().to_string())?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let result = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: format!(
+                        "const mod = await import({absolute_path_json}); console.log(mod.value);"
+                    ),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(result.output.contains("absolute"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_imported_local_files_can_access_repl_globals() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let cwd_dir = tempdir()?;
+        write_js_repl_test_module(
+            cwd_dir.path(),
+            "globals.js",
+            "console.log(codex.tmpDir === tmpDir);\nconsole.log(typeof codex.tool);\nconsole.log(\"local-file-console-ok\");\n",
+        )?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let result = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "await import(\"./globals.js\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(result.output.contains("true"));
+        assert!(result.output.contains("function"));
+        assert!(result.output.contains("local-file-console-ok"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_reimports_local_files_after_edit() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let cwd_dir = tempdir()?;
+        let helper_path = cwd_dir.path().join("helper.js");
+        fs::write(&helper_path, "export const value = \"v1\";\n")?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let first = manager
+            .execute(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                Arc::clone(&tracker),
+                JsReplArgs {
+                    code: "const { value: firstValue } = await import(\"./helper.js\");\nconsole.log(firstValue);".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(first.output.contains("v1"));
+
+        fs::write(&helper_path, "export const value = \"v2\";\n")?;
+
+        let second = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "console.log(firstValue);\nconst { value: secondValue } = await import(\"./helper.js\");\nconsole.log(secondValue);".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(second.output.contains("v1"));
+        assert!(second.output.contains("v2"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_reimports_local_files_after_fixing_failure() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let cwd_dir = tempdir()?;
+        let helper_path = cwd_dir.path().join("broken.js");
+        fs::write(&helper_path, "throw new Error(\"boom\");\n")?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let err = manager
+            .execute(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                Arc::clone(&tracker),
+                JsReplArgs {
+                    code: "await import(\"./broken.js\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected broken module import to fail");
+        assert!(err.to_string().contains("boom"));
+
+        fs::write(&helper_path, "export const value = \"fixed\";\n")?;
+
+        let result = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "console.log((await import(\"./broken.js\")).value);".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        assert!(result.output.contains("fixed"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_local_files_expose_node_like_import_meta() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let cwd_dir = tempdir()?;
+        let pkg_dir = cwd_dir.path().join("node_modules").join("repl_meta_pkg");
+        fs::create_dir_all(&pkg_dir)?;
+        fs::write(
+            pkg_dir.join("package.json"),
+            "{\n  \"name\": \"repl_meta_pkg\",\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"exports\": {\n    \"import\": \"./index.js\"\n  }\n}\n",
+        )?;
+        fs::write(
+            pkg_dir.join("index.js"),
+            "import { sep } from \"node:path\";\nexport const value = `pkg:${typeof sep}`;\n",
+        )?;
+        write_js_repl_test_module(
+            cwd_dir.path(),
+            "child.js",
+            "export const value = \"child-export\";\n",
+        )?;
+        write_js_repl_test_module(
+            cwd_dir.path(),
+            "meta.js",
+            "console.log(import.meta.url);\nconsole.log(import.meta.filename);\nconsole.log(import.meta.dirname);\nconsole.log(import.meta.main);\nconsole.log(import.meta.resolve(\"./child.js\"));\nconsole.log(import.meta.resolve(\"repl_meta_pkg\"));\nconsole.log(import.meta.resolve(\"node:fs\"));\nconsole.log((await import(import.meta.resolve(\"./child.js\"))).value);\nconsole.log((await import(import.meta.resolve(\"repl_meta_pkg\"))).value);\n",
+        )?;
+        let child_path = fs::canonicalize(cwd_dir.path().join("child.js"))?;
+        let child_url = url::Url::from_file_path(&child_path)
+            .expect("child path should convert to file URL")
+            .to_string();
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let result = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "await import(\"./meta.js\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+        let cwd_display = cwd_dir.path().display().to_string();
+        let meta_path_display = cwd_dir.path().join("meta.js").display().to_string();
+        assert!(result.output.contains("file://"));
+        assert!(result.output.contains(&meta_path_display));
+        assert!(result.output.contains(&cwd_display));
+        assert!(result.output.contains("false"));
+        assert!(result.output.contains(&child_url));
+        assert!(result.output.contains("repl_meta_pkg"));
+        assert!(result.output.contains("node:fs"));
+        assert!(result.output.contains("child-export"));
+        assert!(result.output.contains("pkg:string"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_rejects_top_level_static_imports_with_clear_error() -> anyhow::Result<()> {
         if !can_run_js_repl_runtime_tests().await {
             return Ok(());
         }
@@ -2614,13 +3692,259 @@ console.log(out.type);
                 turn,
                 tracker,
                 JsReplArgs {
-                    code: "await import(\"./local.js\");".to_string(),
+                    code: "import \"./local.js\";".to_string(),
                     timeout_ms: Some(10_000),
                 },
             )
             .await
-            .expect_err("expected path specifier to be rejected");
-        assert!(err.to_string().contains("Unsupported import specifier"));
+            .expect_err("expected top-level static import to be rejected");
+        assert!(
+            err.to_string()
+                .contains("Top-level static import \"./local.js\" is not supported in js_repl")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_local_files_reject_static_bare_imports() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let cwd_dir = tempdir()?;
+        write_js_repl_test_package(cwd_dir.path(), "repl_counter", "pkg")?;
+        write_js_repl_test_module(
+            cwd_dir.path(),
+            "entry.js",
+            "import { value } from \"repl_counter\";\nconsole.log(value);\n",
+        )?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let err = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "await import(\"./entry.js\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected static bare import to be rejected");
+        assert!(
+            err.to_string().contains(
+                "Static import \"repl_counter\" is not supported from js_repl local files"
+            )
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_rejects_unsupported_file_specifiers() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let cwd_dir = tempdir()?;
+        write_js_repl_test_module(cwd_dir.path(), "local.ts", "export const value = \"ts\";\n")?;
+        write_js_repl_test_module(cwd_dir.path(), "local", "export const value = \"noext\";\n")?;
+        fs::create_dir_all(cwd_dir.path().join("dir"))?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let unsupported_extension = manager
+            .execute(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                Arc::clone(&tracker),
+                JsReplArgs {
+                    code: "await import(\"./local.ts\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected unsupported extension to be rejected");
+        assert!(
+            unsupported_extension
+                .to_string()
+                .contains("Only .js and .mjs files are supported")
+        );
+
+        let extensionless = manager
+            .execute(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                Arc::clone(&tracker),
+                JsReplArgs {
+                    code: "await import(\"./local\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected extensionless import to be rejected");
+        assert!(
+            extensionless
+                .to_string()
+                .contains("Only .js and .mjs files are supported")
+        );
+
+        let directory = manager
+            .execute(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                Arc::clone(&tracker),
+                JsReplArgs {
+                    code: "await import(\"./dir\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected directory import to be rejected");
+        assert!(
+            directory
+                .to_string()
+                .contains("Directory imports are not supported")
+        );
+
+        let unsupported_url = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "await import(\"https://example.com/test.js\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected unsupported url import to be rejected");
+        assert!(
+            unsupported_url
+                .to_string()
+                .contains("Unsupported import specifier")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_blocks_sensitive_builtin_imports_from_local_files() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let cwd_dir = tempdir()?;
+        write_js_repl_test_module(
+            cwd_dir.path(),
+            "blocked.js",
+            "import process from \"node:process\";\nconsole.log(process.pid);\n",
+        )?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.path().to_path_buf();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let err = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "await import(\"./blocked.js\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected blocked builtin import to be rejected");
+        assert!(
+            err.to_string()
+                .contains("Importing module \"node:process\" is not allowed in js_repl")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_local_files_do_not_escape_node_module_search_roots() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let parent_dir = tempdir()?;
+        write_js_repl_test_package(parent_dir.path(), "repl_probe", "parent")?;
+        let cwd_dir = parent_dir.path().join("workspace");
+        fs::create_dir_all(&cwd_dir)?;
+        write_js_repl_test_module(
+            &cwd_dir,
+            "entry.js",
+            "const { value } = await import(\"repl_probe\");\nconsole.log(value);\n",
+        )?;
+
+        let (session, mut turn) = make_session_and_context().await;
+        turn.shell_environment_policy
+            .r#set
+            .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
+        turn.cwd = cwd_dir.clone();
+        turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+            turn.config.js_repl_node_path.clone(),
+            Vec::new(),
+        ));
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+
+        let err = manager
+            .execute(
+                session,
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: "await import(\"./entry.js\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await
+            .expect_err("expected parent node_modules lookup to be rejected");
+        assert!(err.to_string().contains("repl_probe"));
         Ok(())
     }
 }

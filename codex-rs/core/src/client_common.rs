@@ -84,19 +84,13 @@ fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
                 shell_call_ids.insert(call_id.clone());
             }
         }
-        ResponseItem::CustomToolCallOutput { call_id, output } => {
-            if shell_call_ids.remove(call_id)
-                && let Some(structured) = parse_structured_shell_output(output)
-            {
-                *output = structured
-            }
-        }
         ResponseItem::FunctionCall { name, call_id, .. }
             if is_shell_tool_name(name) || name == "apply_patch" =>
         {
             shell_call_ids.insert(call_id.clone());
         }
-        ResponseItem::FunctionCallOutput { call_id, output } => {
+        ResponseItem::FunctionCallOutput { call_id, output }
+        | ResponseItem::CustomToolCallOutput { call_id, output } => {
             if shell_call_ids.remove(call_id)
                 && let Some(structured) = output
                     .text_content()
@@ -160,6 +154,10 @@ fn strip_total_output_header(output: &str) -> Option<(&str, u32)> {
 
 pub(crate) mod tools {
     use crate::tools::spec::JsonSchema;
+    use codex_protocol::config_types::WebSearchContextSize;
+    use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
+    use codex_protocol::config_types::WebSearchUserLocation as ConfigWebSearchUserLocation;
+    use codex_protocol::config_types::WebSearchUserLocationType;
     use serde::Deserialize;
     use serde::Serialize;
 
@@ -172,6 +170,8 @@ pub(crate) mod tools {
         Function(ResponsesApiTool),
         #[serde(rename = "local_shell")]
         LocalShell {},
+        #[serde(rename = "image_generation")]
+        ImageGeneration { output_format: String },
         // TODO: Understand why we get an error on web_search although the API docs say it's supported.
         // https://platform.openai.com/docs/guides/tools-web-search?api-mode=responses#:~:text=%7B%20type%3A%20%22web_search%22%20%7D%2C
         // The `external_web_access` field determines whether the web search is over cached or live content.
@@ -180,6 +180,14 @@ pub(crate) mod tools {
         WebSearch {
             #[serde(skip_serializing_if = "Option::is_none")]
             external_web_access: Option<bool>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            filters: Option<ResponsesApiWebSearchFilters>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            user_location: Option<ResponsesApiWebSearchUserLocation>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            search_context_size: Option<WebSearchContextSize>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            search_content_types: Option<Vec<String>>,
         },
         #[serde(rename = "custom")]
         Freeform(FreeformTool),
@@ -190,8 +198,49 @@ pub(crate) mod tools {
             match self {
                 ToolSpec::Function(tool) => tool.name.as_str(),
                 ToolSpec::LocalShell {} => "local_shell",
+                ToolSpec::ImageGeneration { .. } => "image_generation",
                 ToolSpec::WebSearch { .. } => "web_search",
                 ToolSpec::Freeform(tool) => tool.name.as_str(),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize, PartialEq)]
+    pub(crate) struct ResponsesApiWebSearchFilters {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) allowed_domains: Option<Vec<String>>,
+    }
+
+    impl From<ConfigWebSearchFilters> for ResponsesApiWebSearchFilters {
+        fn from(filters: ConfigWebSearchFilters) -> Self {
+            Self {
+                allowed_domains: filters.allowed_domains,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize, PartialEq)]
+    pub(crate) struct ResponsesApiWebSearchUserLocation {
+        #[serde(rename = "type")]
+        pub(crate) r#type: WebSearchUserLocationType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) country: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) region: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) city: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) timezone: Option<String>,
+    }
+
+    impl From<ConfigWebSearchUserLocation> for ResponsesApiWebSearchUserLocation {
+        fn from(user_location: ConfigWebSearchUserLocation) -> Self {
+            Self {
+                r#type: user_location.r#type,
+                country: user_location.country,
+                region: user_location.region,
+                city: user_location.city,
+                timezone: user_location.timezone,
             }
         }
     }
@@ -240,6 +289,8 @@ mod tests {
     use codex_api::common::OpenAiVerbosity;
     use codex_api::common::TextControls;
     use codex_api::create_text_param_for_request;
+    use codex_protocol::config_types::ServiceTier;
+    use codex_protocol::models::FunctionCallOutputPayload;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -260,6 +311,7 @@ mod tests {
             stream: true,
             include: vec![],
             prompt_cache_key: None,
+            service_tier: None,
             text: Some(TextControls {
                 verbosity: Some(OpenAiVerbosity::Low),
                 format: None,
@@ -301,6 +353,7 @@ mod tests {
             stream: true,
             include: vec![],
             prompt_cache_key: None,
+            service_tier: None,
             text: Some(text_controls),
         };
 
@@ -337,10 +390,94 @@ mod tests {
             stream: true,
             include: vec![],
             prompt_cache_key: None,
+            service_tier: None,
             text: None,
         };
 
         let v = serde_json::to_value(&req).expect("json");
         assert!(v.get("text").is_none());
+    }
+
+    #[test]
+    fn serializes_flex_service_tier_when_set() {
+        let req = ResponsesApiRequest {
+            model: "gpt-5.1".to_string(),
+            instructions: "i".to_string(),
+            input: vec![],
+            tools: vec![],
+            tool_choice: "auto".to_string(),
+            parallel_tool_calls: true,
+            reasoning: None,
+            store: false,
+            stream: true,
+            include: vec![],
+            prompt_cache_key: None,
+            service_tier: Some(ServiceTier::Flex.to_string()),
+            text: None,
+        };
+
+        let v = serde_json::to_value(&req).expect("json");
+        assert_eq!(
+            v.get("service_tier").and_then(|tier| tier.as_str()),
+            Some("flex")
+        );
+    }
+
+    #[test]
+    fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
+        let raw_output = r#"{"output":"hello","metadata":{"exit_code":0,"duration_seconds":0.5}}"#;
+        let expected_output = "Exit code: 0\nWall time: 0.5 seconds\nOutput:\nhello";
+        let mut items = vec![
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "shell".to_string(),
+                arguments: "{}".to_string(),
+                call_id: "call-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload::from_text(raw_output.to_string()),
+            },
+            ResponseItem::CustomToolCall {
+                id: None,
+                status: None,
+                call_id: "call-2".to_string(),
+                name: "apply_patch".to_string(),
+                input: "*** Begin Patch".to_string(),
+            },
+            ResponseItem::CustomToolCallOutput {
+                call_id: "call-2".to_string(),
+                output: FunctionCallOutputPayload::from_text(raw_output.to_string()),
+            },
+        ];
+
+        reserialize_shell_outputs(&mut items);
+
+        assert_eq!(
+            items,
+            vec![
+                ResponseItem::FunctionCall {
+                    id: None,
+                    name: "shell".to_string(),
+                    arguments: "{}".to_string(),
+                    call_id: "call-1".to_string(),
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: "call-1".to_string(),
+                    output: FunctionCallOutputPayload::from_text(expected_output.to_string()),
+                },
+                ResponseItem::CustomToolCall {
+                    id: None,
+                    status: None,
+                    call_id: "call-2".to_string(),
+                    name: "apply_patch".to_string(),
+                    input: "*** Begin Patch".to_string(),
+                },
+                ResponseItem::CustomToolCallOutput {
+                    call_id: "call-2".to_string(),
+                    output: FunctionCallOutputPayload::from_text(expected_output.to_string()),
+                },
+            ]
+        );
     }
 }

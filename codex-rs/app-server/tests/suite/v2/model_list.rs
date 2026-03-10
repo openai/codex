@@ -9,6 +9,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_app_server_protocol::RequestId;
 use codex_protocol::openai_models::ModelPreset;
@@ -24,6 +25,13 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
         id: preset.id.clone(),
         model: preset.model.clone(),
         upgrade: preset.upgrade.as_ref().map(|upgrade| upgrade.id.clone()),
+        upgrade_info: preset.upgrade.as_ref().map(|upgrade| ModelUpgradeInfo {
+            model: upgrade.id.clone(),
+            upgrade_copy: upgrade.upgrade_copy.clone(),
+            model_link: upgrade.model_link.clone(),
+            migration_markdown: upgrade.migration_markdown.clone(),
+        }),
+        availability_nux: preset.availability_nux.clone().map(Into::into),
         display_name: preset.display_name.clone(),
         description: preset.description.clone(),
         hidden: !preset.show_in_picker,
