@@ -2252,33 +2252,43 @@ pub enum ThreadUnsubscribeStatus {
     Unsubscribed,
 }
 
+/// Parameters for `thread/increment_elicitation`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadIncrementElicitationParams {
+    /// Thread whose out-of-band elicitation counter should be incremented.
     pub thread_id: String,
 }
 
+/// Response for `thread/increment_elicitation`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadIncrementElicitationResponse {
+    /// Current out-of-band elicitation count after the increment.
     pub count: u64,
+    /// Whether timeout accounting is paused after applying the increment.
     pub paused: bool,
 }
 
+/// Parameters for `thread/decrement_elicitation`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadDecrementElicitationParams {
+    /// Thread whose out-of-band elicitation counter should be decremented.
     pub thread_id: String,
 }
 
+/// Response for `thread/decrement_elicitation`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadDecrementElicitationResponse {
+    /// Current out-of-band elicitation count after the decrement.
     pub count: u64,
+    /// Whether timeout accounting remains paused after applying the decrement.
     pub paused: bool,
 }
 

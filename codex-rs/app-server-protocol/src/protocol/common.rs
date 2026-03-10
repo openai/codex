@@ -208,11 +208,18 @@ client_request_definitions! {
         response: v2::ThreadUnsubscribeResponse,
     },
     #[experimental("thread/increment_elicitation")]
+    /// Increment the thread-local out-of-band elicitation counter.
+    ///
+    /// This is used by external helpers to pause timeout accounting while a user
+    /// approval or other elicitation is pending outside the app-server request flow.
     ThreadIncrementElicitation => "thread/increment_elicitation" {
         params: v2::ThreadIncrementElicitationParams,
         response: v2::ThreadIncrementElicitationResponse,
     },
     #[experimental("thread/decrement_elicitation")]
+    /// Decrement the thread-local out-of-band elicitation counter.
+    ///
+    /// When the count reaches zero, timeout accounting resumes for the thread.
     ThreadDecrementElicitation => "thread/decrement_elicitation" {
         params: v2::ThreadDecrementElicitationParams,
         response: v2::ThreadDecrementElicitationResponse,
