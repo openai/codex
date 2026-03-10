@@ -1326,22 +1326,33 @@ async fn read_history_entry_local(
         .map_err(|err| format!("failed to join history read task: {err}"))?
 }
 
-fn local_external_chatgpt_tokens(
-    config: &Config,
+async fn local_external_chatgpt_tokens(
+    auth_manager: Arc<AuthManager>,
 ) -> Result<ChatgptAuthTokensRefreshResponse, String> {
-    let auth_manager = AuthManager::shared(
-        config.codex_home.clone(),
-        false,
-        config.cli_auth_credentials_store_mode,
-    );
-    auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
-    auth_manager.reload();
-
     let auth = auth_manager
         .auth_cached()
         .ok_or_else(|| "no cached auth available for local token refresh".to_string())?;
     if !auth.is_external_chatgpt_tokens() {
         return Err("external ChatGPT token auth is not active".to_string());
+    }
+
+    let base_external_auth_refresher = auth_manager.replace_external_auth_refresher(None);
+    let refresh_result = match base_external_auth_refresher.clone() {
+        Some(refresher) => {
+            let _override_guard = auth_manager
+                .push_external_auth_override(refresher, auth_manager.forced_chatgpt_workspace_id());
+            auth_manager.refresh_token_from_authority().await
+        }
+        None => Err(std::io::Error::other("external auth refresher is not configured").into()),
+    };
+    let _ = auth_manager.replace_external_auth_refresher(base_external_auth_refresher);
+    refresh_result.map_err(|err| format!("failed to refresh external ChatGPT auth: {err}"))?;
+
+    let auth = auth_manager
+        .auth_cached()
+        .ok_or_else(|| "no cached auth available after local token refresh".to_string())?;
+    if !auth.is_external_chatgpt_tokens() {
+        return Err("external ChatGPT token auth is not active after refresh".to_string());
     }
 
     let access_token = auth
@@ -1367,6 +1378,20 @@ fn local_external_chatgpt_tokens(
         chatgpt_account_id,
         chatgpt_plan_type,
     })
+}
+
+fn validate_refreshed_chatgpt_account(
+    previous_account_id: Option<&str>,
+    refreshed_account_id: &str,
+) -> Result<(), String> {
+    if let Some(previous_account_id) = previous_account_id
+        && previous_account_id != refreshed_account_id
+    {
+        return Err(format!(
+            "local auth refresh account mismatch: expected `{previous_account_id}`, got `{refreshed_account_id}`"
+        ));
+    }
+    Ok(())
 }
 
 fn send_codex_event(app_event_tx: &AppEventSender, msg: EventMsg) {
@@ -2867,26 +2892,10 @@ async fn run_in_process_agent_loop(
                                 );
                             }
                             ServerRequest::ChatgptAuthTokensRefresh { request_id, params } => {
-                                let refresh_result = tokio::task::spawn_blocking({
-                                    let config = config.clone();
-                                    move || local_external_chatgpt_tokens(&config)
-                                })
-                                .await;
-
-                                match refresh_result {
-                                    Err(err) => {
-                                        reject_server_request(
-                                            &client,
-                                            request_id,
-                                            &method,
-                                            format!(
-                                                "local chatgpt auth refresh task failed in in-process TUI: {err}"
-                                            ),
-                                            &app_event_tx,
-                                        )
-                                        .await;
-                                    }
-                                    Ok(Err(reason)) => {
+                                match local_external_chatgpt_tokens(thread_manager.auth_manager())
+                                    .await
+                                {
+                                    Err(reason) => {
                                         reject_server_request(
                                             &client,
                                             request_id,
@@ -2898,17 +2907,21 @@ async fn run_in_process_agent_loop(
                                         )
                                         .await;
                                     }
-                                    Ok(Ok(response)) => {
-                                        if let Some(previous_account_id) = params.previous_account_id.as_deref()
-                                            && previous_account_id != response.chatgpt_account_id
-                                        {
-                                            send_warning_event(
+                                    Ok(response) => {
+                                        if let Err(reason) = validate_refreshed_chatgpt_account(
+                                            params.previous_account_id.as_deref(),
+                                            &response.chatgpt_account_id,
+                                        ) {
+                                            send_warning_event(&app_event_tx, reason.clone());
+                                            reject_server_request(
+                                                &client,
+                                                request_id,
+                                                &method,
+                                                reason,
                                                 &app_event_tx,
-                                                format!(
-                                                    "local auth refresh account mismatch: expected `{previous_account_id}`, got `{}`",
-                                                    response.chatgpt_account_id
-                                                ),
-                                            );
+                                            )
+                                            .await;
+                                            continue;
                                         }
 
                                         let value = match serde_json::to_value(response) {
@@ -3167,7 +3180,11 @@ pub(crate) fn spawn_op_forwarder(thread: std::sync::Arc<CodexThread>) -> Unbound
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use base64::Engine;
+    use codex_core::auth::ExternalAuthRefreshContext;
+    use codex_core::auth::ExternalAuthRefresher;
+    use codex_core::auth::ExternalAuthTokens;
     use codex_core::auth::login_with_chatgpt_auth_tokens;
     use codex_core::config::ConfigBuilder;
     use codex_protocol::protocol::ConversationAudioParams;
@@ -3177,6 +3194,7 @@ mod tests {
     use codex_protocol::protocol::TurnCompleteEvent;
     use codex_protocol::protocol::TurnStartedEvent;
     use pretty_assertions::assert_eq;
+    use std::sync::Mutex;
     use tempfile::TempDir;
     use tokio::sync::mpsc::unbounded_channel;
     use tokio::sync::oneshot;
@@ -3199,6 +3217,36 @@ mod tests {
                 config.codex_home.clone(),
             ),
         )
+    }
+
+    struct RecordingExternalAuthRefresher {
+        refreshed: ExternalAuthTokens,
+        contexts: Mutex<Vec<ExternalAuthRefreshContext>>,
+    }
+
+    #[async_trait]
+    impl ExternalAuthRefresher for RecordingExternalAuthRefresher {
+        async fn refresh(
+            &self,
+            context: ExternalAuthRefreshContext,
+        ) -> std::io::Result<ExternalAuthTokens> {
+            self.contexts.lock().expect("contexts mutex").push(context);
+            Ok(self.refreshed.clone())
+        }
+    }
+
+    struct FailingExternalAuthRefresher;
+
+    #[async_trait]
+    impl ExternalAuthRefresher for FailingExternalAuthRefresher {
+        async fn refresh(
+            &self,
+            _context: ExternalAuthRefreshContext,
+        ) -> std::io::Result<ExternalAuthTokens> {
+            Err(std::io::Error::other(
+                "override refresher should not be used during local refresh",
+            ))
+        }
     }
 
     async fn assert_realtime_op_reports_expected_method(op: Op, expected_method: &str) {
@@ -4908,27 +4956,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_external_chatgpt_refresh_reads_tokens_from_auth_storage() {
+    async fn local_external_chatgpt_refresh_uses_base_refresher_over_in_process_override() {
         let codex_home = TempDir::new().expect("create temp dir");
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .build()
             .await
             .expect("config");
-        let access_token = fake_external_access_token("pro");
+        let stale_access_token = fake_external_access_token("pro");
         login_with_chatgpt_auth_tokens(
             &config.codex_home,
-            &access_token,
+            &stale_access_token,
             "workspace-1",
             Some("pro"),
         )
         .expect("write external auth token");
 
-        let response =
-            local_external_chatgpt_tokens(&config).expect("local token refresh response");
-        assert_eq!(response.access_token, access_token);
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            false,
+            config.cli_auth_credentials_store_mode,
+        );
+        auth_manager.reload();
+        let base_refresher = Arc::new(RecordingExternalAuthRefresher {
+            refreshed: ExternalAuthTokens {
+                access_token: fake_external_access_token("enterprise"),
+                chatgpt_account_id: "workspace-1".to_string(),
+                chatgpt_plan_type: Some("enterprise".to_string()),
+            },
+            contexts: Mutex::new(Vec::new()),
+        });
+        auth_manager.set_external_auth_refresher(base_refresher.clone());
+        let _override_guard = auth_manager.push_external_auth_override(
+            Arc::new(FailingExternalAuthRefresher),
+            auth_manager.forced_chatgpt_workspace_id(),
+        );
+
+        let response = local_external_chatgpt_tokens(Arc::clone(&auth_manager))
+            .await
+            .expect("local token refresh response");
+        assert_eq!(
+            response.access_token,
+            fake_external_access_token("enterprise")
+        );
         assert_eq!(response.chatgpt_account_id, "workspace-1".to_string());
-        assert_eq!(response.chatgpt_plan_type, Some("pro".to_string()));
+        assert_eq!(response.chatgpt_plan_type, Some("enterprise".to_string()));
+        assert_eq!(
+            base_refresher
+                .contexts
+                .lock()
+                .expect("contexts mutex")
+                .as_slice(),
+            &[ExternalAuthRefreshContext {
+                reason: codex_core::auth::ExternalAuthRefreshReason::Unauthorized,
+                previous_account_id: Some("workspace-1".to_string()),
+            }]
+        );
     }
 
     #[tokio::test]
@@ -4939,12 +5022,29 @@ mod tests {
             .build()
             .await
             .expect("config");
-        let error =
-            local_external_chatgpt_tokens(&config).expect_err("expected local refresh error");
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            false,
+            config.cli_auth_credentials_store_mode,
+        );
+        let error = local_external_chatgpt_tokens(auth_manager)
+            .await
+            .expect_err("expected local refresh error");
         assert!(
             error.contains("no cached auth available")
                 || error.contains("external ChatGPT token auth is not active"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn refreshed_chatgpt_account_mismatch_is_rejected() {
+        let error = validate_refreshed_chatgpt_account(Some("workspace-1"), "workspace-2")
+            .expect_err("expected account mismatch to fail");
+        assert_eq!(
+            error,
+            "local auth refresh account mismatch: expected `workspace-1`, got `workspace-2`"
+                .to_string()
         );
     }
 }

@@ -2480,6 +2480,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "assert_matches",
+ "async-trait",
  "base64 0.22.1",
  "chrono",
  "clap",
