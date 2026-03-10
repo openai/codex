@@ -56,7 +56,6 @@ struct EnabledTool {
 enum HostToNodeMessage {
     Init {
         source: String,
-        timeout_ms: Option<u64>,
     },
     Response {
         id: String,
@@ -104,7 +103,6 @@ pub(crate) async fn execute(
     turn: Arc<TurnContext>,
     tracker: SharedTurnDiffTracker,
     code: String,
-    timeout_ms: Option<u64>,
 ) -> Result<Vec<FunctionCallOutputContentItem>, FunctionCallError> {
     let exec = ExecContext {
         session,
@@ -113,7 +111,7 @@ pub(crate) async fn execute(
     };
     let enabled_tools = build_enabled_tools(&exec);
     let source = build_source(&code, &enabled_tools).map_err(FunctionCallError::RespondToModel)?;
-    execute_node(exec, source, timeout_ms)
+    execute_node(exec, source)
         .await
         .map_err(FunctionCallError::RespondToModel)
 }
@@ -121,7 +119,6 @@ pub(crate) async fn execute(
 async fn execute_node(
     exec: ExecContext,
     source: String,
-    timeout_ms: Option<u64>,
 ) -> Result<Vec<FunctionCallOutputContentItem>, String> {
     let node_path = resolve_compatible_node(exec.turn.config.js_repl_node_path.as_deref()).await?;
 
@@ -160,7 +157,7 @@ async fn execute_node(
         String::from_utf8_lossy(&buf).trim().to_string()
     });
 
-    write_message(&mut stdin, &HostToNodeMessage::Init { source, timeout_ms }).await?;
+    write_message(&mut stdin, &HostToNodeMessage::Init { source }).await?;
 
     let mut stdout_lines = BufReader::new(stdout).lines();
     let mut final_content_items = None;

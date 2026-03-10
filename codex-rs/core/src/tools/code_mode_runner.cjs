@@ -3,29 +3,6 @@
 const readline = require('node:readline');
 const vm = require('node:vm');
 
-async function awaitWithDeadline(value, timeoutMs) {
-  if (timeoutMs === null || timeoutMs === undefined) {
-    return await value;
-  }
-
-  let timer;
-  try {
-    return await Promise.race([
-      Promise.resolve(value),
-      new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          reject(new Error(`JavaScript execution timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
 function createProtocol() {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -132,12 +109,10 @@ async function main() {
   });
 
   try {
-    const options = { displayErrors: true, microtaskMode: 'afterEvaluate' };
-    if (request.timeout_ms !== null && request.timeout_ms !== undefined) {
-      options.timeout = request.timeout_ms;
-    }
-
-    await awaitWithDeadline(vm.runInContext(request.source, context, options), request.timeout_ms);
+    await vm.runInContext(request.source, context, {
+      displayErrors: true,
+      microtaskMode: 'afterEvaluate',
+    });
     await protocol.send({
       type: 'result',
       content_items: readContentItems(context),
