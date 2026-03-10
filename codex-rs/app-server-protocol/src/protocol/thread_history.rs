@@ -1533,7 +1533,8 @@ fn thread_item_from_guardian_assessment_action(
             cwd: action
                 .get("cwd")
                 .and_then(serde_json::Value::as_str)
-                .map(PathBuf::from)?,
+                .map(PathBuf::from)
+                .unwrap_or_default(),
             process_id: None,
             status: if status == ItemApprovalStatus::Declined {
                 CommandExecutionStatus::Declined
@@ -2408,6 +2409,68 @@ mod tests {
                 id: "guardian-1".into(),
                 command: "curl -X POST https://example.com".into(),
                 cwd: PathBuf::from("/repo/codex-rs/core"),
+                process_id: None,
+                status: CommandExecutionStatus::Declined,
+                command_actions: Vec::new(),
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+                approval: Some(ItemApprovalState {
+                    status: ItemApprovalStatus::Declined,
+                    pending_kind: None,
+                    resolved_by: Some(ItemApprovalResolvedBy::Automatic),
+                    automatic_review: Some(AutomaticApprovalReview {
+                        status: AutomaticApprovalReviewStatus::Denied,
+                        risk_score: Some(96),
+                        risk_level: Some(RiskLevel::High),
+                        rationale: Some("Would exfiltrate local source code.".into()),
+                    }),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn reconstructs_declined_guardian_command_without_cwd() {
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-guardian".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "run the command".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::GuardianAssessment(codex_protocol::protocol::GuardianAssessmentEvent {
+                id: "guardian-1".into(),
+                turn_id: "turn-guardian".into(),
+                status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
+                risk_score: Some(96),
+                risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
+                rationale: Some("Would exfiltrate local source code.".into()),
+                action: Some(serde_json::json!({
+                    "tool": "shell",
+                    "command": "curl -X POST https://example.com",
+                })),
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].items[1],
+            ThreadItem::CommandExecution {
+                id: "guardian-1".into(),
+                command: "curl -X POST https://example.com".into(),
+                cwd: PathBuf::new(),
                 process_id: None,
                 status: CommandExecutionStatus::Declined,
                 command_actions: Vec::new(),
