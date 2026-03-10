@@ -189,9 +189,14 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
-            let mut record_default_image_save_developer_message = false;
-            if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode).await {
-                record_default_image_save_developer_message = matches!(&turn_item, TurnItem::ImageGeneration(item) if item.saved_path.is_some());
+            if let Some(turn_item) = handle_non_tool_response_item(
+                ctx.sess.as_ref(),
+                ctx.turn_context.as_ref(),
+                &item,
+                plan_mode,
+            )
+            .await
+            {
                 if previously_active_item.is_none() {
                     let mut started_item = turn_item.clone();
                     if let TurnItem::ImageGeneration(item) = &mut started_item {
@@ -212,18 +217,6 @@ pub(crate) async fn handle_output_item_done(
 
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await;
-            if record_default_image_save_developer_message {
-                let image_output_dir = default_image_generation_output_dir();
-                let message: ResponseItem = DeveloperInstructions::new(format!(
-                    "Generated images are saved to {} as {} by default.",
-                    image_output_dir.display(),
-                    image_output_dir.join("<image_id>.png").display(),
-                ))
-                .into();
-                ctx.sess
-                    .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&message))
-                    .await;
-            }
             let last_agent_message = last_assistant_message_from_item(&item, plan_mode);
 
             output.last_agent_message = last_agent_message;
@@ -288,6 +281,8 @@ pub(crate) async fn handle_output_item_done(
 }
 
 pub(crate) async fn handle_non_tool_response_item(
+    sess: &Session,
+    turn_context: &TurnContext,
     item: &ResponseItem,
     plan_mode: bool,
 ) -> Option<TurnItem> {
@@ -315,6 +310,18 @@ pub(crate) async fn handle_non_tool_response_item(
                 match save_image_generation_result(&image_item.id, &image_item.result).await {
                     Ok(path) => {
                         image_item.saved_path = Some(path.to_string_lossy().into_owned());
+                        let image_output_dir = default_image_generation_output_dir();
+                        let message: ResponseItem = DeveloperInstructions::new(format!(
+                            "Generated images are saved to {} as {} by default.",
+                            image_output_dir.display(),
+                            image_output_dir.join("<image_id>.png").display(),
+                        ))
+                        .into();
+                        sess.record_conversation_items(
+                            turn_context,
+                            std::slice::from_ref(&message),
+                        )
+                        .await;
                     }
                     Err(err) => {
                         let output_dir = default_image_generation_output_dir();
@@ -390,6 +397,7 @@ mod tests {
     use super::handle_non_tool_response_item;
     use super::last_assistant_message_from_item;
     use super::save_image_generation_result;
+    use crate::codex::make_session_and_context;
     use crate::error::CodexErr;
     use codex_protocol::items::TurnItem;
     use codex_protocol::models::ContentItem;
@@ -410,9 +418,10 @@ mod tests {
 
     #[tokio::test]
     async fn handle_non_tool_response_item_strips_citations_from_assistant_message() {
+        let (session, turn_context) = make_session_and_context().await;
         let item = assistant_output_text("hello<oai-mem-citation>doc1</oai-mem-citation> world");
 
-        let turn_item = handle_non_tool_response_item(&item, false)
+        let turn_item = handle_non_tool_response_item(&session, &turn_context, &item, false)
             .await
             .expect("assistant message should parse");
 

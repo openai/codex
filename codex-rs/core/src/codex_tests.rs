@@ -3205,7 +3205,7 @@ async fn handle_output_item_done_records_image_save_message_after_successful_sav
     let history = session.clone_history().await;
     let expected_message: ResponseItem =
         DeveloperInstructions::new(default_image_save_developer_message_text()).into();
-    assert_eq!(history.raw_items(), &[item, expected_message]);
+    assert_eq!(history.raw_items(), &[expected_message, item]);
     assert_eq!(
         std::fs::read(&expected_saved_path).expect("saved file"),
         b"foo"
