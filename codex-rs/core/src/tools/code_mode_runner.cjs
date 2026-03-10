@@ -4,6 +4,14 @@ const readline = require('node:readline');
 const vm = require('node:vm');
 
 const { SourceTextModule, SyntheticModule } = vm;
+const DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL = 10000;
+
+function normalizeMaxOutputTokensPerExecCall(value) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError('max_output_tokens_per_exec_call must be a non-negative safe integer');
+  }
+  return value;
+}
 
 function createProtocol() {
   const rl = readline.createInterface({
@@ -100,17 +108,20 @@ function isValidIdentifier(name) {
   return /^[A-Za-z_$][0-9A-Za-z_$]*$/.test(name);
 }
 
-function createToolsNamespace(protocol, enabledTools) {
+function createToolCaller(protocol) {
+  return (name, input) =>
+    protocol.request('tool_call', {
+      name: String(name),
+      input,
+    });
+}
+
+function createToolsNamespace(callTool, enabledTools) {
   const tools = Object.create(null);
 
   for (const { tool_name } of enabledTools) {
-    const callTool = async (args) =>
-      protocol.request('tool_call', {
-        name: String(tool_name),
-        input: args,
-      });
     Object.defineProperty(tools, tool_name, {
-      value: callTool,
+      value: async (args) => callTool(tool_name, args),
       configurable: false,
       enumerable: true,
       writable: false,
@@ -120,8 +131,8 @@ function createToolsNamespace(protocol, enabledTools) {
   return Object.freeze(tools);
 }
 
-function createToolsModule(context, protocol, enabledTools) {
-  const tools = createToolsNamespace(protocol, enabledTools);
+function createToolsModule(context, callTool, enabledTools) {
+  const tools = createToolsNamespace(callTool, enabledTools);
   const exportNames = ['tools'];
 
   for (const { tool_name } of enabledTools) {
@@ -185,7 +196,7 @@ function normalizeOutputImageUrl(value) {
   throw new TypeError('output_image expects an http(s) or data URL');
 }
 
-function createCodeModeModule(context) {
+function createCodeModeModule(context, state) {
   const outputText = (value) => {
     const item = {
       type: 'input_text',
@@ -204,10 +215,15 @@ function createCodeModeModule(context) {
   };
 
   return new SyntheticModule(
-    ['output_text', 'output_image'],
+    ['output_text', 'output_image', 'set_max_output_tokens_per_exec_call'],
     function initCodeModeModule() {
       this.setExport('output_text', outputText);
       this.setExport('output_image', outputImage);
+      this.setExport('set_max_output_tokens_per_exec_call', (value) => {
+        const normalized = normalizeMaxOutputTokensPerExecCall(value);
+        state.maxOutputTokensPerExecCall = normalized;
+        return normalized;
+      });
     },
     { context }
   );
@@ -220,7 +236,7 @@ function namespacesMatch(left, right) {
   return left.every((segment, index) => segment === right[index]);
 }
 
-function createNamespacedToolsNamespace(protocol, enabledTools, namespace) {
+function createNamespacedToolsNamespace(callTool, enabledTools, namespace) {
   const tools = Object.create(null);
 
   for (const tool of enabledTools) {
@@ -229,13 +245,8 @@ function createNamespacedToolsNamespace(protocol, enabledTools, namespace) {
       continue;
     }
 
-    const callTool = async (args) =>
-      protocol.request('tool_call', {
-        name: String(tool.tool_name),
-        input: args,
-      });
     Object.defineProperty(tools, tool.name, {
-      value: callTool,
+      value: async (args) => callTool(tool.tool_name, args),
       configurable: false,
       enumerable: true,
       writable: false,
@@ -245,8 +256,8 @@ function createNamespacedToolsNamespace(protocol, enabledTools, namespace) {
   return Object.freeze(tools);
 }
 
-function createNamespacedToolsModule(context, protocol, enabledTools, namespace) {
-  const tools = createNamespacedToolsNamespace(protocol, enabledTools, namespace);
+function createNamespacedToolsModule(context, callTool, enabledTools, namespace) {
+  const tools = createNamespacedToolsNamespace(callTool, enabledTools, namespace);
   const exportNames = ['tools'];
 
   for (const exportName of Object.keys(tools)) {
@@ -271,9 +282,9 @@ function createNamespacedToolsModule(context, protocol, enabledTools, namespace)
   );
 }
 
-function createModuleResolver(context, protocol, enabledTools) {
-  const toolsModule = createToolsModule(context, protocol, enabledTools);
-  const codeModeModule = createCodeModeModule(context);
+function createModuleResolver(context, callTool, enabledTools, state) {
+  const toolsModule = createToolsModule(context, callTool, enabledTools);
+  const codeModeModule = createCodeModeModule(context, state);
   const namespacedModules = new Map();
 
   return function resolveModule(specifier) {
@@ -300,46 +311,48 @@ function createModuleResolver(context, protocol, enabledTools) {
     if (!namespacedModules.has(cacheKey)) {
       namespacedModules.set(
         cacheKey,
-        createNamespacedToolsModule(context, protocol, enabledTools, namespace)
+        createNamespacedToolsModule(context, callTool, enabledTools, namespace)
       );
     }
     return namespacedModules.get(cacheKey);
   };
 }
 
-async function runModule(context, protocol, request) {
-  const resolveModule = createModuleResolver(context, protocol, request.enabled_tools ?? []);
+async function runModule(context, protocol, request, state, callTool) {
+  const resolveModule = createModuleResolver(
+    context,
+    callTool,
+    request.enabled_tools ?? [],
+    state
+  );
   const mainModule = new SourceTextModule(request.source, {
     context,
     identifier: 'code_mode_main.mjs',
-    importModuleDynamically(specifier) {
-      return resolveModule(specifier);
-    },
+    importModuleDynamically: async (specifier) => resolveModule(specifier),
   });
 
-  await mainModule.link(async (specifier) => {
-    return resolveModule(specifier);
-  });
+  await mainModule.link(resolveModule);
   await mainModule.evaluate();
 }
 
 async function main() {
   const protocol = createProtocol();
   const request = await protocol.init;
+  const state = {
+    maxOutputTokensPerExecCall: DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL,
+  };
+  const callTool = createToolCaller(protocol);
   const context = vm.createContext({
     __codexContentItems: [],
-    __codex_tool_call: async (name, input) =>
-      protocol.request('tool_call', {
-        name: String(name),
-        input,
-      }),
+    __codex_tool_call: callTool,
   });
 
   try {
-    await runModule(context, protocol, request);
+    await runModule(context, protocol, request, state, callTool);
     await protocol.send({
       type: 'result',
       content_items: readContentItems(context),
+      max_output_tokens_per_exec_call: state.maxOutputTokensPerExecCall,
     });
     process.exit(0);
   } catch (error) {
@@ -347,6 +360,7 @@ async function main() {
     await protocol.send({
       type: 'result',
       content_items: readContentItems(context),
+      max_output_tokens_per_exec_call: state.maxOutputTokensPerExecCall,
     });
     process.exit(1);
   }

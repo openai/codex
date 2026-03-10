@@ -4,6 +4,7 @@ use anyhow::Result;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::features::Feature;
+use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ResponsesRequest;
@@ -171,6 +172,51 @@ add_content(JSON.stringify(await exec_command({ cmd: "printf code_mode_exec_mark
     assert_eq!(parsed.get("exit_code").and_then(Value::as_i64), Some(0));
     assert!(parsed.get("wall_time_seconds").is_some());
     assert!(parsed.get("session_id").is_none());
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_can_truncate_final_result_with_configured_budget() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use code_mode to truncate the final result",
+        r#"
+import { exec_command } from "tools.js";
+import { set_max_output_tokens_per_exec_call } from "@openai/code_mode";
+
+set_max_output_tokens_per_exec_call(6);
+
+add_content(JSON.stringify(await exec_command({
+  cmd: "printf 'token one token two token three token four token five token six token seven'",
+  max_output_tokens: 100
+})));
+"#,
+        false,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "code_mode call failed unexpectedly: {output}"
+    );
+    let expected_pattern = r#"(?sx)
+\A
+Original\ token\ count:\ \d+\n
+Output:\n
+Total\ output\ lines:\ 1\n
+\n
+\{"chunk_id".*…\d+\ tokens\ truncated….*
+\z
+"#;
+    assert_regex_match(expected_pattern, &output);
 
     Ok(())
 }
