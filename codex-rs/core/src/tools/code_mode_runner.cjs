@@ -4,6 +4,14 @@ const readline = require('node:readline');
 const vm = require('node:vm');
 
 const { SourceTextModule, SyntheticModule } = vm;
+const DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL = 10000;
+
+function normalizeMaxOutputTokensPerExecCall(value) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError('max_output_tokens_per_exec_call must be a non-negative safe integer');
+  }
+  return value;
+}
 
 function createProtocol() {
   const rl = readline.createInterface({
@@ -100,17 +108,20 @@ function isValidIdentifier(name) {
   return /^[A-Za-z_$][0-9A-Za-z_$]*$/.test(name);
 }
 
-function createToolsNamespace(protocol, enabledTools) {
+function createToolCaller(protocol) {
+  return (name, input) =>
+    protocol.request('tool_call', {
+      name: String(name),
+      input,
+    });
+}
+
+function createToolsNamespace(callTool, enabledTools) {
   const tools = Object.create(null);
 
   for (const { name } of enabledTools) {
-    const callTool = async (args) =>
-      protocol.request('tool_call', {
-        name: String(name),
-        input: args,
-      });
     Object.defineProperty(tools, name, {
-      value: callTool,
+      value: async (args) => callTool(name, args),
       configurable: false,
       enumerable: true,
       writable: false,
@@ -120,8 +131,8 @@ function createToolsNamespace(protocol, enabledTools) {
   return Object.freeze(tools);
 }
 
-function createToolsModule(context, protocol, enabledTools) {
-  const tools = createToolsNamespace(protocol, enabledTools);
+function createToolsModule(context, callTool, enabledTools) {
+  const tools = createToolsNamespace(callTool, enabledTools);
   const exportNames = ['tools'];
 
   for (const { name } of enabledTools) {
@@ -146,44 +157,59 @@ function createToolsModule(context, protocol, enabledTools) {
   );
 }
 
-async function runModule(context, protocol, request) {
-  const toolsModule = createToolsModule(context, protocol, request.enabled_tools ?? []);
-  const mainModule = new SourceTextModule(request.source, {
-    context,
-    identifier: 'code_mode_main.mjs',
-    importModuleDynamically(specifier) {
-      if (specifier === 'tools.js') {
-        return toolsModule;
-      }
-      throw new Error(`Unsupported import in code_mode: ${specifier}`);
+function createCodeModeModule(context, state) {
+  return new SyntheticModule(
+    ['set_max_output_tokens_per_exec_call'],
+    function initCodeModeModule() {
+      this.setExport('set_max_output_tokens_per_exec_call', (value) => {
+        const normalized = normalizeMaxOutputTokensPerExecCall(value);
+        state.maxOutputTokensPerExecCall = normalized;
+        return normalized;
+      });
     },
-  });
+    { context }
+  );
+}
 
-  await mainModule.link(async (specifier) => {
+async function runModule(context, protocol, request, state, callTool) {
+  const toolsModule = createToolsModule(context, callTool, request.enabled_tools ?? []);
+  const codeModeModule = createCodeModeModule(context, state);
+  const resolveModule = async (specifier) => {
     if (specifier === 'tools.js') {
       return toolsModule;
     }
+    if (specifier === '@openai/code_mode') {
+      return codeModeModule;
+    }
     throw new Error(`Unsupported import in code_mode: ${specifier}`);
+  };
+  const mainModule = new SourceTextModule(request.source, {
+    context,
+    identifier: 'code_mode_main.mjs',
+    importModuleDynamically: resolveModule,
   });
+
+  await mainModule.link(resolveModule);
   await mainModule.evaluate();
 }
 
 async function main() {
   const protocol = createProtocol();
   const request = await protocol.init;
+  const state = {
+    maxOutputTokensPerExecCall: DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL,
+  };
+  const callTool = createToolCaller(protocol);
   const context = vm.createContext({
-    __codex_tool_call: async (name, input) =>
-      protocol.request('tool_call', {
-        name: String(name),
-        input,
-      }),
+    __codex_tool_call: callTool,
   });
 
   try {
-    await runModule(context, protocol, request);
+    await runModule(context, protocol, request, state, callTool);
     await protocol.send({
       type: 'result',
       content_items: readContentItems(context),
+      max_output_tokens_per_exec_call: state.maxOutputTokensPerExecCall,
     });
     process.exit(0);
   } catch (error) {
@@ -191,6 +217,7 @@ async function main() {
     await protocol.send({
       type: 'result',
       content_items: readContentItems(context),
+      max_output_tokens_per_exec_call: state.maxOutputTokensPerExecCall,
     });
     process.exit(1);
   }
