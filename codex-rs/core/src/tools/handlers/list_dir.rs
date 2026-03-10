@@ -1,4 +1,3 @@
-use codex_protocol::models::FunctionCallOutputBody;
 use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::fs::FileType;
@@ -11,8 +10,9 @@ use serde::Deserialize;
 use tokio::fs;
 
 use crate::function_tool::FunctionCallError;
+use crate::tools::context::TextToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
+use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -52,7 +52,7 @@ impl ToolHandler for ListDirHandler {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
         let ToolInvocation { payload, .. } = invocation;
 
         let arguments = match payload {
@@ -102,10 +102,10 @@ impl ToolHandler for ListDirHandler {
         let mut output = Vec::with_capacity(entries.len() + 1);
         output.push(format!("Absolute path: {}", path.display()));
         output.extend(entries);
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(output.join("\n")),
+        Ok(Box::new(TextToolOutput {
+            text: output.join("\n"),
             success: Some(true),
-        })
+        }))
     }
 }
 

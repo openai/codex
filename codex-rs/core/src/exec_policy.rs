@@ -1569,6 +1569,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 AskForApproval::Reject(RejectConfig {
                     sandbox_approval: false,
                     rules: false,
+                    request_permissions: false,
                     mcp_elicitations: false,
                 }),
                 &SandboxPolicy::new_read_only_policy(),
@@ -1590,6 +1591,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 approval_policy: AskForApproval::Reject(RejectConfig {
                     sandbox_approval: true,
                     rules: false,
+                    request_permissions: false,
                     mcp_elicitations: false,
                 }),
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
@@ -1626,6 +1628,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 approval_policy: AskForApproval::Reject(RejectConfig {
                     sandbox_approval: true,
                     rules: false,
+                    request_permissions: false,
                     mcp_elicitations: false,
                 }),
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
@@ -1660,6 +1663,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 approval_policy: AskForApproval::Reject(RejectConfig {
                     sandbox_approval: false,
                     rules: true,
+                    request_permissions: false,
                     mcp_elicitations: false,
                 }),
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),

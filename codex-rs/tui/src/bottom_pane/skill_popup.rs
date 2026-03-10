@@ -98,14 +98,26 @@ impl SkillPopup {
             .map(|(idx, indices, _score)| {
                 let mention = &self.mentions[idx];
                 let name = truncate_text(&mention.display_name, MENTION_NAME_TRUNCATE_LEN);
-                let description = mention.description.clone().unwrap_or_default();
+                let description = match (
+                    mention.category_tag.as_deref(),
+                    mention.description.as_deref(),
+                ) {
+                    (Some(tag), Some(description)) if !description.is_empty() => {
+                        Some(format!("{tag} {description}"))
+                    }
+                    (Some(tag), _) => Some(tag.to_string()),
+                    (None, Some(description)) if !description.is_empty() => {
+                        Some(description.to_string())
+                    }
+                    _ => None,
+                };
                 GenericDisplayRow {
                     name,
                     name_prefix_spans: Vec::new(),
                     match_indices: indices,
                     display_shortcut: None,
-                    description: Some(description).filter(|desc| !desc.is_empty()),
-                    category_tag: mention.category_tag.clone(),
+                    description,
+                    category_tag: None,
                     is_disabled: false,
                     disabled_reason: None,
                     wrap_indent: None,
