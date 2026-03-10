@@ -3,6 +3,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
@@ -99,13 +100,18 @@ impl SkillPopup {
                 let mention = &self.mentions[idx];
                 let name = truncate_text(&mention.display_name, MENTION_NAME_TRUNCATE_LEN);
                 let description = mention.description.clone().unwrap_or_default();
+                let name_prefix_spans = mention
+                    .category_tag
+                    .as_deref()
+                    .map(|tag| vec![tag.to_string().dim(), " ".into()])
+                    .unwrap_or_default();
                 GenericDisplayRow {
                     name,
-                    name_prefix_spans: Vec::new(),
+                    name_prefix_spans,
                     match_indices: indices,
                     display_shortcut: None,
                     description: Some(description).filter(|desc| !desc.is_empty()),
-                    category_tag: mention.category_tag.clone(),
+                    category_tag: None,
                     is_disabled: false,
                     disabled_reason: None,
                     wrap_indent: None,
