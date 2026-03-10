@@ -27,9 +27,13 @@ pub(crate) fn load_agent_roles(
     let mut roles: BTreeMap<String, AgentRoleConfig> = BTreeMap::new();
     for layer in layers {
         let mut layer_roles: BTreeMap<String, AgentRoleConfig> = BTreeMap::new();
+        let mut declared_role_files = BTreeSet::new();
         if let Some(agents_toml) = agents_toml_from_layer(&layer.config)? {
             for (declared_role_name, role_toml) in &agents_toml.roles {
                 let (role_name, role) = read_declared_role(declared_role_name, role_toml)?;
+                if let Some(config_file) = role.config_file.clone() {
+                    declared_role_files.insert(config_file);
+                }
                 if layer_roles.insert(role_name.clone(), role).is_some() {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
@@ -42,9 +46,10 @@ pub(crate) fn load_agent_roles(
         }
 
         if let Some(config_folder) = layer.config_folder() {
-            for (role_name, role) in
-                discover_agent_roles_in_dir(config_folder.as_path().join("agents").as_path())?
-            {
+            for (role_name, role) in discover_agent_roles_in_dir(
+                config_folder.as_path().join("agents").as_path(),
+                &declared_role_files,
+            )? {
                 layer_roles.insert(role_name, role);
             }
         }
@@ -392,11 +397,22 @@ fn normalize_agent_role_nickname_candidates(
 
 fn discover_agent_roles_in_dir(
     agents_dir: &Path,
+    declared_role_files: &BTreeSet<PathBuf>,
 ) -> std::io::Result<BTreeMap<String, AgentRoleConfig>> {
     let mut roles = BTreeMap::new();
 
     for agent_file in collect_agent_role_files(agents_dir)? {
-        let parsed_file = read_resolved_agent_role_file(&agent_file, None)?;
+        let parsed_file = match read_resolved_agent_role_file(&agent_file, None) {
+            Ok(parsed_file) => parsed_file,
+            Err(err)
+                if err.kind() == std::io::ErrorKind::InvalidInput
+                    && err.to_string().contains("must define a non-empty `name`")
+                    && declared_role_files.contains(&agent_file) =>
+            {
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
         let role_name = parsed_file.role_name;
         if roles
             .insert(
