@@ -809,6 +809,82 @@ fn markdown_render_file_link_snapshot() {
 }
 
 #[test]
+fn unordered_list_local_file_link_stays_inline_with_following_text() {
+    let text = render_markdown_text_with_width_and_cwd(
+        "- [binary](/Users/example/code/codex/codex-rs/README.md:93): core is the agent/business logic, tui is the terminal UI, exec is the headless automation surface, and cli is the top-level multitool binary.",
+        Some(72),
+        Some(Path::new("/Users/example/code/codex")),
+    );
+    let rendered = text
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rendered,
+        vec![
+            "- codex-rs/README.md:93: core is the agent/business logic, tui is the",
+            "  terminal UI, exec is the headless automation surface, and cli is the",
+            "  top-level multitool binary.",
+        ]
+    );
+}
+
+#[test]
+fn unordered_list_local_file_link_soft_break_before_colon_stays_inline() {
+    let text = render_markdown_text_with_width_and_cwd(
+        "- [binary](/Users/example/code/codex/codex-rs/README.md:93)\n  : core is the agent/business logic.",
+        Some(72),
+        Some(Path::new("/Users/example/code/codex")),
+    );
+    let rendered = text
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rendered,
+        vec!["- codex-rs/README.md:93: core is the agent/business logic.",]
+    );
+}
+
+#[test]
+fn consecutive_unordered_list_local_file_links_do_not_detach_paths() {
+    let text = render_markdown_text_with_width_and_cwd(
+        "- [binary](/Users/example/code/codex/codex-rs/README.md:93)\n  : cli is the top-level multitool binary.\n- [expectations](/Users/example/code/codex/codex-rs/core/README.md:1)\n  : codex-core owns the real runtime behavior.",
+        Some(72),
+        Some(Path::new("/Users/example/code/codex")),
+    );
+    let rendered = text
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rendered,
+        vec![
+            "- codex-rs/README.md:93: cli is the top-level multitool binary.",
+            "- codex-rs/core/README.md:1: codex-core owns the real runtime behavior.",
+        ]
+    );
+}
+
+#[test]
 fn code_block_known_lang_has_syntax_colors() {
     let text = render_markdown_text("```rust\nfn main() {}\n```\n");
     let content: Vec<String> = text

@@ -302,6 +302,8 @@ where
     code_block_buffer: String,
     wrap_width: Option<usize>,
     cwd: Option<PathBuf>,
+    line_ends_with_local_link_target: bool,
+    pending_local_link_soft_break: bool,
     current_line_content: Option<Line<'static>>,
     current_initial_indent: Vec<Span<'static>>,
     current_subsequent_indent: Vec<Span<'static>>,
@@ -330,6 +332,8 @@ where
             code_block_buffer: String::new(),
             wrap_width,
             cwd,
+            line_ends_with_local_link_target: false,
+            pending_local_link_soft_break: false,
             current_line_content: None,
             current_initial_indent: Vec::new(),
             current_subsequent_indent: Vec::new(),
@@ -346,6 +350,7 @@ where
     }
 
     fn handle_event(&mut self, event: Event<'a>) {
+        self.prepare_for_event(&event);
         match event {
             Event::Start(tag) => self.start_tag(tag),
             Event::End(tag) => self.end_tag(tag),
@@ -366,6 +371,20 @@ where
             Event::FootnoteReference(_) => {}
             Event::TaskListMarker(_) => {}
         }
+    }
+
+    fn prepare_for_event(&mut self, event: &Event<'a>) {
+        if !self.pending_local_link_soft_break {
+            return;
+        }
+
+        if matches!(event, Event::Text(text) if text.trim_start().starts_with(':')) {
+            self.pending_local_link_soft_break = false;
+            return;
+        }
+
+        self.pending_local_link_soft_break = false;
+        self.push_line(Line::default());
     }
 
     fn start_tag(&mut self, tag: Tag<'a>) {
@@ -482,6 +501,7 @@ where
         if self.suppressing_local_link_label() {
             return;
         }
+        self.line_ends_with_local_link_target = false;
         if self.pending_marker_line {
             self.push_line(Line::default());
         }
@@ -534,6 +554,7 @@ where
         if self.suppressing_local_link_label() {
             return;
         }
+        self.line_ends_with_local_link_target = false;
         if self.pending_marker_line {
             self.push_line(Line::default());
             self.pending_marker_line = false;
@@ -546,6 +567,7 @@ where
         if self.suppressing_local_link_label() {
             return;
         }
+        self.line_ends_with_local_link_target = false;
         self.pending_marker_line = false;
         for (i, line) in html.lines().enumerate() {
             if self.needs_newline {
@@ -565,6 +587,7 @@ where
         if self.suppressing_local_link_label() {
             return;
         }
+        self.line_ends_with_local_link_target = false;
         self.push_line(Line::default());
     }
 
@@ -572,6 +595,12 @@ where
         if self.suppressing_local_link_label() {
             return;
         }
+        if self.line_ends_with_local_link_target {
+            self.pending_local_link_soft_break = true;
+            self.line_ends_with_local_link_target = false;
+            return;
+        }
+        self.line_ends_with_local_link_target = false;
         self.push_line(Line::default());
     }
 
@@ -701,6 +730,9 @@ where
                 self.push_span(Span::styled(link.destination, self.styles.link));
                 self.push_span(")".into());
             } else if let Some(local_target_display) = link.local_target_display {
+                if self.pending_marker_line {
+                    self.push_line(Line::default());
+                }
                 let style = self
                     .inline_styles
                     .last()
@@ -708,6 +740,7 @@ where
                     .unwrap_or_default()
                     .patch(self.styles.code);
                 self.push_span(Span::styled(local_target_display, style));
+                self.line_ends_with_local_link_target = true;
             }
         }
     }
@@ -742,6 +775,7 @@ where
             self.current_initial_indent.clear();
             self.current_subsequent_indent.clear();
             self.current_line_in_code_block = false;
+            self.line_ends_with_local_link_target = false;
         }
     }
 
@@ -763,6 +797,7 @@ where
         self.current_line_style = style;
         self.current_line_content = Some(line);
         self.current_line_in_code_block = self.in_code_block;
+        self.line_ends_with_local_link_target = false;
 
         self.pending_marker_line = false;
     }
