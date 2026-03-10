@@ -100,9 +100,28 @@ async fn setup_turn_one_with_spawned_child(
     server: &MockServer,
     child_response_delay: Option<Duration>,
 ) -> Result<(TestCodex, String)> {
-    let spawn_args = serde_json::to_string(&json!({
-        "message": CHILD_PROMPT,
-    }))?;
+    setup_turn_one_with_custom_spawned_child(
+        server,
+        json!({
+            "message": CHILD_PROMPT,
+        }),
+        child_response_delay,
+        true,
+        |builder| builder,
+    )
+    .await
+}
+
+async fn setup_turn_one_with_custom_spawned_child(
+    server: &MockServer,
+    spawn_args: serde_json::Value,
+    child_response_delay: Option<Duration>,
+    wait_for_parent_notification: bool,
+    configure_test: impl FnOnce(
+        core_test_support::test_codex::TestCodexBuilder,
+    ) -> core_test_support::test_codex::TestCodexBuilder,
+) -> Result<(TestCodex, String)> {
+    let spawn_args = serde_json::to_string(&spawn_args)?;
 
     mount_sse_once_match(
         server,
@@ -152,15 +171,17 @@ async fn setup_turn_one_with_spawned_child(
     .await;
 
     #[allow(clippy::expect_used)]
-    let mut builder = test_codex().with_config(|config| {
+    let mut builder = configure_test(test_codex().with_config(|config| {
         config
             .features
             .enable(Feature::Collab)
             .expect("test config should allow feature update");
-    });
+        config.model = Some(INHERITED_MODEL.to_string());
+        config.model_reasoning_effort = Some(INHERITED_REASONING_EFFORT);
+    }));
     let test = builder.build(server).await?;
     test.submit_turn(TURN_1_PROMPT).await?;
-    if child_response_delay.is_none() {
+    if child_response_delay.is_none() && wait_for_parent_notification {
         let _ = wait_for_requests(&child_request_log).await?;
         let rollout_path = test
             .codex
@@ -194,56 +215,9 @@ async fn spawn_child_and_capture_snapshot(
         core_test_support::test_codex::TestCodexBuilder,
     ) -> core_test_support::test_codex::TestCodexBuilder,
 ) -> Result<ThreadConfigSnapshot> {
-    let spawn_args = serde_json::to_string(&spawn_args)?;
-
-    mount_sse_once_match(
-        server,
-        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
-        sse(vec![
-            ev_response_created("resp-turn1-1"),
-            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
-            ev_completed("resp-turn1-1"),
-        ]),
-    )
-    .await;
-
-    let child_request_log = mount_sse_once_match(
-        server,
-        |req: &wiremock::Request| {
-            body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID)
-        },
-        sse(vec![
-            ev_response_created("resp-child-1"),
-            ev_assistant_message("msg-child-1", "child done"),
-            ev_completed("resp-child-1"),
-        ]),
-    )
-    .await;
-
-    let _turn1_followup = mount_sse_once_match(
-        server,
-        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
-        sse(vec![
-            ev_response_created("resp-turn1-2"),
-            ev_assistant_message("msg-turn1-2", "parent done"),
-            ev_completed("resp-turn1-2"),
-        ]),
-    )
-    .await;
-
-    let mut builder = configure_test(test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::Collab)
-            .expect("test config should allow feature update");
-        config.model = Some(INHERITED_MODEL.to_string());
-        config.model_reasoning_effort = Some(INHERITED_REASONING_EFFORT);
-    }));
-    let test = builder.build(server).await?;
-    test.submit_turn(TURN_1_PROMPT).await?;
-
-    let _ = wait_for_requests(&child_request_log).await?;
-    let spawned_id = wait_for_spawned_thread_id(&test).await?;
+    let (test, spawned_id) =
+        setup_turn_one_with_custom_spawned_child(server, spawn_args, None, false, configure_test)
+            .await?;
     let thread_id = ThreadId::from_string(&spawned_id)?;
     Ok(test
         .thread_manager
