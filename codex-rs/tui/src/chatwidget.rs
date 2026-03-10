@@ -6902,9 +6902,7 @@ impl ChatWidget {
                     ..Default::default()
                 });
 
-                if guardian_approval_enabled
-                    || current_review_policy == ApprovalReviewPolicy::AutoOnly
-                {
+                if guardian_approval_enabled {
                     items.push(SelectionItem {
                         name: "Smart Approvals".to_string(),
                         description: Some(

@@ -8461,7 +8461,8 @@ async fn permissions_selection_hides_smart_approvals_when_feature_disabled() {
 }
 
 #[tokio::test]
-async fn permissions_selection_shows_smart_approvals_when_auto_review_is_active() {
+async fn permissions_selection_hides_smart_approvals_when_feature_disabled_even_if_auto_review_is_active()
+ {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     #[cfg(target_os = "windows")]
     {
@@ -8485,8 +8486,8 @@ async fn permissions_selection_shows_smart_approvals_when_auto_review_is_active(
     let popup = render_bottom_popup(&chat, 120);
 
     assert!(
-        popup.contains("Smart Approvals"),
-        "expected Smart Approvals to remain visible when auto review is active: {popup}"
+        !popup.contains("Smart Approvals"),
+        "expected Smart Approvals to stay hidden when the experimental feature is disabled: {popup}"
     );
 }
 
