@@ -54,11 +54,7 @@ pub(crate) fn raw_assistant_output_text_from_item(item: &ResponseItem) -> Option
     None
 }
 
-async fn save_image_generation_result_to_cwd(
-    cwd: &Path,
-    call_id: &str,
-    result: &str,
-) -> Result<PathBuf> {
+async fn save_image_generation_result(call_id: &str, result: &str) -> Result<PathBuf> {
     let bytes = BASE64_STANDARD
         .decode(result.trim().as_bytes())
         .map_err(|err| {
@@ -77,7 +73,7 @@ async fn save_image_generation_result_to_cwd(
     if file_stem.is_empty() {
         file_stem = "generated_image".to_string();
     }
-    let path = cwd.join(format!("{file_stem}.png"));
+    let path = Path::new("/tmp").join(format!("{file_stem}.png"));
     tokio::fs::write(&path, bytes).await?;
     Ok(path)
 }
@@ -189,9 +185,7 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
-            if let Some(turn_item) =
-                handle_non_tool_response_item(&item, plan_mode, Some(&ctx.turn_context.cwd)).await
-            {
+            if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode).await {
                 if previously_active_item.is_none() {
                     let mut started_item = turn_item.clone();
                     if let TurnItem::ImageGeneration(item) = &mut started_item {
@@ -278,7 +272,6 @@ pub(crate) async fn handle_output_item_done(
 pub(crate) async fn handle_non_tool_response_item(
     item: &ResponseItem,
     plan_mode: bool,
-    image_output_cwd: Option<&Path>,
 ) -> Option<TurnItem> {
     debug!(?item, "Output item");
 
@@ -300,19 +293,15 @@ pub(crate) async fn handle_non_tool_response_item(
                 agent_message.content =
                     vec![codex_protocol::items::AgentMessageContent::Text { text: stripped }];
             }
-            if let TurnItem::ImageGeneration(image_item) = &mut turn_item
-                && let Some(cwd) = image_output_cwd
-            {
-                match save_image_generation_result_to_cwd(cwd, &image_item.id, &image_item.result)
-                    .await
-                {
+            if let TurnItem::ImageGeneration(image_item) = &mut turn_item {
+                match save_image_generation_result(&image_item.id, &image_item.result).await {
                     Ok(path) => {
                         image_item.saved_path = Some(path.to_string_lossy().into_owned());
                     }
                     Err(err) => {
                         tracing::warn!(
                             call_id = %image_item.id,
-                            cwd = %cwd.display(),
+                            cwd = "/tmp",
                             "failed to save generated image: {err}"
                         );
                     }
@@ -380,13 +369,13 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
 mod tests {
     use super::handle_non_tool_response_item;
     use super::last_assistant_message_from_item;
-    use super::save_image_generation_result_to_cwd;
+    use super::save_image_generation_result;
     use crate::error::CodexErr;
     use codex_protocol::items::TurnItem;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
-    use tempfile::tempdir;
+    use std::path::Path;
 
     fn assistant_output_text(text: &str) -> ResponseItem {
         ResponseItem::Message {
@@ -404,10 +393,9 @@ mod tests {
     async fn handle_non_tool_response_item_strips_citations_from_assistant_message() {
         let item = assistant_output_text("hello<oai-mem-citation>doc1</oai-mem-citation> world");
 
-        let turn_item =
-            handle_non_tool_response_item(&item, false, Some(std::path::Path::new(".")))
-                .await
-                .expect("assistant message should parse");
+        let turn_item = handle_non_tool_response_item(&item, false)
+            .await
+            .expect("assistant message should parse");
 
         let TurnItem::AgentMessage(agent_message) = turn_item else {
             panic!("expected agent message");
@@ -449,26 +437,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn save_image_generation_result_saves_base64_to_png_in_cwd() {
-        let dir = tempdir().expect("tempdir");
+    async fn save_image_generation_result_saves_base64_to_png_in_tmp() {
+        let expected_path = Path::new("/tmp").join("ig_save_base64.png");
+        let _ = std::fs::remove_file(&expected_path);
 
-        let saved_path = save_image_generation_result_to_cwd(dir.path(), "ig_123", "Zm9v")
+        let saved_path = save_image_generation_result("ig_save_base64", "Zm9v")
             .await
             .expect("image should be saved");
 
-        assert_eq!(
-            saved_path.file_name().and_then(|v| v.to_str()),
-            Some("ig_123.png")
-        );
-        assert_eq!(std::fs::read(saved_path).expect("saved file"), b"foo");
+        assert_eq!(saved_path, expected_path);
+        assert_eq!(std::fs::read(&saved_path).expect("saved file"), b"foo");
+        let _ = std::fs::remove_file(&saved_path);
     }
 
     #[tokio::test]
     async fn save_image_generation_result_rejects_data_url_payload() {
-        let dir = tempdir().expect("tempdir");
         let result = "data:image/jpeg;base64,Zm9v";
 
-        let err = save_image_generation_result_to_cwd(dir.path(), "ig_456", result)
+        let err = save_image_generation_result("ig_456", result)
             .await
             .expect_err("data url payload should error");
         assert!(matches!(err, CodexErr::InvalidRequest(_)));
@@ -476,42 +462,35 @@ mod tests {
 
     #[tokio::test]
     async fn save_image_generation_result_overwrites_existing_file() {
-        let dir = tempdir().expect("tempdir");
-        let existing_path = dir.path().join("ig_123.png");
+        let existing_path = Path::new("/tmp").join("ig_overwrite.png");
         std::fs::write(&existing_path, b"existing").expect("seed existing image");
 
-        let saved_path = save_image_generation_result_to_cwd(dir.path(), "ig_123", "Zm9v")
+        let saved_path = save_image_generation_result("ig_overwrite", "Zm9v")
             .await
             .expect("image should be saved");
 
-        assert_eq!(
-            saved_path.file_name().and_then(|v| v.to_str()),
-            Some("ig_123.png")
-        );
-        assert_eq!(std::fs::read(saved_path).expect("saved file"), b"foo");
+        assert_eq!(saved_path, existing_path);
+        assert_eq!(std::fs::read(&saved_path).expect("saved file"), b"foo");
+        let _ = std::fs::remove_file(&saved_path);
     }
 
     #[tokio::test]
-    async fn save_image_generation_result_sanitizes_call_id_for_output_path() {
-        let dir = tempdir().expect("tempdir");
+    async fn save_image_generation_result_sanitizes_call_id_for_tmp_output_path() {
+        let expected_path = Path::new("/tmp").join("___ig___.png");
+        let _ = std::fs::remove_file(&expected_path);
 
-        let saved_path = save_image_generation_result_to_cwd(dir.path(), "../ig/..", "Zm9v")
+        let saved_path = save_image_generation_result("../ig/..", "Zm9v")
             .await
             .expect("image should be saved");
 
-        assert_eq!(saved_path.parent(), Some(dir.path()));
-        assert_eq!(
-            saved_path.file_name().and_then(|v| v.to_str()),
-            Some("___ig___.png")
-        );
-        assert_eq!(std::fs::read(saved_path).expect("saved file"), b"foo");
+        assert_eq!(saved_path, expected_path);
+        assert_eq!(std::fs::read(&saved_path).expect("saved file"), b"foo");
+        let _ = std::fs::remove_file(&saved_path);
     }
 
     #[tokio::test]
     async fn save_image_generation_result_rejects_non_standard_base64() {
-        let dir = tempdir().expect("tempdir");
-
-        let err = save_image_generation_result_to_cwd(dir.path(), "ig_urlsafe", "_-8")
+        let err = save_image_generation_result("ig_urlsafe", "_-8")
             .await
             .expect_err("non-standard base64 should error");
         assert!(matches!(err, CodexErr::InvalidRequest(_)));
@@ -519,12 +498,9 @@ mod tests {
 
     #[tokio::test]
     async fn save_image_generation_result_rejects_non_base64_data_urls() {
-        let dir = tempdir().expect("tempdir");
-
-        let err =
-            save_image_generation_result_to_cwd(dir.path(), "ig_svg", "data:image/svg+xml,<svg/>")
-                .await
-                .expect_err("non-base64 data url should error");
+        let err = save_image_generation_result("ig_svg", "data:image/svg+xml,<svg/>")
+            .await
+            .expect_err("non-base64 data url should error");
         assert!(matches!(err, CodexErr::InvalidRequest(_)));
     }
 }

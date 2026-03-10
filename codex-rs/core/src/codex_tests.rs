@@ -3117,6 +3117,20 @@ async fn build_initial_context_uses_previous_realtime_state() {
 }
 
 #[tokio::test]
+async fn build_initial_context_describes_default_image_save_location() {
+    let (session, turn_context) = make_session_and_context().await;
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context);
+    assert!(
+        developer_texts.iter().any(|text| {
+            text.contains("Generated images are saved to /tmp as /tmp/<image_id>.png by default.")
+        }),
+        "expected initial context to describe the default image save location, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
 async fn build_initial_context_uses_previous_turn_settings_for_realtime_end() {
     let (session, turn_context) = make_session_and_context().await;
     let previous_turn_settings = PreviousTurnSettings {
