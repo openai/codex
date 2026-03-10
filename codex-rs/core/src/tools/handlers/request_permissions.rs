@@ -3,9 +3,8 @@ use codex_protocol::request_permissions::RequestPermissionsArgs;
 
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::normalize_additional_permissions;
-use crate::tools::context::TextToolOutput;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::registry::ToolHandler;
@@ -20,11 +19,13 @@ pub struct RequestPermissionsHandler;
 
 #[async_trait]
 impl ToolHandler for RequestPermissionsHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -67,9 +68,6 @@ impl ToolHandler for RequestPermissionsHandler {
             ))
         })?;
 
-        Ok(Box::new(TextToolOutput {
-            text: content,
-            success: Some(true),
-        }))
+        Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }

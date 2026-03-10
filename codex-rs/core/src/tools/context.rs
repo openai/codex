@@ -11,7 +11,6 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ShellToolCallParams;
 use codex_utils_string::take_bytes_at_char_boundary;
-use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -63,15 +62,13 @@ impl ToolPayload {
     }
 }
 
-pub trait ToolOutput: Any + Send {
+pub trait ToolOutput: Send {
     fn log_preview(&self) -> String;
 
     fn success_for_logging(&self) -> bool;
 
-    fn into_response(self: Box<Self>, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
+    fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
 }
-
-pub type ToolOutputBox = Box<dyn ToolOutput>;
 
 pub struct McpToolOutput {
     pub result: Result<CallToolResult, String>,
@@ -86,8 +83,8 @@ impl ToolOutput for McpToolOutput {
         self.result.is_ok()
     }
 
-    fn into_response(self: Box<Self>, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
-        let Self { result } = *self;
+    fn into_response(self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
+        let Self { result } = self;
         ResponseInputItem::McpToolCallOutput {
             call_id: call_id.to_string(),
             result,
@@ -95,57 +92,44 @@ impl ToolOutput for McpToolOutput {
     }
 }
 
-pub struct TextToolOutput {
-    pub text: String,
+pub struct FunctionToolOutput {
+    pub body: FunctionCallOutputBody,
     pub success: Option<bool>,
 }
 
-impl ToolOutput for TextToolOutput {
+impl FunctionToolOutput {
+    pub fn from_text(text: String, success: Option<bool>) -> Self {
+        Self {
+            body: FunctionCallOutputBody::ContentItems(vec![
+                FunctionCallOutputContentItem::InputText { text },
+            ]),
+            success,
+        }
+    }
+
+    pub fn from_content(
+        content: Vec<FunctionCallOutputContentItem>,
+        success: Option<bool>,
+    ) -> Self {
+        Self {
+            body: FunctionCallOutputBody::ContentItems(content),
+            success,
+        }
+    }
+}
+
+impl ToolOutput for FunctionToolOutput {
     fn log_preview(&self) -> String {
-        telemetry_preview(&self.text)
+        telemetry_preview(&self.body.to_text().unwrap_or_default())
     }
 
     fn success_for_logging(&self) -> bool {
         self.success.unwrap_or(true)
     }
 
-    fn into_response(self: Box<Self>, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
-        let Self { text, success } = *self;
-        function_tool_response(
-            call_id,
-            payload,
-            FunctionCallOutputBody::Text(text),
-            success,
-        )
-    }
-}
-
-pub struct ContentToolOutput {
-    pub content: Vec<FunctionCallOutputContentItem>,
-    pub success: Option<bool>,
-}
-
-impl ToolOutput for ContentToolOutput {
-    fn log_preview(&self) -> String {
-        telemetry_preview(
-            &FunctionCallOutputBody::ContentItems(self.content.clone())
-                .to_text()
-                .unwrap_or_default(),
-        )
-    }
-
-    fn success_for_logging(&self) -> bool {
-        self.success.unwrap_or(true)
-    }
-
-    fn into_response(self: Box<Self>, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
-        let Self { content, success } = *self;
-        function_tool_response(
-            call_id,
-            payload,
-            FunctionCallOutputBody::ContentItems(content),
-            success,
-        )
+    fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+        let Self { body, success } = self;
+        function_tool_response(call_id, payload, body, success)
     }
 }
 
@@ -218,17 +202,16 @@ mod tests {
         let payload = ToolPayload::Custom {
             input: "patch".to_string(),
         };
-        let response = Box::new(TextToolOutput {
-            text: "patched".to_string(),
-            success: Some(true),
-        })
-        .into_response("call-42", &payload);
+        let response = FunctionToolOutput::from_text("patched".to_string(), Some(true))
+            .into_response("call-42", &payload);
 
         match response {
             ResponseInputItem::CustomToolCallOutput { call_id, output } => {
                 assert_eq!(call_id, "call-42");
-                assert_eq!(output.text_content(), Some("patched"));
-                assert!(output.content_items().is_none());
+                let expected = vec![FunctionCallOutputContentItem::InputText {
+                    text: "patched".to_string(),
+                }];
+                assert_eq!(output.content_items(), Some(expected.as_slice()));
                 assert_eq!(output.success, Some(true));
             }
             other => panic!("expected CustomToolCallOutput, got {other:?}"),
@@ -240,17 +223,16 @@ mod tests {
         let payload = ToolPayload::Function {
             arguments: "{}".to_string(),
         };
-        let response = Box::new(TextToolOutput {
-            text: "ok".to_string(),
-            success: Some(true),
-        })
-        .into_response("fn-1", &payload);
+        let response =
+            FunctionToolOutput::from_text("ok".to_string(), Some(true)).into_response("fn-1", &payload);
 
         match response {
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 assert_eq!(call_id, "fn-1");
-                assert_eq!(output.text_content(), Some("ok"));
-                assert!(output.content_items().is_none());
+                let expected = vec![FunctionCallOutputContentItem::InputText {
+                    text: "ok".to_string(),
+                }];
+                assert_eq!(output.content_items(), Some(expected.as_slice()));
                 assert_eq!(output.success, Some(true));
             }
             other => panic!("expected FunctionCallOutput, got {other:?}"),
@@ -262,8 +244,8 @@ mod tests {
         let payload = ToolPayload::Custom {
             input: "patch".to_string(),
         };
-        let response = Box::new(ContentToolOutput {
-            content: vec![
+        let response = FunctionToolOutput::from_content(
+            vec![
                 FunctionCallOutputContentItem::InputText {
                     text: "line 1".to_string(),
                 },
@@ -275,8 +257,8 @@ mod tests {
                     text: "line 2".to_string(),
                 },
             ],
-            success: Some(true),
-        })
+            Some(true),
+        )
         .into_response("call-99", &payload);
 
         match response {
@@ -304,12 +286,12 @@ mod tests {
 
     #[test]
     fn log_preview_uses_content_items_when_plain_text_is_missing() {
-        let output = ContentToolOutput {
-            content: vec![FunctionCallOutputContentItem::InputText {
+        let output = FunctionToolOutput::from_content(
+            vec![FunctionCallOutputContentItem::InputText {
                 text: "preview".to_string(),
             }],
-            success: Some(true),
-        };
+            Some(true),
+        );
 
         assert_eq!(output.log_preview(), "preview");
     }

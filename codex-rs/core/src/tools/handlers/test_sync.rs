@@ -10,9 +10,8 @@ use tokio::sync::Barrier;
 use tokio::time::sleep;
 
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::TextToolOutput;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -57,11 +56,13 @@ fn barrier_map() -> &'static tokio::sync::Mutex<HashMap<String, BarrierState>> {
 
 #[async_trait]
 impl ToolHandler for TestSyncHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation { payload, .. } = invocation;
 
         let arguments = match payload {
@@ -91,10 +92,7 @@ impl ToolHandler for TestSyncHandler {
             sleep(Duration::from_millis(delay)).await;
         }
 
-        Ok(Box::new(TextToolOutput {
-            text: "ok".to_string(),
-            success: Some(true),
-        }))
+        Ok(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
     }
 }
 

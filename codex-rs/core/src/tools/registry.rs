@@ -10,7 +10,7 @@ use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::SandboxPolicy;
 use crate::sandbox_tags::sandbox_tag;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutputBox;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use async_trait::async_trait;
 use codex_hooks::HookEvent;
@@ -32,6 +32,8 @@ pub enum ToolKind {
 
 #[async_trait]
 pub trait ToolHandler: Send + Sync {
+    type Output: ToolOutput + 'static;
+
     fn kind(&self) -> ToolKind;
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
@@ -52,19 +54,68 @@ pub trait ToolHandler: Send + Sync {
 
     /// Perform the actual [ToolInvocation] and returns a [ToolOutput] containing
     /// the final output to return to the model.
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError>;
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError>;
+}
+
+struct AnyToolResult {
+    preview: String,
+    success: bool,
+    response: ResponseInputItem,
+}
+
+#[async_trait]
+trait AnyToolHandler: Send + Sync {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool;
+
+    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool;
+
+    async fn handle_any(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<AnyToolResult, FunctionCallError>;
+}
+
+#[async_trait]
+impl<T> AnyToolHandler for T
+where
+    T: ToolHandler,
+{
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        ToolHandler::matches_kind(self, payload)
+    }
+
+    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
+        ToolHandler::is_mutating(self, invocation).await
+    }
+
+    async fn handle_any(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<AnyToolResult, FunctionCallError> {
+        let call_id = invocation.call_id.clone();
+        let payload = invocation.payload.clone();
+        let output = self.handle(invocation).await?;
+        let preview = output.log_preview();
+        let success = output.success_for_logging();
+        let response = output.into_response(&call_id, &payload);
+        Ok(AnyToolResult {
+            preview,
+            success,
+            response,
+        })
+    }
 }
 
 pub struct ToolRegistry {
-    handlers: HashMap<String, Arc<dyn ToolHandler>>,
+    handlers: HashMap<String, Arc<dyn AnyToolHandler>>,
 }
 
 impl ToolRegistry {
-    pub fn new(handlers: HashMap<String, Arc<dyn ToolHandler>>) -> Self {
+    fn new(handlers: HashMap<String, Arc<dyn AnyToolHandler>>) -> Self {
         Self { handlers }
     }
 
-    pub fn handler(&self, name: &str) -> Option<Arc<dyn ToolHandler>> {
+    fn handler(&self, name: &str) -> Option<Arc<dyn AnyToolHandler>> {
         self.handlers.get(name).map(Arc::clone)
     }
 
@@ -163,7 +214,7 @@ impl ToolRegistry {
         }
 
         let is_mutating = handler.is_mutating(&invocation).await;
-        let output_cell = tokio::sync::Mutex::new(None);
+        let response_cell = tokio::sync::Mutex::new(None);
         let invocation_for_tool = invocation.clone();
 
         let started = Instant::now();
@@ -177,19 +228,22 @@ impl ToolRegistry {
                 mcp_server_origin_ref,
                 || {
                     let handler = handler.clone();
-                    let output_cell = &output_cell;
+                    let response_cell = &response_cell;
                     async move {
                         if is_mutating {
                             tracing::trace!("waiting for tool gate");
                             invocation_for_tool.turn.tool_call_gate.wait_ready().await;
                             tracing::trace!("tool gate released");
                         }
-                        match handler.handle(invocation_for_tool).await {
-                            Ok(output) => {
-                                let preview = output.log_preview();
-                                let success = output.success_for_logging();
-                                let mut guard = output_cell.lock().await;
-                                *guard = Some(output);
+                        match handler.handle_any(invocation_for_tool).await {
+                            Ok(result) => {
+                                let AnyToolResult {
+                                    preview,
+                                    success,
+                                    response,
+                                } = result;
+                                let mut guard = response_cell.lock().await;
+                                *guard = Some(response);
                                 Ok((preview, success))
                             }
                             Err(err) => Err(err),
@@ -220,11 +274,11 @@ impl ToolRegistry {
 
         match result {
             Ok(_) => {
-                let mut guard = output_cell.lock().await;
-                let output = guard.take().ok_or_else(|| {
+                let mut guard = response_cell.lock().await;
+                let response = guard.take().ok_or_else(|| {
                     FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
-                Ok(output.into_response(&call_id_owned, &payload_for_response))
+                Ok(response)
             }
             Err(err) => Err(err),
         }
@@ -247,7 +301,7 @@ impl ConfiguredToolSpec {
 }
 
 pub struct ToolRegistryBuilder {
-    handlers: HashMap<String, Arc<dyn ToolHandler>>,
+    handlers: HashMap<String, Arc<dyn AnyToolHandler>>,
     specs: Vec<ConfiguredToolSpec>,
 }
 
@@ -272,8 +326,12 @@ impl ToolRegistryBuilder {
             .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
     }
 
-    pub fn register_handler(&mut self, name: impl Into<String>, handler: Arc<dyn ToolHandler>) {
+    pub fn register_handler<H>(&mut self, name: impl Into<String>, handler: Arc<H>)
+    where
+        H: ToolHandler + 'static,
+    {
         let name = name.into();
+        let handler: Arc<dyn AnyToolHandler> = handler;
         if self
             .handlers
             .insert(name.clone(), handler.clone())

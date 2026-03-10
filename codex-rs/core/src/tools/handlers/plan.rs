@@ -3,9 +3,8 @@ use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::TextToolOutput;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -63,11 +62,13 @@ At most one step can be in_progress at a time.
 
 #[async_trait]
 impl ToolHandler for PlanHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -88,10 +89,7 @@ impl ToolHandler for PlanHandler {
         let content =
             handle_update_plan(session.as_ref(), turn.as_ref(), arguments, call_id).await?;
 
-        Ok(Box::new(TextToolOutput {
-            text: content,
-            success: Some(true),
-        }))
+        Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
 

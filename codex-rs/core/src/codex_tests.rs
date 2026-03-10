@@ -46,7 +46,7 @@ use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
-use crate::tools::context::TextToolOutput;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::ShellHandler;
@@ -89,11 +89,8 @@ use std::time::Duration as StdDuration;
 #[path = "codex_tests_guardian.rs"]
 mod guardian_tests;
 
-fn expect_text_tool_output(output: &dyn std::any::Any) -> String {
-    let Some(output) = output.downcast_ref::<TextToolOutput>() else {
-        panic!("unexpected tool output");
-    };
-    output.text.clone()
+fn expect_text_tool_output(output: &FunctionToolOutput) -> String {
+    output.body.to_text().unwrap_or_default()
 }
 
 struct InstructionsTestCase {
@@ -4142,7 +4139,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         })
         .await;
 
-    let output = expect_text_tool_output(&*resp2.expect("expected Ok result"));
+    let output = expect_text_tool_output(&resp2.expect("expected Ok result"));
 
     #[derive(Deserialize, PartialEq, Eq, Debug)]
     struct ResponseExecMetadata {

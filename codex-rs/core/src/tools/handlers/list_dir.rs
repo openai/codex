@@ -10,9 +10,8 @@ use serde::Deserialize;
 use tokio::fs;
 
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::TextToolOutput;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -48,11 +47,13 @@ struct ListDirArgs {
 
 #[async_trait]
 impl ToolHandler for ListDirHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation { payload, .. } = invocation;
 
         let arguments = match payload {
@@ -102,10 +103,7 @@ impl ToolHandler for ListDirHandler {
         let mut output = Vec::with_capacity(entries.len() + 1);
         output.push(format!("Absolute path: {}", path.display()));
         output.extend(entries);
-        Ok(Box::new(TextToolOutput {
-            text: output.join("\n"),
-            success: Some(true),
-        }))
+        Ok(FunctionToolOutput::from_text(output.join("\n"), Some(true)))
     }
 }
 

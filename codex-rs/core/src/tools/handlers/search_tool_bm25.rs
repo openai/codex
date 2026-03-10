@@ -12,9 +12,8 @@ use crate::connectors;
 use crate::function_tool::FunctionCallError;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
-use crate::tools::context::TextToolOutput;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -74,11 +73,13 @@ impl ToolEntry {
 
 #[async_trait]
 impl ToolHandler for SearchToolBm25Handler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             payload,
             session,
@@ -141,10 +142,7 @@ impl ToolHandler for SearchToolBm25Handler {
                 "tools": [],
             })
             .to_string();
-            return Ok(Box::new(TextToolOutput {
-                text: content,
-                success: Some(true),
-            }));
+            return Ok(FunctionToolOutput::from_text(content, Some(true)));
         }
 
         let documents: Vec<Document<usize>> = entries
@@ -184,10 +182,7 @@ impl ToolHandler for SearchToolBm25Handler {
         })
         .to_string();
 
-        Ok(Box::new(TextToolOutput {
-            text: content,
-            success: Some(true),
-        }))
+        Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
 

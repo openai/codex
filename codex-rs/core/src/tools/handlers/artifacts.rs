@@ -16,9 +16,8 @@ use crate::exec::StreamOutput;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::ExecCommandSource;
-use crate::tools::context::TextToolOutput;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -42,6 +41,8 @@ struct ArtifactsToolArgs {
 
 #[async_trait]
 impl ToolHandler for ArtifactsHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -54,7 +55,7 @@ impl ToolHandler for ArtifactsHandler {
         true
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -112,10 +113,10 @@ impl ToolHandler for ArtifactsHandler {
         )
         .await;
 
-        Ok(Box::new(TextToolOutput {
-            text: format_artifact_output(&output),
-            success: Some(success),
-        }))
+        Ok(FunctionToolOutput::from_text(
+            format_artifact_output(&output),
+            Some(success),
+        ))
     }
 }
 

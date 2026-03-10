@@ -7,9 +7,8 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::skills::maybe_emit_implicit_skill_invocation;
-use crate::tools::context::TextToolOutput;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
@@ -83,6 +82,8 @@ fn default_tty() -> bool {
 
 #[async_trait]
 impl ToolHandler for UnifiedExecHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -114,7 +115,7 @@ impl ToolHandler for UnifiedExecHandler {
         !is_known_safe_command(&command)
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -291,10 +292,7 @@ impl ToolHandler for UnifiedExecHandler {
 
         let content = format_response(&response);
 
-        Ok(Box::new(TextToolOutput {
-            text: content,
-            success: Some(true),
-        }))
+        Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
 

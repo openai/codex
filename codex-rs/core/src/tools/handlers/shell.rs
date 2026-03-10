@@ -14,9 +14,8 @@ use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
 use crate::skills::maybe_emit_implicit_skill_invocation;
-use crate::tools::context::TextToolOutput;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -142,6 +141,8 @@ impl From<ShellCommandBackendConfig> for ShellCommandHandler {
 
 #[async_trait]
 impl ToolHandler for ShellHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -165,7 +166,7 @@ impl ToolHandler for ShellHandler {
         }
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -224,6 +225,8 @@ impl ToolHandler for ShellHandler {
 
 #[async_trait]
 impl ToolHandler for ShellCommandHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -253,7 +256,7 @@ impl ToolHandler for ShellCommandHandler {
             .unwrap_or(true)
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -305,7 +308,7 @@ impl ToolHandler for ShellCommandHandler {
 }
 
 impl ShellHandler {
-    async fn run_exec_like(args: RunExecLikeArgs) -> Result<ToolOutputBox, FunctionCallError> {
+    async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, FunctionCallError> {
         let RunExecLikeArgs {
             tool_name,
             exec_params,
@@ -449,10 +452,7 @@ impl ShellHandler {
             .map(|result| result.output);
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         let content = emitter.finish(event_ctx, out).await?;
-        Ok(Box::new(TextToolOutput {
-            text: content,
-            success: Some(true),
-        }))
+        Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
 

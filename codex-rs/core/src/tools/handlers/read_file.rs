@@ -6,9 +6,8 @@ use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::TextToolOutput;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -94,11 +93,13 @@ impl LineRecord {
 
 #[async_trait]
 impl ToolHandler for ReadFileHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation { payload, .. } = invocation;
 
         let arguments = match payload {
@@ -146,10 +147,7 @@ impl ToolHandler for ReadFileHandler {
                 indentation::read_block(&path, offset, limit, indentation).await?
             }
         };
-        Ok(Box::new(TextToolOutput {
-            text: collected.join("\n"),
-            success: Some(true),
-        }))
+        Ok(FunctionToolOutput::from_text(collected.join("\n"), Some(true)))
     }
 }
 
