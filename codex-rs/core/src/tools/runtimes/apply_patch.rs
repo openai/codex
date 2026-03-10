@@ -140,8 +140,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let changes = req.changes.clone();
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
-                let action =
-                    ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id.as_ref());
+                let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
                 return review_approval_request(session, turn, action, retry_reason).await;
             }
             if req.permissions_preapproved && retry_reason.is_none() {
