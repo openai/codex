@@ -304,9 +304,11 @@ impl ExecPolicyManager {
                 }
             }
             Decision::Allow => ExecApprovalRequirement::Skip {
-                // Bypass sandbox only when every parsed command segment is
-                // explicitly allowed by execpolicy.
-                bypass_sandbox: commands.iter().all(|command| {
+                // Keep sandboxing in place when deny-read restrictions exist. Otherwise,
+                // bypass only when every parsed command segment is explicitly
+                // allowed by execpolicy.
+                bypass_sandbox: !file_system_sandbox_policy.has_denied_read_restrictions()
+                    && commands.iter().all(|command| {
                     exec_policy
                         .matches_for_command_with_options(
                             command,
