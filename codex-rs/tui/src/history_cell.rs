@@ -21,6 +21,7 @@ use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
+use crate::markdown::append_markdown_with_cwd;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
@@ -375,23 +376,31 @@ impl HistoryCell for UserHistoryCell {
 pub(crate) struct ReasoningSummaryCell {
     _header: String,
     content: String,
+    cwd: Option<PathBuf>,
     transcript_only: bool,
 }
 
 impl ReasoningSummaryCell {
-    pub(crate) fn new(header: String, content: String, transcript_only: bool) -> Self {
+    pub(crate) fn new(
+        header: String,
+        content: String,
+        cwd: Option<PathBuf>,
+        transcript_only: bool,
+    ) -> Self {
         Self {
             _header: header,
             content,
+            cwd,
             transcript_only,
         }
     }
 
     fn lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        append_markdown(
+        append_markdown_with_cwd(
             &self.content,
             Some((width as usize).saturating_sub(2)),
+            self.cwd.as_deref(),
             &mut lines,
         );
         let summary_style = Style::default().dim().italic();
@@ -2046,8 +2055,8 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     PlanUpdateCell { explanation, plan }
 }
 
-pub(crate) fn new_proposed_plan(plan_markdown: String) -> ProposedPlanCell {
-    ProposedPlanCell { plan_markdown }
+pub(crate) fn new_proposed_plan(plan_markdown: String, cwd: Option<PathBuf>) -> ProposedPlanCell {
+    ProposedPlanCell { plan_markdown, cwd }
 }
 
 pub(crate) fn new_proposed_plan_stream(
@@ -2063,6 +2072,7 @@ pub(crate) fn new_proposed_plan_stream(
 #[derive(Debug)]
 pub(crate) struct ProposedPlanCell {
     plan_markdown: String,
+    cwd: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -2081,7 +2091,12 @@ impl HistoryCell for ProposedPlanCell {
         let plan_style = proposed_plan_style();
         let wrap_width = width.saturating_sub(4).max(1) as usize;
         let mut body: Vec<Line<'static>> = Vec::new();
-        append_markdown(&self.plan_markdown, Some(wrap_width), &mut body);
+        append_markdown_with_cwd(
+            &self.plan_markdown,
+            Some(wrap_width),
+            self.cwd.as_deref(),
+            &mut body,
+        );
         if body.is_empty() {
             body.push(Line::from("(empty)".dim().italic()));
         }
@@ -2231,7 +2246,10 @@ pub(crate) fn new_image_generation_call(
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<dyn HistoryCell> {
+pub(crate) fn new_reasoning_summary_block(
+    full_reasoning_buffer: String,
+    cwd: Option<PathBuf>,
+) -> Box<dyn HistoryCell> {
     let full_reasoning_buffer = full_reasoning_buffer.trim();
     if let Some(open) = full_reasoning_buffer.find("**") {
         let after_open = &full_reasoning_buffer[(open + 2)..];
@@ -2245,6 +2263,7 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
                 return Box::new(ReasoningSummaryCell::new(
                     header_buffer,
                     summary_buffer,
+                    cwd,
                     false,
                 ));
             }
@@ -2253,6 +2272,7 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
     Box::new(ReasoningSummaryCell::new(
         "".to_string(),
         full_reasoning_buffer.to_string(),
+        cwd,
         true,
     ))
 }
@@ -3999,6 +4019,7 @@ mod tests {
     fn reasoning_summary_block() {
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
+            None,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -4014,6 +4035,7 @@ mod tests {
         let cell: Box<dyn HistoryCell> = Box::new(ReasoningSummaryCell::new(
             "High level reasoning".to_string(),
             summary.to_string(),
+            None,
             false,
         ));
         let width: u16 = 24;
@@ -4054,7 +4076,7 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
-        let cell = new_reasoning_summary_block("Detailed reasoning goes here.".to_string());
+        let cell = new_reasoning_summary_block("Detailed reasoning goes here.".to_string(), None);
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• Detailed reasoning goes here."]);
@@ -4067,6 +4089,7 @@ mod tests {
         config.model_supports_reasoning_summaries = Some(true);
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
+            None,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -4076,7 +4099,7 @@ mod tests {
     #[test]
     fn reasoning_summary_block_falls_back_when_header_is_missing() {
         let cell =
-            new_reasoning_summary_block("**High level reasoning without closing".to_string());
+            new_reasoning_summary_block("**High level reasoning without closing".to_string(), None);
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• **High level reasoning without closing"]);
@@ -4084,14 +4107,17 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_falls_back_when_summary_is_missing() {
-        let cell =
-            new_reasoning_summary_block("**High level reasoning without closing**".to_string());
+        let cell = new_reasoning_summary_block(
+            "**High level reasoning without closing**".to_string(),
+            None,
+        );
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• High level reasoning without closing"]);
 
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**\n\n  ".to_string(),
+            None,
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -4102,6 +4128,7 @@ mod tests {
     fn reasoning_summary_block_splits_header_and_summary_when_present() {
         let cell = new_reasoning_summary_block(
             "**High level plan**\n\nWe should fix the bug next.".to_string(),
+            None,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
