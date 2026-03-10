@@ -444,7 +444,7 @@ mod tests {
             "pause should block the unified exec yield timeout"
         );
         assert!(
-            response.output.contains("unified-exec-done"),
+            response.truncated_output().contains("unified-exec-done"),
             "exec_command should wait for output after the pause lifts"
         );
         assert!(
