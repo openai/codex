@@ -179,6 +179,7 @@ fn format_guardian_action_pretty_truncates_large_string_fields() {
 #[test]
 fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() {
     let action = GuardianApprovalRequest::McpToolCall {
+        id: "call-1".to_string(),
         server: "mcp_server".to_string(),
         tool_name: "browser_navigate".to_string(),
         arguments: Some(serde_json::json!({
