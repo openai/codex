@@ -167,12 +167,10 @@ function serializeOutputText(value) {
     return String(value);
   }
 
-  try {
-    const serialized = JSON.stringify(value);
-    if (typeof serialized === 'string') {
-      return serialized;
-    }
-  } catch {}
+  const serialized = JSON.stringify(value);
+  if (typeof serialized === 'string') {
+    return serialized;
+  }
 
   return String(value);
 }

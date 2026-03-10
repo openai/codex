@@ -136,6 +136,38 @@ output_text({ json: true });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_surfaces_output_text_stringify_errors() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use code_mode to return circular text",
+        r#"
+import { output_text } from "@openai/code_mode";
+
+const circular = {};
+circular.self = circular;
+output_text(circular);
+"#,
+        false,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(true),
+        "circular stringify unexpectedly succeeded"
+    );
+    assert!(output.contains("code_mode execution failed"));
+    assert!(output.contains("Converting circular structure to JSON"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_output_images_via_openai_code_mode_module() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
