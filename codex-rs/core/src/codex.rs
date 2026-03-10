@@ -23,11 +23,14 @@ use crate::compact::InitialContextInjection;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
+use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::FEATURES;
 use crate::features::Feature;
 use crate::features::maybe_push_unstable_features_warning;
+#[cfg(test)]
+use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -154,7 +157,6 @@ use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
-use crate::config::ManagedFeatures;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
@@ -314,7 +316,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
@@ -780,7 +781,6 @@ impl TurnContext {
         })
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
-        .with_available_models(models_manager.try_list_models().unwrap_or_default())
         .with_agent_roles(config.agent_roles.clone());
 
         Self {
@@ -1155,13 +1155,12 @@ impl Session {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn make_turn_context(
+    fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
         session_telemetry: &SessionTelemetry,
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
         per_turn_config: Config,
-        available_models: Vec<ModelPreset>,
         model_info: ModelInfo,
         network: Option<NetworkProxy>,
         sub_id: String,
@@ -1190,7 +1189,6 @@ impl Session {
         })
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
-        .with_available_models(available_models)
         .with_agent_roles(per_turn_config.agent_roles.clone());
 
         let cwd = session_configuration.cwd.clone();
@@ -1248,7 +1246,7 @@ impl Session {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn new(
+    async fn new(
         mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
@@ -2309,10 +2307,6 @@ impl Session {
             session_configuration.provider.clone(),
             &session_configuration,
             per_turn_config,
-            self.services
-                .models_manager
-                .try_list_models()
-                .unwrap_or_default(),
             model_info,
             self.services
                 .network_proxy
@@ -5157,12 +5151,6 @@ async fn spawn_review_thread(
     })
     .with_web_search_config(None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
-    .with_available_models(
-        sess.services
-            .models_manager
-            .try_list_models()
-            .unwrap_or_default(),
-    )
     .with_agent_roles(config.agent_roles.clone());
 
     let review_prompt = resolved.prompt.clone();
