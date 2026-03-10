@@ -2979,15 +2979,17 @@ async fn run_in_process_agent_loop(
                                 };
                                 current_turn_ids.remove(&notification.thread_id);
                                 pending_server_requests.clear_turn_scoped(&notification.thread_id);
-                                if closed_thread_id != session_id {
-                                    app_event_tx.send(AppEvent::ThreadEvent {
-                                        thread_id: closed_thread_id,
-                                        event: Event {
-                                            id: String::new(),
-                                            msg: EventMsg::ShutdownComplete,
-                                        },
-                                    });
+                                if closed_thread_id == session_id {
+                                    pending_shutdown_complete = true;
+                                    break;
                                 }
+                                app_event_tx.send(AppEvent::ThreadEvent {
+                                    thread_id: closed_thread_id,
+                                    event: Event {
+                                        id: String::new(),
+                                        msg: EventMsg::ShutdownComplete,
+                                    },
+                                });
                             }
                             _ => {}
                         }
@@ -4706,6 +4708,79 @@ mod tests {
         assert!(pending_server_requests.request_user_input.is_empty());
 
         client.shutdown().await.expect("shutdown in-process client");
+    }
+
+    #[tokio::test]
+    async fn primary_thread_closed_notification_requests_in_process_loop_shutdown() {
+        let config = test_config().await;
+        let thread_manager = test_thread_manager(&config);
+        let client = InProcessAppServerClient::start(in_process_start_args(
+            &config,
+            Arc::clone(&thread_manager),
+            codex_arg0::Arg0DispatchPaths::default(),
+            Vec::new(),
+            CloudRequirementsLoader::default(),
+        ))
+        .await
+        .expect("in-process app-server client");
+        let mut request_ids = RequestIdSequencer::new();
+        let thread_start = send_request_with_response::<ThreadStartResponse>(
+            &client,
+            ClientRequest::ThreadStart {
+                request_id: request_ids.next(),
+                params: ThreadStartParams::default(),
+            },
+            "thread/start",
+        )
+        .await
+        .expect("thread/start");
+        let session_configured =
+            session_configured_from_thread_start_response(&config, thread_start)
+                .await
+                .expect("session configured");
+        let thread_id = session_configured.session_id.to_string();
+        let (tx, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+        let (codex_op_tx, codex_op_rx) = unbounded_channel();
+        let (thread_scoped_op_tx, thread_scoped_op_rx) = unbounded_channel();
+
+        let run_loop = tokio::spawn(run_in_process_agent_loop(
+            codex_op_rx,
+            thread_scoped_op_rx,
+            client,
+            Arc::clone(&thread_manager),
+            config,
+            thread_id,
+            session_configured,
+            app_event_tx,
+            RequestIdSequencer::new(),
+            HashMap::new(),
+        ));
+
+        thread_manager
+            .remove_and_close_all_threads()
+            .await
+            .expect("close all threads");
+
+        let shutdown_complete = timeout(Duration::from_secs(2), async {
+            loop {
+                let event = next_codex_event(&mut rx).await;
+                if matches!(event.msg, EventMsg::ShutdownComplete) {
+                    break event;
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for shutdown complete event");
+        assert!(matches!(shutdown_complete.msg, EventMsg::ShutdownComplete));
+
+        timeout(Duration::from_secs(2), run_loop)
+            .await
+            .expect("timed out waiting for run loop to exit")
+            .expect("run loop task should not panic");
+
+        drop(codex_op_tx);
+        drop(thread_scoped_op_tx);
     }
 
     #[tokio::test]
