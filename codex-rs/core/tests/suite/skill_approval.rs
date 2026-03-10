@@ -288,6 +288,7 @@ async fn shell_zsh_fork_skill_script_reject_policy_with_sandbox_approval_false_s
     let approval_policy = AskForApproval::Reject(RejectConfig {
         sandbox_approval: false,
         rules: true,
+        request_permissions: false,
         mcp_elicitations: false,
     });
     let server = start_mock_server().await;
@@ -380,6 +381,7 @@ async fn shell_zsh_fork_skill_script_reject_policy_with_sandbox_approval_true_sk
     let approval_policy = AskForApproval::Reject(RejectConfig {
         sandbox_approval: true,
         rules: false,
+        request_permissions: false,
         mcp_elicitations: false,
     });
     let server = start_mock_server().await;

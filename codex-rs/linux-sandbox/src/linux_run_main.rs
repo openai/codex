@@ -233,7 +233,10 @@ fn resolve_sandbox_policies(
             }
         }
         (Some(sandbox_policy), None) => EffectiveSandboxPolicies {
-            file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
+            file_system_sandbox_policy: FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                &sandbox_policy,
+                sandbox_policy_cwd,
+            ),
             network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
             sandbox_policy,
         },

@@ -4683,6 +4683,10 @@
           "description": "Reject MCP elicitation prompts.",
           "type": "boolean"
         },
+        "request_permissions": {
+          "description": "Reject approval prompts related to built-in permission requests.",
+          "type": "boolean"
+        },
         "rules": {
           "description": "Reject prompts triggered by execpolicy `prompt` rules.",
           "type": "boolean"
@@ -4694,6 +4698,7 @@
       },
       "required": [
         "mcp_elicitations",
+        "request_permissions",
         "rules",
         "sandbox_approval"
       ],
