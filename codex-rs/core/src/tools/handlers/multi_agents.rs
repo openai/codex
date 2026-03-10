@@ -987,48 +987,41 @@ async fn apply_requested_spawn_agent_model_overrides(
         return Ok(());
     }
 
-    let available_models = session
-        .services
-        .models_manager
-        .list_models(RefreshStrategy::Offline)
-        .await;
-    let selected_model_name = requested_model
-        .map(|model| find_spawn_agent_model_name(&available_models, model))
-        .transpose()?
-        .unwrap_or_else(|| {
-            config
-                .model
-                .clone()
-                .unwrap_or_else(|| turn.model_info.slug.clone())
-        });
+    if let Some(requested_model) = requested_model {
+        let available_models = session
+            .services
+            .models_manager
+            .list_models(RefreshStrategy::Offline)
+            .await;
+        let selected_model_name = find_spawn_agent_model_name(&available_models, requested_model)?;
+        let selected_model_info = session
+            .services
+            .models_manager
+            .get_model_info(&selected_model_name, config)
+            .await;
 
-    if requested_model.is_some() {
         config.model = Some(selected_model_name.clone());
-    }
-
-    let selected_model_info =
-        if requested_model.is_some() || selected_model_name != turn.model_info.slug {
-            session
-                .services
-                .models_manager
-                .get_model_info(&selected_model_name, config)
-                .await
+        if let Some(reasoning_effort) = requested_reasoning_effort {
+            validate_spawn_agent_reasoning_effort(
+                &selected_model_name,
+                &selected_model_info.supported_reasoning_levels,
+                reasoning_effort,
+            )?;
+            config.model_reasoning_effort = Some(reasoning_effort);
         } else {
-            turn.model_info.clone()
-        };
+            config.model_reasoning_effort = selected_model_info.default_reasoning_level;
+        }
 
-    if let Some(reasoning_effort) = requested_reasoning_effort {
-        validate_spawn_agent_reasoning_effort(
-            &selected_model_name,
-            &selected_model_info.supported_reasoning_levels,
-            reasoning_effort,
-        )?;
-        config.model_reasoning_effort = Some(reasoning_effort);
         return Ok(());
     }
 
-    if requested_model.is_some() {
-        config.model_reasoning_effort = selected_model_info.default_reasoning_level;
+    if let Some(reasoning_effort) = requested_reasoning_effort {
+        validate_spawn_agent_reasoning_effort(
+            &turn.model_info.slug,
+            &turn.model_info.supported_reasoning_levels,
+            reasoning_effort,
+        )?;
+        config.model_reasoning_effort = Some(reasoning_effort);
     }
 
     Ok(())
