@@ -1658,6 +1658,11 @@ fn decode_legacy_notification(
         .map_err(|err| {
             format!("legacy notification `{method}` has invalid conversationId: {err}")
         })?;
+    let event_id = object
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_default();
     let mut event_payload = if let Some(serde_json::Value::Object(msg_payload)) = object.get("msg")
     {
         serde_json::Value::Object(msg_payload.clone())
@@ -1679,10 +1684,7 @@ fn decode_legacy_notification(
         .map_err(|err| format!("failed to decode event: {err}"))?;
     Ok(DecodedLegacyNotification {
         conversation_id,
-        event: Event {
-            id: String::new(),
-            msg,
-        },
+        event: Event { id: event_id, msg },
     })
 }
 
@@ -4239,6 +4241,7 @@ mod tests {
         };
 
         let event = legacy_notification_to_event(notification).expect("decode wrapped warning");
+        assert_eq!(event.id, "submission-1");
         let EventMsg::Warning(warning) = event.msg else {
             panic!("expected warning event");
         };
@@ -4261,6 +4264,26 @@ mod tests {
         .expect("decode wrapped warning");
 
         assert_eq!(decoded.conversation_id, Some(thread_id));
+        let EventMsg::Warning(warning) = decoded.event.msg else {
+            panic!("expected warning event");
+        };
+        assert_eq!(warning.message, "wrapped warning".to_string());
+    }
+
+    #[test]
+    fn decode_legacy_notification_defaults_missing_event_id() {
+        let decoded = decode_legacy_notification(JSONRPCNotification {
+            method: "codex/event/warning".to_string(),
+            params: Some(serde_json::json!({
+                "msg": {
+                    "message": "wrapped warning",
+                    "type": "warning",
+                },
+            })),
+        })
+        .expect("decode wrapped warning");
+
+        assert!(decoded.event.id.is_empty());
         let EventMsg::Warning(warning) = decoded.event.msg else {
             panic!("expected warning event");
         };
