@@ -120,6 +120,21 @@ function createToolsNamespace(protocol, enabledTools) {
   return Object.freeze(tools);
 }
 
+function parseMcpToolName(name) {
+  const parts = String(name).split('__');
+  if (parts.length < 3 || parts[0] !== 'mcp') {
+    return null;
+  }
+
+  const serverName = parts[1];
+  const exportName = parts.slice(2).join('__');
+  if (!serverName || !exportName) {
+    return null;
+  }
+
+  return { serverName, exportName };
+}
+
 function createToolsModule(context, protocol, enabledTools) {
   const tools = createToolsNamespace(protocol, enabledTools);
   const exportNames = ['tools'];
@@ -146,24 +161,94 @@ function createToolsModule(context, protocol, enabledTools) {
   );
 }
 
+function createMcpToolsNamespace(protocol, enabledTools, serverName) {
+  const tools = Object.create(null);
+
+  for (const { name } of enabledTools) {
+    const parsed = parseMcpToolName(name);
+    if (!parsed || parsed.serverName !== serverName) {
+      continue;
+    }
+
+    const callTool = async (args) =>
+      protocol.request('tool_call', {
+        name: String(name),
+        input: args,
+      });
+    Object.defineProperty(tools, parsed.exportName, {
+      value: callTool,
+      configurable: false,
+      enumerable: true,
+      writable: false,
+    });
+  }
+
+  return Object.freeze(tools);
+}
+
+function createMcpToolsModule(context, protocol, enabledTools, serverName) {
+  const tools = createMcpToolsNamespace(protocol, enabledTools, serverName);
+  const exportNames = ['tools'];
+
+  for (const exportName of Object.keys(tools)) {
+    if (exportName !== 'tools' && isValidIdentifier(exportName)) {
+      exportNames.push(exportName);
+    }
+  }
+
+  const uniqueExportNames = [...new Set(exportNames)];
+
+  return new SyntheticModule(
+    uniqueExportNames,
+    function initMcpToolsModule() {
+      this.setExport('tools', tools);
+      for (const exportName of uniqueExportNames) {
+        if (exportName !== 'tools') {
+          this.setExport(exportName, tools[exportName]);
+        }
+      }
+    },
+    { context }
+  );
+}
+
+function createModuleResolver(context, protocol, enabledTools) {
+  const toolsModule = createToolsModule(context, protocol, enabledTools);
+  const mcpModules = new Map();
+
+  return function resolveModule(specifier) {
+    if (specifier === 'tools.js') {
+      return toolsModule;
+    }
+
+    const mcpMatch = /^tools\/mcp\/([^/]+)\.js$/.exec(specifier);
+    if (!mcpMatch) {
+      throw new Error(`Unsupported import in code_mode: ${specifier}`);
+    }
+
+    const serverName = mcpMatch[1];
+    if (!mcpModules.has(serverName)) {
+      mcpModules.set(
+        serverName,
+        createMcpToolsModule(context, protocol, enabledTools, serverName)
+      );
+    }
+    return mcpModules.get(serverName);
+  };
+}
+
 async function runModule(context, protocol, request) {
-  const toolsModule = createToolsModule(context, protocol, request.enabled_tools ?? []);
+  const resolveModule = createModuleResolver(context, protocol, request.enabled_tools ?? []);
   const mainModule = new SourceTextModule(request.source, {
     context,
     identifier: 'code_mode_main.mjs',
     importModuleDynamically(specifier) {
-      if (specifier === 'tools.js') {
-        return toolsModule;
-      }
-      throw new Error(`Unsupported import in code_mode: ${specifier}`);
+      return resolveModule(specifier);
     },
   });
 
   await mainModule.link(async (specifier) => {
-    if (specifier === 'tools.js') {
-      return toolsModule;
-    }
-    throw new Error(`Unsupported import in code_mode: ${specifier}`);
+    return resolveModule(specifier);
   });
   await mainModule.evaluate();
 }

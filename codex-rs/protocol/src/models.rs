@@ -206,7 +206,7 @@ pub enum ResponseInputItem {
     },
     McpToolCallOutput {
         call_id: String,
-        output: McpToolOutput,
+        output: CallToolResult,
     },
     CustomToolCallOutput {
         call_id: String,
@@ -1184,20 +1184,10 @@ impl<'de> Deserialize<'de> for FunctionCallOutputPayload {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct McpToolOutput {
-    pub content: Vec<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub structured_content: Option<serde_json::Value>,
-    pub success: bool,
-}
-
-impl McpToolOutput {
-    pub fn from_result(result: Result<CallToolResult, String>) -> Self {
+impl CallToolResult {
+    pub fn from_result(result: Result<Self, String>) -> Self {
         match result {
-            Ok(result) => Self::from(&result),
+            Ok(result) => result,
             Err(error) => Self::from_error_text(error),
         }
     }
@@ -1209,23 +1199,13 @@ impl McpToolOutput {
                 "text": text,
             })],
             structured_content: None,
-            success: false,
+            is_error: Some(true),
+            meta: None,
         }
     }
 
-    pub fn into_call_tool_result(self) -> CallToolResult {
-        let Self {
-            content,
-            structured_content,
-            success,
-        } = self;
-
-        CallToolResult {
-            content,
-            structured_content,
-            is_error: Some(!success),
-            meta: None,
-        }
+    pub fn success(&self) -> bool {
+        self.is_error != Some(true)
     }
 
     pub fn as_function_call_output_payload(&self) -> FunctionCallOutputPayload {
@@ -1236,7 +1216,7 @@ impl McpToolOutput {
                 Ok(serialized_structured_content) => {
                     return FunctionCallOutputPayload {
                         body: FunctionCallOutputBody::Text(serialized_structured_content),
-                        success: Some(self.success),
+                        success: Some(self.success()),
                     };
                 }
                 Err(err) => {
@@ -1267,29 +1247,12 @@ impl McpToolOutput {
 
         FunctionCallOutputPayload {
             body,
-            success: Some(self.success),
+            success: Some(self.success()),
         }
     }
 
     pub fn into_function_call_output_payload(self) -> FunctionCallOutputPayload {
         self.as_function_call_output_payload()
-    }
-}
-
-impl From<&CallToolResult> for McpToolOutput {
-    fn from(call_tool_result: &CallToolResult) -> Self {
-        let CallToolResult {
-            content,
-            structured_content,
-            is_error,
-            meta: _,
-        } = call_tool_result;
-
-        Self {
-            content: content.clone(),
-            structured_content: structured_content.clone(),
-            success: is_error != &Some(true),
-        }
     }
 }
 
@@ -1882,7 +1845,7 @@ mod tests {
             meta: None,
         };
 
-        let payload = McpToolOutput::from(&call_tool_result).into_function_call_output_payload();
+        let payload = call_tool_result.into_function_call_output_payload();
         assert_eq!(payload.success, Some(true));
         let Some(items) = payload.content_items() else {
             panic!("expected content items");
@@ -1949,7 +1912,7 @@ mod tests {
             meta: None,
         };
 
-        let payload = McpToolOutput::from(&call_tool_result).into_function_call_output_payload();
+        let payload = call_tool_result.into_function_call_output_payload();
         let Some(items) = payload.content_items() else {
             panic!("expected content items");
         };

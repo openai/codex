@@ -85,7 +85,7 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
     section.push_str("- `code_mode` is a freeform/custom tool. Direct `code_mode` calls must send raw JavaScript tool input. Do not wrap code in JSON, quotes, or markdown code fences.\n");
     section.push_str("- Direct tool calls remain available while `code_mode` is enabled.\n");
     section.push_str("- `code_mode` uses the same Node runtime resolution as `js_repl`. If needed, point `js_repl_node_path` at the Node binary you want Codex to use.\n");
-    section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to their code-mode result values.\n");
+    section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. MCP tools are also available from `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to their code-mode result values.\n");
     section.push_str(
         "- Function tools require JSON object arguments. Freeform tools require raw strings.\n",
     );
@@ -106,7 +106,7 @@ pub(crate) async fn execute(
         turn,
         tracker,
     };
-    let enabled_tools = build_enabled_tools(&exec);
+    let enabled_tools = build_enabled_tools(&exec).await;
     let source = build_source(&code, &enabled_tools).map_err(FunctionCallError::RespondToModel)?;
     execute_node(exec, source, enabled_tools)
         .await
@@ -259,14 +259,8 @@ fn build_source(user_code: &str, enabled_tools: &[EnabledTool]) -> Result<String
         .replace("__CODE_MODE_USER_CODE_PLACEHOLDER__", user_code))
 }
 
-fn build_enabled_tools(exec: &ExecContext) -> Vec<EnabledTool> {
-    let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
-    let router = ToolRouter::from_config(
-        &nested_tools_config,
-        None,
-        None,
-        exec.turn.dynamic_tools.as_slice(),
-    );
+async fn build_enabled_tools(exec: &ExecContext) -> Vec<EnabledTool> {
+    let router = build_nested_router(exec).await;
     let mut out = router
         .specs()
         .into_iter()
@@ -281,6 +275,28 @@ fn build_enabled_tools(exec: &ExecContext) -> Vec<EnabledTool> {
     out
 }
 
+async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
+    let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
+    let mcp_tools = exec
+        .session
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .list_all_tools()
+        .await
+        .into_iter()
+        .map(|(name, tool_info)| (name, tool_info.tool))
+        .collect();
+
+    ToolRouter::from_config(
+        &nested_tools_config,
+        Some(mcp_tools),
+        None,
+        exec.turn.dynamic_tools.as_slice(),
+    )
+}
+
 async fn call_nested_tool(
     exec: ExecContext,
     tool_name: String,
@@ -290,18 +306,23 @@ async fn call_nested_tool(
         return JsonValue::String("code_mode cannot invoke itself".to_string());
     }
 
-    let nested_config = exec.turn.tools_config.for_code_mode_nested_tools();
-    let router = ToolRouter::from_config(
-        &nested_config,
-        None,
-        None,
-        exec.turn.dynamic_tools.as_slice(),
-    );
+    let router = build_nested_router(&exec).await;
 
     let specs = router.specs();
-    let payload = match build_nested_tool_payload(&specs, &tool_name, input) {
-        Ok(payload) => payload,
-        Err(error) => return JsonValue::String(error),
+    let payload = if let Some((server, tool)) = exec.session.parse_mcp_tool_name(&tool_name).await {
+        match serialize_function_tool_arguments(&tool_name, input) {
+            Ok(raw_arguments) => ToolPayload::Mcp {
+                server,
+                tool,
+                raw_arguments,
+            },
+            Err(error) => return JsonValue::String(error),
+        }
+    } else {
+        match build_nested_tool_payload(&specs, &tool_name, input) {
+            Ok(payload) => payload,
+            Err(error) => return JsonValue::String(error),
+        }
     };
 
     let call = ToolCall {
@@ -357,17 +378,22 @@ fn build_function_tool_payload(
     tool_name: &str,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
-    let arguments = match input {
-        None => "{}".to_string(),
-        Some(JsonValue::Object(map)) => serde_json::to_string(&JsonValue::Object(map))
-            .map_err(|err| format!("failed to serialize tool `{tool_name}` arguments: {err}"))?,
-        Some(_) => {
-            return Err(format!(
-                "tool `{tool_name}` expects a JSON object for arguments"
-            ));
-        }
-    };
+    let arguments = serialize_function_tool_arguments(tool_name, input)?;
     Ok(ToolPayload::Function { arguments })
+}
+
+fn serialize_function_tool_arguments(
+    tool_name: &str,
+    input: Option<JsonValue>,
+) -> Result<String, String> {
+    match input {
+        None => Ok("{}".to_string()),
+        Some(JsonValue::Object(map)) => serde_json::to_string(&JsonValue::Object(map))
+            .map_err(|err| format!("failed to serialize tool `{tool_name}` arguments: {err}")),
+        Some(_) => Err(format!(
+            "tool `{tool_name}` expects a JSON object for arguments"
+        )),
+    }
 }
 
 fn build_freeform_tool_payload(
