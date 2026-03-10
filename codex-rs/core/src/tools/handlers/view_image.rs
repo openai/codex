@@ -9,6 +9,7 @@ use serde::Deserialize;
 use tokio::fs;
 
 use crate::features::Feature;
+use crate::filesystem_deny_read::ensure_read_allowed;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::EventMsg;
 use crate::protocol::ViewImageToolCallEvent;
@@ -68,6 +69,7 @@ impl ToolHandler for ViewImageHandler {
         let args: ViewImageArgs = parse_arguments(&arguments)?;
 
         let abs_path = turn.resolve_path(Some(args.path));
+        ensure_read_allowed(&abs_path, &turn.file_system_sandbox_policy, &turn.cwd)?;
 
         let metadata = fs::metadata(&abs_path).await.map_err(|error| {
             FunctionCallError::RespondToModel(format!(

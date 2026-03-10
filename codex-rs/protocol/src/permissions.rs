@@ -119,6 +119,10 @@ pub struct FileSystemSandboxPolicy {
     pub kind: FileSystemSandboxKind,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entries: Vec<FileSystemSandboxEntry>,
+    /// Additional deny-only read patterns that cannot be expressed as
+    /// concrete filesystem entries, such as macOS glob-based deny rules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny_read_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
@@ -139,6 +143,7 @@ impl Default for FileSystemSandboxPolicy {
                 },
                 access: FileSystemAccessMode::Read,
             }],
+            deny_read_patterns: Vec::new(),
         }
     }
 }
@@ -167,6 +172,7 @@ impl FileSystemSandboxPolicy {
         Self {
             kind: FileSystemSandboxKind::Unrestricted,
             entries: Vec::new(),
+            deny_read_patterns: Vec::new(),
         }
     }
 
@@ -174,6 +180,7 @@ impl FileSystemSandboxPolicy {
         Self {
             kind: FileSystemSandboxKind::ExternalSandbox,
             entries: Vec::new(),
+            deny_read_patterns: Vec::new(),
         }
     }
 
@@ -181,7 +188,51 @@ impl FileSystemSandboxPolicy {
         Self {
             kind: FileSystemSandboxKind::Restricted,
             entries,
+            deny_read_patterns: Vec::new(),
         }
+    }
+
+    pub fn deny_read_patterns(&self) -> &[String] {
+        &self.deny_read_patterns
+    }
+
+    pub fn has_denied_read_patterns(&self) -> bool {
+        !self.deny_read_patterns.is_empty()
+    }
+
+    pub fn has_denied_read_restrictions(&self) -> bool {
+        self.has_explicit_deny_entries() || self.has_denied_read_patterns()
+    }
+
+    pub fn from_legacy_sandbox_policy_preserving_read_denies(
+        sandbox_policy: &SandboxPolicy,
+        cwd: &Path,
+        existing: &Self,
+    ) -> Self {
+        let mut rebuilt = Self::from_legacy_sandbox_policy(sandbox_policy, cwd);
+        if !matches!(rebuilt.kind, FileSystemSandboxKind::Restricted) {
+            return rebuilt;
+        }
+
+        for deny_entry in existing
+            .entries
+            .iter()
+            .filter(|entry| entry.access == FileSystemAccessMode::None)
+        {
+            if !rebuilt.entries.iter().any(|entry| entry == deny_entry) {
+                rebuilt.entries.push(deny_entry.clone());
+            }
+        }
+
+        let mut seen_patterns = HashSet::new();
+        rebuilt
+            .deny_read_patterns
+            .extend(existing.deny_read_patterns.iter().cloned());
+        rebuilt
+            .deny_read_patterns
+            .retain(|pattern| seen_patterns.insert(pattern.clone()));
+
+        rebuilt
     }
 
     /// Converts a legacy sandbox policy into an equivalent filesystem policy

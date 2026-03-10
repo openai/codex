@@ -954,6 +954,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
     }
@@ -997,6 +998,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             })
         );
     }
@@ -1051,6 +1053,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 2);
@@ -1098,6 +1101,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                permissions: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1148,6 +1152,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                permissions: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1306,6 +1311,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
@@ -1334,6 +1340,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
 
@@ -1382,6 +1389,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
@@ -1429,6 +1437,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
@@ -1480,6 +1489,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
@@ -1532,6 +1542,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
@@ -1584,6 +1595,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             })
         );
         let payload_bytes = cache_payload_bytes(&cache_file.signed_payload).expect("payload bytes");
@@ -1668,6 +1680,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             }))
         );
 
@@ -1692,6 +1705,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                permissions: None,
             })
         );
     }

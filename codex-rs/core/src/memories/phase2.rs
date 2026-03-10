@@ -12,6 +12,8 @@ use crate::memories::storage::rollout_summary_file_stem;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
 use codex_config::Constrained;
 use codex_protocol::ThreadId;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
@@ -289,11 +291,17 @@ mod agent {
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         };
+        let consolidation_file_system_sandbox_policy =
+            FileSystemSandboxPolicy::from(&consolidation_sandbox_policy);
         agent_config
             .permissions
             .sandbox_policy
-            .set(consolidation_sandbox_policy)
+            .set(consolidation_sandbox_policy.clone())
             .ok()?;
+        agent_config.permissions.file_system_sandbox_policy =
+            consolidation_file_system_sandbox_policy;
+        agent_config.permissions.network_sandbox_policy =
+            NetworkSandboxPolicy::from(&consolidation_sandbox_policy);
 
         agent_config.model = Some(
             config

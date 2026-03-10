@@ -6,6 +6,7 @@ use serde::Deserialize;
 use tokio::process::Command;
 use tokio::time::timeout;
 
+use crate::filesystem_deny_read::ensure_search_root_does_not_overlap_deny_read;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::TextToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -72,6 +73,11 @@ impl ToolHandler for GrepFilesHandler {
         let limit = args.limit.min(MAX_LIMIT);
         let search_path = turn.resolve_path(args.path.clone());
 
+        ensure_search_root_does_not_overlap_deny_read(
+            &search_path,
+            &turn.file_system_sandbox_policy,
+            &turn.cwd,
+        )?;
         verify_path_exists(&search_path).await?;
 
         let include = args.include.as_deref().map(str::trim).and_then(|val| {

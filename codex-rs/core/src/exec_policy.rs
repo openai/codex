@@ -31,6 +31,7 @@ use crate::bash::parse_shell_lc_plain_commands;
 use crate::bash::parse_shell_lc_single_command_prefix;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use shlex::try_join as shlex_try_join;
 
 const PROMPT_CONFLICT_REASON: &str =
@@ -173,6 +174,7 @@ pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) command: &'a [String],
     pub(crate) approval_policy: AskForApproval,
     pub(crate) sandbox_policy: &'a SandboxPolicy,
+    pub(crate) file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) prefix_rule: Option<Vec<String>>,
 }
@@ -204,6 +206,7 @@ impl ExecPolicyManager {
             command,
             approval_policy,
             sandbox_policy,
+            file_system_sandbox_policy,
             sandbox_permissions,
             prefix_rule,
         } = req;
@@ -267,10 +270,13 @@ impl ExecPolicyManager {
                 }
             }
             Decision::Allow => ExecApprovalRequirement::Skip {
-                // Bypass sandbox if execpolicy allows the command
-                bypass_sandbox: evaluation.matched_rules.iter().any(|rule_match| {
-                    is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
-                }),
+                // Bypass sandbox for trusted execpolicy allow rules unless the current
+                // sandbox policy carries filesystem deny_read restrictions that must
+                // still be enforced for shell/unified_exec commands.
+                bypass_sandbox: !file_system_sandbox_policy.has_denied_read_restrictions()
+                    && evaluation.matched_rules.iter().any(|rule_match| {
+                        is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
+                    }),
                 proposed_execpolicy_amendment: if auto_amendment_allowed {
                     try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
                 } else {
@@ -824,6 +830,10 @@ mod tests {
     use crate::config_loader::ConfigRequirements;
     use crate::config_loader::ConfigRequirementsToml;
     use codex_app_server_protocol::ConfigLayerSource;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::RejectConfig;
     use codex_protocol::protocol::SandboxPolicy;
@@ -1234,6 +1244,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 command: &forbidden_script,
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1284,6 +1295,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 command: &command,
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1311,6 +1323,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1339,6 +1352,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: Some(requested_prefix.clone()),
             })
@@ -1378,6 +1392,7 @@ prefix_rule(
                 ],
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1407,6 +1422,7 @@ prefix_rule(
                 command: &command,
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1443,6 +1459,7 @@ prefix_rule(pattern=["git"], decision="allow")
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1485,6 +1502,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1513,6 +1531,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
             })
@@ -1546,6 +1565,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 command: &command,
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1595,6 +1615,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                     mcp_elicitations: false,
                 }),
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 prefix_rule: None,
             })
@@ -1632,6 +1653,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                     mcp_elicitations: false,
                 }),
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 prefix_rule: None,
             })
@@ -1667,6 +1689,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                     mcp_elicitations: false,
                 }),
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 prefix_rule: None,
             })
@@ -1690,6 +1713,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1714,6 +1738,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1742,6 +1767,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1770,6 +1796,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 command: &command,
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
             })
@@ -1801,6 +1828,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 command: &command,
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
             })
@@ -1839,6 +1867,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                     command: &command,
                     approval_policy: AskForApproval::UnlessTrusted,
                     sandbox_policy: &SandboxPolicy::DangerFullAccess,
+                    file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     prefix_rule: None,
                 })
@@ -1913,6 +1942,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1943,6 +1973,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 command: &command,
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -1970,6 +2001,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -2008,6 +2040,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                     command: &command,
                     approval_policy: AskForApproval::UnlessTrusted,
                     sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                    file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     prefix_rule: None,
                 })
@@ -2031,6 +2064,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 command: &command,
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -2061,6 +2095,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 command: &command,
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -2091,6 +2126,45 @@ prefix_rule(pattern=["git"], decision="prompt")
             &|_: &[String]| Decision::Allow,
             &MatchOptions::default(),
         )
+    }
+
+    #[tokio::test]
+    async fn allow_rule_does_not_bypass_sandbox_when_deny_read_paths_exist() {
+        let policy_src = r#"prefix_rule(pattern=["cat"], decision="allow")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.rules", policy_src)
+            .expect("parse policy");
+        let policy = Arc::new(parser.build());
+        let command = vec!["cat".to_string(), "~/.gitconfig".to_string()];
+
+        let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+        let deny_path = AbsolutePathBuf::try_from("/tmp/secret-config").expect("absolute path");
+        let file_system_sandbox_policy =
+            FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: deny_path },
+                access: FileSystemAccessMode::None,
+            }]);
+
+        let manager = ExecPolicyManager::new(policy);
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::OnRequest,
+                sandbox_policy: &sandbox_policy,
+                file_system_sandbox_policy: &file_system_sandbox_policy,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            })
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            }
+        );
     }
 
     #[test]
@@ -2234,6 +2308,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 command: &command,
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
+                file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })
@@ -2300,6 +2375,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                     command: &sneaky_command,
                     approval_policy: AskForApproval::OnRequest,
                     sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                    file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                     sandbox_permissions: permissions,
                     prefix_rule: None,
                 })
@@ -2323,6 +2399,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                     command: &dangerous_command,
                     approval_policy: AskForApproval::OnRequest,
                     sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                    file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                     sandbox_permissions: permissions,
                     prefix_rule: None,
                 })
@@ -2342,6 +2419,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                     command: &dangerous_command,
                     approval_policy: AskForApproval::Never,
                     sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                    file_system_sandbox_policy: &FileSystemSandboxPolicy::default(),
                     sandbox_permissions: permissions,
                     prefix_rule: None,
                 })

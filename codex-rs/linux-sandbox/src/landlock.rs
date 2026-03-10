@@ -8,6 +8,7 @@ use std::path::Path;
 use codex_core::error::CodexErr;
 use codex_core::error::Result;
 use codex_core::error::SandboxErr;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -41,6 +42,7 @@ use seccompiler::apply_filter;
 /// Filesystem restrictions are intentionally handled by bubblewrap.
 pub(crate) fn apply_sandbox_policy_to_current_thread(
     sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
     cwd: &Path,
     apply_landlock_fs: bool,
@@ -65,6 +67,13 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
 
     if let Some(mode) = network_seccomp_mode {
         install_network_seccomp_filter_on_current_thread(mode)?;
+    }
+
+    if apply_landlock_fs && file_system_sandbox_policy.has_denied_read_restrictions() {
+        return Err(CodexErr::UnsupportedOperation(
+            "Filesystem deny_read restrictions are not supported by the legacy Linux Landlock filesystem backend."
+                .to_string(),
+        ));
     }
 
     if apply_landlock_fs && !sandbox_policy.has_full_disk_write_access() {

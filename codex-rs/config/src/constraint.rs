@@ -138,6 +138,27 @@ impl<T: Send + Sync> Constrained<T> {
         (self.validator)(candidate)
     }
 
+    /// Composes an additional validator onto the current constraint.
+    ///
+    /// The existing value must satisfy the combined validator before it is installed.
+    pub fn add_validator(
+        &mut self,
+        validator: impl Fn(&T) -> ConstraintResult<()> + Send + Sync + 'static,
+    ) -> ConstraintResult<()>
+    where
+        T: 'static,
+    {
+        let existing_validator = self.validator.clone();
+        let combined_validator: Arc<ConstraintValidator<T>> = Arc::new(move |candidate| {
+            existing_validator(candidate)?;
+            validator(candidate)
+        });
+
+        combined_validator(&self.value)?;
+        self.validator = combined_validator;
+        Ok(())
+    }
+
     pub fn set(&mut self, value: T) -> ConstraintResult<()> {
         let value = if let Some(normalizer) = &self.normalizer {
             normalizer(value)
@@ -146,6 +167,30 @@ impl<T: Send + Sync> Constrained<T> {
         };
         (self.validator)(&value)?;
         self.value = value;
+        Ok(())
+    }
+
+    pub fn add_normalizer(
+        &mut self,
+        normalizer: impl Fn(T) -> T + Send + Sync + 'static,
+    ) -> ConstraintResult<()>
+    where
+        T: Clone + 'static,
+    {
+        let existing_normalizer = self.normalizer.clone();
+        let combined_normalizer: Arc<ConstraintNormalizer<T>> = Arc::new(move |value| {
+            let value = if let Some(existing) = &existing_normalizer {
+                existing(value)
+            } else {
+                value
+            };
+            normalizer(value)
+        });
+
+        let normalized = combined_normalizer(self.value.clone());
+        (self.validator)(&normalized)?;
+        self.value = normalized;
+        self.normalizer = Some(combined_normalizer);
         Ok(())
     }
 }
@@ -221,6 +266,52 @@ mod tests {
         assert_eq!(constrained.value(), 0);
         constrained.set(10)?;
         assert_eq!(constrained.value(), 10);
+        Ok(())
+    }
+
+    #[test]
+    fn constrained_add_normalizer_composes_with_existing_normalizer() -> anyhow::Result<()> {
+        let mut constrained = Constrained::normalized(-1, |value| value.max(0))?;
+        constrained.add_normalizer(|value| value.min(5))?;
+
+        assert_eq!(constrained.value(), 0);
+
+        constrained.set(10)?;
+        assert_eq!(constrained.value(), 5);
+
+        constrained.set(-10)?;
+        assert_eq!(constrained.value(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn constrained_add_validator_composes_with_existing_validator() -> anyhow::Result<()> {
+        let mut constrained = Constrained::new(5, |value: &i32| {
+            if *value >= 0 {
+                Ok(())
+            } else {
+                Err(ConstraintError::empty_field("value"))
+            }
+        })?;
+        constrained.add_validator(|value| {
+            if *value <= 10 {
+                Ok(())
+            } else {
+                Err(ConstraintError::empty_field("value"))
+            }
+        })?;
+
+        assert_eq!(constrained.can_set(&7), Ok(()));
+        assert_eq!(
+            constrained.can_set(&11),
+            Err(ConstraintError::empty_field("value"))
+        );
+        assert_eq!(
+            constrained.can_set(&-1),
+            Err(ConstraintError::empty_field("value"))
+        );
+
         Ok(())
     }
 

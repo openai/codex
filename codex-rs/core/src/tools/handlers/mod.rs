@@ -33,6 +33,7 @@ use crate::sandboxing::normalize_additional_permissions;
 pub use apply_patch::ApplyPatchHandler;
 pub use artifacts::ArtifactsHandler;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 pub use dynamic::DynamicToolHandler;
 pub use grep_files::GrepFilesHandler;
@@ -153,6 +154,21 @@ pub(crate) fn normalize_and_validate_additional_permissions(
     }
 }
 
+fn reject_explicit_escalation_if_deny_read_present(
+    sandbox_permissions: SandboxPermissions,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+) -> Result<(), FunctionCallError> {
+    if sandbox_permissions.requires_escalated_permissions()
+        && file_system_sandbox_policy.has_denied_read_restrictions()
+    {
+        return Err(FunctionCallError::RespondToModel(
+            "filesystem deny_read policy is enforced; reject command — you cannot ask for escalated permissions because managed read restrictions must remain sandboxed".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 pub(super) struct EffectiveAdditionalPermissions {
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
@@ -203,5 +219,52 @@ pub(super) async fn apply_granted_turn_permissions(
         sandbox_permissions,
         additional_permissions: effective_permissions,
         permissions_preapproved,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reject_explicit_escalation_if_deny_read_present;
+    use crate::function_tool::FunctionCallError;
+    use crate::sandboxing::SandboxPermissions;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+
+    #[test]
+    fn explicit_escalation_is_rejected_when_deny_read_paths_exist() {
+        let path = AbsolutePathBuf::try_from("/tmp/deny-read-test").expect("absolute path");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path },
+            access: FileSystemAccessMode::None,
+        }]);
+
+        let result = reject_explicit_escalation_if_deny_read_present(
+            SandboxPermissions::RequireEscalated,
+            &policy,
+        );
+
+        let Err(FunctionCallError::RespondToModel(message)) = result else {
+            panic!("expected managed deny_read explicit escalation rejection");
+        };
+        assert!(message.contains("filesystem deny_read policy is enforced"));
+    }
+
+    #[test]
+    fn non_escalated_command_is_allowed_when_deny_read_paths_exist() {
+        let path = AbsolutePathBuf::try_from("/tmp/deny-read-test").expect("absolute path");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path },
+            access: FileSystemAccessMode::None,
+        }]);
+
+        let result = reject_explicit_escalation_if_deny_read_present(
+            SandboxPermissions::UseDefault,
+            &policy,
+        );
+
+        assert!(result.is_ok());
     }
 }

@@ -1846,6 +1846,7 @@ dependencies = [
  "env-flags",
  "eventsource-stream",
  "futures",
+ "globset",
  "http 1.4.0",
  "iana-time-zone",
  "image",

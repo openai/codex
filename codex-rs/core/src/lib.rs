@@ -39,6 +39,7 @@ mod exec_policy;
 pub mod external_agent_config;
 pub mod features;
 mod file_watcher;
+mod filesystem_deny_read;
 mod flags;
 pub mod git_info;
 mod guardian;
