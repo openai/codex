@@ -876,7 +876,6 @@ impl App {
 
         for (feature, enabled) in updates {
             let feature_key = feature.key();
-            let previous_enabled = self.config.features.enabled(feature);
             if feature == Feature::GuardianApproval && enabled {
                 if let Err(err) = self
                     .config
@@ -923,6 +922,7 @@ impl App {
                 .set_feature_enabled(feature, effective_enabled);
             if feature == Feature::GuardianApproval {
                 let approval_review_policy_was_configured = approval_review_policy_is_configured();
+                let previous_approval_review_policy = self.config.approval_review_policy;
                 if effective_enabled && !approval_review_policy_was_configured {
                     self.config.approval_review_policy = ApprovalReviewPolicy::AutoOnly;
                     self.chat_widget
@@ -931,8 +931,20 @@ impl App {
                         segments: scoped_segments("approval_review_policy"),
                         value: ApprovalReviewPolicy::AutoOnly.to_string().into(),
                     }]);
-                    if previous_enabled != effective_enabled {
+                    if previous_approval_review_policy != ApprovalReviewPolicy::AutoOnly {
                         permissions_history_label = Some("Smart Approvals");
+                    }
+                } else if !effective_enabled {
+                    if approval_review_policy_was_configured {
+                        builder = builder.with_edits([ConfigEdit::ClearPath {
+                            segments: scoped_segments("approval_review_policy"),
+                        }]);
+                    }
+                    self.config.approval_review_policy = ApprovalReviewPolicy::ManualOnly;
+                    self.chat_widget
+                        .set_approval_review_policy(ApprovalReviewPolicy::ManualOnly);
+                    if previous_approval_review_policy != ApprovalReviewPolicy::ManualOnly {
+                        permissions_history_label = Some("Default");
                     }
                 }
             }
@@ -5279,7 +5291,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_feature_flags_enabling_guardian_selects_smart_approvals() -> Result<()> {
-        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
 
@@ -5327,6 +5339,17 @@ mod tests {
             op_rx.try_recv().is_err(),
             "feature toggle should not patch the active session"
         );
+        let cell = match app_event_rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+            other => panic!("expected InsertHistoryCell event, got {other:?}"),
+        };
+        let rendered = cell
+            .display_lines(120)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Permissions updated to Smart Approvals"));
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(config.contains("guardian_approval = true"));
@@ -5337,19 +5360,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_feature_flags_disabling_guardian_keeps_default_permissions() -> Result<()> {
-        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restores_default()
+    -> Result<()> {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
-        std::fs::write(
-            codex_home.path().join("config.toml"),
-            "approval_review_policy = \"auto-only\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n",
-        )?;
+        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml = "approval_review_policy = \"auto-only\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
+        std::fs::write(config_toml_path.as_path(), config_toml)?;
+        let user_config = toml::from_str::<TomlValue>(config_toml)?;
+        app.config.config_layer_stack = app
+            .config
+            .config_layer_stack
+            .with_user_config(&config_toml_path, user_config);
         app.config
             .features
             .set_enabled(Feature::GuardianApproval, true)?;
         app.chat_widget
             .set_feature_enabled(Feature::GuardianApproval, true);
+        app.config.approval_review_policy = ApprovalReviewPolicy::AutoOnly;
+        app.chat_widget
+            .set_approval_review_policy(ApprovalReviewPolicy::AutoOnly);
         app.config
             .permissions
             .approval_policy
@@ -5375,7 +5406,7 @@ mod tests {
         );
         assert_eq!(
             app.config.approval_review_policy,
-            ApprovalReviewPolicy::AutoOnly
+            ApprovalReviewPolicy::ManualOnly
         );
         assert_eq!(
             app.config.permissions.approval_policy.value(),
@@ -5383,17 +5414,28 @@ mod tests {
         );
         assert_eq!(
             app.chat_widget.config_ref().approval_review_policy,
-            ApprovalReviewPolicy::AutoOnly
+            ApprovalReviewPolicy::ManualOnly
         );
         assert_eq!(app.runtime_approval_policy_override, None);
         assert!(
             op_rx.try_recv().is_err(),
             "feature toggle should not patch the active session"
         );
+        let cell = match app_event_rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+            other => panic!("expected InsertHistoryCell event, got {other:?}"),
+        };
+        let rendered = cell
+            .display_lines(120)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Permissions updated to Default"));
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(!config.contains("guardian_approval = true"));
-        assert!(config.contains("approval_review_policy = \"auto-only\""));
+        assert!(!config.contains("approval_review_policy ="));
         assert!(config.contains("approval_policy = \"on-request\""));
         assert!(config.contains("sandbox_mode = \"workspace-write\""));
         Ok(())
@@ -5405,10 +5447,17 @@ mod tests {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
-        std::fs::write(
-            codex_home.path().join("config.toml"),
-            "approval_review_policy = \"manual-only\"\n",
-        )?;
+        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml = "approval_review_policy = \"manual-only\"\n";
+        std::fs::write(config_toml_path.as_path(), config_toml)?;
+        let user_config = toml::from_str::<TomlValue>(config_toml)?;
+        app.config.config_layer_stack = app
+            .config
+            .config_layer_stack
+            .with_user_config(&config_toml_path, user_config);
+        app.config.approval_review_policy = ApprovalReviewPolicy::ManualOnly;
+        app.chat_widget
+            .set_approval_review_policy(ApprovalReviewPolicy::ManualOnly);
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
             .await;
@@ -5444,6 +5493,56 @@ mod tests {
         assert!(config.contains("guardian_approval = true"));
         assert!(config.contains("approval_policy = \"on-request\""));
         assert!(config.contains("sandbox_mode = \"workspace-write\""));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_without_history()
+    -> Result<()> {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml = "approval_review_policy = \"manual-only\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
+        std::fs::write(config_toml_path.as_path(), config_toml)?;
+        let user_config = toml::from_str::<TomlValue>(config_toml)?;
+        app.config.config_layer_stack = app
+            .config
+            .config_layer_stack
+            .with_user_config(&config_toml_path, user_config);
+        app.config
+            .features
+            .set_enabled(Feature::GuardianApproval, true)?;
+        app.chat_widget
+            .set_feature_enabled(Feature::GuardianApproval, true);
+        app.config.approval_review_policy = ApprovalReviewPolicy::ManualOnly;
+        app.chat_widget
+            .set_approval_review_policy(ApprovalReviewPolicy::ManualOnly);
+
+        app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
+            .await;
+
+        assert!(!app.config.features.enabled(Feature::GuardianApproval));
+        assert_eq!(
+            app.config.approval_review_policy,
+            ApprovalReviewPolicy::ManualOnly
+        );
+        assert_eq!(
+            app.chat_widget.config_ref().approval_review_policy,
+            ApprovalReviewPolicy::ManualOnly
+        );
+        assert!(
+            op_rx.try_recv().is_err(),
+            "feature toggle should not patch the active session"
+        );
+        assert!(
+            app_event_rx.try_recv().is_err(),
+            "manual review should not emit a permissions history update when the effective state stays default"
+        );
+
+        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        assert!(!config.contains("guardian_approval = true"));
+        assert!(!config.contains("approval_review_policy ="));
         Ok(())
     }
 
