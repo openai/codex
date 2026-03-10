@@ -197,9 +197,10 @@ pub(crate) fn parse_agent_role_file_contents(
         &format!("agent role file {}.description", role_file_label.display()),
         parsed.description.as_deref(),
     )?;
-    validate_required_agent_role_file_developer_instructions(
+    validate_agent_role_file_developer_instructions(
         role_file_label,
         parsed.config.developer_instructions.as_deref(),
+        role_name_hint.is_none(),
     )?;
 
     let role_name = parsed
@@ -290,9 +291,10 @@ fn validate_required_agent_role_description(
     }
 }
 
-fn validate_required_agent_role_file_developer_instructions(
+fn validate_agent_role_file_developer_instructions(
     role_file_label: &Path,
     developer_instructions: Option<&str>,
+    require_present: bool,
 ) -> std::io::Result<()> {
     match developer_instructions.map(str::trim) {
         Some("") => Err(std::io::Error::new(
@@ -303,13 +305,14 @@ fn validate_required_agent_role_file_developer_instructions(
             ),
         )),
         Some(_) => Ok(()),
-        None => Err(std::io::Error::new(
+        None if require_present => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
                 "agent role file at {} must define `developer_instructions`",
                 role_file_label.display()
             ),
         )),
+        None => Ok(()),
     }
 }
 
@@ -402,17 +405,10 @@ fn discover_agent_roles_in_dir(
     let mut roles = BTreeMap::new();
 
     for agent_file in collect_agent_role_files(agents_dir)? {
-        let parsed_file = match read_resolved_agent_role_file(&agent_file, None) {
-            Ok(parsed_file) => parsed_file,
-            Err(err)
-                if err.kind() == std::io::ErrorKind::InvalidInput
-                    && err.to_string().contains("must define a non-empty `name`")
-                    && declared_role_files.contains(&agent_file) =>
-            {
-                continue;
-            }
-            Err(err) => return Err(err),
-        };
+        if declared_role_files.contains(&agent_file) {
+            continue;
+        }
+        let parsed_file = read_resolved_agent_role_file(&agent_file, None)?;
         let role_name = parsed_file.role_name;
         if roles
             .insert(
