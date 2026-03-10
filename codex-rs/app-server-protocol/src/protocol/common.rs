@@ -44,15 +44,46 @@ pub enum AuthMode {
 
 macro_rules! experimental_reason_expr {
     // If a request variant is explicitly marked experimental, that reason wins.
-    (#[experimental($reason:expr)] $params:ident $(, $inspect_params:tt)?) => {
+    (variant $variant:ident, #[experimental($reason:expr)] $params:ident $(, $inspect_params:tt)?) => {
         Some($reason)
     };
     // `inspect_params: true` is used when a method is mostly stable but needs
     // field-level gating from its params type (for example, ThreadStart).
-    ($params:ident, true) => {
-        crate::experimental_api::ExperimentalApi::experimental_reason($params)
+    (variant $variant:ident, $params:ident, true) => {
+        nested_experimental_reason_expr!($variant, $params)
+            .or_else(|| crate::experimental_api::ExperimentalApi::experimental_reason($params))
     };
-    ($params:ident $(, $inspect_params:tt)?) => {
+    (variant $variant:ident, $params:ident $(, $inspect_params:tt)?) => {
+        None
+    };
+}
+
+macro_rules! nested_experimental_reason_expr {
+    (ThreadStart, $params:ident) => {
+        $params
+            .approval_policy
+            .as_ref()
+            .and_then(crate::experimental_api::ExperimentalApi::experimental_reason)
+    };
+    (ThreadResume, $params:ident) => {
+        $params
+            .approval_policy
+            .as_ref()
+            .and_then(crate::experimental_api::ExperimentalApi::experimental_reason)
+    };
+    (ThreadFork, $params:ident) => {
+        $params
+            .approval_policy
+            .as_ref()
+            .and_then(crate::experimental_api::ExperimentalApi::experimental_reason)
+    };
+    (TurnStart, $params:ident) => {
+        $params
+            .approval_policy
+            .as_ref()
+            .and_then(crate::experimental_api::ExperimentalApi::experimental_reason)
+    };
+    ($variant:ident, $params:ident) => {
         None
     };
 }
@@ -136,6 +167,7 @@ macro_rules! client_request_definitions {
                     $(
                         Self::$variant { params: _params, .. } => {
                             experimental_reason_expr!(
+                                variant $variant,
                                 $(#[experimental($reason)])?
                                 _params
                                 $(, $inspect_params)?

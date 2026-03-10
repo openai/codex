@@ -1319,6 +1319,7 @@ Examples of descriptor strings:
 
 - `mock/experimentalMethod` (method-level gate)
 - `thread/start.mockExperimentalField` (field-level gate)
+- `askForApproval.reject` (enum-variant gate, for `approvalPolicy: { "reject": ... }`)
 
 ### For maintainers: Adding experimental fields and methods
 
@@ -1334,6 +1335,16 @@ At runtime, clients must send `initialize` with `capabilities.experimentalApi = 
 2. Ensure the params type derives `ExperimentalApi` so field-level gating can be detected at runtime.
 
 3. In `app-server-protocol/src/protocol/common.rs`, keep the method stable and use `inspect_params: true` when only some fields are experimental (like `thread/start`). If the entire method is experimental, annotate the method variant with `#[experimental("method/name")]`.
+
+Enum variants can be gated too:
+
+```rust
+#[derive(ExperimentalApi)]
+enum AskForApproval {
+    #[experimental("askForApproval.reject")]
+    Reject { /* ... */ },
+}
+```
 
 For server-initiated request payloads, annotate the field the same way so schema generation treats it as experimental, and make sure app-server omits that field when the client did not opt into `experimentalApi`.
 
