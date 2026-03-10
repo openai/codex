@@ -413,8 +413,7 @@ async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> 
                 std::fs::write(
                     &role_path,
                     format!(
-                        "model = \"{ROLE_MODEL}\"\nmodel_reasoning_effort = \"{}\"\n",
-                        ROLE_REASONING_EFFORT
+                        "model = \"{ROLE_MODEL}\"\nmodel_reasoning_effort = \"{ROLE_REASONING_EFFORT}\"\n",
                     ),
                 )
                 .expect("write role config");
