@@ -1040,7 +1040,7 @@ fn find_spawn_agent_model_name(
 ) -> Result<String, FunctionCallError> {
     available_models
         .iter()
-        .find(|model| model.model == requested_model || model.id == requested_model)
+        .find(|model| model.model == requested_model)
         .map(|model| model.model.clone())
         .ok_or_else(|| {
             let available = available_models
