@@ -1423,6 +1423,7 @@ pub struct AgentsToml {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentRoleConfig {
     /// Human-facing role documentation used in spawn tool guidance.
+    /// Required for loaded user-defined roles after deprecated/new metadata precedence resolves.
     pub description: Option<String>,
     /// Path to a role-specific config layer.
     pub config_file: Option<PathBuf>,
@@ -1434,6 +1435,7 @@ pub struct AgentRoleConfig {
 #[schemars(deny_unknown_fields)]
 pub struct AgentRoleToml {
     /// Human-facing role documentation used in spawn tool guidance.
+    /// Required unless supplied by the referenced agent role file.
     pub description: Option<String>,
 
     /// Path to a role-specific config layer.
@@ -1442,6 +1444,105 @@ pub struct AgentRoleToml {
 
     /// Candidate nicknames for agents spawned with this role.
     pub nickname_candidates: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentRoleFileToml {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub nickname_candidates: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub config: ConfigToml,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ParsedAgentRoleFile {
+    pub role_name: String,
+    pub description: Option<String>,
+    pub nickname_candidates: Option<Vec<String>>,
+    pub config: TomlValue,
+}
+
+pub(crate) fn parse_agent_role_file_contents(
+    contents: &str,
+    role_file_label: &Path,
+    config_base_dir: &Path,
+    role_name_hint: Option<&str>,
+) -> std::io::Result<ParsedAgentRoleFile> {
+    let role_file_toml: TomlValue = toml::from_str(contents).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "failed to parse agent role file at {}: {err}",
+                role_file_label.display()
+            ),
+        )
+    })?;
+    let _guard = AbsolutePathBufGuard::new(config_base_dir);
+    let parsed: AgentRoleFileToml = role_file_toml.clone().try_into().map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "failed to deserialize agent role file at {}: {err}",
+                role_file_label.display()
+            ),
+        )
+    })?;
+    let description = Config::normalize_agent_role_description(
+        &format!("agent role file {}.description", role_file_label.display()),
+        parsed.description.as_deref(),
+    )?;
+    Config::validate_required_agent_role_file_developer_instructions(
+        role_file_label,
+        parsed.config.developer_instructions.as_deref(),
+    )?;
+
+    let role_name = parsed
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| role_name_hint.map(ToOwned::to_owned))
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "agent role file at {} must define a non-empty `name`",
+                    role_file_label.display()
+                ),
+            )
+        })?;
+
+    let nickname_candidates = Config::normalize_agent_role_nickname_candidates(
+        &format!(
+            "agent role file {}.nickname_candidates",
+            role_file_label.display()
+        ),
+        parsed.nickname_candidates.as_deref(),
+    )?;
+
+    let mut config = role_file_toml;
+    let Some(config_table) = config.as_table_mut() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "agent role file at {} must contain a TOML table",
+                role_file_label.display()
+            ),
+        ));
+    };
+    config_table.remove("name");
+    config_table.remove("description");
+    config_table.remove("nickname_candidates");
+
+    Ok(ParsedAgentRoleFile {
+        role_name,
+        description,
+        nickname_candidates,
+        config,
+    })
 }
 
 impl From<ToolsToml> for Tools {
@@ -2046,6 +2147,8 @@ impl Config {
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
 
+        let agent_roles = Self::load_agent_roles(&cfg, &config_layer_stack)?;
+
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
@@ -2095,34 +2198,6 @@ impl Config {
                 "agents.max_depth must be at least 1",
             ));
         }
-        let agent_roles = cfg
-            .agents
-            .as_ref()
-            .map(|agents| {
-                agents
-                    .roles
-                    .iter()
-                    .map(|(name, role)| {
-                        let config_file =
-                            role.config_file.as_ref().map(AbsolutePathBuf::to_path_buf);
-                        Self::validate_agent_role_config_file(name, config_file.as_deref())?;
-                        let nickname_candidates = Self::normalize_agent_role_nickname_candidates(
-                            name,
-                            role.nickname_candidates.as_deref(),
-                        )?;
-                        Ok((
-                            name.clone(),
-                            AgentRoleConfig {
-                                description: role.description.clone(),
-                                config_file,
-                                nickname_candidates,
-                            },
-                        ))
-                    })
-                    .collect::<std::io::Result<BTreeMap<_, _>>>()
-            })
-            .transpose()?
-            .unwrap_or_default();
         let agent_job_max_runtime_seconds = cfg
             .agents
             .as_ref()
@@ -2567,6 +2642,224 @@ impl Config {
         }
     }
 
+    fn load_agent_roles(
+        cfg: &ConfigToml,
+        config_layer_stack: &ConfigLayerStack,
+    ) -> std::io::Result<BTreeMap<String, AgentRoleConfig>> {
+        let layers =
+            config_layer_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false);
+        if layers.is_empty() {
+            let mut roles = BTreeMap::new();
+            if let Some(agents_toml) = cfg.agents.as_ref() {
+                for (declared_role_name, role_toml) in &agents_toml.roles {
+                    let mut role =
+                        Self::agent_role_config_from_toml(declared_role_name, role_toml)?;
+                    let mut role_name = declared_role_name.clone();
+                    if let Some(config_file) = role.config_file.as_deref() {
+                        let parsed = Self::read_parsed_agent_role_file(
+                            config_file,
+                            Some(declared_role_name.as_str()),
+                        )?;
+                        role_name = parsed.role_name;
+                        role.description = parsed.description.or(role.description);
+                        role.nickname_candidates =
+                            parsed.nickname_candidates.or(role.nickname_candidates);
+                    }
+                    Self::validate_required_agent_role_description(
+                        &role_name,
+                        role.description.as_deref(),
+                    )?;
+
+                    if roles.insert(role_name.clone(), role).is_some() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!("duplicate agent role name `{role_name}` declared in config"),
+                        ));
+                    }
+                }
+            }
+            return Ok(roles);
+        }
+
+        let mut roles = BTreeMap::new();
+        for layer in layers {
+            let mut layer_roles = BTreeMap::new();
+            if let Some(agents_toml) = Self::agents_toml_from_layer(&layer.config)? {
+                for (declared_role_name, role_toml) in &agents_toml.roles {
+                    let mut role =
+                        Self::agent_role_config_from_toml(declared_role_name, role_toml)?;
+                    let mut role_name = declared_role_name.clone();
+                    if let Some(config_file) = role.config_file.as_deref() {
+                        let parsed = Self::read_parsed_agent_role_file(
+                            config_file,
+                            Some(declared_role_name.as_str()),
+                        )?;
+                        role_name = parsed.role_name;
+                        role.description = parsed.description.or(role.description);
+                        role.nickname_candidates =
+                            parsed.nickname_candidates.or(role.nickname_candidates);
+                    }
+                    Self::validate_required_agent_role_description(
+                        &role_name,
+                        role.description.as_deref(),
+                    )?;
+
+                    if layer_roles.insert(role_name.clone(), role).is_some() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "duplicate agent role name `{role_name}` declared in the same config layer"
+                            ),
+                        ));
+                    }
+                }
+            }
+
+            if let Some(config_folder) = layer.config_folder() {
+                for (role_name, role) in Self::discover_agent_roles_in_dir(
+                    config_folder.as_path().join("agents").as_path(),
+                )? {
+                    layer_roles.insert(role_name, role);
+                }
+            }
+
+            for (role_name, role) in layer_roles {
+                roles.insert(role_name, role);
+            }
+        }
+
+        Ok(roles)
+    }
+
+    fn agents_toml_from_layer(layer_toml: &TomlValue) -> std::io::Result<Option<AgentsToml>> {
+        let Some(agents_toml) = layer_toml.get("agents") else {
+            return Ok(None);
+        };
+
+        agents_toml
+            .clone()
+            .try_into()
+            .map(Some)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))
+    }
+
+    fn agent_role_config_from_toml(
+        role_name: &str,
+        role: &AgentRoleToml,
+    ) -> std::io::Result<AgentRoleConfig> {
+        let config_file = role.config_file.as_ref().map(AbsolutePathBuf::to_path_buf);
+        Self::validate_agent_role_config_file(role_name, config_file.as_deref())?;
+        let description = Self::normalize_agent_role_description(
+            &format!("agents.{role_name}.description"),
+            role.description.as_deref(),
+        )?;
+        let nickname_candidates = Self::normalize_agent_role_nickname_candidates(
+            &format!("agents.{role_name}.nickname_candidates"),
+            role.nickname_candidates.as_deref(),
+        )?;
+
+        Ok(AgentRoleConfig {
+            description,
+            config_file,
+            nickname_candidates,
+        })
+    }
+
+    fn discover_agent_roles_in_dir(
+        agents_dir: &Path,
+    ) -> std::io::Result<BTreeMap<String, AgentRoleConfig>> {
+        let mut roles = BTreeMap::new();
+
+        for agent_file in Self::collect_agent_role_files(agents_dir)? {
+            let parsed = match Self::read_parsed_agent_role_file(&agent_file, None) {
+                Ok(parsed) => parsed,
+                Err(err)
+                    if err.kind() == std::io::ErrorKind::InvalidInput
+                        && err.to_string().contains("must define a non-empty `name`") =>
+                {
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
+            let role_name = parsed.role_name;
+            Self::validate_required_agent_role_description(
+                &role_name,
+                parsed.description.as_deref(),
+            )?;
+            if roles
+                .insert(
+                    role_name.clone(),
+                    AgentRoleConfig {
+                        description: parsed.description,
+                        config_file: Some(agent_file),
+                        nickname_candidates: parsed.nickname_candidates,
+                    },
+                )
+                .is_some()
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "duplicate agent role name `{role_name}` discovered in {}",
+                        agents_dir.display()
+                    ),
+                ));
+            }
+        }
+
+        Ok(roles)
+    }
+
+    fn collect_agent_role_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+        let mut files = Vec::new();
+        Self::collect_agent_role_files_recursive(dir, &mut files)?;
+        files.sort();
+        Ok(files)
+    }
+
+    fn collect_agent_role_files_recursive(
+        dir: &Path,
+        files: &mut Vec<PathBuf>,
+    ) -> std::io::Result<()> {
+        let read_dir = match std::fs::read_dir(dir) {
+            Ok(read_dir) => read_dir,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(err),
+        };
+
+        for entry in read_dir {
+            let entry = entry?;
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                Self::collect_agent_role_files_recursive(&path, files)?;
+                continue;
+            }
+            if file_type.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension == "toml")
+            {
+                files.push(path);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn read_parsed_agent_role_file(
+        path: &Path,
+        role_name_hint: Option<&str>,
+    ) -> std::io::Result<ParsedAgentRoleFile> {
+        let contents = std::fs::read_to_string(path)?;
+        parse_agent_role_file_contents(
+            &contents,
+            path,
+            path.parent().unwrap_or(path),
+            role_name_hint,
+        )
+    }
+
     fn validate_agent_role_config_file(
         role_name: &str,
         config_file: Option<&Path>,
@@ -2597,8 +2890,59 @@ impl Config {
         }
     }
 
-    fn normalize_agent_role_nickname_candidates(
+    fn normalize_agent_role_description(
+        field_label: &str,
+        description: Option<&str>,
+    ) -> std::io::Result<Option<String>> {
+        match description.map(str::trim) {
+            Some("") => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{field_label} cannot be blank"),
+            )),
+            Some(description) => Ok(Some(description.to_string())),
+            None => Ok(None),
+        }
+    }
+
+    fn validate_required_agent_role_description(
         role_name: &str,
+        description: Option<&str>,
+    ) -> std::io::Result<()> {
+        if description.is_some() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("agent role `{role_name}` must define a description"),
+            ))
+        }
+    }
+
+    fn validate_required_agent_role_file_developer_instructions(
+        role_file_label: &Path,
+        developer_instructions: Option<&str>,
+    ) -> std::io::Result<()> {
+        match developer_instructions.map(str::trim) {
+            Some("") => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "agent role file at {}.developer_instructions cannot be blank",
+                    role_file_label.display()
+                ),
+            )),
+            Some(_) => Ok(()),
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "agent role file at {} must define `developer_instructions`",
+                    role_file_label.display()
+                ),
+            )),
+        }
+    }
+
+    fn normalize_agent_role_nickname_candidates(
+        field_label: &str,
         nickname_candidates: Option<&[String]>,
     ) -> std::io::Result<Option<Vec<String>>> {
         let Some(nickname_candidates) = nickname_candidates else {
@@ -2608,7 +2952,7 @@ impl Config {
         if nickname_candidates.is_empty() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("agents.{role_name}.nickname_candidates must contain at least one name"),
+                format!("{field_label} must contain at least one name"),
             ));
         }
 
@@ -2620,14 +2964,14 @@ impl Config {
             if normalized_nickname.is_empty() {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    format!("agents.{role_name}.nickname_candidates cannot contain blank names"),
+                    format!("{field_label} cannot contain blank names"),
                 ));
             }
 
             if !seen_candidates.insert(normalized_nickname.to_owned()) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    format!("agents.{role_name}.nickname_candidates cannot contain duplicates"),
+                    format!("{field_label} cannot contain duplicates"),
                 ));
             }
 
@@ -2638,7 +2982,7 @@ impl Config {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     format!(
-                        "agents.{role_name}.nickname_candidates may only contain ASCII letters, digits, spaces, hyphens, and underscores"
+                        "{field_label} may only contain ASCII letters, digits, spaces, hyphens, and underscores"
                     ),
                 ));
             }
