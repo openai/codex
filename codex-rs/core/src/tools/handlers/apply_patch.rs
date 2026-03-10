@@ -420,13 +420,14 @@ It is important to remember:
 - You must prefix new lines with `+` even when creating a new file
 - File references can only be relative, NEVER ABSOLUTE.
 "#
-            .to_string(),
+        .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["input".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 

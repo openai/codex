@@ -44,7 +44,7 @@ function createProtocol() {
         return;
       }
       pending.delete(message.id);
-      entry.resolve(Array.isArray(message.content_items) ? message.content_items : []);
+      entry.resolve(message.code_mode_result ?? '');
       return;
     }
 

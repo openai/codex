@@ -29,9 +29,7 @@ use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
 use crate::state_db;
 use codex_protocol::mcp::CallToolResult;
-use codex_protocol::models::FunctionCallOutputBody;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::McpToolOutput;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
@@ -58,7 +56,7 @@ pub(crate) async fn handle_mcp_tool_call(
     server: String,
     tool_name: String,
     arguments: String,
-) -> ResponseInputItem {
+) -> McpToolOutput {
     // Parse the `arguments` as JSON. An empty string is OK, but invalid JSON
     // is not.
     let arguments_value = if arguments.trim().is_empty() {
@@ -68,13 +66,7 @@ pub(crate) async fn handle_mcp_tool_call(
             Ok(value) => Some(value),
             Err(e) => {
                 error!("failed to parse tool call arguments: {e}");
-                return ResponseInputItem::FunctionCallOutput {
-                    call_id: call_id.clone(),
-                    output: FunctionCallOutputPayload {
-                        body: FunctionCallOutputBody::Text(format!("err: {e}")),
-                        success: Some(false),
-                    },
-                };
+                return McpToolOutput::from_error_text(format!("err: {e}"));
             }
         }
     };
@@ -118,7 +110,7 @@ pub(crate) async fn handle_mcp_tool_call(
         turn_context
             .session_telemetry
             .counter("codex.mcp.call", 1, &[("status", status)]);
-        return ResponseInputItem::McpToolCallOutput { call_id, result };
+        return McpToolOutput::from_result(result);
     }
 
     if let Some(decision) = maybe_request_mcp_tool_approval(
@@ -212,7 +204,7 @@ pub(crate) async fn handle_mcp_tool_call(
             .session_telemetry
             .counter("codex.mcp.call", 1, &[("status", status)]);
 
-        return ResponseInputItem::McpToolCallOutput { call_id, result };
+        return McpToolOutput::from_result(result);
     }
 
     let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
@@ -258,7 +250,7 @@ pub(crate) async fn handle_mcp_tool_call(
         .session_telemetry
         .counter("codex.mcp.call", 1, &[("status", status)]);
 
-    ResponseInputItem::McpToolCallOutput { call_id, result }
+    McpToolOutput::from_result(result)
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {

@@ -56,7 +56,13 @@ fn echo_sleep_command(marker: &str) -> String {
 }
 
 fn split_stdout_stderr_command() -> String {
-    "printf 'split-out\\n'; printf 'split-err\\n' >&2".to_string()
+    if cfg!(windows) {
+        // Keep this in cmd.exe syntax so the test does not depend on a runner-local
+        // PowerShell/Python setup just to produce deterministic split output.
+        "(echo split-out)&(>&2 echo split-err)".to_string()
+    } else {
+        "printf 'split-out\\n'; printf 'split-err\\n' >&2".to_string()
+    }
 }
 
 async fn collect_split_output(mut output_rx: tokio::sync::mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
@@ -418,21 +424,7 @@ async fn pipe_drains_stderr_without_stdout_activity() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipe_process_can_expose_split_stdout_and_stderr() -> anyhow::Result<()> {
     let env_map: HashMap<String, String> = std::env::vars().collect();
-    let (program, args) = if cfg!(windows) {
-        let Some(python) = find_python() else {
-            eprintln!("python not found; skipping pipe_process_can_expose_split_stdout_and_stderr");
-            return Ok(());
-        };
-        (
-            python,
-            vec![
-                "-c".to_string(),
-                "import sys; sys.stdout.buffer.write(b'split-out\\n'); sys.stdout.buffer.flush(); sys.stderr.buffer.write(b'split-err\\n'); sys.stderr.buffer.flush()".to_string(),
-            ],
-        )
-    } else {
-        shell_command(&split_stdout_stderr_command())
-    };
+    let (program, args) = shell_command(&split_stdout_stderr_command());
     let spawned =
         spawn_pipe_process_no_stdin(&program, &args, Path::new("."), &env_map, &None).await?;
     let SpawnedProcess {
@@ -457,8 +449,19 @@ async fn pipe_process_can_expose_split_stdout_and_stderr() -> anyhow::Result<()>
         .await
         .map_err(|_| anyhow::anyhow!("timed out waiting to drain split stderr"))??;
 
-    assert_eq!(stdout, b"split-out\n".to_vec());
-    assert_eq!(stderr, b"split-err\n".to_vec());
+    let expected_stdout = if cfg!(windows) {
+        b"split-out\r\n".to_vec()
+    } else {
+        b"split-out\n".to_vec()
+    };
+    let expected_stderr = if cfg!(windows) {
+        b"split-err\r\n".to_vec()
+    } else {
+        b"split-err\n".to_vec()
+    };
+
+    assert_eq!(stdout, expected_stdout);
+    assert_eq!(stderr, expected_stderr);
     assert_eq!(code, 0);
 
     Ok(())

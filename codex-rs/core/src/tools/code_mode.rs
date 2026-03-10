@@ -14,15 +14,10 @@ use crate::tools::context::ToolPayload;
 use crate::tools::js_repl::resolve_compatible_node;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseInputItem;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use serde_json::json;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -60,7 +55,7 @@ enum HostToNodeMessage {
     },
     Response {
         id: String,
-        content_items: Vec<JsonValue>,
+        code_mode_result: JsonValue,
     },
 }
 
@@ -90,11 +85,11 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
     section.push_str("- `code_mode` is a freeform/custom tool. Direct `code_mode` calls must send raw JavaScript tool input. Do not wrap code in JSON, quotes, or markdown code fences.\n");
     section.push_str("- Direct tool calls remain available while `code_mode` is enabled.\n");
     section.push_str("- `code_mode` uses the same Node runtime resolution as `js_repl`. If needed, point `js_repl_node_path` at the Node binary you want Codex to use.\n");
-    section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to arrays of content items.\n");
+    section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to their code-mode result values.\n");
     section.push_str(
         "- Function tools require JSON object arguments. Freeform tools require raw strings.\n",
     );
-    section.push_str("- `add_content(value)` is synchronous. It accepts a content item or an array of content items, so `add_content(await exec_command(...))` returns the same content items a direct tool call would expose to the model.\n");
+    section.push_str("- `add_content(value)` is synchronous. It accepts a content item, an array of content items, or a string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`.\n");
     section
         .push_str("- Only content passed to `add_content(value)` is surfaced back to the model.");
     Some(section)
@@ -186,7 +181,7 @@ async fn execute_node(
             NodeToHostMessage::ToolCall { id, name, input } => {
                 let response = HostToNodeMessage::Response {
                     id,
-                    content_items: call_nested_tool(exec.clone(), name, input).await,
+                    code_mode_result: call_nested_tool(exec.clone(), name, input).await,
                 };
                 write_message(&mut stdin, &response).await?;
             }
@@ -290,9 +285,9 @@ async fn call_nested_tool(
     exec: ExecContext,
     tool_name: String,
     input: Option<JsonValue>,
-) -> Vec<JsonValue> {
+) -> JsonValue {
     if tool_name == "code_mode" {
-        return error_content_items_json("code_mode cannot invoke itself".to_string());
+        return JsonValue::String("code_mode cannot invoke itself".to_string());
     }
 
     let nested_config = exec.turn.tools_config.for_code_mode_nested_tools();
@@ -306,7 +301,7 @@ async fn call_nested_tool(
     let specs = router.specs();
     let payload = match build_nested_tool_payload(&specs, &tool_name, input) {
         Ok(payload) => payload,
-        Err(error) => return error_content_items_json(error),
+        Err(error) => return JsonValue::String(error),
     };
 
     let call = ToolCall {
@@ -314,8 +309,8 @@ async fn call_nested_tool(
         call_id: format!("code_mode-{}", uuid::Uuid::new_v4()),
         payload,
     };
-    let response = router
-        .dispatch_tool_call(
+    let result = router
+        .dispatch_tool_call_with_code_mode_result(
             Arc::clone(&exec.session),
             Arc::clone(&exec.turn),
             Arc::clone(&exec.tracker),
@@ -324,11 +319,9 @@ async fn call_nested_tool(
         )
         .await;
 
-    match response {
-        Ok(response) => {
-            json_values_from_output_content_items(content_items_from_response_input(response))
-        }
-        Err(error) => error_content_items_json(error.to_string()),
+    match result {
+        Ok(result) => result.code_mode_result(),
+        Err(error) => JsonValue::String(error.to_string()),
     }
 }
 
@@ -387,70 +380,6 @@ fn build_freeform_tool_payload(
     }
 }
 
-fn content_items_from_response_input(
-    response: ResponseInputItem,
-) -> Vec<FunctionCallOutputContentItem> {
-    match response {
-        ResponseInputItem::Message { content, .. } => content
-            .into_iter()
-            .map(function_output_content_item_from_content_item)
-            .collect(),
-        ResponseInputItem::FunctionCallOutput { output, .. } => {
-            content_items_from_function_output(output)
-        }
-        ResponseInputItem::CustomToolCallOutput { output, .. } => {
-            content_items_from_function_output(output)
-        }
-        ResponseInputItem::McpToolCallOutput { result, .. } => match result {
-            Ok(result) => {
-                content_items_from_function_output(FunctionCallOutputPayload::from(&result))
-            }
-            Err(error) => vec![FunctionCallOutputContentItem::InputText { text: error }],
-        },
-    }
-}
-
-fn content_items_from_function_output(
-    output: FunctionCallOutputPayload,
-) -> Vec<FunctionCallOutputContentItem> {
-    match output.body {
-        FunctionCallOutputBody::Text(text) => {
-            vec![FunctionCallOutputContentItem::InputText { text }]
-        }
-        FunctionCallOutputBody::ContentItems(items) => items,
-    }
-}
-
-fn function_output_content_item_from_content_item(
-    item: ContentItem,
-) -> FunctionCallOutputContentItem {
-    match item {
-        ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-            FunctionCallOutputContentItem::InputText { text }
-        }
-        ContentItem::InputImage { image_url } => FunctionCallOutputContentItem::InputImage {
-            image_url,
-            detail: None,
-        },
-    }
-}
-
-fn json_values_from_output_content_items(
-    content_items: Vec<FunctionCallOutputContentItem>,
-) -> Vec<JsonValue> {
-    content_items
-        .into_iter()
-        .map(|item| match item {
-            FunctionCallOutputContentItem::InputText { text } => {
-                json!({ "type": "input_text", "text": text })
-            }
-            FunctionCallOutputContentItem::InputImage { image_url, detail } => {
-                json!({ "type": "input_image", "image_url": image_url, "detail": detail })
-            }
-        })
-        .collect()
-}
-
 fn output_content_items_from_json_values(
     content_items: Vec<JsonValue>,
 ) -> Result<Vec<FunctionCallOutputContentItem>, String> {
@@ -462,8 +391,4 @@ fn output_content_items_from_json_values(
                 .map_err(|err| format!("invalid code_mode content item at index {index}: {err}"))
         })
         .collect()
-}
-
-fn error_content_items_json(message: String) -> Vec<JsonValue> {
-    vec![json!({ "type": "input_text", "text": message })]
 }

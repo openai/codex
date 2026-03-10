@@ -359,14 +359,8 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
                 output: output.clone(),
             })
         }
-        ResponseInputItem::McpToolCallOutput { call_id, result } => {
-            let output = match result {
-                Ok(call_tool_result) => FunctionCallOutputPayload::from(call_tool_result),
-                Err(err) => FunctionCallOutputPayload {
-                    body: FunctionCallOutputBody::Text(err.clone()),
-                    success: Some(false),
-                },
-            };
+        ResponseInputItem::McpToolCallOutput { call_id, output } => {
+            let output = output.as_function_call_output_payload();
             Some(ResponseItem::FunctionCallOutput {
                 call_id: call_id.clone(),
                 output,

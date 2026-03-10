@@ -57,10 +57,28 @@ pub trait ToolHandler: Send + Sync {
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError>;
 }
 
-struct AnyToolResult {
-    preview: String,
-    success: bool,
-    response: ResponseInputItem,
+pub(crate) struct AnyToolResult {
+    pub(crate) call_id: String,
+    pub(crate) payload: ToolPayload,
+    pub(crate) result: Box<dyn ToolOutput>,
+}
+
+impl AnyToolResult {
+    pub(crate) fn into_response(self) -> ResponseInputItem {
+        let Self {
+            call_id,
+            payload,
+            result,
+        } = self;
+        result.to_response_item(&call_id, &payload)
+    }
+
+    pub(crate) fn code_mode_result(self) -> serde_json::Value {
+        let Self {
+            payload, result, ..
+        } = self;
+        result.code_mode_result(&payload)
+    }
 }
 
 #[async_trait]
@@ -95,13 +113,10 @@ where
         let call_id = invocation.call_id.clone();
         let payload = invocation.payload.clone();
         let output = self.handle(invocation).await?;
-        let preview = output.log_preview();
-        let success = output.success_for_logging();
-        let response = output.into_response(&call_id, &payload);
         Ok(AnyToolResult {
-            preview,
-            success,
-            response,
+            call_id,
+            payload,
+            result: Box::new(output),
         })
     }
 }
@@ -127,10 +142,10 @@ impl ToolRegistry {
     //     }
     // }
 
-    pub async fn dispatch(
+    pub(crate) async fn dispatch_any(
         &self,
         invocation: ToolInvocation,
-    ) -> Result<ResponseInputItem, FunctionCallError> {
+    ) -> Result<AnyToolResult, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
         let call_id_owned = invocation.call_id.clone();
         let otel = invocation.turn.session_telemetry.clone();
@@ -237,13 +252,10 @@ impl ToolRegistry {
                         }
                         match handler.handle_any(invocation_for_tool).await {
                             Ok(result) => {
-                                let AnyToolResult {
-                                    preview,
-                                    success,
-                                    response,
-                                } = result;
+                                let preview = result.result.log_preview();
+                                let success = result.result.success_for_logging();
                                 let mut guard = response_cell.lock().await;
-                                *guard = Some(response);
+                                *guard = Some(result);
                                 Ok((preview, success))
                             }
                             Err(err) => Err(err),
@@ -275,10 +287,10 @@ impl ToolRegistry {
         match result {
             Ok(_) => {
                 let mut guard = response_cell.lock().await;
-                let response = guard.take().ok_or_else(|| {
+                let result = guard.take().ok_or_else(|| {
                     FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
-                Ok(response)
+                Ok(result)
             }
             Err(err) => Err(err),
         }
