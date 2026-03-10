@@ -396,16 +396,7 @@ fn discover_agent_roles_in_dir(
     let mut roles = BTreeMap::new();
 
     for agent_file in collect_agent_role_files(agents_dir)? {
-        let parsed_file = match read_resolved_agent_role_file(&agent_file, None) {
-            Ok(parsed_file) => parsed_file,
-            Err(err)
-                if err.kind() == std::io::ErrorKind::InvalidInput
-                    && err.to_string().contains("must define a non-empty `name`") =>
-            {
-                continue;
-            }
-            Err(err) => return Err(err),
-        };
+        let parsed_file = read_resolved_agent_role_file(&agent_file, None)?;
         let role_name = parsed_file.role_name;
         if roles
             .insert(
