@@ -98,6 +98,7 @@ use crate::config::profile::ConfigProfile;
 use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
+use toml_edit::value;
 
 pub(crate) mod agent_roles;
 pub mod edit;
@@ -604,6 +605,9 @@ impl ConfigBuilder {
             fallback_cwd,
         } = self;
         let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
+        if let Err(err) = maybe_migrate_guardian_approval_alias(&codex_home).await {
+            tracing::warn!(error = %err, "failed to migrate guardian_approval feature alias");
+        }
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
@@ -649,6 +653,73 @@ impl ConfigBuilder {
             config_layer_stack,
         )
     }
+}
+
+async fn maybe_migrate_guardian_approval_alias(codex_home: &Path) -> std::io::Result<bool> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    if !tokio::fs::try_exists(&config_path).await? {
+        return Ok(false);
+    }
+
+    let config_contents = tokio::fs::read_to_string(&config_path).await?;
+    let Ok(config_toml) = toml::from_str::<ConfigToml>(&config_contents) else {
+        return Ok(false);
+    };
+
+    let mut edits = Vec::new();
+
+    if let Some(features) = config_toml.features.as_ref()
+        && let Some(enabled) = features.entries.get("guardian_approval").copied()
+    {
+        if enabled && !features.entries.contains_key("smart_approvals") {
+            edits.push(ConfigEdit::SetPath {
+                segments: vec!["features".to_string(), "smart_approvals".to_string()],
+                value: value(true),
+            });
+        }
+        edits.push(ConfigEdit::ClearPath {
+            segments: vec!["features".to_string(), "guardian_approval".to_string()],
+        });
+    }
+
+    for (profile_name, profile) in &config_toml.profiles {
+        if let Some(features) = profile.features.as_ref()
+            && let Some(enabled) = features.entries.get("guardian_approval").copied()
+        {
+            if enabled && !features.entries.contains_key("smart_approvals") {
+                edits.push(ConfigEdit::SetPath {
+                    segments: vec![
+                        "profiles".to_string(),
+                        profile_name.clone(),
+                        "features".to_string(),
+                        "smart_approvals".to_string(),
+                    ],
+                    value: value(true),
+                });
+            }
+            edits.push(ConfigEdit::ClearPath {
+                segments: vec![
+                    "profiles".to_string(),
+                    profile_name.clone(),
+                    "features".to_string(),
+                    "guardian_approval".to_string(),
+                ],
+            });
+        }
+    }
+
+    if edits.is_empty() {
+        return Ok(false);
+    }
+
+    ConfigEditsBuilder::new(codex_home)
+        .with_edits(edits)
+        .apply()
+        .await
+        .map_err(|err| {
+            std::io::Error::other(format!("failed to migrate smart_approvals alias: {err}"))
+        })?;
+    Ok(true)
 }
 
 impl Config {
@@ -712,6 +783,9 @@ pub async fn load_config_as_toml_with_cli_overrides(
     cwd: &AbsolutePathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
+    if let Err(err) = maybe_migrate_guardian_approval_alias(codex_home).await {
+        tracing::warn!(error = %err, "failed to migrate guardian_approval feature alias");
+    }
     let config_layer_stack = load_config_layers_state(
         codex_home,
         Some(cwd.clone()),
