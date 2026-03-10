@@ -348,23 +348,19 @@ impl NetworkApprovalService {
             host: request.host.clone(),
             protocol,
         };
+        let owner_call = self.resolve_single_active_call().await;
         let approval_decision = if routes_approval_to_guardian(&turn_context) {
-            let Some(owner_call) = self.resolve_single_active_call().await else {
-                pending.set_decision(PendingApprovalDecision::Deny).await;
-                let mut pending_approvals = self.pending_host_approvals.lock().await;
-                pending_approvals.remove(&key);
-                self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
-                    policy_denial_message.clone(),
-                ))
-                .await;
-                return NetworkDecision::deny(REASON_NOT_ALLOWED);
-            };
             review_approval_request(
                 &session,
                 &turn_context,
                 GuardianApprovalRequest::NetworkAccess {
-                    id: owner_call.call_id.clone(),
-                    turn_id: owner_call.turn_id.clone(),
+                    id: owner_call.as_ref().map_or_else(
+                        || Self::approval_id_for_key(&key),
+                        |call| call.call_id.clone(),
+                    ),
+                    turn_id: owner_call
+                        .as_ref()
+                        .map_or_else(|| turn_context.sub_id.clone(), |call| call.turn_id.clone()),
                     target,
                     host: request.host,
                     protocol,
@@ -461,27 +457,36 @@ impl NetworkApprovalService {
                                 .await;
                         }
                     }
-                    self.record_outcome_for_single_active_call(
-                        NetworkApprovalOutcome::DeniedByUser,
-                    )
-                    .await;
+                    if let Some(owner_call) = owner_call.as_ref() {
+                        self.record_call_outcome(
+                            &owner_call.registration_id,
+                            NetworkApprovalOutcome::DeniedByUser,
+                        )
+                        .await;
+                    }
                     cache_session_deny = true;
                     PendingApprovalDecision::Deny
                 }
             },
             ReviewDecision::Denied | ReviewDecision::Abort => {
                 if routes_approval_to_guardian(&turn_context) {
-                    self.record_outcome_for_single_active_call(
-                        NetworkApprovalOutcome::DeniedByPolicy(
-                            GUARDIAN_REJECTION_MESSAGE.to_string(),
-                        ),
-                    )
-                    .await;
+                    if let Some(owner_call) = owner_call.as_ref() {
+                        self.record_call_outcome(
+                            &owner_call.registration_id,
+                            NetworkApprovalOutcome::DeniedByPolicy(
+                                GUARDIAN_REJECTION_MESSAGE.to_string(),
+                            ),
+                        )
+                        .await;
+                    }
                 } else {
-                    self.record_outcome_for_single_active_call(
-                        NetworkApprovalOutcome::DeniedByUser,
-                    )
-                    .await;
+                    if let Some(owner_call) = owner_call.as_ref() {
+                        self.record_call_outcome(
+                            &owner_call.registration_id,
+                            NetworkApprovalOutcome::DeniedByUser,
+                        )
+                        .await;
+                    }
                 }
                 PendingApprovalDecision::Deny
             }
