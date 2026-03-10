@@ -64,6 +64,7 @@ pub struct CommandSpec {
 pub struct ExecRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
+    pub sandbox_policy_cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub expiration: ExecExpiration,
@@ -700,6 +701,7 @@ impl SandboxManager {
         Ok(ExecRequest {
             command,
             cwd: spec.cwd,
+            sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
             env,
             network: network.cloned(),
             expiration: spec.expiration,

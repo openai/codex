@@ -157,6 +157,7 @@ pub(crate) async fn execute_user_shell_command(
     let exec_env = ExecRequest {
         command: exec_command.clone(),
         cwd: cwd.clone(),
+        sandbox_policy_cwd: cwd.clone(),
         env: create_env(
             &turn_context.shell_environment_policy,
             Some(session.conversation_id),

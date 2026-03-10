@@ -14,8 +14,10 @@ When using the workspace-write sandbox policy, the Seatbelt profile allows
 writes under the configured writable roots while keeping `.git` (directory or
 pointer file), the resolved `gitdir:` target, and `.codex` read-only.
 
-Network access and filesystem read/write roots are controlled by
-`SandboxPolicy`. Seatbelt consumes the resolved policy and enforces it.
+Network access and filesystem read/write roots are controlled by the split
+`FileSystemSandboxPolicy` and `NetworkSandboxPolicy` views. On macOS, Seatbelt
+enforces overlapping path rules with the most specific entry winning, so a
+broader writable root can still contain nested read-only or denied carveouts.
 
 Seatbelt also supports macOS permission-profile extensions layered on top of
 `SandboxPolicy`:
@@ -47,6 +49,20 @@ Seatbelt also supports macOS permission-profile extensions layered on top of
 ### Linux
 
 Expects the binary containing `codex-core` to run the equivalent of `codex sandbox linux` (legacy alias: `codex debug landlock`) when `arg0` is `codex-linux-sandbox`. See the `codex-arg0` crate for details.
+
+Split filesystem policies that need direct `FileSystemSandboxPolicy`
+enforcement, such as read-only or denied carveouts under a broader writable
+root, automatically route through bubblewrap. The legacy Landlock path is used
+only when the split filesystem policy round-trips through the legacy
+`SandboxPolicy` model without changing semantics.
+
+### Windows
+
+The restricted-token sandbox currently enforces only the subset of filesystem
+and network restrictions that round-trip through the legacy `SandboxPolicy`
+model. Split-only filesystem carveouts that require direct
+`FileSystemSandboxPolicy` enforcement are rejected instead of running with a
+weaker sandbox.
 
 ### All Platforms
 
