@@ -1,4 +1,8 @@
 use super::*;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
@@ -257,4 +261,54 @@ async fn truncation_respects_sorted_order() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+#[tokio::test]
+async fn hides_denied_entries_and_prunes_denied_subtrees() {
+    let temp = tempdir().expect("create tempdir");
+    let dir_path = temp.path();
+    let visible_dir = dir_path.join("visible");
+    let denied_dir = dir_path.join("private");
+    tokio::fs::create_dir(&visible_dir)
+        .await
+        .expect("create visible dir");
+    tokio::fs::create_dir(&denied_dir)
+        .await
+        .expect("create denied dir");
+    tokio::fs::write(visible_dir.join("ok.txt"), b"ok")
+        .await
+        .expect("write visible file");
+    tokio::fs::write(denied_dir.join("secret.txt"), b"secret")
+        .await
+        .expect("write denied file");
+    tokio::fs::write(dir_path.join("top_secret.txt"), b"secret")
+        .await
+        .expect("write denied top-level file");
+
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: denied_dir.try_into().expect("absolute denied dir"),
+            },
+            access: FileSystemAccessMode::None,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: dir_path
+                    .join("top_secret.txt")
+                    .try_into()
+                    .expect("absolute denied file"),
+            },
+            access: FileSystemAccessMode::None,
+        },
+    ]);
+
+    let entries = list_dir_slice_with_policy(dir_path, 1, 20, 3, Some((&policy, dir_path)))
+        .await
+        .expect("list directory");
+
+    assert_eq!(
+        entries,
+        vec!["visible/".to_string(), "  ok.txt".to_string(),]
+    );
 }

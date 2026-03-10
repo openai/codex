@@ -1226,6 +1226,12 @@ impl SessionConfiguration {
         let mut sandbox_policy_changed = false;
         if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
             next_configuration.sandbox_policy.set(sandbox_policy)?;
+            next_configuration.file_system_sandbox_policy =
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_read_denies(
+                    next_configuration.sandbox_policy.get(),
+                    &next_configuration.cwd,
+                    &next_configuration.file_system_sandbox_policy,
+                );
             next_configuration.network_sandbox_policy =
                 NetworkSandboxPolicy::from(next_configuration.sandbox_policy.get());
             sandbox_policy_changed = true;

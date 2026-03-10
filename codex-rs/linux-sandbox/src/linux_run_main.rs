@@ -149,6 +149,7 @@ pub fn run_main() -> ! {
         let proxy_routing_active = allow_network_for_proxy;
         if let Err(e) = apply_sandbox_policy_to_current_thread(
             &sandbox_policy,
+            &file_system_sandbox_policy,
             network_sandbox_policy,
             &sandbox_policy_cwd,
             /*apply_landlock_fs*/ false,
@@ -163,6 +164,7 @@ pub fn run_main() -> ! {
     if file_system_sandbox_policy.has_full_disk_write_access() && !allow_network_for_proxy {
         if let Err(e) = apply_sandbox_policy_to_current_thread(
             &sandbox_policy,
+            &file_system_sandbox_policy,
             network_sandbox_policy,
             &sandbox_policy_cwd,
             /*apply_landlock_fs*/ false,
@@ -210,6 +212,7 @@ pub fn run_main() -> ! {
     // Legacy path: Landlock enforcement only, when bwrap sandboxing is not enabled.
     if let Err(e) = apply_sandbox_policy_to_current_thread(
         &sandbox_policy,
+        &file_system_sandbox_policy,
         network_sandbox_policy,
         &sandbox_policy_cwd,
         /*apply_landlock_fs*/ true,

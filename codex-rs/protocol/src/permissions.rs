@@ -198,6 +198,33 @@ impl FileSystemSandboxPolicy {
                 .any(|entry| entry.access == FileSystemAccessMode::None)
     }
 
+    pub fn has_denied_read_restrictions(&self) -> bool {
+        self.has_explicit_deny_entries()
+    }
+
+    pub fn from_legacy_sandbox_policy_preserving_read_denies(
+        sandbox_policy: &SandboxPolicy,
+        cwd: &Path,
+        existing: &Self,
+    ) -> Self {
+        let mut rebuilt = Self::from_legacy_sandbox_policy(sandbox_policy, cwd);
+        if !matches!(rebuilt.kind, FileSystemSandboxKind::Restricted) {
+            return rebuilt;
+        }
+
+        for deny_entry in existing
+            .entries
+            .iter()
+            .filter(|entry| entry.access == FileSystemAccessMode::None)
+        {
+            if !rebuilt.entries.iter().any(|entry| entry == deny_entry) {
+                rebuilt.entries.push(deny_entry.clone());
+            }
+        }
+
+        rebuilt
+    }
+
     /// Returns true when a restricted policy contains any entry that really
     /// reduces a broader `:root = write` grant.
     ///
@@ -2060,5 +2087,33 @@ mod tests {
     fn file_system_access_mode_orders_by_conflict_precedence() {
         assert!(FileSystemAccessMode::Write > FileSystemAccessMode::Read);
         assert!(FileSystemAccessMode::None > FileSystemAccessMode::Write);
+    }
+
+    #[test]
+    fn legacy_bridge_preserves_explicit_deny_entries() {
+        let denied = AbsolutePathBuf::try_from("/tmp/private").expect("absolute path");
+        let existing = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: denied.clone(),
+            },
+            access: FileSystemAccessMode::None,
+        }]);
+
+        let rebuilt = FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_read_denies(
+            &SandboxPolicy::new_workspace_write_policy(),
+            Path::new("/tmp/workspace"),
+            &existing,
+        );
+
+        assert!(
+            rebuilt.entries.iter().any(|entry| {
+                entry.path
+                    == FileSystemPath::Path {
+                        path: denied.clone(),
+                    }
+                    && entry.access == FileSystemAccessMode::None
+            }),
+            "expected explicit deny entry to be preserved"
+        );
     }
 }
