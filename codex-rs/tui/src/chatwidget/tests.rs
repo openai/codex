@@ -1235,26 +1235,32 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
     )];
     let existing_images = vec![PathBuf::from("/tmp/existing.png")];
 
-    chat.queued_user_messages.push_back(UserMessage {
-        text: first_text,
-        local_images: vec![LocalImageAttachment {
-            placeholder: first_placeholder.to_string(),
-            path: first_images[0].clone(),
-        }],
-        remote_image_urls: Vec::new(),
-        text_elements: first_elements,
-        mention_bindings: Vec::new(),
-    });
-    chat.queued_user_messages.push_back(UserMessage {
-        text: second_text,
-        local_images: vec![LocalImageAttachment {
-            placeholder: second_placeholder.to_string(),
-            path: second_images[0].clone(),
-        }],
-        remote_image_urls: Vec::new(),
-        text_elements: second_elements,
-        mention_bindings: Vec::new(),
-    });
+    chat.queued_user_messages.push_back(
+        UserMessage {
+            text: first_text,
+            local_images: vec![LocalImageAttachment {
+                placeholder: first_placeholder.to_string(),
+                path: first_images[0].clone(),
+            }],
+            remote_image_urls: Vec::new(),
+            text_elements: first_elements,
+            mention_bindings: Vec::new(),
+        }
+        .into(),
+    );
+    chat.queued_user_messages.push_back(
+        UserMessage {
+            text: second_text,
+            local_images: vec![LocalImageAttachment {
+                placeholder: second_placeholder.to_string(),
+                path: second_images[0].clone(),
+            }],
+            remote_image_urls: Vec::new(),
+            text_elements: second_elements,
+            mention_bindings: Vec::new(),
+        }
+        .into(),
+    );
     chat.refresh_pending_input_preview();
 
     chat.bottom_pane
@@ -1318,13 +1324,16 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
 
     chat.set_collaboration_mask(plan_mask);
     chat.on_task_started();
-    chat.queued_user_messages.push_back(UserMessage {
-        text: "Implement the plan.".to_string(),
-        local_images: Vec::new(),
-        remote_image_urls: Vec::new(),
-        text_elements: Vec::new(),
-        mention_bindings: Vec::new(),
-    });
+    chat.queued_user_messages.push_back(
+        UserMessage {
+            text: "Implement the plan.".to_string(),
+            local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
+            text_elements: Vec::new(),
+            mention_bindings: Vec::new(),
+        }
+        .into(),
+    );
     chat.refresh_pending_input_preview();
 
     chat.handle_codex_event(Event {
@@ -3696,9 +3705,9 @@ async fn alt_up_edits_most_recent_queued_message() {
 
     // Seed two queued messages.
     chat.queued_user_messages
-        .push_back(UserMessage::from("first queued".to_string()));
+        .push_back(UserMessage::from("first queued".to_string()).into());
     chat.queued_user_messages
-        .push_back(UserMessage::from("second queued".to_string()));
+        .push_back(UserMessage::from("second queued".to_string()).into());
     chat.refresh_pending_input_preview();
 
     // Press Alt+Up to edit the most recent (last) queued message.
@@ -3712,7 +3721,7 @@ async fn alt_up_edits_most_recent_queued_message() {
     // And the queue should now contain only the remaining (older) item.
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.queued_user_messages.front().unwrap().preview_text(),
         "first queued"
     );
 }
@@ -3730,9 +3739,9 @@ async fn assert_shift_left_edits_most_recent_queued_message_for_terminal(
 
     // Seed two queued messages.
     chat.queued_user_messages
-        .push_back(UserMessage::from("first queued".to_string()));
+        .push_back(UserMessage::from("first queued".to_string()).into());
     chat.queued_user_messages
-        .push_back(UserMessage::from("second queued".to_string()));
+        .push_back(UserMessage::from("second queued".to_string()).into());
     chat.refresh_pending_input_preview();
 
     // Press Shift+Left to edit the most recent (last) queued message.
@@ -3746,7 +3755,7 @@ async fn assert_shift_left_edits_most_recent_queued_message_for_terminal(
     // And the queue should now contain only the remaining (older) item.
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.queued_user_messages.front().unwrap().preview_text(),
         "first queued"
     );
 }
@@ -3815,7 +3824,7 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
 
     assert_eq!(chat.queued_user_messages.len(), 3);
     for message in chat.queued_user_messages.iter() {
-        assert_eq!(message.text, "repeat me");
+        assert_eq!(message.preview_text(), "repeat me");
     }
 }
 
@@ -3838,7 +3847,7 @@ async fn streaming_final_answer_keeps_task_running_state() {
 
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.queued_user_messages.front().unwrap().preview_text(),
         "queued submission"
     );
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
@@ -4011,7 +4020,7 @@ async fn steer_enter_queues_while_plan_stream_is_active() {
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.queued_user_messages.front().unwrap().preview_text(),
         "queued submission"
     );
     assert!(chat.pending_steers.is_empty());
@@ -4504,7 +4513,7 @@ async fn esc_interrupt_sends_all_pending_steers_immediately_and_keeps_existing_d
     }
 
     chat.queued_user_messages
-        .push_back(UserMessage::from("queued draft".to_string()));
+        .push_back(UserMessage::from("queued draft".to_string()).into());
     chat.refresh_pending_input_preview();
     chat.bottom_pane
         .set_composer_text("still editing".to_string(), Vec::new(), Vec::new());
@@ -4529,7 +4538,7 @@ async fn esc_interrupt_sends_all_pending_steers_immediately_and_keeps_existing_d
     assert_eq!(chat.bottom_pane.composer_text(), "still editing");
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.queued_user_messages.front().unwrap().preview_text(),
         "queued draft"
     );
 
@@ -4626,7 +4635,7 @@ async fn manual_interrupt_restores_pending_steers_before_queued_messages() {
         .set_composer_text("pending steer".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     chat.queued_user_messages
-        .push_back(UserMessage::from("queued draft".to_string()));
+        .push_back(UserMessage::from("queued draft".to_string()).into());
     chat.refresh_pending_input_preview();
 
     match next_submit_op(&mut op_rx) {
@@ -4668,7 +4677,7 @@ async fn replaced_turn_clears_pending_steers_but_keeps_queued_drafts() {
         .set_composer_text("pending steer".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     chat.queued_user_messages
-        .push_back(UserMessage::from("queued draft".to_string()));
+        .push_back(UserMessage::from("queued draft".to_string()).into());
     chat.refresh_pending_input_preview();
 
     match next_submit_op(&mut op_rx) {
@@ -6050,24 +6059,19 @@ async fn slash_clear_requests_ui_clear_when_idle() {
 }
 
 #[tokio::test]
-async fn slash_clear_is_disabled_while_task_running() {
+async fn slash_clear_queues_while_task_running() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.bottom_pane.set_task_running(true);
+    chat.on_task_started();
 
     chat.dispatch_command(SlashCommand::Clear);
 
-    let event = rx.try_recv().expect("expected disabled command error");
-    match event {
-        AppEvent::InsertHistoryCell(cell) => {
-            let rendered = lines_to_single_string(&cell.display_lines(80));
-            assert!(
-                rendered.contains("'/clear' is disabled while a task is in progress."),
-                "expected /clear task-running error, got {rendered:?}"
-            );
-        }
-        other => panic!("expected InsertHistoryCell error, got {other:?}"),
-    }
-    assert!(rx.try_recv().is_err(), "expected no follow-up events");
+    assert_eq!(chat.queued_user_message_texts(), vec!["/clear".to_string()]);
+    assert!(rx.try_recv().is_err(), "expected no immediate app events");
+
+    chat.on_task_complete(None, false);
+
+    assert!(chat.queued_user_messages.is_empty());
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ClearUi));
 }
 
 #[tokio::test]
@@ -8109,22 +8113,26 @@ async fn user_shell_command_renders_output_not_exploring() {
 }
 
 #[tokio::test]
-async fn disabled_slash_command_while_task_running_snapshot() {
-    // Build a chat widget and simulate an active task
+async fn queued_slash_command_while_task_running_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.bottom_pane.set_task_running(true);
+    chat.on_task_started();
 
-    // Dispatch a command that is unavailable while a task runs (e.g., /model)
     chat.dispatch_command(SlashCommand::Model);
 
-    // Drain history and snapshot the rendered error line(s)
-    let cells = drain_insert_history(&mut rx);
-    assert!(
-        !cells.is_empty(),
-        "expected an error message history cell to be emitted",
-    );
-    let blob = lines_to_single_string(cells.last().unwrap());
-    assert_snapshot!(blob);
+    assert_eq!(chat.queued_user_message_texts(), vec!["/model".to_string()]);
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    let width: u16 = 80;
+    let height: u16 = 18;
+    let backend = VT100Backend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    let desired_height = chat.desired_height(width).min(height);
+    term.set_viewport_area(Rect::new(0, height - desired_height, width, desired_height));
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .unwrap();
+    assert_snapshot!(term.backend().vt100().screen().contents());
 }
 
 #[tokio::test]
@@ -8994,9 +9002,9 @@ async fn interrupt_restores_queued_messages_into_composer() {
 
     // Queue two user messages while the task is running.
     chat.queued_user_messages
-        .push_back(UserMessage::from("first queued".to_string()));
+        .push_back(UserMessage::from("first queued".to_string()).into());
     chat.queued_user_messages
-        .push_back(UserMessage::from("second queued".to_string()));
+        .push_back(UserMessage::from("second queued".to_string()).into());
     chat.refresh_pending_input_preview();
 
     // Deliver a TurnAborted event with Interrupted reason (as if Esc was pressed).
@@ -9034,9 +9042,9 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
         .set_composer_text("current draft".to_string(), Vec::new(), Vec::new());
 
     chat.queued_user_messages
-        .push_back(UserMessage::from("first queued".to_string()));
+        .push_back(UserMessage::from("first queued".to_string()).into());
     chat.queued_user_messages
-        .push_back(UserMessage::from("second queued".to_string()));
+        .push_back(UserMessage::from("second queued".to_string()).into());
     chat.refresh_pending_input_preview();
 
     chat.handle_codex_event(Event {
@@ -11005,12 +11013,74 @@ async fn enter_queues_user_messages_while_review_is_running() {
 
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
+        chat.queued_user_messages.front().unwrap().preview_text(),
         "Queued while /review is running."
     );
     assert!(chat.pending_steers.is_empty());
     assert_no_submit_op(&mut op_rx);
     assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
+async fn review_slash_command_queues_while_task_running_and_opens_popup_after_turn_complete() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    chat.dispatch_command(SlashCommand::Review);
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["/review".to_string()]
+    );
+    assert!(!chat.has_active_view());
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.on_task_complete(None, false);
+
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.has_active_view(), "expected /review popup to open");
+}
+
+#[tokio::test]
+async fn review_slash_command_with_args_queues_while_task_running_and_submits_after_turn_complete()
+{
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.bottom_pane.set_composer_text(
+        "/review audit dependency changes".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["/review audit dependency changes".to_string()]
+    );
+    assert_no_submit_op(&mut op_rx);
+
+    chat.on_task_complete(None, false);
+
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::Review { review_request }) => {
+                assert_eq!(
+                    review_request,
+                    ReviewRequest {
+                        target: ReviewTarget::Custom {
+                            instructions: "audit dependency changes".to_string(),
+                        },
+                        user_facing_hint: None,
+                    }
+                );
+                break;
+            }
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected queued /review op"),
+            Err(TryRecvError::Disconnected) => panic!("expected queued /review op"),
+        }
+    }
 }
 
 #[tokio::test]

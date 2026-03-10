@@ -148,6 +148,7 @@ use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use codex_utils_sleep_inhibitor::SleepInhibitor;
@@ -725,8 +726,8 @@ pub(crate) struct ChatWidget {
     // When resuming an existing session (selected via resume picker), avoid an
     // immediate redraw on SessionConfigured to prevent a gratuitous UI flicker.
     suppress_session_configured_redraw: bool,
-    // User messages queued while a turn is in progress
-    queued_user_messages: VecDeque<UserMessage>,
+    // User messages or slash-command actions queued while a turn is in progress.
+    queued_user_messages: VecDeque<QueuedInput>,
     // Steers already submitted to core but not yet committed into history.
     //
     // The bottom pane shows these above queued drafts until core records the
@@ -867,10 +868,71 @@ impl ThreadComposerState {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+enum QueuedInput {
+    UserMessage(UserMessage),
+    SlashCommand(QueuedSlashCommand),
+}
+
+impl QueuedInput {
+    fn preview_text(&self) -> String {
+        match self {
+            Self::UserMessage(message) => message.text.clone(),
+            Self::SlashCommand(command) => command.preview_text(),
+        }
+    }
+
+    fn into_restorable_user_message(self) -> UserMessage {
+        match self {
+            Self::UserMessage(message) => message,
+            Self::SlashCommand(command) => command.into_restorable_user_message(),
+        }
+    }
+}
+
+impl From<UserMessage> for QueuedInput {
+    fn from(message: UserMessage) -> Self {
+        Self::UserMessage(message)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct QueuedSlashCommand {
+    draft: UserMessage,
+    action: QueuedSlashCommandAction,
+}
+
+impl QueuedSlashCommand {
+    fn preview_text(&self) -> String {
+        self.draft.text.clone()
+    }
+
+    fn into_restorable_user_message(self) -> UserMessage {
+        self.draft
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum QueuedSlashCommandAction {
+    Command(SlashCommand),
+    Fast(QueuedFastCommandAction),
+    Plan(UserMessage),
+    Rename(String),
+    Review(ReviewRequest),
+    SandboxReadRoot(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueuedFastCommandAction {
+    On,
+    Off,
+    Status,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ThreadInputState {
     composer: Option<ThreadComposerState>,
     pending_steers: VecDeque<UserMessage>,
-    queued_user_messages: VecDeque<UserMessage>,
+    queued_user_messages: VecDeque<QueuedInput>,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     agent_turn_running: bool,
@@ -2236,7 +2298,11 @@ impl ChatWidget {
             .drain(..)
             .map(|steer| steer.user_message)
             .collect();
-        to_merge.extend(self.queued_user_messages.drain(..));
+        to_merge.extend(
+            self.queued_user_messages
+                .drain(..)
+                .map(QueuedInput::into_restorable_user_message),
+        );
         if !existing_message.text.is_empty()
             || !existing_message.local_images.is_empty()
             || !existing_message.remote_image_urls.is_empty()
@@ -2321,7 +2387,11 @@ impl ChatWidget {
                 self.bottom_pane.set_composer_pending_pastes(Vec::new());
             }
             self.pending_steers.clear();
-            self.queued_user_messages = input_state.pending_steers;
+            self.queued_user_messages = input_state
+                .pending_steers
+                .into_iter()
+                .map(QueuedInput::from)
+                .collect();
             self.queued_user_messages
                 .extend(input_state.queued_user_messages);
         } else {
@@ -4121,8 +4191,8 @@ impl ChatWidget {
             && self.queued_message_edit_binding.is_press(key_event)
             && !self.queued_user_messages.is_empty()
         {
-            if let Some(user_message) = self.queued_user_messages.pop_back() {
-                self.restore_user_message_to_composer(user_message);
+            if let Some(queued_input) = self.queued_user_messages.pop_back() {
+                self.restore_user_message_to_composer(queued_input.into_restorable_user_message());
                 self.refresh_pending_input_preview();
                 self.request_redraw();
             }
@@ -4295,14 +4365,11 @@ impl ChatWidget {
     }
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {
-        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
-            let message = format!(
-                "'/{}' is disabled while a task is in progress.",
-                cmd.command()
-            );
-            self.add_to_history(history_cell::new_error_event(message));
-            self.bottom_pane.drain_pending_submission_state();
-            self.request_redraw();
+        if self.bottom_pane.is_task_running() && !cmd.available_during_task() {
+            self.queue_slash_command(QueuedSlashCommand {
+                draft: format!("/{}", cmd.command()).into(),
+                action: QueuedSlashCommandAction::Command(cmd),
+            });
             return;
         }
         match cmd {
@@ -4633,27 +4700,49 @@ impl ChatWidget {
             self.dispatch_command(cmd);
             return;
         }
-        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
-            let message = format!(
-                "'/{}' is disabled while a task is in progress.",
-                cmd.command()
-            );
-            self.add_to_history(history_cell::new_error_event(message));
-            self.request_redraw();
-            return;
-        }
 
         let trimmed = args.trim();
+        let should_queue = self.bottom_pane.is_task_running() && !cmd.available_during_task();
         match cmd {
             SlashCommand::Fast => {
                 if trimmed.is_empty() {
-                    self.dispatch_command(cmd);
+                    if should_queue {
+                        self.queue_current_inline_bare_slash_command(cmd);
+                    } else {
+                        self.dispatch_command(cmd);
+                    }
                     return;
                 }
-                match trimmed.to_ascii_lowercase().as_str() {
-                    "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
-                    "off" => self.set_service_tier_selection(None),
-                    "status" => {
+                let action = match trimmed.to_ascii_lowercase().as_str() {
+                    "on" => QueuedFastCommandAction::On,
+                    "off" => QueuedFastCommandAction::Off,
+                    "status" => QueuedFastCommandAction::Status,
+                    _ => {
+                        self.add_error_message("Usage: /fast [on|off|status]".to_string());
+                        return;
+                    }
+                };
+                if should_queue {
+                    let Some((prepared_args, prepared_elements)) =
+                        self.bottom_pane.prepare_inline_args_submission(false)
+                    else {
+                        return;
+                    };
+                    let args_message = self
+                        .take_prepared_submission_user_message(prepared_args, prepared_elements);
+                    let draft = Self::queued_inline_slash_command_draft(cmd, args_message);
+                    self.queue_slash_command(QueuedSlashCommand {
+                        draft,
+                        action: QueuedSlashCommandAction::Fast(action),
+                    });
+                    return;
+                }
+                match action {
+                    QueuedFastCommandAction::On => {
+                        self.set_service_tier_selection(Some(ServiceTier::Fast))
+                    }
+                    QueuedFastCommandAction::Off => self.set_service_tier_selection(None),
+                    QueuedFastCommandAction::Status => {
                         let status = if matches!(self.config.service_tier, Some(ServiceTier::Fast))
                         {
                             "on"
@@ -4662,89 +4751,249 @@ impl ChatWidget {
                         };
                         self.add_info_message(format!("Fast mode is {status}."), None);
                     }
-                    _ => {
-                        self.add_error_message("Usage: /fast [on|off|status]".to_string());
-                    }
                 }
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 self.session_telemetry
                     .counter("codex.thread.rename", 1, &[]);
-                let Some((prepared_args, _prepared_elements)) =
+                let Some((prepared_args, prepared_elements)) =
                     self.bottom_pane.prepare_inline_args_submission(false)
                 else {
                     return;
                 };
+                let args_message = self.take_prepared_submission_user_message(
+                    prepared_args.clone(),
+                    prepared_elements,
+                );
                 let Some(name) = codex_core::util::normalize_thread_name(&prepared_args) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
                 };
+                if should_queue {
+                    let draft = Self::queued_inline_slash_command_draft(cmd, args_message);
+                    self.queue_slash_command(QueuedSlashCommand {
+                        draft,
+                        action: QueuedSlashCommandAction::Rename(name),
+                    });
+                    return;
+                }
                 let cell = Self::rename_confirmation_cell(&name, self.thread_id);
                 self.add_boxed_history(Box::new(cell));
                 self.request_redraw();
                 self.app_event_tx
                     .send(AppEvent::CodexOp(Op::SetThreadName { name }));
-                self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Plan if !trimmed.is_empty() => {
-                self.dispatch_command(cmd);
-                if self.active_mode_kind() != ModeKind::Plan {
-                    return;
-                }
                 let Some((prepared_args, prepared_elements)) =
                     self.bottom_pane.prepare_inline_args_submission(true)
                 else {
                     return;
                 };
-                let local_images = self
-                    .bottom_pane
-                    .take_recent_submission_images_with_placeholders();
-                let remote_image_urls = self.take_remote_image_urls();
-                let user_message = UserMessage {
-                    text: prepared_args,
-                    local_images,
-                    remote_image_urls,
-                    text_elements: prepared_elements,
-                    mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
-                };
-                if self.is_session_configured() {
-                    self.reasoning_buffer.clear();
-                    self.full_reasoning_buffer.clear();
-                    self.set_status_header(String::from("Working"));
-                    self.submit_user_message(user_message);
-                } else {
-                    self.queue_user_message(user_message);
+                let user_message =
+                    self.take_prepared_submission_user_message(prepared_args, prepared_elements);
+                if should_queue {
+                    let draft = Self::queued_inline_slash_command_draft(cmd, user_message.clone());
+                    self.queue_slash_command(QueuedSlashCommand {
+                        draft,
+                        action: QueuedSlashCommandAction::Plan(user_message),
+                    });
+                    return;
                 }
+                self.dispatch_command(cmd);
+                if self.active_mode_kind() != ModeKind::Plan {
+                    return;
+                }
+                self.submit_plan_user_message(user_message);
             }
             SlashCommand::Review if !trimmed.is_empty() => {
-                let Some((prepared_args, _prepared_elements)) =
+                let Some((prepared_args, prepared_elements)) =
                     self.bottom_pane.prepare_inline_args_submission(false)
                 else {
                     return;
                 };
-                self.submit_op(Op::Review {
-                    review_request: ReviewRequest {
-                        target: ReviewTarget::Custom {
-                            instructions: prepared_args,
-                        },
-                        user_facing_hint: None,
+                let args_message = self.take_prepared_submission_user_message(
+                    prepared_args.clone(),
+                    prepared_elements,
+                );
+                let review_request = ReviewRequest {
+                    target: ReviewTarget::Custom {
+                        instructions: prepared_args,
                     },
-                });
-                self.bottom_pane.drain_pending_submission_state();
+                    user_facing_hint: None,
+                };
+                if should_queue {
+                    let draft = Self::queued_inline_slash_command_draft(cmd, args_message);
+                    self.queue_slash_command(QueuedSlashCommand {
+                        draft,
+                        action: QueuedSlashCommandAction::Review(review_request),
+                    });
+                    return;
+                }
+                self.submit_op(Op::Review { review_request });
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
-                let Some((prepared_args, _prepared_elements)) =
+                let Some((prepared_args, prepared_elements)) =
                     self.bottom_pane.prepare_inline_args_submission(false)
                 else {
                     return;
                 };
+                let args_message = self.take_prepared_submission_user_message(
+                    prepared_args.clone(),
+                    prepared_elements,
+                );
+                if should_queue {
+                    let draft = Self::queued_inline_slash_command_draft(cmd, args_message);
+                    self.queue_slash_command(QueuedSlashCommand {
+                        draft,
+                        action: QueuedSlashCommandAction::SandboxReadRoot(prepared_args),
+                    });
+                    return;
+                }
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
                         path: prepared_args,
                     });
-                self.bottom_pane.drain_pending_submission_state();
             }
-            _ => self.dispatch_command(cmd),
+            _ => {
+                if should_queue && trimmed.is_empty() {
+                    self.queue_current_inline_bare_slash_command(cmd);
+                } else {
+                    self.dispatch_command(cmd);
+                }
+            }
+        }
+    }
+
+    fn take_prepared_submission_user_message(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+    ) -> UserMessage {
+        UserMessage {
+            text,
+            local_images: self
+                .bottom_pane
+                .take_recent_submission_images_with_placeholders(),
+            remote_image_urls: self.take_remote_image_urls(),
+            text_elements,
+            mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
+        }
+    }
+
+    fn queued_inline_slash_command_draft(
+        cmd: SlashCommand,
+        args_message: UserMessage,
+    ) -> UserMessage {
+        let prefix = format!("/{}", cmd.command());
+        let UserMessage {
+            text,
+            local_images,
+            remote_image_urls,
+            text_elements,
+            mention_bindings,
+        } = args_message;
+
+        if text.is_empty() {
+            return UserMessage {
+                text: prefix,
+                local_images,
+                remote_image_urls,
+                text_elements,
+                mention_bindings,
+            };
+        }
+
+        let mut draft_text = format!("{prefix} ");
+        let offset = draft_text.len();
+        draft_text.push_str(&text);
+        let text_elements = text_elements
+            .into_iter()
+            .map(|element| {
+                let start = element.byte_range.start + offset;
+                let end = element.byte_range.end + offset;
+                element.map_range(|_| ByteRange { start, end })
+            })
+            .collect();
+
+        UserMessage {
+            text: draft_text,
+            local_images,
+            remote_image_urls,
+            text_elements,
+            mention_bindings,
+        }
+    }
+
+    fn queue_current_inline_bare_slash_command(&mut self, cmd: SlashCommand) {
+        let Some((prepared_args, prepared_elements)) =
+            self.bottom_pane.prepare_inline_args_submission(false)
+        else {
+            return;
+        };
+        let args_message =
+            self.take_prepared_submission_user_message(prepared_args, prepared_elements);
+        self.queue_slash_command(QueuedSlashCommand {
+            draft: Self::queued_inline_slash_command_draft(cmd, args_message),
+            action: QueuedSlashCommandAction::Command(cmd),
+        });
+    }
+
+    fn queue_slash_command(&mut self, command: QueuedSlashCommand) {
+        self.queued_user_messages
+            .push_back(QueuedInput::SlashCommand(command));
+        self.refresh_pending_input_preview();
+    }
+
+    fn submit_plan_user_message(&mut self, user_message: UserMessage) {
+        if self.is_session_configured() {
+            self.reasoning_buffer.clear();
+            self.full_reasoning_buffer.clear();
+            self.set_status_header(String::from("Working"));
+            self.submit_user_message(user_message);
+        } else {
+            self.queue_user_message(user_message);
+        }
+    }
+
+    fn execute_queued_slash_command(&mut self, command: QueuedSlashCommand) {
+        match command.action {
+            QueuedSlashCommandAction::Command(cmd) => self.dispatch_command(cmd),
+            QueuedSlashCommandAction::Fast(action) => match action {
+                QueuedFastCommandAction::On => {
+                    self.set_service_tier_selection(Some(ServiceTier::Fast))
+                }
+                QueuedFastCommandAction::Off => self.set_service_tier_selection(None),
+                QueuedFastCommandAction::Status => {
+                    let status = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
+                        "on"
+                    } else {
+                        "off"
+                    };
+                    self.add_info_message(format!("Fast mode is {status}."), None);
+                }
+            },
+            QueuedSlashCommandAction::Plan(user_message) => {
+                self.dispatch_command(SlashCommand::Plan);
+                if self.active_mode_kind() == ModeKind::Plan {
+                    self.submit_plan_user_message(user_message);
+                }
+            }
+            QueuedSlashCommandAction::Rename(name) => {
+                self.session_telemetry
+                    .counter("codex.thread.rename", 1, &[]);
+                let cell = Self::rename_confirmation_cell(&name, self.thread_id);
+                self.add_boxed_history(Box::new(cell));
+                self.request_redraw();
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::SetThreadName { name }));
+            }
+            QueuedSlashCommandAction::Review(review_request) => {
+                self.submit_op(Op::Review { review_request });
+            }
+            QueuedSlashCommandAction::SandboxReadRoot(path) => {
+                self.app_event_tx
+                    .send(AppEvent::BeginWindowsSandboxGrantReadRoot { path });
+            }
         }
     }
 
@@ -4835,7 +5084,7 @@ impl ChatWidget {
             || self.bottom_pane.is_task_running()
             || self.is_review_mode
         {
-            self.queued_user_messages.push_back(user_message);
+            self.queued_user_messages.push_back(user_message.into());
             self.refresh_pending_input_preview();
         } else {
             self.submit_user_message(user_message);
@@ -4845,12 +5094,12 @@ impl ChatWidget {
     fn submit_user_message(&mut self, user_message: UserMessage) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
-            self.queued_user_messages.push_front(user_message);
+            self.queued_user_messages.push_front(user_message.into());
             self.refresh_pending_input_preview();
             return;
         }
         if self.is_review_mode {
-            self.queued_user_messages.push_back(user_message);
+            self.queued_user_messages.push_back(user_message.into());
             self.refresh_pending_input_preview();
             return;
         }
@@ -5620,7 +5869,8 @@ impl ChatWidget {
         }
     }
 
-    // If idle and there are queued inputs, submit exactly one to start the next turn.
+    // If idle and there are queued inputs, dispatch queued work in order until a turn starts or
+    // a popup takes focus.
     pub(crate) fn maybe_send_next_queued_input(&mut self) {
         if self.suppress_queue_autosend {
             return;
@@ -5628,10 +5878,21 @@ impl ChatWidget {
         if self.bottom_pane.is_task_running() {
             return;
         }
-        if let Some(user_message) = self.queued_user_messages.pop_front() {
-            self.submit_user_message(user_message);
+        while !self.bottom_pane.is_task_running() {
+            let Some(queued_input) = self.queued_user_messages.pop_front() else {
+                break;
+            };
+            match queued_input {
+                QueuedInput::UserMessage(user_message) => {
+                    self.submit_user_message(user_message);
+                    break;
+                }
+                QueuedInput::SlashCommand(command) => self.execute_queued_slash_command(command),
+            }
+            if !self.bottom_pane.no_modal_or_popup_active() {
+                break;
+            }
         }
-        // Update the list to reflect the remaining queued messages (if any).
         self.refresh_pending_input_preview();
     }
 
@@ -5640,7 +5901,7 @@ impl ChatWidget {
         let queued_messages: Vec<String> = self
             .queued_user_messages
             .iter()
-            .map(|m| m.text.clone())
+            .map(QueuedInput::preview_text)
             .collect();
         let pending_steers: Vec<String> = self
             .pending_steers
@@ -8782,7 +9043,7 @@ impl ChatWidget {
     pub(crate) fn queued_user_message_texts(&self) -> Vec<String> {
         self.queued_user_messages
             .iter()
-            .map(|message| message.text.clone())
+            .map(QueuedInput::preview_text)
             .collect()
     }
 

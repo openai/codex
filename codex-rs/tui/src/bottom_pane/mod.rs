@@ -263,6 +263,7 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     pub fn take_mention_bindings(&mut self) -> Vec<MentionBinding> {
         self.composer.take_mention_bindings()
     }
@@ -272,6 +273,7 @@ impl BottomPane {
     }
 
     /// Clear pending attachments and mention bindings e.g. when a slash command doesn't submit text.
+    #[cfg(test)]
     pub(crate) fn drain_pending_submission_state(&mut self) {
         let _ = self.take_recent_submission_images_with_placeholders();
         let _ = self.take_remote_image_urls();
