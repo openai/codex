@@ -934,14 +934,8 @@ impl App {
             self.chat_widget
                 .set_feature_enabled(feature, effective_enabled);
             if feature == Feature::GuardianApproval {
-                let (
-                    root_approval_review_policy_configured,
-                    profile_approval_review_policy_configured,
-                ) = approval_review_policy_config_scope();
-                let approval_review_policy_was_configured = root_approval_review_policy_configured
-                    || profile_approval_review_policy_configured;
                 let previous_approval_review_policy = self.config.approval_review_policy;
-                if effective_enabled && !approval_review_policy_was_configured {
+                if effective_enabled {
                     self.config.approval_review_policy = ApprovalReviewPolicy::AutoOnly;
                     self.chat_widget
                         .set_approval_review_policy(ApprovalReviewPolicy::AutoOnly);
@@ -953,6 +947,10 @@ impl App {
                         permissions_history_label = Some("Smart Approvals");
                     }
                 } else if !effective_enabled {
+                    let (
+                        _root_approval_review_policy_configured,
+                        profile_approval_review_policy_configured,
+                    ) = approval_review_policy_config_scope();
                     if profile_approval_review_policy_configured || self.active_profile.is_none() {
                         builder = builder.with_edits([ConfigEdit::ClearPath {
                             segments: scoped_segments("approval_review_policy"),
@@ -5502,7 +5500,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_feature_flags_enabling_guardian_keeps_explicit_manual_review_policy()
+    async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review_policy()
     -> Result<()> {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
@@ -5525,11 +5523,11 @@ mod tests {
         assert!(app.config.features.enabled(Feature::GuardianApproval));
         assert_eq!(
             app.config.approval_review_policy,
-            ApprovalReviewPolicy::ManualOnly
+            ApprovalReviewPolicy::AutoOnly
         );
         assert_eq!(
             app.chat_widget.config_ref().approval_review_policy,
-            ApprovalReviewPolicy::ManualOnly
+            ApprovalReviewPolicy::AutoOnly
         );
         assert_eq!(
             app.config.permissions.approval_policy.value(),
@@ -5548,7 +5546,7 @@ mod tests {
             Ok(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: Some(AskForApproval::OnRequest),
-                approval_review_policy: Some(ApprovalReviewPolicy::ManualOnly),
+                approval_review_policy: Some(ApprovalReviewPolicy::AutoOnly),
                 sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
                 windows_sandbox_level: None,
                 model: None,
@@ -5561,7 +5559,7 @@ mod tests {
         );
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-        assert!(config.contains("approval_review_policy = \"manual-only\""));
+        assert!(config.contains("approval_review_policy = \"auto-only\""));
         assert!(config.contains("smart_approvals = true"));
         assert!(config.contains("approval_policy = \"on-request\""));
         assert!(config.contains("sandbox_mode = \"workspace-write\""));
@@ -5631,7 +5629,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_feature_flags_enabling_guardian_in_profile_keeps_root_review_policy()
+    async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_review_policy()
     -> Result<()> {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
@@ -5655,18 +5653,18 @@ mod tests {
         assert!(app.config.features.enabled(Feature::GuardianApproval));
         assert_eq!(
             app.config.approval_review_policy,
-            ApprovalReviewPolicy::ManualOnly
+            ApprovalReviewPolicy::AutoOnly
         );
         assert_eq!(
             app.chat_widget.config_ref().approval_review_policy,
-            ApprovalReviewPolicy::ManualOnly
+            ApprovalReviewPolicy::AutoOnly
         );
         assert_eq!(
             op_rx.try_recv(),
             Ok(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: Some(AskForApproval::OnRequest),
-                approval_review_policy: Some(ApprovalReviewPolicy::ManualOnly),
+                approval_review_policy: Some(ApprovalReviewPolicy::AutoOnly),
                 sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
                 windows_sandbox_level: None,
                 model: None,
@@ -5693,12 +5691,15 @@ mod tests {
                 .and_then(|table| table.get("approval_review_policy")),
             Some(&TomlValue::String("manual-only".to_string()))
         );
-        assert!(!profile_config.contains_key("approval_review_policy"));
+        assert_eq!(
+            profile_config.get("approval_review_policy"),
+            Some(&TomlValue::String("auto-only".to_string()))
+        );
         Ok(())
     }
 
     #[tokio::test]
-    async fn update_feature_flags_disabling_guardian_in_profile_rejects_inherited_review_policy()
+    async fn update_feature_flags_disabling_guardian_in_profile_keeps_inherited_feature_enabled()
     -> Result<()> {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
@@ -5741,7 +5742,7 @@ mod tests {
         );
         assert!(
             op_rx.try_recv().is_err(),
-            "rejected feature disable should not patch the active session"
+            "disabling an inherited feature should not patch the active session"
         );
         let app_events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
         assert!(
@@ -5752,11 +5753,17 @@ mod tests {
                     .any(|line| line.to_string().contains("Permissions updated to")),
                 _ => false,
             }),
-            "rejected feature disable should not emit a permissions history update: {app_events:?}"
+            "disabling with inherited manual review should not emit a permissions history update: {app_events:?}"
         );
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-        assert_eq!(config, config_toml);
+        assert!(config.contains("smart_approvals = true"));
+        assert_eq!(
+            toml::from_str::<TomlValue>(&config)?
+                .as_table()
+                .and_then(|table| table.get("approval_review_policy")),
+            Some(&TomlValue::String("manual-only".to_string()))
+        );
         Ok(())
     }
 
