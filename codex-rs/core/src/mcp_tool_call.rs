@@ -22,6 +22,7 @@ use crate::connectors;
 use crate::features::Feature;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
+use crate::guardian::guardian_approval_request_to_json;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -579,8 +580,16 @@ async fn maybe_monitor_auto_approved_mcp_tool_call(
     invocation: &McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> ArcMonitorOutcome {
+    let action = prepare_arc_request_action(invocation, metadata);
+    monitor_action(sess, turn_context, action).await
+}
+
+fn prepare_arc_request_action(
+    invocation: &McpInvocation,
+    metadata: Option<&McpToolApprovalMetadata>,
+) -> serde_json::Value {
     let request = build_guardian_mcp_tool_review_request(invocation, metadata);
-    monitor_action(sess, turn_context, request.action).await
+    guardian_approval_request_to_json(&request)
 }
 
 fn session_mcp_tool_approval_key(
@@ -1276,7 +1285,7 @@ mod tests {
                 "Allow this action?".to_string(),
                 Some("This tool may contact an external system."),
             ),
-            "Tool call needs your approval. Reason: This tool may contact an external system.. Approve?"
+            "Tool call needs your approval. Reason: This tool may contact an external system."
         );
     }
 
@@ -1666,6 +1675,42 @@ mod tests {
     }
 
     #[test]
+    fn prepare_arc_request_action_serializes_mcp_tool_call_shape() {
+        let invocation = McpInvocation {
+            server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            tool: "browser_navigate".to_string(),
+            arguments: Some(serde_json::json!({
+                "url": "https://example.com",
+            })),
+        };
+
+        let action = prepare_arc_request_action(
+            &invocation,
+            Some(&approval_metadata(
+                None,
+                Some("Playwright"),
+                None,
+                Some("Navigate"),
+                None,
+            )),
+        );
+
+        assert_eq!(
+            action,
+            serde_json::json!({
+                "tool": "mcp_tool_call",
+                "server": CODEX_APPS_MCP_SERVER_NAME,
+                "tool_name": "browser_navigate",
+                "arguments": {
+                    "url": "https://example.com",
+                },
+                "connector_name": "Playwright",
+                "tool_title": "Navigate",
+            })
+        );
+    }
+
+    #[test]
     fn guardian_review_decision_maps_to_mcp_tool_decision() {
         assert_eq!(
             mcp_tool_approval_decision_from_guardian(ReviewDecision::Approved),
@@ -1932,7 +1977,7 @@ mod tests {
 
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/codex/safety/arc"))
+            .and(path("/api/codex/safety/arc"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "outcome": "steer-model",
                 "short_reason": "needs approval",

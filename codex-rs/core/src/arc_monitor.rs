@@ -666,7 +666,9 @@ mod tests {
                 input: None,
                 policies: Some(ArcMonitorPolicies {
                     user: None,
-                    developer: None,
+                    developer: Some(
+                        "Always require approval before creating a google document.".to_string(),
+                    ),
                 }),
                 action: serde_json::from_value(serde_json::json!({ "tool": "mcp_tool_call" }))
                     .expect("action should deserialize"),
@@ -705,7 +707,7 @@ mod tests {
             .await;
 
         Mock::given(method("POST"))
-            .and(path("/codex/safety/arc"))
+            .and(path("/api/codex/safety/arc"))
             .and(header("authorization", "Bearer Access Token"))
             .and(header("chatgpt-account-id", "account_id"))
             .and(body_json(serde_json::json!({
@@ -722,7 +724,7 @@ mod tests {
                     }],
                 }],
                 "policies": {
-                    "developer": null,
+                    "developer": "Always require approval before creating a google document.",
                     "user": null,
                 },
                 "action": {
@@ -733,6 +735,12 @@ mod tests {
                 "outcome": "ask-user",
                 "short_reason": "needs confirmation",
                 "rationale": "tool call needs additional review",
+                "risk_score": 42,
+                "risk_level": "medium",
+                "evidence": [{
+                    "message": "browser_navigate",
+                    "why": "tool call needs additional review",
+                }],
             })))
             .expect(1)
             .mount(&server)
@@ -784,6 +792,12 @@ mod tests {
                 "outcome": "steer-model",
                 "short_reason": "needs approval",
                 "rationale": "high-risk action",
+                "risk_score": 96,
+                "risk_level": "critical",
+                "evidence": [{
+                    "message": "browser_navigate",
+                    "why": "high-risk action",
+                }],
             })))
             .expect(1)
             .mount(&server)
@@ -807,7 +821,7 @@ mod tests {
     async fn monitor_action_rejects_legacy_response_fields() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/codex/safety/arc"))
+            .and(path("/api/codex/safety/arc"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "outcome": "steer-model",
                 "reason": "legacy high-risk action",
