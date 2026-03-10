@@ -63,6 +63,7 @@ async fn run_code_mode_turn(
     Ok((test, second_mock))
 }
 
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_return_exec_command_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
