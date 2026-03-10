@@ -1,4 +1,3 @@
-use codex_protocol::models::FunctionCallOutputBody;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
@@ -11,8 +10,9 @@ use tokio::sync::Barrier;
 use tokio::time::sleep;
 
 use crate::function_tool::FunctionCallError;
+use crate::tools::context::TextToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
+use crate::tools::context::ToolOutputBox;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -61,7 +61,7 @@ impl ToolHandler for TestSyncHandler {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutputBox, FunctionCallError> {
         let ToolInvocation { payload, .. } = invocation;
 
         let arguments = match payload {
@@ -91,10 +91,10 @@ impl ToolHandler for TestSyncHandler {
             sleep(Duration::from_millis(delay)).await;
         }
 
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text("ok".to_string()),
+        Ok(Box::new(TextToolOutput {
+            text: "ok".to_string(),
             success: Some(true),
-        })
+        }))
     }
 }
 

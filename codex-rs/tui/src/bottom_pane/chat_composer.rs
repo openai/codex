@@ -3579,8 +3579,7 @@ impl ChatComposer {
                     insert_text: format!("${skill_name}"),
                     search_terms,
                     path: Some(skill.path_to_skills_md.to_string_lossy().into_owned()),
-                    category_tag: (skill.scope == codex_protocol::protocol::SkillScope::Repo)
-                        .then(|| "[Repo]".to_string()),
+                    category_tag: Some("[Skill]".to_string()),
                 });
             }
         }
@@ -3631,8 +3630,7 @@ impl ChatComposer {
                     insert_text: format!("${plugin_name}"),
                     search_terms,
                     path: Some(format!("plugin://{}", plugin.config_name)),
-                    category_tag: (!marketplace_name.is_empty())
-                        .then(|| format!("[{marketplace_name}]")),
+                    category_tag: Some("[Plugin]".to_string()),
                 });
             }
         }
@@ -3657,16 +3655,6 @@ impl ChatComposer {
                     path: Some(format!("app://{connector_id}")),
                     category_tag: Some("[App]".to_string()),
                 });
-            }
-        }
-
-        let mut counts: HashMap<String, usize> = HashMap::new();
-        for mention in &mentions {
-            *counts.entry(mention.insert_text.clone()).or_insert(0) += 1;
-        }
-        for mention in &mut mentions {
-            if counts.get(&mention.insert_text).copied().unwrap_or(0) <= 1 {
-                mention.category_tag = None;
             }
         }
 
@@ -5340,6 +5328,60 @@ mod tests {
                     "calendar".to_string(),
                 )],
             }]));
+        });
+    }
+
+    #[test]
+    fn mention_popup_type_prefixes_snapshot() {
+        snapshot_composer_state_with_width("mention_popup_type_prefixes", 72, false, |composer| {
+            composer.set_connectors_enabled(true);
+            composer.set_text_content("$goog".to_string(), Vec::new(), Vec::new());
+            composer.set_skill_mentions(Some(vec![SkillMetadata {
+                name: "google-calendar-skill".to_string(),
+                description: "Find availability and plan event changes".to_string(),
+                short_description: None,
+                interface: Some(codex_core::skills::model::SkillInterface {
+                    display_name: Some("Google Calendar".to_string()),
+                    short_description: None,
+                    icon_small: None,
+                    icon_large: None,
+                    brand_color: None,
+                    default_prompt: None,
+                }),
+                dependencies: None,
+                policy: None,
+                permission_profile: None,
+                path_to_skills_md: PathBuf::from("/tmp/repo/google-calendar/SKILL.md"),
+                scope: codex_protocol::protocol::SkillScope::Repo,
+            }]));
+            composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+                config_name: "google-calendar@debug".to_string(),
+                display_name: "Google Calendar".to_string(),
+                description: Some(
+                    "Connect Google Calendar for scheduling, availability, and event management."
+                        .to_string(),
+                ),
+                has_skills: false,
+                mcp_server_names: vec!["google-calendar".to_string()],
+                app_connector_ids: Vec::new(),
+            }]));
+            composer.set_connector_mentions(Some(ConnectorsSnapshot {
+                connectors: vec![AppInfo {
+                    id: "google_calendar".to_string(),
+                    name: "Google Calendar".to_string(),
+                    description: Some("Look up events and availability".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
+                    install_url: Some("https://example.test/google-calendar".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                    plugin_display_names: Vec::new(),
+                }],
+            }));
         });
     }
 
