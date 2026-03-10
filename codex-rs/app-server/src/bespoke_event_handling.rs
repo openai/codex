@@ -53,7 +53,6 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
-use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ModelReroutedNotification;
 use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
 use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
@@ -112,9 +111,6 @@ use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
-use codex_protocol::protocol::ExecCommandEndEvent;
-use codex_protocol::protocol::McpToolCallBeginEvent;
-use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewDecision;
@@ -1904,7 +1900,7 @@ async fn complete_file_change_item(
     let item = ThreadItem::FileChange {
         id: item_id,
         changes,
-        status,
+        status: status.clone(),
         approval: manual_approval_completion_state(status),
     };
     let notification = ItemCompletedNotification {
@@ -1942,7 +1938,7 @@ async fn complete_command_execution_item(
         command,
         cwd,
         process_id,
-        status,
+        status: status.clone(),
         command_actions,
         aggregated_output: None,
         exit_code: None,
@@ -2004,9 +2000,7 @@ impl From<CommandExecutionStatus> for ManualApprovalCompletionStatus {
         match value {
             CommandExecutionStatus::Declined => Self::Declined,
             CommandExecutionStatus::Failed => Self::Failed,
-            CommandExecutionStatus::InProgress
-            | CommandExecutionStatus::Completed
-            | CommandExecutionStatus::Interrupted => Self::Other,
+            CommandExecutionStatus::InProgress | CommandExecutionStatus::Completed => Self::Other,
         }
     }
 }
