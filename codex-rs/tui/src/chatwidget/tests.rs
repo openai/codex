@@ -1849,6 +1849,7 @@ async fn make_chatwidget_manual(
         agent_turn_running: false,
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
+        connectors_partial_snapshot: None,
         connectors_prefetch_in_flight: false,
         connectors_force_refetch_pending: false,
         interrupts: InterruptManager::new(),
@@ -6523,7 +6524,7 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
 }
 
 #[tokio::test]
-async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
+async fn apps_popup_stays_loading_until_final_snapshot_updates() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config
         .features
@@ -6561,13 +6562,10 @@ async fn apps_popup_refreshes_when_connectors_snapshot_updates() {
 
     let before = render_bottom_popup(&chat, 80);
     assert!(
-        before.contains("Installed 1 of 1 available apps."),
-        "expected initial apps popup snapshot, got:\n{before}"
+        before.contains("Loading installed and available apps..."),
+        "expected /apps to stay in the loading state until the full list arrives, got:\n{before}"
     );
-    assert!(
-        before.contains("Installed. Press Enter to open the app page"),
-        "expected selected app description to explain the app page action, got:\n{before}"
-    );
+    assert_snapshot!("apps_popup_loading_state", before);
 
     chat.on_connectors_loaded(
         Ok(ConnectorsSnapshot {
@@ -6704,6 +6702,125 @@ async fn apps_refresh_failure_keeps_existing_full_snapshot() {
 }
 
 #[tokio::test]
+async fn apps_popup_preserves_selected_app_across_refresh() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow feature update");
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![
+                codex_chatgpt::connectors::AppInfo {
+                    id: "notion".to_string(),
+                    name: "Notion".to_string(),
+                    description: Some("Workspace docs".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
+                    install_url: Some("https://example.test/notion".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                    plugin_display_names: Vec::new(),
+                },
+                codex_chatgpt::connectors::AppInfo {
+                    id: "slack".to_string(),
+                    name: "Slack".to_string(),
+                    description: Some("Team chat".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
+                    install_url: Some("https://example.test/slack".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                    plugin_display_names: Vec::new(),
+                },
+            ],
+        }),
+        true,
+    );
+    chat.add_connectors_output();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+    let before = render_bottom_popup(&chat, 80);
+    assert!(
+        before.contains("› Slack"),
+        "expected Slack to be selected before refresh, got:\n{before}"
+    );
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![
+                codex_chatgpt::connectors::AppInfo {
+                    id: "airtable".to_string(),
+                    name: "Airtable".to_string(),
+                    description: Some("Spreadsheets".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
+                    install_url: Some("https://example.test/airtable".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                    plugin_display_names: Vec::new(),
+                },
+                codex_chatgpt::connectors::AppInfo {
+                    id: "notion".to_string(),
+                    name: "Notion".to_string(),
+                    description: Some("Workspace docs".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
+                    install_url: Some("https://example.test/notion".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                    plugin_display_names: Vec::new(),
+                },
+                codex_chatgpt::connectors::AppInfo {
+                    id: "slack".to_string(),
+                    name: "Slack".to_string(),
+                    description: Some("Team chat".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
+                    install_url: Some("https://example.test/slack".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                    plugin_display_names: Vec::new(),
+                },
+            ],
+        }),
+        true,
+    );
+
+    let after = render_bottom_popup(&chat, 80);
+    assert!(
+        after.contains("› Slack"),
+        "expected Slack to stay selected after refresh, got:\n{after}"
+    );
+    assert!(
+        !after.contains("› Notion"),
+        "did not expect selection to reset to Notion after refresh, got:\n{after}"
+    );
+}
+
+#[tokio::test]
 async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetch() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config
@@ -6744,7 +6861,7 @@ async fn apps_refresh_failure_with_cached_snapshot_triggers_pending_force_refetc
 }
 
 #[tokio::test]
-async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
+async fn apps_popup_keeps_existing_full_snapshot_while_partial_refresh_loads() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config
         .features
@@ -6837,12 +6954,67 @@ async fn apps_partial_refresh_uses_same_filtering_as_full_refresh() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
-        popup.contains("Installed 1 of 1 available apps."),
-        "expected partial refresh popup to use filtered connectors, got:\n{popup}"
+        popup.contains("Installed 1 of 2 available apps."),
+        "expected popup to keep the last full snapshot while partial refresh loads, got:\n{popup}"
     );
     assert!(
         !popup.contains("Hidden OpenAI"),
-        "expected disallowed connector to be filtered from partial refresh popup, got:\n{popup}"
+        "expected popup to ignore partial refresh rows until the full list arrives, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_refresh_failure_without_full_snapshot_falls_back_to_installed_apps() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow feature update");
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![codex_chatgpt::connectors::AppInfo {
+                id: "unit_test_apps_refresh_failure_fallback_connector".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: Vec::new(),
+            }],
+        }),
+        false,
+    );
+
+    chat.add_connectors_output();
+    let loading_popup = render_bottom_popup(&chat, 80);
+    assert!(
+        loading_popup.contains("Loading installed and available apps..."),
+        "expected /apps to keep showing loading before the final result, got:\n{loading_popup}"
+    );
+
+    chat.on_connectors_loaded(Err("failed to load apps".to_string()), true);
+
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot) if snapshot.connectors.len() == 1
+    );
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Installed 1 of 1 available apps."),
+        "expected /apps to fall back to the installed apps snapshot, got:\n{popup}"
+    );
+    assert!(
+        popup.contains("Installed. Press Enter to open the app page"),
+        "expected the fallback popup to behave like the installed apps view, got:\n{popup}"
     );
 }
 
