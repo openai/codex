@@ -35,6 +35,10 @@
         "calendar": {
           "type": "boolean"
         },
+        "chromium": {
+          "default": false,
+          "type": "boolean"
+        },
         "preferences": {
           "$ref": "#/definitions/MacOsPreferencesPermission"
         }
@@ -5303,6 +5307,12 @@
             "null"
           ]
         },
+        "chromium": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "preferences": {
           "anyOf": [
             {
@@ -5596,6 +5606,10 @@
           "default": "none"
         },
         "macos_calendar": {
+          "default": false,
+          "type": "boolean"
+        },
+        "macos_chromium": {
           "default": false,
           "type": "boolean"
         },

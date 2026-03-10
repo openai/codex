@@ -966,6 +966,8 @@ pub struct AdditionalMacOsPermissions {
     pub automations: CoreMacOsAutomationPermission,
     pub accessibility: bool,
     pub calendar: bool,
+    #[serde(default)]
+    pub chromium: bool,
 }
 
 impl From<CoreMacOsSeatbeltProfileExtensions> for AdditionalMacOsPermissions {
@@ -975,6 +977,7 @@ impl From<CoreMacOsSeatbeltProfileExtensions> for AdditionalMacOsPermissions {
             automations: value.macos_automation,
             accessibility: value.macos_accessibility,
             calendar: value.macos_calendar,
+            chromium: value.macos_chromium,
         }
     }
 }
@@ -986,6 +989,7 @@ impl From<AdditionalMacOsPermissions> for CoreMacOsSeatbeltProfileExtensions {
             macos_automation: value.automations,
             macos_accessibility: value.accessibility,
             macos_calendar: value.calendar,
+            macos_chromium: value.chromium,
         }
     }
 }
@@ -1058,6 +1062,9 @@ pub struct GrantedMacOsPermissions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub calendar: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub chromium: Option<bool>,
 }
 
 impl From<GrantedMacOsPermissions> for CoreMacOsSeatbeltProfileExtensions {
@@ -1071,6 +1078,7 @@ impl From<GrantedMacOsPermissions> for CoreMacOsSeatbeltProfileExtensions {
                 .unwrap_or(CoreMacOsAutomationPermission::None),
             macos_accessibility: value.accessibility.unwrap_or(false),
             macos_calendar: value.calendar.unwrap_or(false),
+            macos_chromium: value.chromium.unwrap_or(false),
         }
     }
 }
@@ -5539,6 +5547,7 @@ mod tests {
                     macos_automation: CoreMacOsAutomationPermission::None,
                     macos_accessibility: false,
                     macos_calendar: false,
+                    macos_chromium: false,
                 }),
             ),
             (
@@ -5560,6 +5569,7 @@ mod tests {
                     ]),
                     macos_accessibility: false,
                     macos_calendar: false,
+                    macos_chromium: false,
                 }),
             ),
             (
@@ -5575,6 +5585,7 @@ mod tests {
                     macos_automation: CoreMacOsAutomationPermission::None,
                     macos_accessibility: true,
                     macos_calendar: false,
+                    macos_chromium: false,
                 }),
             ),
             (
@@ -5590,6 +5601,7 @@ mod tests {
                     macos_automation: CoreMacOsAutomationPermission::None,
                     macos_accessibility: false,
                     macos_calendar: true,
+                    macos_chromium: false,
                 }),
             ),
         ];

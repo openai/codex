@@ -351,7 +351,6 @@ impl ShellHandler {
             &exec_params.cwd,
         )
         .map_err(FunctionCallError::RespondToModel)?;
-
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         // Sticky turn permissions have already been approved, so they should
         // continue through the normal exec approval flow for the command.

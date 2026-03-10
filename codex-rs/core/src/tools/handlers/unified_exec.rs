@@ -215,7 +215,6 @@ impl ToolHandler for UnifiedExecHandler {
                             return Err(FunctionCallError::RespondToModel(err));
                         }
                     };
-
                 if let Some(output) = intercept_apply_patch(
                     &command,
                     &cwd,

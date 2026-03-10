@@ -63,6 +63,12 @@
             "null"
           ]
         },
+        "chromium": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "preferences": {
           "anyOf": [
             {

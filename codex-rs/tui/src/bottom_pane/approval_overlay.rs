@@ -800,6 +800,9 @@ pub(crate) fn format_additional_permissions_rule(
         if macos.macos_calendar {
             parts.push("macOS calendar".to_string());
         }
+        if macos.macos_chromium {
+            parts.push("macOS chromium".to_string());
+        }
     }
 
     if parts.is_empty() {
@@ -1403,6 +1406,7 @@ mod tests {
                     ]),
                     macos_accessibility: true,
                     macos_calendar: true,
+                    macos_chromium: true,
                 }),
                 ..Default::default()
             }),

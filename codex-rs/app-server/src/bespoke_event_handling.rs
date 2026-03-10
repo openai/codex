@@ -2718,6 +2718,7 @@ mod tests {
                 ]),
                 macos_accessibility: true,
                 macos_calendar: true,
+                macos_chromium: false,
             }),
             ..Default::default()
         };
@@ -2733,6 +2734,7 @@ mod tests {
                         macos_automation: MacOsAutomationPermission::None,
                         macos_accessibility: false,
                         macos_calendar: false,
+                        macos_chromium: false,
                     }),
                     ..Default::default()
                 },
@@ -2751,6 +2753,7 @@ mod tests {
                         ]),
                         macos_accessibility: false,
                         macos_calendar: false,
+                        macos_chromium: false,
                     }),
                     ..Default::default()
                 },
@@ -2765,6 +2768,7 @@ mod tests {
                         macos_automation: MacOsAutomationPermission::None,
                         macos_accessibility: true,
                         macos_calendar: false,
+                        macos_chromium: false,
                     }),
                     ..Default::default()
                 },
@@ -2779,6 +2783,7 @@ mod tests {
                         macos_automation: MacOsAutomationPermission::None,
                         macos_accessibility: false,
                         macos_calendar: true,
+                        macos_chromium: false,
                     }),
                     ..Default::default()
                 },

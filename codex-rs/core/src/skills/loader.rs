@@ -1482,6 +1482,7 @@ permissions:
                     ]),
                     macos_accessibility: true,
                     macos_calendar: true,
+                    macos_chromium: false,
                 }),
                 ..Default::default()
             })
@@ -1505,6 +1506,7 @@ permissions:
       - "com.apple.Notes"
     macos_accessibility: true
     macos_calendar: true
+    macos_chromium: true
 "#,
         );
 
@@ -1527,6 +1529,7 @@ permissions:
                     ],),
                     macos_accessibility: true,
                     macos_calendar: true,
+                    macos_chromium: true,
                 }),
                 ..Default::default()
             })
@@ -1550,6 +1553,7 @@ permissions:
       - "com.apple.Notes"
     macos_accessibility: true
     macos_calendar: true
+    macos_chromium: true
 "#,
         );
 
@@ -1572,6 +1576,7 @@ permissions:
                     ],),
                     macos_accessibility: true,
                     macos_calendar: true,
+                    macos_chromium: true,
                 }),
                 ..Default::default()
             })

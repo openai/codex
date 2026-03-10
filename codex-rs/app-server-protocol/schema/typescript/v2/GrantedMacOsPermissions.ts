@@ -4,4 +4,4 @@
 import type { MacOsAutomationPermission } from "../MacOsAutomationPermission";
 import type { MacOsPreferencesPermission } from "../MacOsPreferencesPermission";
 
-export type GrantedMacOsPermissions = { preferences?: MacOsPreferencesPermission, automations?: MacOsAutomationPermission, accessibility?: boolean, calendar?: boolean, };
+export type GrantedMacOsPermissions = { preferences?: MacOsPreferencesPermission, automations?: MacOsAutomationPermission, accessibility?: boolean, calendar?: boolean, chromium?: boolean, };

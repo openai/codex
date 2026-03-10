@@ -26,6 +26,7 @@ pub(crate) fn merge_macos_seatbelt_profile_extensions(
             ),
             macos_accessibility: base.macos_accessibility || permissions.macos_accessibility,
             macos_calendar: base.macos_calendar || permissions.macos_calendar,
+            macos_chromium: base.macos_chromium || permissions.macos_chromium,
         }),
         None => Some(permissions.clone()),
     }
@@ -47,6 +48,7 @@ pub(crate) fn intersect_macos_seatbelt_profile_extensions(
                 macos_automation,
                 macos_accessibility: requested.macos_accessibility && granted.macos_accessibility,
                 macos_calendar: requested.macos_calendar && granted.macos_calendar,
+                macos_chromium: requested.macos_chromium && granted.macos_chromium,
             })
         }
         _ => None,
@@ -148,6 +150,7 @@ mod tests {
             ]),
             macos_accessibility: false,
             macos_calendar: false,
+            macos_chromium: false,
         };
         let requested = MacOsSeatbeltProfileExtensions {
             macos_preferences: MacOsPreferencesPermission::ReadWrite,
@@ -157,6 +160,7 @@ mod tests {
             ]),
             macos_accessibility: true,
             macos_calendar: true,
+            macos_chromium: true,
         };
 
         let merged =
@@ -172,6 +176,7 @@ mod tests {
                 ]),
                 macos_accessibility: true,
                 macos_calendar: true,
+                macos_chromium: true,
             }
         );
     }
@@ -221,6 +226,7 @@ mod tests {
             ]),
             macos_accessibility: true,
             macos_calendar: true,
+            macos_chromium: false,
         };
         let granted = MacOsSeatbeltProfileExtensions::default();
 

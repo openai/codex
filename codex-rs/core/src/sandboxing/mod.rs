@@ -724,6 +724,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::intersect_permission_profiles;
     use super::merge_file_system_policy_with_additional_permissions;
+    use super::merge_permission_profiles;
     use super::normalize_additional_permissions;
     use super::sandbox_policy_with_additional_permissions;
     use super::should_require_platform_sandbox;
@@ -934,6 +935,57 @@ mod tests {
     }
 
     #[test]
+    fn merge_permission_profiles_unions_network_and_file_system_permissions() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let root = AbsolutePathBuf::from_absolute_path(
+            canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+        )
+        .expect("absolute temp dir");
+        let base_read = root.join("base-read").expect("base read path");
+        let shared_write = root.join("shared-write").expect("shared write path");
+        let extra_read = root.join("extra-read").expect("extra read path");
+        let extra_write = root.join("extra-write").expect("extra write path");
+
+        let merged = merge_permission_profiles(
+            Some(&PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(false),
+                }),
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![base_read.clone()]),
+                    write: Some(vec![shared_write.clone()]),
+                }),
+                ..Default::default()
+            }),
+            Some(&PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![base_read.clone(), extra_read.clone()]),
+                    write: Some(vec![shared_write.clone(), extra_write.clone()]),
+                }),
+                ..Default::default()
+            }),
+        )
+        .expect("merged permissions");
+
+        assert_eq!(
+            merged,
+            PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![base_read, extra_read]),
+                    write: Some(vec![shared_write, extra_write]),
+                }),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
     fn normalize_additional_permissions_drops_empty_nested_profiles() {
         let permissions = normalize_additional_permissions(PermissionProfile {
             network: Some(NetworkPermissions { enabled: None }),
@@ -983,6 +1035,7 @@ mod tests {
                 ]),
                 macos_accessibility: true,
                 macos_calendar: true,
+                macos_chromium: false,
             }),
             ..Default::default()
         };
@@ -1015,6 +1068,7 @@ mod tests {
                 ]),
                 macos_accessibility: true,
                 macos_calendar: true,
+                macos_chromium: true,
             }),
             ..Default::default()
         })
@@ -1029,6 +1083,7 @@ mod tests {
                 ]),
                 macos_accessibility: true,
                 macos_calendar: true,
+                macos_chromium: true,
             })
         );
     }
@@ -1094,6 +1149,7 @@ mod tests {
                 ]),
                 macos_accessibility: false,
                 macos_calendar: false,
+                macos_chromium: false,
             }),
             Some(&PermissionProfile {
                 file_system: Some(FileSystemPermissions {
@@ -1107,6 +1163,7 @@ mod tests {
                     ]),
                     macos_accessibility: true,
                     macos_calendar: true,
+                    macos_chromium: true,
                 }),
                 ..Default::default()
             }),
@@ -1122,6 +1179,7 @@ mod tests {
                 ]),
                 macos_accessibility: true,
                 macos_calendar: true,
+                macos_chromium: true,
             })
         );
     }

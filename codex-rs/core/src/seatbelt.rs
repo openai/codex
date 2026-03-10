@@ -789,6 +789,7 @@ mod tests {
                 ]),
                 macos_accessibility: true,
                 macos_calendar: true,
+                macos_chromium: true,
             }),
         );
         let policy = &args[1];
@@ -797,6 +798,8 @@ mod tests {
         assert!(policy.contains("(appleevent-destination \"com.apple.Notes\")"));
         assert!(policy.contains("com.apple.axserver"));
         assert!(policy.contains("com.apple.CalendarAgent"));
+        assert!(policy.contains("(allow mach-register"));
+        assert!(policy.contains("org.chromium.Chromium.MachPortRendezvousServer."));
     }
 
     #[test]

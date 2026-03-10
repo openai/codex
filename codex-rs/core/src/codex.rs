@@ -4,6 +4,7 @@ use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
 
 use crate::AuthManager;
@@ -40,6 +41,7 @@ use crate::realtime_conversation::handle_close as handle_realtime_conversation_c
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::rollout::session_index;
+use crate::sandboxing::merge_permission_profiles;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -673,13 +675,34 @@ pub(crate) struct Session {
 pub(crate) struct TurnSkillsContext {
     pub(crate) outcome: Arc<SkillLoadOutcome>,
     pub(crate) implicit_invocation_seen_skills: Arc<Mutex<HashSet<String>>>,
+    explicit_permission_profile: Arc<OnceLock<PermissionProfile>>,
 }
 impl TurnSkillsContext {
     pub(crate) fn new(outcome: Arc<SkillLoadOutcome>) -> Self {
         Self {
             outcome,
             implicit_invocation_seen_skills: Arc::new(Mutex::new(HashSet::new())),
+            explicit_permission_profile: Arc::new(OnceLock::new()),
         }
+    }
+
+    pub(crate) fn set_explicit_permission_profile(&self, skills: &[SkillMetadata]) {
+        let mut permission_profile = None;
+        for skill in skills {
+            permission_profile = merge_permission_profiles(
+                permission_profile.as_ref(),
+                skill.permission_profile.as_ref(),
+            );
+        }
+        let _ = self
+            .explicit_permission_profile
+            .set(permission_profile.unwrap_or_default());
+    }
+
+    pub(crate) fn explicit_permission_profile(&self) -> Option<&PermissionProfile> {
+        self.explicit_permission_profile
+            .get()
+            .filter(|profile| !profile.is_empty())
     }
 }
 
@@ -5417,6 +5440,9 @@ pub(crate) async fn run_turn(
             &connector_slug_counts,
         )
     });
+    turn_context
+        .turn_skills
+        .set_explicit_permission_profile(&mentioned_skills);
     let config = turn_context.config.clone();
     if config
         .features

@@ -103,6 +103,25 @@ pub(crate) fn build_seatbelt_extensions(
         clauses.push("(allow mach-lookup (global-name \"com.apple.CalendarAgent\"))".to_string());
     }
 
+    if extensions.macos_chromium {
+        clauses.push(
+            "(allow mach-register\n  (global-name-prefix \"org.chromium.Chromium.MachPortRendezvousServer.\"))"
+                .to_string(),
+        );
+        clauses.push(
+            "(allow mach-lookup\n  (global-name-prefix \"org.chromium.Chromium.MachPortRendezvousServer.\"))"
+                .to_string(),
+        );
+        clauses.push(
+            "(allow mach-register\n  (global-name-prefix \"org.chromium.crashpad.child_port_handshake.\"))"
+                .to_string(),
+        );
+        clauses.push(
+            "(allow mach-lookup\n  (global-name-prefix \"org.chromium.crashpad.child_port_handshake.\"))"
+                .to_string(),
+        );
+    }
+
     if clauses.is_empty() {
         SeatbeltExtensionPolicy::default()
     } else {
@@ -213,6 +232,26 @@ mod tests {
         });
         assert!(policy.policy.contains("com.apple.axserver"));
         assert!(policy.policy.contains("com.apple.CalendarAgent"));
+    }
+
+    #[test]
+    fn chromium_permissions_emit_scoped_mach_rules() {
+        let policy = build_seatbelt_extensions(&MacOsSeatbeltProfileExtensions {
+            macos_chromium: true,
+            ..Default::default()
+        });
+        assert!(policy.policy.contains("(allow mach-register"));
+        assert!(policy.policy.contains("(allow mach-lookup"));
+        assert!(
+            policy
+                .policy
+                .contains("org.chromium.Chromium.MachPortRendezvousServer.")
+        );
+        assert!(
+            policy
+                .policy
+                .contains("org.chromium.crashpad.child_port_handshake.")
+        );
     }
 
     #[test]

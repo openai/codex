@@ -39,6 +39,10 @@
         "calendar": {
           "type": "boolean"
         },
+        "chromium": {
+          "default": false,
+          "type": "boolean"
+        },
         "preferences": {
           "$ref": "#/definitions/MacOsPreferencesPermission"
         }

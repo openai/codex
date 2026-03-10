@@ -178,6 +178,7 @@ pub struct MacOsSeatbeltProfileExtensions {
     pub macos_accessibility: bool,
     #[serde(alias = "calendar")]
     pub macos_calendar: bool,
+    pub macos_chromium: bool,
 }
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -1453,7 +1454,8 @@ mod tests {
                 "macos_preferences": "read_write",
                 "macos_automation": ["com.apple.Notes"],
                 "macos_accessibility": true,
-                "macos_calendar": true
+                "macos_calendar": true,
+                "macos_chromium": true
             }
         }))
         .expect("deserialize permission profile");
@@ -1470,6 +1472,7 @@ mod tests {
                     ]),
                     macos_accessibility: true,
                     macos_calendar: true,
+                    macos_chromium: true,
                 }),
             }
         );
@@ -1492,6 +1495,7 @@ mod tests {
                 ]),
                 macos_accessibility: false,
                 macos_calendar: false,
+                macos_chromium: false,
             }
         );
     }
@@ -1516,6 +1520,7 @@ mod tests {
                 ]),
                 macos_accessibility: true,
                 macos_calendar: true,
+                macos_chromium: false,
             }
         );
     }

@@ -13,6 +13,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use serde::Deserialize;
 use serde::Serialize;
@@ -116,6 +117,7 @@ struct KernelState {
     pending_execs: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<ExecResultMessage>>>>,
     exec_contexts: Arc<Mutex<HashMap<String, ExecContext>>>,
     shutdown: CancellationToken,
+    permission_profile: Option<PermissionProfile>,
 }
 
 #[derive(Clone)]
@@ -680,6 +682,16 @@ impl JsReplManager {
         let _permit = self.exec_lock.clone().acquire_owned().await.map_err(|_| {
             FunctionCallError::RespondToModel("js_repl execution unavailable".to_string())
         })?;
+        let permission_profile = turn.turn_skills.explicit_permission_profile().cloned();
+        let should_reset_kernel = {
+            let kernel = self.kernel.lock().await;
+            kernel
+                .as_ref()
+                .is_some_and(|state| state.permission_profile != permission_profile)
+        };
+        if should_reset_kernel {
+            self.reset_kernel().await;
+        }
 
         let (stdin, pending_execs, exec_contexts, child, recent_stderr) = {
             let mut kernel = self.kernel.lock().await;
@@ -808,6 +820,7 @@ impl JsReplManager {
         turn: Arc<TurnContext>,
         thread_id: Option<ThreadId>,
     ) -> Result<KernelState, String> {
+        let permission_profile = turn.turn_skills.explicit_permission_profile().cloned();
         let node_path = resolve_compatible_node(self.node_path.as_deref()).await?;
 
         let kernel_path = self
@@ -840,7 +853,7 @@ impl JsReplManager {
             env,
             expiration: ExecExpiration::DefaultTimeout,
             sandbox_permissions: SandboxPermissions::UseDefault,
-            additional_permissions: None,
+            additional_permissions: permission_profile.clone(),
             justification: None,
         };
 
@@ -869,7 +882,11 @@ impl JsReplManager {
                 network: None,
                 sandbox_policy_cwd: &turn.cwd,
                 #[cfg(target_os = "macos")]
-                macos_seatbelt_profile_extensions: None,
+                macos_seatbelt_profile_extensions: turn
+                    .config
+                    .permissions
+                    .macos_seatbelt_profile_extensions
+                    .as_ref(),
                 codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_ref(),
                 use_linux_sandbox_bwrap: turn
                     .features
@@ -951,6 +968,7 @@ impl JsReplManager {
             pending_execs,
             exec_contexts,
             shutdown,
+            permission_profile,
         })
     }
 
@@ -1736,6 +1754,7 @@ mod tests {
     use crate::protocol::AskForApproval;
     use crate::protocol::EventMsg;
     use crate::protocol::SandboxPolicy;
+    use crate::skills::SkillMetadata;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
     use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -1743,12 +1762,30 @@ mod tests {
     use codex_protocol::models::FunctionCallOutputContentItem;
     use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::models::ImageDetail;
+    use codex_protocol::models::NetworkPermissions;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::models::ResponseInputItem;
     use codex_protocol::openai_models::InputModality;
+    use codex_protocol::protocol::SkillScope;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
+    use std::path::PathBuf;
     use tempfile::tempdir;
+
+    fn test_skill_with_permission_profile(permission_profile: PermissionProfile) -> SkillMetadata {
+        SkillMetadata {
+            name: "test-skill".to_string(),
+            description: "test".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            permission_profile: Some(permission_profile),
+            path_to_skills_md: PathBuf::from("/tmp/test-skill/SKILL.md"),
+            scope: SkillScope::Repo,
+        }
+    }
 
     fn set_danger_full_access(turn: &mut crate::codex::TurnContext) {
         turn.sandbox_policy
@@ -3211,6 +3248,76 @@ await codex.emitImage(out);
             )
             .await?;
         assert!(result.output.contains("env"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn js_repl_restarts_kernel_when_explicit_permissions_change() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn_without_permissions) = make_session_and_context().await;
+        let shared_js_repl = Arc::clone(&turn_without_permissions.js_repl);
+        let manager = shared_js_repl.manager().await?;
+        let session = Arc::new(session);
+
+        manager
+            .execute(
+                Arc::clone(&session),
+                Arc::new(turn_without_permissions),
+                Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default())),
+                JsReplArgs {
+                    code: "console.log(\"first\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+
+        let (first_child, first_permission_profile) = {
+            let kernel = manager.kernel.lock().await;
+            let state = kernel.as_ref().expect("kernel should be running");
+            (Arc::clone(&state.child), state.permission_profile.clone())
+        };
+        assert_eq!(first_permission_profile, None);
+
+        let (session_with_permissions, mut turn_with_permissions) =
+            make_session_and_context().await;
+        let expected_permission_profile = PermissionProfile {
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
+            }),
+            ..Default::default()
+        };
+        turn_with_permissions.js_repl = Arc::clone(&shared_js_repl);
+        turn_with_permissions
+            .turn_skills
+            .set_explicit_permission_profile(&[test_skill_with_permission_profile(
+                expected_permission_profile.clone(),
+            )]);
+
+        manager
+            .execute(
+                Arc::new(session_with_permissions),
+                Arc::new(turn_with_permissions),
+                Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default())),
+                JsReplArgs {
+                    code: "console.log(\"second\");".to_string(),
+                    timeout_ms: Some(10_000),
+                },
+            )
+            .await?;
+
+        let (second_child, second_permission_profile) = {
+            let kernel = manager.kernel.lock().await;
+            let state = kernel.as_ref().expect("kernel should still be running");
+            (Arc::clone(&state.child), state.permission_profile.clone())
+        };
+
+        assert_eq!(second_permission_profile, Some(expected_permission_profile));
+        assert!(!Arc::ptr_eq(&first_child, &second_child));
+
+        manager.reset().await?;
         Ok(())
     }
 

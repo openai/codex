@@ -4070,6 +4070,10 @@
           "default": false,
           "type": "boolean"
         },
+        "macos_chromium": {
+          "default": false,
+          "type": "boolean"
+        },
         "macos_preferences": {
           "allOf": [
             {
