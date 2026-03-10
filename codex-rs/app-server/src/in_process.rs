@@ -732,7 +732,10 @@ mod tests {
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
     use codex_app_server_protocol::TurnStatus;
+    use codex_core::AuthManager;
+    use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
+    use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
     use pretty_assertions::assert_eq;
 
     async fn build_test_config() -> Config {
@@ -773,6 +776,34 @@ mod tests {
 
     async fn start_test_client(session_source: SessionSource) -> InProcessClientHandle {
         start_test_client_with_capacity(session_source, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY).await
+    }
+
+    async fn start_test_client_with_thread_manager(
+        session_source: SessionSource,
+        thread_manager: Arc<ThreadManager>,
+    ) -> InProcessClientHandle {
+        let args = InProcessStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(build_test_config().await),
+            thread_manager: Some(thread_manager),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source,
+            enable_codex_api_key_env: false,
+            initialize: InitializeParams {
+                client_info: ClientInfo {
+                    name: "codex-in-process-test".to_string(),
+                    title: None,
+                    version: "0.0.0".to_string(),
+                },
+                capabilities: None,
+            },
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        };
+        start(args).await.expect("in-process runtime should start")
     }
 
     #[tokio::test]
@@ -848,6 +879,38 @@ mod tests {
             .shutdown()
             .await
             .expect("in-process runtime should shutdown cleanly");
+    }
+
+    #[tokio::test]
+    async fn in_process_shutdown_restores_shared_auth_refresher() {
+        let config = build_test_config().await;
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            false,
+            config.cli_auth_credentials_store_mode,
+        );
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.codex_home.clone(),
+            auth_manager.clone(),
+            SessionSource::Cli,
+            config.model_catalog.clone(),
+            CollaborationModesConfig {
+                default_mode_request_user_input: false,
+            },
+        ));
+
+        assert!(!auth_manager.has_external_auth_refresher());
+
+        let client =
+            start_test_client_with_thread_manager(SessionSource::Cli, thread_manager).await;
+        assert!(auth_manager.has_external_auth_refresher());
+
+        client
+            .shutdown()
+            .await
+            .expect("in-process runtime should shutdown cleanly");
+
+        assert!(!auth_manager.has_external_auth_refresher());
     }
 
     #[test]

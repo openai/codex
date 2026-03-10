@@ -18,6 +18,7 @@
 //! bypass the in-process client.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
 use std::future::Future;
@@ -178,15 +179,17 @@ const HISTORY_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(100);
 enum InProcessTypedInteractiveRequest {
     ExecApproval,
     ApplyPatchApproval,
+    RequestPermissions,
     RequestUserInput,
     McpServerElicitation,
     DynamicToolCall,
 }
 
 impl InProcessTypedInteractiveRequest {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::ExecApproval,
         Self::ApplyPatchApproval,
+        Self::RequestPermissions,
         Self::RequestUserInput,
         Self::McpServerElicitation,
         Self::DynamicToolCall,
@@ -196,6 +199,7 @@ impl InProcessTypedInteractiveRequest {
         match self {
             Self::ExecApproval => "codex/event/exec_approval_request",
             Self::ApplyPatchApproval => "codex/event/apply_patch_approval_request",
+            Self::RequestPermissions => "codex/event/request_permissions",
             Self::RequestUserInput => "codex/event/request_user_input",
             Self::McpServerElicitation => "codex/event/elicitation_request",
             Self::DynamicToolCall => "codex/event/dynamic_tool_call_request",
@@ -216,6 +220,9 @@ fn in_process_typed_interactive_request(
         | ServerRequest::ApplyPatchApproval { .. } => {
             Some(InProcessTypedInteractiveRequest::ApplyPatchApproval)
         }
+        ServerRequest::PermissionsRequestApproval { .. } => {
+            Some(InProcessTypedInteractiveRequest::RequestPermissions)
+        }
         ServerRequest::ToolRequestUserInput { .. } => {
             Some(InProcessTypedInteractiveRequest::RequestUserInput)
         }
@@ -225,8 +232,7 @@ fn in_process_typed_interactive_request(
         ServerRequest::DynamicToolCall { .. } => {
             Some(InProcessTypedInteractiveRequest::DynamicToolCall)
         }
-        ServerRequest::PermissionsRequestApproval { .. }
-        | ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
+        ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
     }
 }
 
@@ -353,6 +359,7 @@ struct PendingMcpElicitationRequest {
 pub(crate) struct ThreadScopedOp {
     pub(crate) thread_id: ThreadId,
     pub(crate) op: Op,
+    pub(crate) interrupt_turn_id: Option<String>,
 }
 
 impl PendingServerRequests {
@@ -460,6 +467,53 @@ impl PendingServerRequests {
 
     fn clear_mcp_elicitation_by_request_id(&mut self, request_id: &RequestId) {
         self.mcp_elicitations.remove(request_id);
+    }
+
+    fn clear_resolved_request_id(&mut self, thread_id: &str, request_id: &RequestId) {
+        self.exec_approvals
+            .retain(|(pending_thread_id, _), pending| {
+                pending_thread_id != thread_id || pending.request_id() != request_id
+            });
+        self.patch_approvals
+            .retain(|(pending_thread_id, _), pending| {
+                pending_thread_id != thread_id || pending.request_id() != request_id
+            });
+        self.request_permissions
+            .retain(|(pending_thread_id, _), pending_request_id| {
+                pending_thread_id != thread_id || pending_request_id != request_id
+            });
+        self.dynamic_tool_calls
+            .retain(|(pending_thread_id, _), pending_request_id| {
+                pending_thread_id != thread_id || pending_request_id != request_id
+            });
+        self.request_user_input
+            .retain(|(pending_thread_id, _), pending_request_ids| {
+                if pending_thread_id != thread_id {
+                    return true;
+                }
+                pending_request_ids.retain(|pending_request_id| pending_request_id != request_id);
+                !pending_request_ids.is_empty()
+            });
+        let remaining_patch_items = self.patch_approvals.keys().cloned().collect::<HashSet<_>>();
+        self.pending_file_changes
+            .retain(|key, _| key.0 != thread_id || remaining_patch_items.contains(key));
+        self.clear_mcp_elicitation_by_request_id(request_id);
+    }
+}
+
+impl PendingExecApprovalRequest {
+    fn request_id(&self) -> &RequestId {
+        match self {
+            Self::V1(request_id) | Self::V2(request_id) => request_id,
+        }
+    }
+}
+
+impl PendingPatchApprovalRequest {
+    fn request_id(&self) -> &RequestId {
+        match self {
+            Self::V1(request_id) | Self::V2(request_id) => request_id,
+        }
     }
 }
 
@@ -1618,6 +1672,7 @@ fn legacy_notification_to_event(notification: JSONRPCNotification) -> Result<Eve
 async fn process_in_process_command(
     op: Op,
     thread_id: &str,
+    interrupt_turn_id: Option<&str>,
     session_id: &ThreadId,
     config: &Config,
     current_turn_id: &mut Option<String>,
@@ -1629,7 +1684,10 @@ async fn process_in_process_command(
 ) -> bool {
     match op {
         Op::Interrupt => {
-            let Some(turn_id) = current_turn_id.clone() else {
+            let Some(turn_id) = interrupt_turn_id
+                .map(str::to_owned)
+                .or_else(|| current_turn_id.clone())
+            else {
                 send_warning_event(
                     app_event_tx,
                     "turn/interrupt skipped because there is no active turn".to_string(),
@@ -2472,6 +2530,7 @@ async fn run_in_process_agent_loop(
                         let should_shutdown = process_in_process_command(
                             op,
                             &thread_id,
+                            None,
                             &session_id,
                             &config,
                             &mut current_turn_id,
@@ -2491,11 +2550,12 @@ async fn run_in_process_agent_loop(
             }
             maybe_thread_scoped_op = thread_scoped_op_rx.recv() => {
                 match maybe_thread_scoped_op {
-                    Some(ThreadScopedOp { thread_id: scoped_thread_id, op }) => {
+                    Some(ThreadScopedOp { thread_id: scoped_thread_id, op, interrupt_turn_id }) => {
                         let scoped_thread_id = scoped_thread_id.to_string();
                         let should_shutdown = process_in_process_command(
                             op,
                             &scoped_thread_id,
+                            interrupt_turn_id.as_deref(),
                             &session_id,
                             &config,
                             &mut current_turn_id,
@@ -2884,11 +2944,11 @@ async fn run_in_process_agent_loop(
                                         );
                                 }
                             }
-                            ServerNotification::ServerRequestResolved(notification)
-                                if notification.thread_id == thread_id =>
-                            {
-                                pending_server_requests
-                                    .clear_mcp_elicitation_by_request_id(&notification.request_id);
+                            ServerNotification::ServerRequestResolved(notification) => {
+                                pending_server_requests.clear_resolved_request_id(
+                                    &notification.thread_id,
+                                    &notification.request_id,
+                                );
                             }
                             _ => {}
                         }
@@ -3122,6 +3182,7 @@ mod tests {
         let should_shutdown = process_in_process_command(
             op,
             "missing-thread-id",
+            None,
             &session_id,
             &config,
             &mut current_turn_id,
@@ -3194,6 +3255,7 @@ mod tests {
         let should_shutdown = process_in_process_command(
             op,
             &thread_id,
+            None,
             &session_id,
             config,
             &mut current_turn_id,
@@ -3575,6 +3637,34 @@ mod tests {
         assert_eq!(
             pending.pop_mcp_elicitation_request_id(&thread_id, &server_name, &elicitation_id),
             None
+        );
+    }
+
+    #[test]
+    fn server_request_resolved_clears_pending_request_permissions_and_user_input() {
+        let mut pending = PendingServerRequests::default();
+        pending.request_permissions.insert(
+            ("thread-1".to_string(), "perm-1".to_string()),
+            RequestId::Integer(5),
+        );
+        pending.register_request_user_input(
+            "thread-1".to_string(),
+            "turn-1".to_string(),
+            RequestId::Integer(6),
+        );
+        pending.register_request_user_input(
+            "thread-1".to_string(),
+            "turn-1".to_string(),
+            RequestId::Integer(7),
+        );
+
+        pending.clear_resolved_request_id("thread-1", &RequestId::Integer(5));
+        pending.clear_resolved_request_id("thread-1", &RequestId::Integer(6));
+
+        assert_eq!(pending.request_permissions.len(), 0);
+        assert_eq!(
+            pending.pop_request_user_input_request_id("thread-1", "turn-1"),
+            Some(RequestId::Integer(7))
         );
     }
 
@@ -4196,6 +4286,7 @@ mod tests {
                 text: "hello history".to_string(),
             },
             &thread_id,
+            None,
             &session_id,
             &config,
             &mut current_turn_id,
@@ -4214,6 +4305,7 @@ mod tests {
                 log_id: 0,
             },
             &thread_id,
+            None,
             &session_id,
             &config,
             &mut current_turn_id,
@@ -4311,6 +4403,7 @@ mod tests {
                 },
             },
             &thread_id,
+            None,
             &session_id,
             &config,
             &mut current_turn_id,
@@ -4334,6 +4427,7 @@ mod tests {
         let should_shutdown = process_in_process_command(
             Op::Interrupt,
             "missing-thread-id",
+            None,
             &session_id,
             &config,
             &mut current_turn_id,

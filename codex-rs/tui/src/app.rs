@@ -369,6 +369,19 @@ impl ThreadEventStore {
         self.pending_interactive_replay.note_outbound_op(op);
     }
 
+    fn current_turn_id(&self) -> Option<String> {
+        for event in self.buffer.iter().rev() {
+            match &event.msg {
+                EventMsg::TurnStarted(event) => return Some(event.turn_id.clone()),
+                EventMsg::TurnComplete(_)
+                | EventMsg::TurnAborted(_)
+                | EventMsg::ShutdownComplete => return None,
+                _ => {}
+            }
+        }
+        None
+    }
+
     fn op_can_change_pending_replay_state(op: &Op) -> bool {
         PendingInteractiveReplayState::op_can_change_state(op)
     }
@@ -1172,6 +1185,12 @@ impl App {
         }
     }
 
+    async fn current_turn_id_for_thread(&self, thread_id: ThreadId) -> Option<String> {
+        let channel = self.thread_event_channels.get(&thread_id)?;
+        let store = channel.store.lock().await;
+        store.current_turn_id()
+    }
+
     async fn interactive_request_for_thread_event(
         &self,
         thread_id: ThreadId,
@@ -1247,7 +1266,16 @@ impl App {
             crate::session_log::log_outbound_op(&op);
             match self.primary_app_server_op_tx.as_ref() {
                 Some(tx) => {
-                    if let Err(err) = tx.send(ThreadScopedOp { thread_id, op }) {
+                    let interrupt_turn_id = if matches!(&op, Op::Interrupt) {
+                        self.current_turn_id_for_thread(thread_id).await
+                    } else {
+                        None
+                    };
+                    if let Err(err) = tx.send(ThreadScopedOp {
+                        thread_id,
+                        op,
+                        interrupt_turn_id,
+                    }) {
                         self.chat_widget.add_error_message(format!(
                             "Failed to submit op through app-server session for thread {thread_id}: {err}"
                         ));
@@ -1298,6 +1326,7 @@ impl App {
                 op,
                 Op::ExecApproval { .. }
                     | Op::PatchApproval { .. }
+                    | Op::Interrupt
                     | Op::ResolveElicitation { .. }
                     | Op::RequestPermissionsResponse { .. }
                     | Op::UserInputAnswer { .. }
@@ -5868,12 +5897,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submit_op_to_thread_routes_interactive_responses_via_app_server() {
+    async fn submit_op_to_thread_routes_interactive_ops_via_app_server() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let (thread_op_tx, mut thread_op_rx) = tokio::sync::mpsc::unbounded_channel();
         let thread_id = ThreadId::new();
         app.active_session_events_via_app_server = true;
         app.primary_app_server_op_tx = Some(thread_op_tx);
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(8));
+        app.enqueue_thread_event(
+            thread_id,
+            Event {
+                id: "turn-1".to_string(),
+                msg: EventMsg::TurnStarted(TurnStartedEvent {
+                    turn_id: "turn-1".to_string(),
+                    model_context_window: None,
+                    collaboration_mode_kind: ModeKind::Default,
+                }),
+            },
+        )
+        .await
+        .expect("turn start should enqueue");
 
         app.submit_op_to_thread(
             thread_id,
@@ -5896,6 +5940,18 @@ mod tests {
                         answers: HashMap::new(),
                     },
                 },
+                interrupt_turn_id: None,
+            })
+        );
+
+        app.submit_op_to_thread(thread_id, Op::Interrupt).await;
+
+        assert_eq!(
+            thread_op_rx.try_recv(),
+            Ok(ThreadScopedOp {
+                thread_id,
+                op: Op::Interrupt,
+                interrupt_turn_id: Some("turn-1".to_string()),
             })
         );
     }

@@ -1140,10 +1140,18 @@ impl AuthManager {
         }
     }
 
+    pub fn replace_external_auth_refresher(
+        &self,
+        refresher: Option<Arc<dyn ExternalAuthRefresher>>,
+    ) -> Option<Arc<dyn ExternalAuthRefresher>> {
+        self.inner
+            .write()
+            .ok()
+            .and_then(|mut guard| std::mem::replace(&mut guard.external_refresher, refresher))
+    }
+
     pub fn set_external_auth_refresher(&self, refresher: Arc<dyn ExternalAuthRefresher>) {
-        if let Ok(mut guard) = self.inner.write() {
-            guard.external_refresher = Some(refresher);
-        }
+        let _ = self.replace_external_auth_refresher(Some(refresher));
     }
 
     pub fn set_forced_chatgpt_workspace_id(&self, workspace_id: Option<String>) {
