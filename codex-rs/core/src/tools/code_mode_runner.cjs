@@ -150,12 +150,12 @@ async function runModule(context, protocol, request) {
   const toolsModule = createToolsModule(context, protocol, request.enabled_tools ?? []);
   const mainModule = new SourceTextModule(request.source, {
     context,
-    identifier: 'code_mode_main.mjs',
+    identifier: 'exec_main.mjs',
     importModuleDynamically(specifier) {
       if (specifier === 'tools.js') {
         return toolsModule;
       }
-      throw new Error(`Unsupported import in code_mode: ${specifier}`);
+      throw new Error(`Unsupported import in exec: ${specifier}`);
     },
   });
 
@@ -163,7 +163,7 @@ async function runModule(context, protocol, request) {
     if (specifier === 'tools.js') {
       return toolsModule;
     }
-    throw new Error(`Unsupported import in code_mode: ${specifier}`);
+    throw new Error(`Unsupported import in exec: ${specifier}`);
   });
   await mainModule.evaluate();
 }

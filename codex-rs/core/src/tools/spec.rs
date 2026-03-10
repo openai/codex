@@ -7,6 +7,7 @@ use crate::features::Feature;
 use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
 use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
@@ -1603,11 +1604,11 @@ source: /[\s\S]+/
         enabled_tool_names.join(", ")
     };
     let description = format!(
-        "Runs JavaScript in a Node-backed `node:vm` context. This is a freeform tool: send raw JavaScript source text (no JSON/quotes/markdown fences). Direct tool calls remain available while `code_mode` is enabled. Inside JavaScript, import nested tools from `tools.js`, for example `import {{ exec_command }} from \"tools.js\"` or `import {{ tools }} from \"tools.js\"`. `tools[name]` and identifier wrappers like `await shell(args)` remain available for compatibility when the tool name is a valid JS identifier. Nested tool calls resolve to their code-mode result values. Function tools require JSON object arguments. Freeform tools require raw strings. Use synchronous `add_content(value)` with a content item, content-item array, or string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`. Only content passed to `add_content(value)` is surfaced back to the model. Enabled nested tools: {enabled_list}."
+        "Runs JavaScript in a Node-backed `node:vm` context. This is a freeform tool: send raw JavaScript source text (no JSON/quotes/markdown fences). Direct tool calls remain available while `{PUBLIC_TOOL_NAME}` is enabled. Inside JavaScript, import nested tools from `tools.js`, for example `import {{ exec_command }} from \"tools.js\"` or `import {{ tools }} from \"tools.js\"`. `tools[name]` and identifier wrappers like `await shell(args)` remain available for compatibility when the tool name is a valid JS identifier. Nested tool calls resolve to their code-mode result values. Function tools require JSON object arguments. Freeform tools require raw strings. Use synchronous `add_content(value)` with a content item, content-item array, or string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`. Only content passed to `add_content(value)` is surfaced back to the model. Enabled nested tools: {enabled_list}."
     );
 
     ToolSpec::Freeform(FreeformTool {
-        name: "code_mode".to_string(),
+        name: PUBLIC_TOOL_NAME.to_string(),
         description,
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
@@ -1983,12 +1984,12 @@ pub(crate) fn build_specs(
         let mut enabled_tool_names = nested_specs
             .into_iter()
             .map(|spec| spec.spec.name().to_string())
-            .filter(|name| name != "code_mode")
+            .filter(|name| name != PUBLIC_TOOL_NAME)
             .collect::<Vec<_>>();
         enabled_tool_names.sort();
         enabled_tool_names.dedup();
         builder.push_spec(create_code_mode_tool(&enabled_tool_names));
-        builder.register_handler("code_mode", code_mode_handler);
+        builder.register_handler(PUBLIC_TOOL_NAME, code_mode_handler);
     }
 
     match &config.shell_type {

@@ -44,7 +44,7 @@ async fn run_code_mode_turn(
         server,
         sse(vec![
             ev_response_created("resp-1"),
-            ev_custom_tool_call("call-1", "code_mode", code),
+            ev_custom_tool_call("call-1", "exec", code),
             ev_completed("resp-1"),
         ]),
     )
@@ -71,7 +71,7 @@ async fn code_mode_can_return_exec_command_output() -> Result<()> {
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "use code_mode to run exec_command",
+        "use exec to run exec_command",
         r#"
 import { exec_command } from "tools.js";
 
@@ -86,7 +86,7 @@ add_content(JSON.stringify(await exec_command({ cmd: "printf code_mode_exec_mark
     assert_ne!(
         success,
         Some(false),
-        "code_mode call failed unexpectedly: {output}"
+        "exec call failed unexpectedly: {output}"
     );
     let parsed: Value = serde_json::from_str(&output)?;
     assert!(
@@ -120,14 +120,14 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
     );
 
     let (test, second_mock) =
-        run_code_mode_turn(&server, "use code_mode to run apply_patch", &code, true).await?;
+        run_code_mode_turn(&server, "use exec to run apply_patch", &code, true).await?;
 
     let req = second_mock.single_request();
     let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "code_mode apply_patch call failed unexpectedly: {output}"
+        "exec apply_patch call failed unexpectedly: {output}"
     );
 
     let file_path = test.cwd_path().join(file_name);
