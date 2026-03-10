@@ -2259,17 +2259,20 @@ impl ChatWidget {
         };
 
         let tool = action.get("tool").and_then(serde_json::Value::as_str);
-        let command = action
-            .get("command")
-            .and_then(serde_json::Value::as_array)
-            .map(|command| {
+        let command = match action.get("command") {
+            Some(serde_json::Value::Array(command)) => Some(
                 command
                     .iter()
                     .filter_map(serde_json::Value::as_str)
                     .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .filter(|command| !command.is_empty());
+                    .collect::<Vec<_>>(),
+            )
+            .filter(|command| !command.is_empty()),
+            Some(serde_json::Value::String(command)) => shlex::split(command)
+                .filter(|command| !command.is_empty())
+                .or_else(|| Some(vec![command.clone()])),
+            _ => None,
+        };
 
         let cell = if let Some(command) = command {
             history_cell::new_approval_decision_cell(
