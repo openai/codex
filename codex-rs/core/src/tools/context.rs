@@ -3,7 +3,10 @@ use crate::codex::TurnContext;
 use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
 use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
 use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::formatted_truncate_text;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::unified_exec::resolve_max_tokens;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -14,6 +17,7 @@ use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_utils_string::take_bytes_at_char_boundary;
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
@@ -115,6 +119,10 @@ impl FunctionToolOutput {
             success,
         }
     }
+
+    pub fn into_text(self) -> String {
+        function_call_output_content_items_to_text(&self.body).unwrap_or_default()
+    }
 }
 
 impl ToolOutput for FunctionToolOutput {
@@ -131,6 +139,77 @@ impl ToolOutput for FunctionToolOutput {
     fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
         let Self { body, success } = self;
         function_tool_response(call_id, payload, body, success)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecCommandToolOutput {
+    pub event_call_id: String,
+    pub chunk_id: String,
+    pub wall_time: Duration,
+    /// Raw bytes returned for this unified exec call before any truncation.
+    pub raw_output: Vec<u8>,
+    pub max_output_tokens: Option<usize>,
+    pub process_id: Option<String>,
+    pub exit_code: Option<i32>,
+    pub original_token_count: Option<usize>,
+    pub session_command: Option<Vec<String>>,
+}
+
+impl ToolOutput for ExecCommandToolOutput {
+    fn log_preview(&self) -> String {
+        telemetry_preview(&self.response_text())
+    }
+
+    fn success_for_logging(&self) -> bool {
+        true
+    }
+
+    fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+        function_tool_response(
+            call_id,
+            payload,
+            vec![FunctionCallOutputContentItem::InputText {
+                text: self.response_text(),
+            }],
+            Some(true),
+        )
+    }
+}
+
+impl ExecCommandToolOutput {
+    pub(crate) fn truncated_output(&self) -> String {
+        let text = String::from_utf8_lossy(&self.raw_output).to_string();
+        let max_tokens = resolve_max_tokens(self.max_output_tokens);
+        formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens))
+    }
+
+    fn response_text(&self) -> String {
+        let mut sections = Vec::new();
+
+        if !self.chunk_id.is_empty() {
+            sections.push(format!("Chunk ID: {}", self.chunk_id));
+        }
+
+        let wall_time_seconds = self.wall_time.as_secs_f64();
+        sections.push(format!("Wall time: {wall_time_seconds:.4} seconds"));
+
+        if let Some(exit_code) = self.exit_code {
+            sections.push(format!("Process exited with code {exit_code}"));
+        }
+
+        if let Some(process_id) = &self.process_id {
+            sections.push(format!("Process running with session ID {process_id}"));
+        }
+
+        if let Some(original_token_count) = self.original_token_count {
+            sections.push(format!("Original token count: {original_token_count}"));
+        }
+
+        sections.push("Output:".to_string());
+        sections.push(self.truncated_output());
+
+        sections.join("\n")
     }
 }
 
@@ -203,6 +282,7 @@ fn telemetry_preview(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core_test_support::assert_regex_match;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -334,5 +414,47 @@ mod tests {
 
         assert!(lines.len() <= TELEMETRY_PREVIEW_MAX_LINES + 1);
         assert_eq!(lines.last(), Some(&TELEMETRY_PREVIEW_TRUNCATION_NOTICE));
+    }
+
+    #[test]
+    fn exec_command_tool_output_formats_truncated_response() {
+        let payload = ToolPayload::Function {
+            arguments: "{}".to_string(),
+        };
+        let response = ExecCommandToolOutput {
+            event_call_id: "call-42".to_string(),
+            chunk_id: "abc123".to_string(),
+            wall_time: std::time::Duration::from_millis(1250),
+            raw_output: b"token one token two token three token four token five".to_vec(),
+            max_output_tokens: Some(4),
+            process_id: None,
+            exit_code: Some(0),
+            original_token_count: Some(10),
+            session_command: None,
+        }
+        .into_response("call-42", &payload);
+
+        match response {
+            ResponseInputItem::FunctionCallOutput { call_id, output } => {
+                assert_eq!(call_id, "call-42");
+                assert_eq!(output.success, Some(true));
+                let text = output
+                    .body
+                    .to_text()
+                    .expect("exec output should serialize as text");
+                assert_regex_match(
+                    r#"(?sx)
+                    ^Chunk\ ID:\ abc123
+                    \nWall\ time:\ \d+\.\d{4}\ seconds
+                    \nProcess\ exited\ with\ code\ 0
+                    \nOriginal\ token\ count:\ 10
+                    \nOutput:
+                    \n.*tokens\ truncated.*
+                    $"#,
+                    &text,
+                );
+            }
+            other => panic!("expected FunctionCallOutput, got {other:?}"),
+        }
     }
 }

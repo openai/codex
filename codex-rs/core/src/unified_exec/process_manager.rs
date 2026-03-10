@@ -16,6 +16,7 @@ use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecRequest;
+use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
@@ -25,9 +26,7 @@ use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
-use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
-use crate::truncate::formatted_truncate_text;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::MAX_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::MAX_YIELD_TIME_MS;
@@ -38,7 +37,6 @@ use crate::unified_exec::ProcessStore;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
-use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::WARNING_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::async_watcher::emit_exec_end_for_unified_exec;
@@ -51,7 +49,6 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
-use crate::unified_exec::resolve_max_tokens;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("NO_COLOR", "1"),
@@ -159,7 +156,7 @@ impl UnifiedExecProcessManager {
         &self,
         request: ExecCommandRequest,
         context: &UnifiedExecContext,
-    ) -> Result<UnifiedExecResponse, UnifiedExecError> {
+    ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
         let cwd = request
             .workdir
             .clone()
@@ -194,7 +191,6 @@ impl UnifiedExecProcessManager {
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
         start_streaming_output(&process, context, Arc::clone(&transcript));
-        let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = clamp_yield_time(request.yield_time_ms);
 
         let start = Instant::now();
@@ -221,7 +217,6 @@ impl UnifiedExecProcessManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let exit_code = process.exit_code();
         let has_exited = process.has_exited() || exit_code.is_some();
         let chunk_id = generate_chunk_id();
@@ -240,7 +235,7 @@ impl UnifiedExecProcessManager {
                 cwd.clone(),
                 Some(process_id),
                 Arc::clone(&transcript),
-                output.clone(),
+                text.clone(),
                 exit,
                 wall_time,
             )
@@ -276,12 +271,12 @@ impl UnifiedExecProcessManager {
         };
 
         let original_token_count = approx_token_count(&text);
-        let response = UnifiedExecResponse {
+        let response = ExecCommandToolOutput {
             event_call_id: context.call_id.clone(),
             chunk_id,
             wall_time,
-            output,
             raw_output: collected,
+            max_output_tokens: request.max_output_tokens,
             process_id: if has_exited {
                 None
             } else {
@@ -298,7 +293,7 @@ impl UnifiedExecProcessManager {
     pub(crate) async fn write_stdin(
         &self,
         request: WriteStdinRequest<'_>,
-    ) -> Result<UnifiedExecResponse, UnifiedExecError> {
+    ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
         let process_id = request.process_id.to_string();
 
         let PreparedProcessHandles {
@@ -324,7 +319,6 @@ impl UnifiedExecProcessManager {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
-        let max_tokens = resolve_max_tokens(request.max_output_tokens);
         let yield_time_ms = {
             // Empty polls use configurable background timeout bounds. Non-empty
             // writes keep a fixed max cap so interactive stdin remains responsive.
@@ -349,7 +343,6 @@ impl UnifiedExecProcessManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let output = formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens));
         let original_token_count = approx_token_count(&text);
         let chunk_id = generate_chunk_id();
 
@@ -375,12 +368,12 @@ impl UnifiedExecProcessManager {
             }
         };
 
-        let response = UnifiedExecResponse {
+        let response = ExecCommandToolOutput {
             event_call_id,
             chunk_id,
             wall_time,
-            output,
             raw_output: collected,
+            max_output_tokens: request.max_output_tokens,
             process_id,
             exit_code,
             original_token_count: Some(original_token_count),

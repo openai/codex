@@ -7,7 +7,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::skills::maybe_emit_implicit_skill_invocation;
-use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::apply_granted_turn_permissions;
@@ -21,7 +21,6 @@ use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecProcessManager;
-use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
 use codex_protocol::models::PermissionProfile;
@@ -82,7 +81,7 @@ fn default_tty() -> bool {
 
 #[async_trait]
 impl ToolHandler for UnifiedExecHandler {
-    type Output = FunctionToolOutput;
+    type Output = ExecCommandToolOutput;
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -230,7 +229,17 @@ impl ToolHandler for UnifiedExecHandler {
                 .await?
                 {
                     manager.release_process_id(&process_id).await;
-                    return Ok(output);
+                    return Ok(ExecCommandToolOutput {
+                        event_call_id: String::new(),
+                        chunk_id: String::new(),
+                        wall_time: std::time::Duration::ZERO,
+                        raw_output: output.into_text().into_bytes(),
+                        max_output_tokens: None,
+                        process_id: None,
+                        exit_code: None,
+                        original_token_count: None,
+                        session_command: None,
+                    });
                 }
 
                 manager
@@ -290,9 +299,7 @@ impl ToolHandler for UnifiedExecHandler {
             }
         };
 
-        let content = format_response(&response);
-
-        Ok(FunctionToolOutput::from_text(content, Some(true)))
+        Ok(response)
     }
 }
 
@@ -319,35 +326,6 @@ pub(crate) fn get_command(
     };
 
     Ok(shell.derive_exec_args(&args.cmd, use_login_shell))
-}
-
-fn format_response(response: &UnifiedExecResponse) -> String {
-    let mut sections = Vec::new();
-
-    if !response.chunk_id.is_empty() {
-        sections.push(format!("Chunk ID: {}", response.chunk_id));
-    }
-
-    let wall_time_seconds = response.wall_time.as_secs_f64();
-    sections.push(format!("Wall time: {wall_time_seconds:.4} seconds"));
-
-    if let Some(exit_code) = response.exit_code {
-        sections.push(format!("Process exited with code {exit_code}"));
-    }
-
-    if let Some(process_id) = &response.process_id {
-        // Training still uses "session ID".
-        sections.push(format!("Process running with session ID {process_id}"));
-    }
-
-    if let Some(original_token_count) = response.original_token_count {
-        sections.push(format!("Original token count: {original_token_count}"));
-    }
-
-    sections.push("Output:".to_string());
-    sections.push(response.output.clone());
-
-    sections.join("\n")
 }
 
 #[cfg(test)]
