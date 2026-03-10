@@ -73,7 +73,9 @@ pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = concat!(
     "This action was rejected due to unacceptable risk. ",
     "The agent must not attempt to achieve the same outcome via workaround, ",
     "indirect execution, or policy circumvention. ",
-    "Proceed only with a materially safer alternative, or stop and request user input.",
+    "Proceed only with a materially safer alternative, ",
+    "or if the user explicitly approves the action after being informed of the risk. ",
+    "Otherwise, stop and request user input.",
 );
 
 /// Whether this turn should route `on-request` approval prompts through the
