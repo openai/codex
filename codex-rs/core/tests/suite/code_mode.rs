@@ -34,7 +34,7 @@ async fn run_code_mode_turn(
     include_apply_patch: bool,
 ) -> Result<(TestCodex, ResponseMock)> {
     let mut builder = test_codex().with_config(move |config| {
-        config.features.enable(Feature::CodeMode);
+        let _ = config.features.enable(Feature::CodeMode);
         config.include_apply_patch_tool = include_apply_patch;
     });
     let test = builder.build(server).await?;

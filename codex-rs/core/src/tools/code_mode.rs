@@ -375,7 +375,7 @@ fn content_items_from_response_input(
             content_items_from_function_output(output)
         }
         ResponseInputItem::CustomToolCallOutput { output, .. } => {
-            vec![FunctionCallOutputContentItem::InputText { text: output }]
+            content_items_from_function_output(output)
         }
         ResponseInputItem::McpToolCallOutput { result, .. } => match result {
             Ok(result) => {
@@ -404,9 +404,10 @@ fn function_output_content_item_from_content_item(
         ContentItem::InputText { text } | ContentItem::OutputText { text } => {
             FunctionCallOutputContentItem::InputText { text }
         }
-        ContentItem::InputImage { image_url } => {
-            FunctionCallOutputContentItem::InputImage { image_url }
-        }
+        ContentItem::InputImage { image_url } => FunctionCallOutputContentItem::InputImage {
+            image_url,
+            detail: None,
+        },
     }
 }
 
@@ -419,8 +420,8 @@ fn json_values_from_output_content_items(
             FunctionCallOutputContentItem::InputText { text } => {
                 json!({ "type": "input_text", "text": text })
             }
-            FunctionCallOutputContentItem::InputImage { image_url } => {
-                json!({ "type": "input_image", "image_url": image_url })
+            FunctionCallOutputContentItem::InputImage { image_url, detail } => {
+                json!({ "type": "input_image", "image_url": image_url, "detail": detail })
             }
         })
         .collect()

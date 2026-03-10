@@ -66,7 +66,6 @@ pub(crate) struct ToolsConfig {
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
     pub request_permission_enabled: bool,
-    pub code_mode_enabled: bool,
     pub request_permissions_tool_enabled: bool,
     pub code_mode_enabled: bool,
     pub js_repl_enabled: bool,
@@ -172,8 +171,6 @@ impl ToolsConfig {
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
             request_permission_enabled,
-            code_mode_enabled: include_code_mode,
-            request_permissions_tool_enabled,
             request_permissions_tool_enabled,
             code_mode_enabled: include_code_mode,
             js_repl_enabled: include_js_repl,
@@ -212,7 +209,6 @@ impl ToolsConfig {
 
 fn supports_image_generation(model_info: &ModelInfo) -> bool {
     model_info.input_modalities.contains(&InputModality::Image)
-}
 }
 
 /// Generic JSON‑Schema subset needed for our tool definitions
@@ -1867,7 +1863,6 @@ pub(crate) fn build_specs(
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
-    use crate::tools::handlers::CodeModeHandler;
     use crate::tools::handlers::ArtifactsHandler;
     use crate::tools::handlers::CodeModeHandler;
     use crate::tools::handlers::DynamicToolHandler;

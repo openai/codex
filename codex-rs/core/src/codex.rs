@@ -412,7 +412,7 @@ impl Codex {
                 "Disabled `code_mode` for this session because the configured Node runtime is unavailable or incompatible. {err}"
             );
             warn!("{message}");
-            config.features.disable(Feature::CodeMode);
+            let _ = config.features.disable(Feature::CodeMode);
             config.startup_warnings.push(message);
         }
 
