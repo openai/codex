@@ -1779,12 +1779,7 @@ pub(crate) fn mcp_tool_to_openai_tool(
     sanitize_json_schema(&mut serialized_input_schema);
     let input_schema = serde_json::from_value::<JsonSchema>(serialized_input_schema)?;
     let structured_content_schema = output_schema
-        .map(|output_schema| {
-            let mut serialized_output_schema =
-                serde_json::Value::Object(output_schema.as_ref().clone());
-            sanitize_top_level_json_schema(&mut serialized_output_schema);
-            serialized_output_schema
-        })
+        .map(|output_schema| serde_json::Value::Object(output_schema.as_ref().clone()))
         .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
     let output_schema = Some(mcp_call_tool_result_output_schema(
         structured_content_schema,
@@ -1837,56 +1832,6 @@ fn mcp_call_tool_result_output_schema(structured_content_schema: JsonValue) -> J
         "required": ["content"],
         "additionalProperties": false
     })
-}
-
-fn sanitize_top_level_json_schema(value: &mut JsonValue) {
-    match value {
-        JsonValue::Bool(_) => {
-            *value = json!({ "type": "string" });
-        }
-        JsonValue::Object(map) => {
-            let top_level_type = map
-                .get("type")
-                .and_then(JsonValue::as_str)
-                .map(ToString::to_string)
-                .or_else(|| infer_top_level_json_schema_type(map))
-                .unwrap_or_else(|| "string".to_string());
-
-            map.insert(
-                "type".to_string(),
-                JsonValue::String(top_level_type.clone()),
-            );
-
-            if top_level_type == "object" && map.get("properties").is_none_or(JsonValue::is_null) {
-                map.insert(
-                    "properties".to_string(),
-                    JsonValue::Object(serde_json::Map::new()),
-                );
-            }
-        }
-        JsonValue::Array(_) | JsonValue::Null | JsonValue::Number(_) | JsonValue::String(_) => {}
-    }
-}
-
-fn infer_top_level_json_schema_type(map: &serde_json::Map<String, JsonValue>) -> Option<String> {
-    if map.contains_key("properties") || map.contains_key("required") {
-        return Some("object".to_string());
-    }
-    if map.contains_key("items") {
-        return Some("array".to_string());
-    }
-    if map.contains_key("enum") || map.contains_key("const") || map.contains_key("format") {
-        return Some("string".to_string());
-    }
-    if map.contains_key("minimum")
-        || map.contains_key("maximum")
-        || map.contains_key("exclusiveMinimum")
-        || map.contains_key("exclusiveMaximum")
-        || map.contains_key("multipleOf")
-    {
-        return Some("number".to_string());
-    }
-    None
 }
 
 /// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
@@ -2405,7 +2350,6 @@ mod tests {
                         "items": {}
                     },
                     "structuredContent": {
-                        "type": "object",
                         "properties": {
                             "result": {
                                 "properties": {
@@ -2414,6 +2358,53 @@ mod tests {
                             }
                         },
                         "required": ["result"]
+                    },
+                    "isError": {
+                        "type": "boolean"
+                    },
+                    "_meta": {}
+                },
+                "required": ["content"],
+                "additionalProperties": false
+            }))
+        );
+    }
+
+    #[test]
+    fn mcp_tool_to_openai_tool_preserves_output_schema_without_inferred_type() {
+        let mut input_schema = rmcp::model::JsonObject::new();
+        input_schema.insert("type".to_string(), serde_json::json!("object"));
+
+        let mut output_schema = rmcp::model::JsonObject::new();
+        output_schema.insert("enum".to_string(), serde_json::json!(["ok", "error"]));
+
+        let tool = rmcp::model::Tool {
+            name: "with_enum_output".to_string().into(),
+            title: None,
+            description: Some("Has enum output schema".to_string().into()),
+            input_schema: std::sync::Arc::new(input_schema),
+            output_schema: Some(std::sync::Arc::new(output_schema)),
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        };
+
+        let openai_tool =
+            mcp_tool_to_openai_tool("mcp__server__with_enum_output".to_string(), tool)
+                .expect("convert tool");
+
+        assert_eq!(
+            openai_tool.output_schema,
+            Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "array",
+                        "items": {}
+                    },
+                    "structuredContent": {
+                        "enum": ["ok", "error"]
                     },
                     "isError": {
                         "type": "boolean"

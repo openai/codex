@@ -42,6 +42,8 @@ enum CodeModeToolKind {
 
 #[derive(Clone, Debug, Serialize)]
 struct EnabledTool {
+    tool_name: String,
+    namespace: Vec<String>,
     name: String,
     kind: CodeModeToolKind,
 }
@@ -85,7 +87,7 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
     section.push_str("- `code_mode` is a freeform/custom tool. Direct `code_mode` calls must send raw JavaScript tool input. Do not wrap code in JSON, quotes, or markdown code fences.\n");
     section.push_str("- Direct tool calls remain available while `code_mode` is enabled.\n");
     section.push_str("- `code_mode` uses the same Node runtime resolution as `js_repl`. If needed, point `js_repl_node_path` at the Node binary you want Codex to use.\n");
-    section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. MCP tools are also available from `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to their code-mode result values.\n");
+    section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to their code-mode result values.\n");
     section.push_str(
         "- Function tools require JSON object arguments. Freeform tools require raw strings.\n",
     );
@@ -261,17 +263,47 @@ fn build_source(user_code: &str, enabled_tools: &[EnabledTool]) -> Result<String
 
 async fn build_enabled_tools(exec: &ExecContext) -> Vec<EnabledTool> {
     let router = build_nested_router(exec).await;
-    let mut out = router
-        .specs()
+    let mcp_tool_names = exec
+        .session
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .list_all_tools()
+        .await
         .into_iter()
-        .map(|spec| EnabledTool {
-            name: spec.name().to_string(),
-            kind: tool_kind_for_spec(&spec),
+        .map(|(qualified_name, tool_info)| {
+            (
+                qualified_name,
+                (
+                    vec!["mcp".to_string(), tool_info.server_name],
+                    tool_info.tool_name,
+                ),
+            )
         })
-        .filter(|tool| tool.name != "code_mode")
-        .collect::<Vec<_>>();
-    out.sort_by(|left, right| left.name.cmp(&right.name));
-    out.dedup_by(|left, right| left.name == right.name);
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut out = Vec::new();
+    for spec in router.specs() {
+        let tool_name = spec.name().to_string();
+        if tool_name == "code_mode" {
+            continue;
+        }
+
+        let (namespace, name) = if let Some((namespace, name)) = mcp_tool_names.get(&tool_name) {
+            (namespace.clone(), name.clone())
+        } else {
+            (Vec::new(), tool_name.clone())
+        };
+
+        out.push(EnabledTool {
+            tool_name,
+            namespace,
+            name,
+            kind: tool_kind_for_spec(&spec),
+        });
+    }
+    out.sort_by(|left, right| left.tool_name.cmp(&right.tool_name));
+    out.dedup_by(|left, right| left.tool_name == right.tool_name);
     out
 }
 

@@ -103,13 +103,13 @@ function isValidIdentifier(name) {
 function createToolsNamespace(protocol, enabledTools) {
   const tools = Object.create(null);
 
-  for (const { name } of enabledTools) {
+  for (const { tool_name } of enabledTools) {
     const callTool = async (args) =>
       protocol.request('tool_call', {
-        name: String(name),
+        name: String(tool_name),
         input: args,
       });
-    Object.defineProperty(tools, name, {
+    Object.defineProperty(tools, tool_name, {
       value: callTool,
       configurable: false,
       enumerable: true,
@@ -120,28 +120,13 @@ function createToolsNamespace(protocol, enabledTools) {
   return Object.freeze(tools);
 }
 
-function parseMcpToolName(name) {
-  const parts = String(name).split('__');
-  if (parts.length < 3 || parts[0] !== 'mcp') {
-    return null;
-  }
-
-  const serverName = parts[1];
-  const exportName = parts.slice(2).join('__');
-  if (!serverName || !exportName) {
-    return null;
-  }
-
-  return { serverName, exportName };
-}
-
 function createToolsModule(context, protocol, enabledTools) {
   const tools = createToolsNamespace(protocol, enabledTools);
   const exportNames = ['tools'];
 
-  for (const { name } of enabledTools) {
-    if (name !== 'tools' && isValidIdentifier(name)) {
-      exportNames.push(name);
+  for (const { tool_name } of enabledTools) {
+    if (tool_name !== 'tools' && isValidIdentifier(tool_name)) {
+      exportNames.push(tool_name);
     }
   }
 
@@ -161,21 +146,28 @@ function createToolsModule(context, protocol, enabledTools) {
   );
 }
 
-function createMcpToolsNamespace(protocol, enabledTools, serverName) {
+function namespacesMatch(left, right) {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((segment, index) => segment === right[index]);
+}
+
+function createNamespacedToolsNamespace(protocol, enabledTools, namespace) {
   const tools = Object.create(null);
 
-  for (const { name } of enabledTools) {
-    const parsed = parseMcpToolName(name);
-    if (!parsed || parsed.serverName !== serverName) {
+  for (const tool of enabledTools) {
+    const toolNamespace = Array.isArray(tool.namespace) ? tool.namespace : [];
+    if (!namespacesMatch(toolNamespace, namespace)) {
       continue;
     }
 
     const callTool = async (args) =>
       protocol.request('tool_call', {
-        name: String(name),
+        name: String(tool.tool_name),
         input: args,
       });
-    Object.defineProperty(tools, parsed.exportName, {
+    Object.defineProperty(tools, tool.name, {
       value: callTool,
       configurable: false,
       enumerable: true,
@@ -186,8 +178,8 @@ function createMcpToolsNamespace(protocol, enabledTools, serverName) {
   return Object.freeze(tools);
 }
 
-function createMcpToolsModule(context, protocol, enabledTools, serverName) {
-  const tools = createMcpToolsNamespace(protocol, enabledTools, serverName);
+function createNamespacedToolsModule(context, protocol, enabledTools, namespace) {
+  const tools = createNamespacedToolsNamespace(protocol, enabledTools, namespace);
   const exportNames = ['tools'];
 
   for (const exportName of Object.keys(tools)) {
@@ -200,7 +192,7 @@ function createMcpToolsModule(context, protocol, enabledTools, serverName) {
 
   return new SyntheticModule(
     uniqueExportNames,
-    function initMcpToolsModule() {
+    function initNamespacedToolsModule() {
       this.setExport('tools', tools);
       for (const exportName of uniqueExportNames) {
         if (exportName !== 'tools') {
@@ -214,26 +206,33 @@ function createMcpToolsModule(context, protocol, enabledTools, serverName) {
 
 function createModuleResolver(context, protocol, enabledTools) {
   const toolsModule = createToolsModule(context, protocol, enabledTools);
-  const mcpModules = new Map();
+  const namespacedModules = new Map();
 
   return function resolveModule(specifier) {
     if (specifier === 'tools.js') {
       return toolsModule;
     }
 
-    const mcpMatch = /^tools\/mcp\/([^/]+)\.js$/.exec(specifier);
-    if (!mcpMatch) {
+    const namespacedMatch = /^tools\/(.+)\.js$/.exec(specifier);
+    if (!namespacedMatch) {
       throw new Error(`Unsupported import in code_mode: ${specifier}`);
     }
 
-    const serverName = mcpMatch[1];
-    if (!mcpModules.has(serverName)) {
-      mcpModules.set(
-        serverName,
-        createMcpToolsModule(context, protocol, enabledTools, serverName)
+    const namespace = namespacedMatch[1]
+      .split('/')
+      .filter((segment) => segment.length > 0);
+    if (namespace.length === 0) {
+      throw new Error(`Unsupported import in code_mode: ${specifier}`);
+    }
+
+    const cacheKey = namespace.join('/');
+    if (!namespacedModules.has(cacheKey)) {
+      namespacedModules.set(
+        cacheKey,
+        createNamespacedToolsModule(context, protocol, enabledTools, namespace)
       );
     }
-    return mcpModules.get(serverName);
+    return namespacedModules.get(cacheKey);
   };
 }
 
