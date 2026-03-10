@@ -53,10 +53,15 @@ impl ApplyPatchRuntime {
         Self
     }
 
-    fn build_guardian_review_request(req: &ApplyPatchRequest) -> GuardianApprovalRequest {
+    fn build_guardian_review_request(
+        req: &ApplyPatchRequest,
+        call_id: &str,
+    ) -> GuardianApprovalRequest {
         GuardianApprovalRequest::ApplyPatch {
+            id: call_id.to_string(),
             cwd: req.action.cwd.clone(),
             files: req.file_paths.clone(),
+            changes: req.changes.clone(),
             change_count: req.changes.len(),
             patch: req.action.patch.clone(),
         }
@@ -135,7 +140,8 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let changes = req.changes.clone();
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
-                let action = ApplyPatchRuntime::build_guardian_review_request(req);
+                let action =
+                    ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id.as_ref());
                 return review_approval_request(session, turn, action, retry_reason).await;
             }
             if req.permissions_preapproved && retry_reason.is_none() {

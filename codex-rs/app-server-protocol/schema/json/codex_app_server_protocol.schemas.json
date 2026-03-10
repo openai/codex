@@ -3729,7 +3729,7 @@
             "risk_level": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/v2/GuardianRiskLevel"
+                  "$ref": "#/definitions/GuardianRiskLevel"
                 },
                 {
                   "type": "null"
@@ -3747,7 +3747,7 @@
               ]
             },
             "status": {
-              "$ref": "#/definitions/v2/GuardianAssessmentStatus"
+              "$ref": "#/definitions/GuardianAssessmentStatus"
             },
             "turn_id": {
               "default": "",
@@ -5668,6 +5668,22 @@
         }
       },
       "type": "object"
+    },
+    "GuardianAssessmentStatus": {
+      "enum": [
+        "in_progress",
+        "approved",
+        "denied"
+      ],
+      "type": "string"
+    },
+    "GuardianRiskLevel": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
     },
     "HistoryEntry": {
       "properties": {
@@ -7814,6 +7830,26 @@
           "properties": {
             "method": {
               "enum": [
+                "item/updated"
+              ],
+              "title": "Item/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ItemUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Item/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "item/completed"
               ],
               "title": "Item/completedNotificationMethod",
@@ -9786,6 +9822,49 @@
             "type": "string"
           }
         ]
+      },
+      "AutomaticApprovalReview": {
+        "properties": {
+          "rationale": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "riskLevel": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/RiskLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "riskScore": {
+            "format": "uint8",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/definitions/v2/AutomaticApprovalReviewStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "AutomaticApprovalReviewStatus": {
+        "enum": [
+          "inProgress",
+          "approved",
+          "denied"
+        ],
+        "type": "string"
       },
       "ByteRange": {
         "properties": {
@@ -12189,24 +12268,6 @@
         },
         "type": "object"
       },
-      "GuardianAssessmentStatus": {
-        "description": "UNSTABLE: Guardian assessment status values are part of the evolving app UI surface.",
-        "enum": [
-          "in_progress",
-          "approved",
-          "denied"
-        ],
-        "type": "string"
-      },
-      "GuardianRiskLevel": {
-        "description": "UNSTABLE: Guardian risk labels are part of the evolving app UI surface.",
-        "enum": [
-          "low",
-          "medium",
-          "high"
-        ],
-        "type": "string"
-      },
       "HazelnutScope": {
         "enum": [
           "example",
@@ -12426,6 +12487,70 @@
           }
         ]
       },
+      "ItemApprovalPendingKind": {
+        "enum": [
+          "manualRequest",
+          "automaticReview"
+        ],
+        "type": "string"
+      },
+      "ItemApprovalResolvedBy": {
+        "enum": [
+          "user",
+          "automatic"
+        ],
+        "type": "string"
+      },
+      "ItemApprovalState": {
+        "properties": {
+          "automaticReview": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AutomaticApprovalReview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pendingKind": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ItemApprovalPendingKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resolvedBy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ItemApprovalResolvedBy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/definitions/v2/ItemApprovalStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "ItemApprovalStatus": {
+        "enum": [
+          "pending",
+          "approved",
+          "declined",
+          "cancelled"
+        ],
+        "type": "string"
+      },
       "ItemCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -12466,6 +12591,27 @@
           "turnId"
         ],
         "title": "ItemStartedNotification",
+        "type": "object"
+      },
+      "ItemUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "item": {
+            "$ref": "#/definitions/v2/ThreadItem"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "threadId",
+          "turnId"
+        ],
+        "title": "ItemUpdatedNotification",
         "type": "object"
       },
       "ListMcpServerStatusParams": {
@@ -12890,7 +13036,8 @@
         "enum": [
           "inProgress",
           "completed",
-          "failed"
+          "failed",
+          "declined"
         ],
         "type": "string"
       },
@@ -15041,6 +15188,14 @@
           }
         ]
       },
+      "RiskLevel": {
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "type": "string"
+      },
       "SandboxMode": {
         "enum": [
           "read-only",
@@ -16310,6 +16465,16 @@
                   "null"
                 ]
               },
+              "approval": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ItemApprovalState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "command": {
                 "description": "The command to be executed.",
                 "type": "string"
@@ -16375,6 +16540,16 @@
           },
           {
             "properties": {
+              "approval": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ItemApprovalState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "changes": {
                 "items": {
                   "$ref": "#/definitions/v2/FileUpdateChange"
@@ -16406,6 +16581,16 @@
           },
           {
             "properties": {
+              "approval": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ItemApprovalState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "arguments": true,
               "durationMs": {
                 "description": "The duration of the MCP tool call in milliseconds.",
@@ -16694,56 +16879,6 @@
               "type"
             ],
             "title": "ImageGenerationThreadItem",
-            "type": "object"
-          },
-          {
-            "description": "UNSTABLE: Guardian assessment items may evolve as the app UI settles.",
-            "properties": {
-              "action": true,
-              "id": {
-                "type": "string"
-              },
-              "rationale": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "riskLevel": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/GuardianRiskLevel"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "riskScore": {
-                "format": "uint8",
-                "minimum": 0.0,
-                "type": [
-                  "integer",
-                  "null"
-                ]
-              },
-              "status": {
-                "$ref": "#/definitions/v2/GuardianAssessmentStatus"
-              },
-              "type": {
-                "enum": [
-                  "guardianAssessment"
-                ],
-                "title": "GuardianAssessmentThreadItemType",
-                "type": "string"
-              }
-            },
-            "required": [
-              "id",
-              "status",
-              "type"
-            ],
-            "title": "GuardianAssessmentThreadItem",
             "type": "object"
           },
           {

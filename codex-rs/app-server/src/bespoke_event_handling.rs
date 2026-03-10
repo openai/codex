@@ -49,12 +49,11 @@ use codex_app_server_protocol::GuardianAssessmentStatus;
 use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::ItemUpdatedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
-use codex_app_server_protocol::McpToolCallError;
-use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ModelReroutedNotification;
 use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
@@ -139,8 +138,6 @@ use tokio::sync::oneshot;
 use tracing::error;
 use tracing::warn;
 
-type JsonValue = serde_json::Value;
-
 enum CommandExecutionApprovalPresentation {
     Network(V2NetworkApprovalContext),
     Command(CommandExecutionCompletionItem),
@@ -181,6 +178,41 @@ async fn resolve_server_request_on_thread_listener(
 
     if let Err(err) = completion_rx.await {
         error!("failed to remove pending client request: {err}");
+    }
+}
+
+async fn item_snapshot(
+    thread_state: &Arc<Mutex<ThreadState>>,
+    turn_id: Option<&str>,
+    item_id: &str,
+) -> Option<ThreadItem> {
+    let state = thread_state.lock().await;
+    state.item_snapshot(turn_id, item_id)
+}
+
+fn mark_item_started(turn_summary: &mut TurnSummary, item: &ThreadItem) -> bool {
+    match item {
+        ThreadItem::CommandExecution { id, .. } => {
+            turn_summary.command_execution_started.insert(id.clone())
+        }
+        ThreadItem::FileChange { id, .. } => turn_summary.file_change_started.insert(id.clone()),
+        ThreadItem::McpToolCall { id, .. } => turn_summary.mcp_tool_call_started.insert(id.clone()),
+        _ => false,
+    }
+}
+
+fn clear_started_item(turn_summary: &mut TurnSummary, item_id: &str, item: &ThreadItem) {
+    match item {
+        ThreadItem::CommandExecution { .. } => {
+            turn_summary.command_execution_started.remove(item_id);
+        }
+        ThreadItem::FileChange { .. } => {
+            turn_summary.file_change_started.remove(item_id);
+        }
+        ThreadItem::McpToolCall { .. } => {
+            turn_summary.mcp_tool_call_started.remove(item_id);
+        }
+        _ => {}
     }
 }
 
@@ -253,37 +285,50 @@ pub(crate) async fn apply_bespoke_event_handling(
                 } else {
                     assessment.turn_id.clone()
                 };
-                let status = assessment.status;
-                let item = ThreadItem::GuardianAssessment {
-                    id: assessment.id.clone(),
-                    status: GuardianAssessmentStatus::from(status),
-                    risk_score: assessment.risk_score,
-                    risk_level: assessment.risk_level.map(Into::into),
-                    rationale: assessment.rationale.clone(),
-                    action: assessment.action.clone(),
+                let Some(item) =
+                    item_snapshot(&thread_state, Some(turn_id.as_str()), &assessment.id).await
+                else {
+                    return;
                 };
-                match status {
+                match assessment.status {
                     codex_protocol::protocol::GuardianAssessmentStatus::InProgress => {
-                        let notification = ItemStartedNotification {
-                            item,
-                            thread_id: conversation_id.to_string(),
-                            turn_id,
+                        let first_start = {
+                            let mut state = thread_state.lock().await;
+                            mark_item_started(&mut state.turn_summary, &item)
                         };
-                        outgoing
-                            .send_server_notification(ServerNotification::ItemStarted(notification))
-                            .await;
+                        if first_start {
+                            let notification = ItemStartedNotification {
+                                item,
+                                thread_id: conversation_id.to_string(),
+                                turn_id,
+                            };
+                            outgoing
+                                .send_server_notification(ServerNotification::ItemStarted(
+                                    notification,
+                                ))
+                                .await;
+                        } else {
+                            let notification = ItemUpdatedNotification {
+                                item,
+                                thread_id: conversation_id.to_string(),
+                                turn_id,
+                            };
+                            outgoing
+                                .send_server_notification(ServerNotification::ItemUpdated(
+                                    notification,
+                                ))
+                                .await;
+                        }
                     }
                     codex_protocol::protocol::GuardianAssessmentStatus::Approved
                     | codex_protocol::protocol::GuardianAssessmentStatus::Denied => {
-                        let notification = ItemCompletedNotification {
+                        let notification = ItemUpdatedNotification {
                             item,
                             thread_id: conversation_id.to_string(),
                             turn_id,
                         };
                         outgoing
-                            .send_server_notification(ServerNotification::ItemCompleted(
-                                notification,
-                            ))
+                            .send_server_notification(ServerNotification::ItemUpdated(notification))
                             .await;
                     }
                 }
@@ -421,28 +466,24 @@ pub(crate) async fn apply_bespoke_event_handling(
                     // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                     let item_id = call_id.clone();
                     let patch_changes = convert_patch_changes(&changes);
-
-                    let first_start = {
-                        let mut state = thread_state.lock().await;
-                        state
-                            .turn_summary
-                            .file_change_started
-                            .insert(item_id.clone())
-                    };
-                    if first_start {
-                        let item = ThreadItem::FileChange {
-                            id: item_id.clone(),
-                            changes: patch_changes.clone(),
-                            status: PatchApplyStatus::InProgress,
+                    let turn_id_ref = (!turn_id.is_empty()).then_some(turn_id.as_str());
+                    if let Some(item) = item_snapshot(&thread_state, turn_id_ref, &item_id).await {
+                        let first_start = {
+                            let mut state = thread_state.lock().await;
+                            mark_item_started(&mut state.turn_summary, &item)
                         };
-                        let notification = ItemStartedNotification {
-                            thread_id: conversation_id.to_string(),
-                            turn_id: event_turn_id.clone(),
-                            item,
-                        };
-                        outgoing
-                            .send_server_notification(ServerNotification::ItemStarted(notification))
-                            .await;
+                        if first_start {
+                            let notification = ItemStartedNotification {
+                                thread_id: conversation_id.to_string(),
+                                turn_id: event_turn_id.clone(),
+                                item,
+                            };
+                            outgoing
+                                .send_server_notification(ServerNotification::ItemStarted(
+                                    notification,
+                                ))
+                                .await;
+                        }
                     }
 
                     let params = FileChangeRequestApprovalParams {
@@ -524,6 +565,27 @@ pub(crate) async fn apply_bespoke_event_handling(
                     });
                 }
                 ApiVersion::V2 => {
+                    if let Some(item) =
+                        item_snapshot(&thread_state, Some(turn_id.as_str()), &call_id).await
+                    {
+                        let first_start = {
+                            let mut state = thread_state.lock().await;
+                            mark_item_started(&mut state.turn_summary, &item)
+                        };
+                        if first_start {
+                            let notification = ItemStartedNotification {
+                                thread_id: conversation_id.to_string(),
+                                turn_id: event_turn_id.clone(),
+                                item,
+                            };
+                            outgoing
+                                .send_server_notification(ServerNotification::ItemStarted(
+                                    notification,
+                                ))
+                                .await;
+                        }
+                    }
+
                     let command_actions = parsed_cmd
                         .iter()
                         .cloned()
@@ -611,6 +673,22 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::RequestUserInput(request) => {
             if matches!(api_version, ApiVersion::V2) {
+                if let Some(item) = item_snapshot(
+                    &thread_state,
+                    Some(request.turn_id.as_str()),
+                    &request.call_id,
+                )
+                .await
+                {
+                    let notification = ItemUpdatedNotification {
+                        thread_id: conversation_id.to_string(),
+                        turn_id: request.turn_id.clone(),
+                        item,
+                    };
+                    outgoing
+                        .send_server_notification(ServerNotification::ItemUpdated(notification))
+                        .await;
+                }
                 let user_input_guard = thread_watch_manager
                     .note_user_input_requested(&conversation_id.to_string())
                     .await;
@@ -685,6 +763,23 @@ pub(crate) async fn apply_bespoke_event_handling(
                         state.active_turn_snapshot().map(|turn| turn.id)
                     }
                 };
+                let request_id = request.id.to_string();
+                let call_id = request_id
+                    .strip_prefix("mcp_tool_call_approval_")
+                    .map(str::to_string);
+                if let Some(call_id) = call_id.as_deref()
+                    && let Some(item) =
+                        item_snapshot(&thread_state, turn_id.as_deref(), call_id).await
+                {
+                    let notification = ItemUpdatedNotification {
+                        thread_id: conversation_id.to_string(),
+                        turn_id: turn_id.clone().unwrap_or_else(|| event_turn_id.clone()),
+                        item,
+                    };
+                    outgoing
+                        .send_server_notification(ServerNotification::ItemUpdated(notification))
+                        .await;
+                }
                 let server_name = request.server_name.clone();
                 let request_body = match request.request.try_into() {
                     Ok(request_body) => request_body,
@@ -876,28 +971,45 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
             }
         }
-        // TODO(celia): properly construct McpToolCall TurnItem in core.
         EventMsg::McpToolCallBegin(begin_event) => {
-            let notification = construct_mcp_tool_call_notification(
-                begin_event,
-                conversation_id.to_string(),
-                event_turn_id.clone(),
-            )
-            .await;
-            outgoing
-                .send_server_notification(ServerNotification::ItemStarted(notification))
-                .await;
+            let item_id = begin_event.call_id.clone();
+            if let Some(item) =
+                item_snapshot(&thread_state, Some(event_turn_id.as_str()), &item_id).await
+            {
+                let first_start = {
+                    let mut state = thread_state.lock().await;
+                    mark_item_started(&mut state.turn_summary, &item)
+                };
+                if first_start {
+                    let notification = ItemStartedNotification {
+                        thread_id: conversation_id.to_string(),
+                        turn_id: event_turn_id.clone(),
+                        item,
+                    };
+                    outgoing
+                        .send_server_notification(ServerNotification::ItemStarted(notification))
+                        .await;
+                }
+            }
         }
         EventMsg::McpToolCallEnd(end_event) => {
-            let notification = construct_mcp_tool_call_end_notification(
-                end_event,
-                conversation_id.to_string(),
-                event_turn_id.clone(),
-            )
-            .await;
-            outgoing
-                .send_server_notification(ServerNotification::ItemCompleted(notification))
-                .await;
+            let item_id = end_event.call_id.clone();
+            if let Some(item) =
+                item_snapshot(&thread_state, Some(event_turn_id.as_str()), &item_id).await
+            {
+                {
+                    let mut state = thread_state.lock().await;
+                    clear_started_item(&mut state.turn_summary, &item_id, &item);
+                }
+                let notification = ItemCompletedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    item,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ItemCompleted(notification))
+                    .await;
+            }
         }
         EventMsg::CollabAgentSpawnBegin(begin_event) => {
             let item = ThreadItem::CollabAgentToolCall {
@@ -1434,90 +1546,65 @@ pub(crate) async fn apply_bespoke_event_handling(
             .await;
         }
         EventMsg::PatchApplyBegin(patch_begin_event) => {
-            // Until we migrate the core to be aware of a first class FileChangeItem
-            // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
             let item_id = patch_begin_event.call_id.clone();
-            let changes = convert_patch_changes(&patch_begin_event.changes);
-
-            let first_start = {
-                let mut state = thread_state.lock().await;
-                state
-                    .turn_summary
-                    .file_change_started
-                    .insert(item_id.clone())
-            };
-            if first_start {
-                let item = ThreadItem::FileChange {
-                    id: item_id.clone(),
-                    changes,
-                    status: PatchApplyStatus::InProgress,
+            if let Some(item) =
+                item_snapshot(&thread_state, Some(event_turn_id.as_str()), &item_id).await
+            {
+                let first_start = {
+                    let mut state = thread_state.lock().await;
+                    mark_item_started(&mut state.turn_summary, &item)
                 };
-                let notification = ItemStartedNotification {
+                if first_start {
+                    let notification = ItemStartedNotification {
+                        thread_id: conversation_id.to_string(),
+                        turn_id: event_turn_id.clone(),
+                        item,
+                    };
+                    outgoing
+                        .send_server_notification(ServerNotification::ItemStarted(notification))
+                        .await;
+                }
+            }
+        }
+        EventMsg::PatchApplyEnd(patch_end_event) => {
+            let item_id = patch_end_event.call_id.clone();
+            if let Some(item) =
+                item_snapshot(&thread_state, Some(event_turn_id.as_str()), &item_id).await
+            {
+                {
+                    let mut state = thread_state.lock().await;
+                    clear_started_item(&mut state.turn_summary, &item_id, &item);
+                }
+                let notification = ItemCompletedNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
                     item,
                 };
                 outgoing
-                    .send_server_notification(ServerNotification::ItemStarted(notification))
+                    .send_server_notification(ServerNotification::ItemCompleted(notification))
                     .await;
             }
         }
-        EventMsg::PatchApplyEnd(patch_end_event) => {
-            // Until we migrate the core to be aware of a first class FileChangeItem
-            // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
-            let item_id = patch_end_event.call_id.clone();
-
-            let status: PatchApplyStatus = (&patch_end_event.status).into();
-            let changes = convert_patch_changes(&patch_end_event.changes);
-            complete_file_change_item(
-                conversation_id,
-                item_id,
-                changes,
-                status,
-                event_turn_id.clone(),
-                &outgoing,
-                &thread_state,
-            )
-            .await;
-        }
         EventMsg::ExecCommandBegin(exec_command_begin_event) => {
             let item_id = exec_command_begin_event.call_id.clone();
-            let command_actions = exec_command_begin_event
-                .parsed_cmd
-                .into_iter()
-                .map(V2ParsedCommand::from)
-                .collect::<Vec<_>>();
-            let command = shlex_join(&exec_command_begin_event.command);
-            let cwd = exec_command_begin_event.cwd;
-            let process_id = exec_command_begin_event.process_id;
-
+            if let Some(item) =
+                item_snapshot(&thread_state, Some(event_turn_id.as_str()), &item_id).await
             {
-                let mut state = thread_state.lock().await;
-                state
-                    .turn_summary
-                    .command_execution_started
-                    .insert(item_id.clone());
+                let first_start = {
+                    let mut state = thread_state.lock().await;
+                    mark_item_started(&mut state.turn_summary, &item)
+                };
+                if first_start {
+                    let notification = ItemStartedNotification {
+                        thread_id: conversation_id.to_string(),
+                        turn_id: event_turn_id.clone(),
+                        item,
+                    };
+                    outgoing
+                        .send_server_notification(ServerNotification::ItemStarted(notification))
+                        .await;
+                }
             }
-
-            let item = ThreadItem::CommandExecution {
-                id: item_id,
-                command,
-                cwd,
-                process_id,
-                status: CommandExecutionStatus::InProgress,
-                command_actions,
-                aggregated_output: None,
-                exit_code: None,
-                duration_ms: None,
-            };
-            let notification = ItemStartedNotification {
-                thread_id: conversation_id.to_string(),
-                turn_id: event_turn_id.clone(),
-                item,
-            };
-            outgoing
-                .send_server_notification(ServerNotification::ItemStarted(notification))
-                .await;
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
             let item_id = exec_command_output_delta_event.call_id.clone();
@@ -1573,61 +1660,23 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::ExecCommandEnd(exec_command_end_event) => {
-            let ExecCommandEndEvent {
-                call_id,
-                command,
-                cwd,
-                parsed_cmd,
-                process_id,
-                aggregated_output,
-                exit_code,
-                duration,
-                status,
-                ..
-            } = exec_command_end_event;
-
+            let item_id = exec_command_end_event.call_id.clone();
+            if let Some(item) =
+                item_snapshot(&thread_state, Some(event_turn_id.as_str()), &item_id).await
             {
-                let mut state = thread_state.lock().await;
-                state
-                    .turn_summary
-                    .command_execution_started
-                    .remove(&call_id);
+                {
+                    let mut state = thread_state.lock().await;
+                    clear_started_item(&mut state.turn_summary, &item_id, &item);
+                }
+                let notification = ItemCompletedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event_turn_id.clone(),
+                    item,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::ItemCompleted(notification))
+                    .await;
             }
-
-            let status: CommandExecutionStatus = (&status).into();
-            let command_actions = parsed_cmd
-                .into_iter()
-                .map(V2ParsedCommand::from)
-                .collect::<Vec<_>>();
-
-            let aggregated_output = if aggregated_output.is_empty() {
-                None
-            } else {
-                Some(aggregated_output)
-            };
-
-            let duration_ms = i64::try_from(duration.as_millis()).unwrap_or(i64::MAX);
-
-            let item = ThreadItem::CommandExecution {
-                id: call_id,
-                command: shlex_join(&command),
-                cwd,
-                process_id,
-                status,
-                command_actions,
-                aggregated_output,
-                exit_code: Some(exit_code),
-                duration_ms: Some(duration_ms),
-            };
-
-            let notification = ItemCompletedNotification {
-                thread_id: conversation_id.to_string(),
-                turn_id: event_turn_id.clone(),
-                item,
-            };
-            outgoing
-                .send_server_notification(ServerNotification::ItemCompleted(notification))
-                .await;
         }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {
@@ -1857,6 +1906,7 @@ async fn complete_file_change_item(
         id: item_id,
         changes,
         status,
+        approval: manual_approval_completion_state(status),
     };
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
@@ -1879,7 +1929,15 @@ async fn complete_command_execution_item(
     command_actions: Vec<V2ParsedCommand>,
     status: CommandExecutionStatus,
     outgoing: &ThreadScopedOutgoingMessageSender,
+    thread_state: &Arc<Mutex<ThreadState>>,
 ) {
+    let mut state = thread_state.lock().await;
+    state
+        .turn_summary
+        .command_execution_started
+        .remove(&item_id);
+    drop(state);
+
     let item = ThreadItem::CommandExecution {
         id: item_id,
         command,
@@ -1890,6 +1948,7 @@ async fn complete_command_execution_item(
         aggregated_output: None,
         exit_code: None,
         duration_ms: None,
+        approval: manual_approval_completion_state(status),
     };
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
@@ -1899,6 +1958,58 @@ async fn complete_command_execution_item(
     outgoing
         .send_server_notification(ServerNotification::ItemCompleted(notification))
         .await;
+}
+
+fn manual_approval_completion_state(
+    status: impl Into<ManualApprovalCompletionStatus>,
+) -> Option<codex_app_server_protocol::ItemApprovalState> {
+    match status.into() {
+        ManualApprovalCompletionStatus::Declined => {
+            Some(codex_app_server_protocol::ItemApprovalState {
+                status: codex_app_server_protocol::ItemApprovalStatus::Declined,
+                pending_kind: None,
+                resolved_by: Some(codex_app_server_protocol::ItemApprovalResolvedBy::User),
+                automatic_review: None,
+            })
+        }
+        ManualApprovalCompletionStatus::Failed => {
+            Some(codex_app_server_protocol::ItemApprovalState {
+                status: codex_app_server_protocol::ItemApprovalStatus::Cancelled,
+                pending_kind: None,
+                resolved_by: None,
+                automatic_review: None,
+            })
+        }
+        ManualApprovalCompletionStatus::Other => None,
+    }
+}
+
+enum ManualApprovalCompletionStatus {
+    Declined,
+    Failed,
+    Other,
+}
+
+impl From<PatchApplyStatus> for ManualApprovalCompletionStatus {
+    fn from(value: PatchApplyStatus) -> Self {
+        match value {
+            PatchApplyStatus::Declined => Self::Declined,
+            PatchApplyStatus::Failed => Self::Failed,
+            PatchApplyStatus::InProgress | PatchApplyStatus::Completed => Self::Other,
+        }
+    }
+}
+
+impl From<CommandExecutionStatus> for ManualApprovalCompletionStatus {
+    fn from(value: CommandExecutionStatus) -> Self {
+        match value {
+            CommandExecutionStatus::Declined => Self::Declined,
+            CommandExecutionStatus::Failed => Self::Failed,
+            CommandExecutionStatus::InProgress
+            | CommandExecutionStatus::Completed
+            | CommandExecutionStatus::Interrupted => Self::Other,
+        }
+    }
 }
 
 async fn maybe_emit_raw_response_item_completed(
@@ -2551,6 +2662,7 @@ async fn on_command_execution_request_approval_response(
             completion_item.command_actions,
             status,
             &outgoing,
+            &thread_state,
         )
         .await;
     }
@@ -2609,75 +2721,6 @@ fn collab_resume_end_item(end_event: codex_protocol::protocol::CollabResumeEndEv
     }
 }
 
-/// similar to handle_mcp_tool_call_begin in exec
-async fn construct_mcp_tool_call_notification(
-    begin_event: McpToolCallBeginEvent,
-    thread_id: String,
-    turn_id: String,
-) -> ItemStartedNotification {
-    let item = ThreadItem::McpToolCall {
-        id: begin_event.call_id,
-        server: begin_event.invocation.server,
-        tool: begin_event.invocation.tool,
-        status: McpToolCallStatus::InProgress,
-        arguments: begin_event.invocation.arguments.unwrap_or(JsonValue::Null),
-        result: None,
-        error: None,
-        duration_ms: None,
-    };
-    ItemStartedNotification {
-        thread_id,
-        turn_id,
-        item,
-    }
-}
-
-/// similar to handle_mcp_tool_call_end in exec
-async fn construct_mcp_tool_call_end_notification(
-    end_event: McpToolCallEndEvent,
-    thread_id: String,
-    turn_id: String,
-) -> ItemCompletedNotification {
-    let status = if end_event.is_success() {
-        McpToolCallStatus::Completed
-    } else {
-        McpToolCallStatus::Failed
-    };
-    let duration_ms = i64::try_from(end_event.duration.as_millis()).ok();
-
-    let (result, error) = match &end_event.result {
-        Ok(value) => (
-            Some(McpToolCallResult {
-                content: value.content.clone(),
-                structured_content: value.structured_content.clone(),
-            }),
-            None,
-        ),
-        Err(message) => (
-            None,
-            Some(McpToolCallError {
-                message: message.clone(),
-            }),
-        ),
-    };
-
-    let item = ThreadItem::McpToolCall {
-        id: end_event.call_id,
-        server: end_event.invocation.server,
-        tool: end_event.invocation.tool,
-        status,
-        arguments: end_event.invocation.arguments.unwrap_or(JsonValue::Null),
-        result,
-        error,
-        duration_ms,
-    };
-    ItemCompletedNotification {
-        thread_id,
-        turn_id,
-        item,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2694,21 +2737,21 @@ mod tests {
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
     use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
+    use codex_protocol::models::MacOsAutomationPermission;
+    use codex_protocol::models::MacOsContactsPermission;
+    use codex_protocol::models::MacOsPreferencesPermission;
+    use codex_protocol::models::MacOsSeatbeltProfileExtensions;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
     use codex_protocol::protocol::CollabResumeBeginEvent;
     use codex_protocol::protocol::CollabResumeEndEvent;
     use codex_protocol::protocol::CreditsSnapshot;
-    use codex_protocol::protocol::McpInvocation;
     use codex_protocol::protocol::RateLimitSnapshot;
     use codex_protocol::protocol::RateLimitWindow;
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
-    use rmcp::model::Content;
-    use serde_json::Value as JsonValue;
-    use std::time::Duration;
     use tokio::sync::Mutex;
     use tokio::sync::mpsc;
 
@@ -3185,6 +3228,29 @@ mod tests {
             ),
         );
         let conversation = thread_manager.start_thread(config).await?.thread;
+        {
+            let mut state = thread_state.lock().await;
+            state.track_current_turn_event(&EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: event_turn_id.clone(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }));
+            state.track_current_turn_event(&EventMsg::GuardianAssessment(
+                codex_protocol::protocol::GuardianAssessmentEvent {
+                    id: "guardian-1".to_string(),
+                    turn_id: event_turn_id.clone(),
+                    status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
+                    risk_score: None,
+                    risk_level: None,
+                    rationale: None,
+                    action: Some(serde_json::json!({
+                        "tool": "shell",
+                        "command": "curl -X POST https://example.com",
+                        "cwd": "/repo/codex-rs/core",
+                    })),
+                },
+            ));
+        }
 
         apply_bespoke_event_handling(
             Event {
@@ -3197,7 +3263,11 @@ mod tests {
                         risk_score: None,
                         risk_level: None,
                         rationale: None,
-                        action: None,
+                        action: Some(serde_json::json!({
+                            "tool": "shell",
+                            "command": "curl -X POST https://example.com",
+                            "cwd": "/repo/codex-rs/core",
+                        })),
                     },
                 ),
             },
@@ -3222,13 +3292,32 @@ mod tests {
                 assert_eq!(notification.turn_id, event_turn_id);
                 assert_eq!(
                     notification.item,
-                    ThreadItem::GuardianAssessment {
+                    ThreadItem::CommandExecution {
                         id: "guardian-1".to_string(),
-                        status: GuardianAssessmentStatus::InProgress,
-                        risk_score: None,
-                        risk_level: None,
-                        rationale: None,
-                        action: None,
+                        command: "curl -X POST https://example.com".to_string(),
+                        cwd: PathBuf::from("/repo/codex-rs/core"),
+                        process_id: None,
+                        status: CommandExecutionStatus::InProgress,
+                        command_actions: Vec::new(),
+                        aggregated_output: None,
+                        exit_code: None,
+                        duration_ms: None,
+                        approval: Some(codex_app_server_protocol::ItemApprovalState {
+                            status: codex_app_server_protocol::ItemApprovalStatus::Pending,
+                            pending_kind: Some(
+                                codex_app_server_protocol::ItemApprovalPendingKind::AutomaticReview,
+                            ),
+                            resolved_by: None,
+                            automatic_review: Some(
+                                codex_app_server_protocol::AutomaticApprovalReview {
+                                    status:
+                                        codex_app_server_protocol::AutomaticApprovalReviewStatus::InProgress,
+                                    risk_score: None,
+                                    risk_level: None,
+                                    rationale: None,
+                                },
+                            ),
+                        }),
                     }
                 );
             }
@@ -3357,44 +3446,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_construct_mcp_tool_call_begin_notification_with_args() {
-        let begin_event = McpToolCallBeginEvent {
-            call_id: "call_123".to_string(),
-            invocation: McpInvocation {
-                server: "codex".to_string(),
-                tool: "list_mcp_resources".to_string(),
-                arguments: Some(serde_json::json!({"server": ""})),
-            },
-        };
-
-        let thread_id = ThreadId::new().to_string();
-        let turn_id = "turn_1".to_string();
-        let notification = construct_mcp_tool_call_notification(
-            begin_event.clone(),
-            thread_id.clone(),
-            turn_id.clone(),
-        )
-        .await;
-
-        let expected = ItemStartedNotification {
-            thread_id,
-            turn_id,
-            item: ThreadItem::McpToolCall {
-                id: begin_event.call_id,
-                server: begin_event.invocation.server,
-                tool: begin_event.invocation.tool,
-                status: McpToolCallStatus::InProgress,
-                arguments: serde_json::json!({"server": ""}),
-                result: None,
-                error: None,
-                duration_ms: None,
-            },
-        };
-
-        assert_eq!(notification, expected);
-    }
-
-    #[tokio::test]
     async fn test_handle_turn_complete_emits_error_multiple_turns() -> Result<()> {
         // Conversation A will have two turns; Conversation B will have one turn.
         let conversation_a = ThreadId::new();
@@ -3490,140 +3541,6 @@ mod tests {
 
         assert!(rx.try_recv().is_err(), "no extra messages expected");
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_construct_mcp_tool_call_begin_notification_without_args() {
-        let begin_event = McpToolCallBeginEvent {
-            call_id: "call_456".to_string(),
-            invocation: McpInvocation {
-                server: "codex".to_string(),
-                tool: "list_mcp_resources".to_string(),
-                arguments: None,
-            },
-        };
-
-        let thread_id = ThreadId::new().to_string();
-        let turn_id = "turn_2".to_string();
-        let notification = construct_mcp_tool_call_notification(
-            begin_event.clone(),
-            thread_id.clone(),
-            turn_id.clone(),
-        )
-        .await;
-
-        let expected = ItemStartedNotification {
-            thread_id,
-            turn_id,
-            item: ThreadItem::McpToolCall {
-                id: begin_event.call_id,
-                server: begin_event.invocation.server,
-                tool: begin_event.invocation.tool,
-                status: McpToolCallStatus::InProgress,
-                arguments: JsonValue::Null,
-                result: None,
-                error: None,
-                duration_ms: None,
-            },
-        };
-
-        assert_eq!(notification, expected);
-    }
-
-    #[tokio::test]
-    async fn test_construct_mcp_tool_call_end_notification_success() {
-        let content = vec![
-            serde_json::to_value(Content::text("{\"resources\":[]}"))
-                .expect("content should serialize"),
-        ];
-        let result = CallToolResult {
-            content: content.clone(),
-            is_error: Some(false),
-            structured_content: None,
-            meta: None,
-        };
-
-        let end_event = McpToolCallEndEvent {
-            call_id: "call_789".to_string(),
-            invocation: McpInvocation {
-                server: "codex".to_string(),
-                tool: "list_mcp_resources".to_string(),
-                arguments: Some(serde_json::json!({"server": ""})),
-            },
-            duration: Duration::from_nanos(92708),
-            result: Ok(result),
-        };
-
-        let thread_id = ThreadId::new().to_string();
-        let turn_id = "turn_3".to_string();
-        let notification = construct_mcp_tool_call_end_notification(
-            end_event.clone(),
-            thread_id.clone(),
-            turn_id.clone(),
-        )
-        .await;
-
-        let expected = ItemCompletedNotification {
-            thread_id,
-            turn_id,
-            item: ThreadItem::McpToolCall {
-                id: end_event.call_id,
-                server: end_event.invocation.server,
-                tool: end_event.invocation.tool,
-                status: McpToolCallStatus::Completed,
-                arguments: serde_json::json!({"server": ""}),
-                result: Some(McpToolCallResult {
-                    content,
-                    structured_content: None,
-                }),
-                error: None,
-                duration_ms: Some(0),
-            },
-        };
-
-        assert_eq!(notification, expected);
-    }
-
-    #[tokio::test]
-    async fn test_construct_mcp_tool_call_end_notification_error() {
-        let end_event = McpToolCallEndEvent {
-            call_id: "call_err".to_string(),
-            invocation: McpInvocation {
-                server: "codex".to_string(),
-                tool: "list_mcp_resources".to_string(),
-                arguments: None,
-            },
-            duration: Duration::from_millis(1),
-            result: Err("boom".to_string()),
-        };
-
-        let thread_id = ThreadId::new().to_string();
-        let turn_id = "turn_4".to_string();
-        let notification = construct_mcp_tool_call_end_notification(
-            end_event.clone(),
-            thread_id.clone(),
-            turn_id.clone(),
-        )
-        .await;
-
-        let expected = ItemCompletedNotification {
-            thread_id,
-            turn_id,
-            item: ThreadItem::McpToolCall {
-                id: end_event.call_id,
-                server: end_event.invocation.server,
-                tool: end_event.invocation.tool,
-                status: McpToolCallStatus::Failed,
-                arguments: JsonValue::Null,
-                result: None,
-                error: Some(McpToolCallError {
-                    message: "boom".to_string(),
-                }),
-                duration_ms: Some(1),
-            },
-        };
-
-        assert_eq!(notification, expected);
     }
 
     #[tokio::test]

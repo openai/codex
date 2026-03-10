@@ -108,6 +108,7 @@ pub(crate) async fn handle_mcp_tool_call(
             &call_id,
             invocation,
             "MCP tool call blocked by app configuration".to_string(),
+            false,
         )
         .await;
         let status = if result.is_ok() { "ok" } else { "error" };
@@ -116,6 +117,12 @@ pub(crate) async fn handle_mcp_tool_call(
             .counter("codex.mcp.call", 1, &[("status", status)]);
         return CallToolResult::from_result(result);
     }
+
+    let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+        call_id: call_id.clone(),
+        invocation: invocation.clone(),
+    });
+    notify_mcp_tool_call_event(sess.as_ref(), turn_context.as_ref(), tool_call_begin_event).await;
 
     if let Some(decision) = maybe_request_mcp_tool_approval(
         &sess,
@@ -131,16 +138,6 @@ pub(crate) async fn handle_mcp_tool_call(
             McpToolApprovalDecision::Accept
             | McpToolApprovalDecision::AcceptForSession
             | McpToolApprovalDecision::AcceptAndRemember => {
-                let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
-                    call_id: call_id.clone(),
-                    invocation: invocation.clone(),
-                });
-                notify_mcp_tool_call_event(
-                    sess.as_ref(),
-                    turn_context.as_ref(),
-                    tool_call_begin_event,
-                )
-                .await;
                 maybe_mark_thread_memory_mode_polluted(sess.as_ref(), turn_context.as_ref()).await;
 
                 let start = Instant::now();
@@ -187,6 +184,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     message,
+                    true,
                 )
                 .await
             }
@@ -198,6 +196,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     message,
+                    true,
                 )
                 .await
             }
@@ -221,11 +220,6 @@ pub(crate) async fn handle_mcp_tool_call(
         return CallToolResult::from_result(result);
     }
 
-    let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
-        call_id: call_id.clone(),
-        invocation: invocation.clone(),
-    });
-    notify_mcp_tool_call_event(sess.as_ref(), turn_context.as_ref(), tool_call_begin_event).await;
     maybe_mark_thread_memory_mode_polluted(sess.as_ref(), turn_context.as_ref()).await;
 
     let start = Instant::now();
@@ -494,7 +488,7 @@ async fn maybe_request_mcp_tool_approval(
         let decision = review_approval_request(
             sess,
             turn_context,
-            build_guardian_mcp_tool_review_request(invocation, metadata),
+            build_guardian_mcp_tool_review_request(call_id, invocation, metadata),
             None,
         )
         .await;
@@ -654,10 +648,12 @@ fn persistent_mcp_tool_approval_key(
 }
 
 fn build_guardian_mcp_tool_review_request(
+    call_id: &str,
     invocation: &McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> GuardianApprovalRequest {
     GuardianApprovalRequest::McpToolCall {
+        id: call_id.to_string(),
         server: invocation.server.clone(),
         tool_name: invocation.tool.clone(),
         arguments: invocation.arguments.clone(),
@@ -1216,12 +1212,15 @@ async fn notify_mcp_tool_call_skip(
     call_id: &str,
     invocation: McpInvocation,
     message: String,
+    already_started: bool,
 ) -> Result<CallToolResult, String> {
-    let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
-        call_id: call_id.to_string(),
-        invocation: invocation.clone(),
-    });
-    notify_mcp_tool_call_event(sess, turn_context, tool_call_begin_event).await;
+    if !already_started {
+        let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+            call_id: call_id.to_string(),
+            invocation: invocation.clone(),
+        });
+        notify_mcp_tool_call_event(sess, turn_context, tool_call_begin_event).await;
+    }
 
     let tool_call_end_event = EventMsg::McpToolCallEnd(McpToolCallEndEvent {
         call_id: call_id.to_string(),

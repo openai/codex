@@ -826,10 +826,9 @@ Today both notifications carry an empty `items` array even when item events were
 - `agentMessage` — `{id, text}` containing the accumulated agent reply.
 - `plan` — `{id, text}` emitted for plan-mode turns; plan text can stream via `item/plan/delta` (experimental).
 - `reasoning` — `{id, summary, content}` where `summary` holds streamed reasoning summaries (applicable for most OpenAI models) and `content` holds raw reasoning blocks (applicable for e.g. open source models).
-- `commandExecution` — `{id, command, cwd, status, commandActions, aggregatedOutput?, exitCode?, durationMs?}` for sandboxed commands; `status` is `inProgress`, `completed`, `failed`, or `declined`.
-- `fileChange` — `{id, changes, status}` describing proposed edits; `changes` list `{path, kind, diff}` and `status` is `inProgress`, `completed`, `failed`, or `declined`.
-- `mcpToolCall` — `{id, server, tool, status, arguments, result?, error?}` describing MCP calls; `status` is `inProgress`, `completed`, or `failed`.
-- `guardianAssessment` — `{id, status, riskScore?, riskLevel?, rationale?, action?}` describing a guardian-reviewed approval request; `status` is `in_progress`, `approved`, or `denied`, and `action` is included on denied items so clients can render the rejected request.
+- `commandExecution` — `{id, command, cwd, status, commandActions, aggregatedOutput?, exitCode?, durationMs?, approval?}` for sandboxed commands; `status` is `inProgress`, `completed`, `failed`, or `declined`.
+- `fileChange` — `{id, changes, status, approval?}` describing proposed edits; `changes` list `{path, kind, diff}` and `status` is `inProgress`, `completed`, `failed`, or `declined`.
+- `mcpToolCall` — `{id, server, tool, status, arguments, result?, error?, approval?}` describing MCP calls; `status` is `inProgress`, `completed`, `failed`, or `declined`.
 - `collabToolCall` — `{id, tool, status, senderThreadId, receiverThreadId?, newThreadId?, prompt?, agentStatus?}` describing collab tool calls (`spawn_agent`, `send_input`, `resume_agent`, `wait`, `close_agent`); `status` is `inProgress`, `completed`, or `failed`.
 - `webSearch` — `{id, query, action?}` for a web search request issued by the agent; `action` mirrors the Responses API web_search action payload (`search`, `open_page`, `find_in_page`) and may be omitted until completion.
 - `imageView` — `{id, path}` emitted when the agent invokes the image viewer tool.
@@ -838,10 +837,18 @@ Today both notifications carry an empty `items` array even when item events were
 - `contextCompaction` — `{id}` emitted when codex compacts the conversation history. This can happen automatically.
 - `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically. **Deprecated:** Use `contextCompaction` instead.
 
-All items emit two shared lifecycle events:
+Tool items (`commandExecution`, `fileChange`, and `mcpToolCall`) may include an `approval` object:
+
+- `approval.status` — `pending`, `approved`, `declined`, or `cancelled`
+- `approval.pendingKind?` — `manualRequest` or `automaticReview`
+- `approval.resolvedBy?` — `user` or `automatic`
+- `approval.automaticReview?` — `{status, riskScore?, riskLevel?, rationale?}` for automatic approval review state
+
+All items emit shared lifecycle events:
 
 - `item/started` — emits the full `item` when a new unit of work begins so the UI can render it immediately; the `item.id` in this payload matches the `itemId` used by deltas.
 - `item/completed` — sends the final `item` once that work finishes (e.g., after a tool call or message completes); treat this as the authoritative state.
+- `item/updated` — sends the latest full `item` when an existing item's approval state changes (for example, manual approval pending, automatic review pending, or approval resolution).
 
 There are additional item-specific events:
 

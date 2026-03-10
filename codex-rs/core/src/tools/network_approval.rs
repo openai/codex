@@ -161,6 +161,8 @@ impl PendingHostApproval {
 
 struct ActiveNetworkApprovalCall {
     registration_id: String,
+    turn_id: String,
+    call_id: String,
 }
 
 pub(crate) struct NetworkApprovalService {
@@ -190,10 +192,17 @@ impl NetworkApprovalService {
         other_approved_hosts.extend(approved_hosts.iter().cloned());
     }
 
-    async fn register_call(&self, registration_id: String) {
+    async fn register_call(&self, registration_id: String, turn_id: String, call_id: String) {
         let mut active_calls = self.active_calls.lock().await;
         let key = registration_id.clone();
-        active_calls.insert(key, Arc::new(ActiveNetworkApprovalCall { registration_id }));
+        active_calls.insert(
+            key,
+            Arc::new(ActiveNetworkApprovalCall {
+                registration_id,
+                turn_id,
+                call_id,
+            }),
+        );
     }
 
     pub(crate) async fn unregister_call(&self, registration_id: &str) {
@@ -340,10 +349,22 @@ impl NetworkApprovalService {
             protocol,
         };
         let approval_decision = if routes_approval_to_guardian(&turn_context) {
+            let Some(owner_call) = self.resolve_single_active_call().await else {
+                pending.set_decision(PendingApprovalDecision::Deny).await;
+                let mut pending_approvals = self.pending_host_approvals.lock().await;
+                pending_approvals.remove(&key);
+                self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
+                    policy_denial_message.clone(),
+                ))
+                .await;
+                return NetworkDecision::deny(REASON_NOT_ALLOWED);
+            };
             review_approval_request(
                 &session,
                 &turn_context,
                 GuardianApprovalRequest::NetworkAccess {
+                    id: owner_call.call_id.clone(),
+                    turn_id: owner_call.turn_id.clone(),
                     target,
                     host: request.host,
                     protocol,
@@ -523,8 +544,8 @@ pub(crate) fn build_network_policy_decider(
 
 pub(crate) async fn begin_network_approval(
     session: &Session,
-    _turn_id: &str,
-    _call_id: &str,
+    turn_id: &str,
+    call_id: &str,
     has_managed_network_requirements: bool,
     spec: Option<NetworkApprovalSpec>,
 ) -> Option<ActiveNetworkApproval> {
@@ -537,7 +558,11 @@ pub(crate) async fn begin_network_approval(
     session
         .services
         .network_approval
-        .register_call(registration_id.clone())
+        .register_call(
+            registration_id.clone(),
+            turn_id.to_string(),
+            call_id.to_string(),
+        )
         .await;
 
     Some(ActiveNetworkApproval {
