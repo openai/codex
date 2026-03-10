@@ -1642,6 +1642,7 @@ impl App {
         let (codex_op_tx, thread_scoped_op_tx, app_server_thread_id) =
             if let Some(thread) = live_thread {
                 if self.active_session_events_via_app_server
+                    && self.primary_thread_id == Some(thread_id)
                     && let Some(thread_scoped_op_tx) = self.primary_app_server_op_tx.clone()
                 {
                     let (tx, _rx) = unbounded_channel();
