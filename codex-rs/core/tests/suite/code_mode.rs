@@ -14,6 +14,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
+use regex_lite::Regex;
 use std::fs;
 use wiremock::MockServer;
 
@@ -84,7 +85,19 @@ add_content(await exec_command({ cmd: "printf code_mode_exec_marker" }));
         Some(false),
         "code_mode call failed unexpectedly: {output}"
     );
-    assert_eq!(output, "code_mode_exec_marker");
+    let regex = Regex::new(
+        r#"(?ms)^Chunk ID: [[:xdigit:]]+
+Wall time: [0-9]+(?:\.[0-9]+)? seconds
+Process exited with code 0
+Original token count: [0-9]+
+Output:
+code_mode_exec_marker
+?$"#,
+    )?;
+    assert!(
+        regex.is_match(&output),
+        "expected exec_command output envelope to match regex, got: {output}"
+    );
 
     Ok(())
 }
