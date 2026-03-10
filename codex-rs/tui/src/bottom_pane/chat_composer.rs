@@ -3580,6 +3580,7 @@ impl ChatComposer {
                     search_terms,
                     path: Some(skill.path_to_skills_md.to_string_lossy().into_owned()),
                     category_tag: Some("[Skill]".to_string()),
+                    sort_rank: 1,
                 });
             }
         }
@@ -3631,6 +3632,7 @@ impl ChatComposer {
                     search_terms,
                     path: Some(format!("plugin://{}", plugin.config_name)),
                     category_tag: Some("[Plugin]".to_string()),
+                    sort_rank: 0,
                 });
             }
         }
@@ -3654,6 +3656,7 @@ impl ChatComposer {
                     search_terms,
                     path: Some(format!("app://{connector_id}")),
                     category_tag: Some("[App]".to_string()),
+                    sort_rank: 1,
                 });
             }
         }
