@@ -96,6 +96,7 @@ use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionConfiguredEvent;
@@ -8539,6 +8540,60 @@ async fn permissions_selection_marks_smart_approvals_current_after_session_confi
     assert!(
         popup.contains("Smart Approvals (current)"),
         "expected Smart Approvals to be current after SessionConfigured sync: {popup}"
+    );
+}
+
+#[tokio::test]
+async fn permissions_selection_marks_smart_approvals_current_with_custom_workspace_write_details() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.config.notices.hide_world_writable_warning = Some(true);
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.notices.hide_full_access_warning = Some(true);
+    let _ = chat
+        .config
+        .features
+        .set_enabled(Feature::GuardianApproval, true);
+
+    let extra_root = AbsolutePathBuf::try_from("/tmp/smart-approvals-extra")
+        .expect("absolute extra writable root");
+
+    chat.handle_codex_event(Event {
+        id: "session-configured-custom-workspace".to_string(),
+        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: "gpt-test".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::OnRequest,
+            approval_review_policy: ApprovalReviewPolicy::AutoOnly,
+            sandbox_policy: SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![extra_root],
+                read_only_access: ReadOnlyAccess::FullAccess,
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            },
+            cwd: PathBuf::from("/tmp/project"),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::new()),
+        }),
+    });
+
+    chat.open_permissions_popup();
+    let popup = render_bottom_popup(&chat, 120);
+
+    assert!(
+        popup.contains("Smart Approvals (current)"),
+        "expected Smart Approvals to be current even with custom workspace-write details: {popup}"
     );
 }
 

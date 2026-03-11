@@ -7057,7 +7057,34 @@ impl ChatWidget {
         current_sandbox: &SandboxPolicy,
         preset: &ApprovalPreset,
     ) -> bool {
-        current_approval == preset.approval && *current_sandbox == preset.sandbox
+        if current_approval != preset.approval {
+            return false;
+        }
+
+        match (current_sandbox, &preset.sandbox) {
+            (SandboxPolicy::DangerFullAccess, SandboxPolicy::DangerFullAccess) => true,
+            (
+                SandboxPolicy::ReadOnly {
+                    network_access: current_network_access,
+                    ..
+                },
+                SandboxPolicy::ReadOnly {
+                    network_access: preset_network_access,
+                    ..
+                },
+            ) => current_network_access == preset_network_access,
+            (
+                SandboxPolicy::WorkspaceWrite {
+                    network_access: current_network_access,
+                    ..
+                },
+                SandboxPolicy::WorkspaceWrite {
+                    network_access: preset_network_access,
+                    ..
+                },
+            ) => current_network_access == preset_network_access,
+            _ => false,
+        }
     }
 
     #[cfg(target_os = "windows")]
