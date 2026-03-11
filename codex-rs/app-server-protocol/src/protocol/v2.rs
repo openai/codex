@@ -3053,6 +3053,31 @@ pub struct PluginMarketplaceEntry {
     pub plugins: Vec<PluginSummary>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub enum PluginInstallPolicy {
+    #[serde(rename = "NOT_AVAILABLE")]
+    #[ts(rename = "NOT_AVAILABLE")]
+    NotAvailable,
+    #[serde(rename = "AVAILABLE")]
+    #[ts(rename = "AVAILABLE")]
+    Available,
+    #[serde(rename = "INSTALLED_BY_DEFAULT")]
+    #[ts(rename = "INSTALLED_BY_DEFAULT")]
+    InstalledByDefault,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub enum PluginAuthPolicy {
+    #[serde(rename = "ON_INSTALL")]
+    #[ts(rename = "ON_INSTALL")]
+    OnInstall,
+    #[serde(rename = "ON_USE")]
+    #[ts(rename = "ON_USE")]
+    OnUse,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -3062,6 +3087,8 @@ pub struct PluginSummary {
     pub source: PluginSource,
     pub installed: bool,
     pub enabled: bool,
+    pub install_policy: Option<PluginInstallPolicy>,
+    pub auth_policy: Option<PluginAuthPolicy>,
     pub interface: Option<PluginInterface>,
 }
 
@@ -3122,6 +3149,7 @@ pub struct PluginInstallParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginInstallResponse {
+    pub auth_policy: Option<PluginAuthPolicy>,
     pub apps_needing_auth: Vec<AppSummary>,
 }
 

@@ -6,6 +6,8 @@ use app_test_support::McpProcess;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::PluginAuthPolicy;
+use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::RequestId;
@@ -358,7 +360,10 @@ async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Res
       "source": {
         "source": "local",
         "path": "./plugins/demo-plugin"
-      }
+      },
+      "installPolicy": "AVAILABLE",
+      "authPolicy": "ON_INSTALL",
+      "category": "Design"
     }
   ]
 }"#,
@@ -413,6 +418,8 @@ async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Res
     assert_eq!(plugin.id, "demo-plugin@codex-curated");
     assert_eq!(plugin.installed, false);
     assert_eq!(plugin.enabled, false);
+    assert_eq!(plugin.install_policy, Some(PluginInstallPolicy::Available));
+    assert_eq!(plugin.auth_policy, Some(PluginAuthPolicy::OnInstall));
     let interface = plugin
         .interface
         .as_ref()
@@ -421,6 +428,7 @@ async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Res
         interface.display_name.as_deref(),
         Some("Plugin Display Name")
     );
+    assert_eq!(interface.category.as_deref(), Some("Design"));
     assert_eq!(
         interface.website_url.as_deref(),
         Some("https://openai.com/")

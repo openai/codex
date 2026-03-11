@@ -28,6 +28,13 @@
         "name"
       ],
       "type": "object"
+    },
+    "PluginAuthPolicy": {
+      "enum": [
+        "ON_INSTALL",
+        "ON_USE"
+      ],
+      "type": "string"
     }
   },
   "properties": {
@@ -36,6 +43,16 @@
         "$ref": "#/definitions/AppSummary"
       },
       "type": "array"
+    },
+    "authPolicy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/PluginAuthPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [

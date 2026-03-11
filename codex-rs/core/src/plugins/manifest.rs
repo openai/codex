@@ -32,7 +32,7 @@ pub struct PluginManifestPaths {
     pub apps: Option<AbsolutePathBuf>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PluginManifestInterfaceSummary {
     pub display_name: Option<String>,
     pub short_description: Option<String>,

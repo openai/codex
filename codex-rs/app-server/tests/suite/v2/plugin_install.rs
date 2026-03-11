@@ -19,6 +19,7 @@ use axum::routing::get;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::RequestId;
@@ -99,6 +100,43 @@ async fn plugin_install_returns_invalid_request_for_missing_marketplace_file() -
 }
 
 #[tokio::test]
+async fn plugin_install_returns_invalid_request_for_not_available_plugin() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "debug",
+        "sample-plugin",
+        "./sample-plugin",
+        Some("NOT_AVAILABLE"),
+        None,
+    )?;
+    write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            marketplace_path,
+            plugin_name: "sample-plugin".to_string(),
+        })
+        .await?;
+
+    let err = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, -32600);
+    assert!(err.error.message.contains("not available for install"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
     let connectors = vec![
         AppInfo {
@@ -152,6 +190,8 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
         "debug",
         "sample-plugin",
         "./sample-plugin",
+        None,
+        Some("ON_INSTALL"),
     )?;
     write_plugin_source(repo_root.path(), "sample-plugin", &["alpha", "beta"])?;
     let marketplace_path =
@@ -177,6 +217,7 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
     assert_eq!(
         response,
         PluginInstallResponse {
+            auth_policy: Some(PluginAuthPolicy::OnInstall),
             apps_needing_auth: vec![AppSummary {
                 id: "alpha".to_string(),
                 name: "Alpha".to_string(),
@@ -227,6 +268,8 @@ async fn plugin_install_filters_disallowed_apps_needing_auth() -> Result<()> {
         "debug",
         "sample-plugin",
         "./sample-plugin",
+        None,
+        Some("ON_USE"),
     )?;
     write_plugin_source(
         repo_root.path(),
@@ -256,6 +299,7 @@ async fn plugin_install_filters_disallowed_apps_needing_auth() -> Result<()> {
     assert_eq!(
         response,
         PluginInstallResponse {
+            auth_policy: Some(PluginAuthPolicy::OnUse),
             apps_needing_auth: vec![AppSummary {
                 id: "alpha".to_string(),
                 name: "Alpha".to_string(),
@@ -422,7 +466,15 @@ fn write_plugin_marketplace(
     marketplace_name: &str,
     plugin_name: &str,
     source_path: &str,
+    install_policy: Option<&str>,
+    auth_policy: Option<&str>,
 ) -> std::io::Result<()> {
+    let install_policy = install_policy
+        .map(|install_policy| format!(",\n      \"installPolicy\": \"{install_policy}\""))
+        .unwrap_or_default();
+    let auth_policy = auth_policy
+        .map(|auth_policy| format!(",\n      \"authPolicy\": \"{auth_policy}\""))
+        .unwrap_or_default();
     std::fs::create_dir_all(repo_root.join(".git"))?;
     std::fs::create_dir_all(repo_root.join(".agents/plugins"))?;
     std::fs::write(
@@ -436,7 +488,7 @@ fn write_plugin_marketplace(
       "source": {{
         "source": "local",
         "path": "{source_path}"
-      }}
+      }}{install_policy}{auth_policy}
     }}
   ]
 }}"#

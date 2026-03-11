@@ -3,6 +3,8 @@ use super::curated_plugins_repo_path;
 use super::load_plugin_manifest;
 use super::manifest::PluginManifestInterfaceSummary;
 use super::marketplace::MarketplaceError;
+use super::marketplace::MarketplacePluginAuthPolicy;
+use super::marketplace::MarketplacePluginInstallPolicy;
 use super::marketplace::MarketplacePluginSourceSummary;
 use super::marketplace::list_marketplaces;
 use super::marketplace::load_marketplace_summary;
@@ -12,7 +14,7 @@ use super::plugin_manifest_paths;
 use super::store::DEFAULT_PLUGIN_VERSION;
 use super::store::PluginId;
 use super::store::PluginIdError;
-use super::store::PluginInstallResult;
+use super::store::PluginInstallResult as StorePluginInstallResult;
 use super::store::PluginStore;
 use super::store::PluginStoreError;
 use super::sync_openai_plugins_repo;
@@ -69,6 +71,14 @@ pub struct PluginInstallRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginInstallOutcome {
+    pub plugin_id: PluginId,
+    pub plugin_version: String,
+    pub installed_path: AbsolutePathBuf,
+    pub auth_policy: Option<MarketplacePluginAuthPolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfiguredMarketplaceSummary {
     pub name: String,
     pub path: AbsolutePathBuf,
@@ -80,6 +90,8 @@ pub struct ConfiguredMarketplacePluginSummary {
     pub id: String,
     pub name: String,
     pub source: MarketplacePluginSourceSummary,
+    pub install_policy: Option<MarketplacePluginInstallPolicy>,
+    pub auth_policy: Option<MarketplacePluginAuthPolicy>,
     pub interface: Option<PluginManifestInterfaceSummary>,
     pub installed: bool,
     pub enabled: bool,
@@ -380,10 +392,11 @@ impl PluginsManager {
     pub async fn install_plugin(
         &self,
         request: PluginInstallRequest,
-    ) -> Result<PluginInstallResult, PluginInstallError> {
+    ) -> Result<PluginInstallOutcome, PluginInstallError> {
         let resolved = resolve_marketplace_plugin(&request.marketplace_path, &request.plugin_name)?;
+        let auth_policy = resolved.auth_policy;
         let store = self.store.clone();
-        let result = tokio::task::spawn_blocking(move || {
+        let result: StorePluginInstallResult = tokio::task::spawn_blocking(move || {
             store.install(resolved.source_path, resolved.plugin_id)
         })
         .await
@@ -403,7 +416,12 @@ impl PluginsManager {
             .map(|_| ())
             .map_err(PluginInstallError::from)?;
 
-        Ok(result)
+        Ok(PluginInstallOutcome {
+            plugin_id: result.plugin_id,
+            plugin_version: result.plugin_version,
+            installed_path: result.installed_path,
+            auth_policy,
+        })
     }
 
     pub async fn uninstall_plugin(&self, plugin_id: String) -> Result<(), PluginUninstallError> {
@@ -634,6 +652,8 @@ impl PluginsManager {
                                 .unwrap_or(false),
                             name: plugin.name,
                             source: plugin.source,
+                            install_policy: plugin.install_policy,
+                            auth_policy: plugin.auth_policy,
                             interface: plugin.interface,
                         })
                     })
@@ -760,6 +780,7 @@ impl PluginInstallError {
                 MarketplaceError::MarketplaceNotFound { .. }
                     | MarketplaceError::InvalidMarketplaceFile { .. }
                     | MarketplaceError::PluginNotFound { .. }
+                    | MarketplaceError::PluginNotAvailable { .. }
                     | MarketplaceError::InvalidPlugin(_)
             ) | Self::Store(PluginStoreError::Invalid(_))
         )
@@ -1925,7 +1946,8 @@ mod tests {
       "source": {
         "source": "local",
         "path": "./sample-plugin"
-      }
+      },
+      "authPolicy": "ON_USE"
     }
   ]
 }"#,
@@ -1946,10 +1968,11 @@ mod tests {
         let installed_path = tmp.path().join("plugins/cache/debug/sample-plugin/local");
         assert_eq!(
             result,
-            PluginInstallResult {
+            PluginInstallOutcome {
                 plugin_id: PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap(),
                 plugin_version: "local".to_string(),
                 installed_path: AbsolutePathBuf::try_from(installed_path).unwrap(),
+                auth_policy: Some(MarketplacePluginAuthPolicy::OnUse),
             }
         );
 
@@ -2079,6 +2102,8 @@ enabled = false
                             path: AbsolutePathBuf::try_from(tmp.path().join("repo/enabled-plugin"))
                                 .unwrap(),
                         },
+                        install_policy: None,
+                        auth_policy: None,
                         interface: None,
                         installed: true,
                         enabled: true,
@@ -2092,6 +2117,8 @@ enabled = false
                             )
                             .unwrap(),
                         },
+                        install_policy: None,
+                        auth_policy: None,
                         interface: None,
                         installed: true,
                         enabled: false,
@@ -2157,6 +2184,8 @@ enabled = false
                         path: AbsolutePathBuf::try_from(curated_root.join("plugins/linear"))
                             .unwrap(),
                     },
+                    install_policy: None,
+                    auth_policy: None,
                     interface: None,
                     installed: false,
                     enabled: false,
@@ -2255,6 +2284,8 @@ enabled = false
                 source: MarketplacePluginSourceSummary::Local {
                     path: AbsolutePathBuf::try_from(tmp.path().join("repo-a/from-a")).unwrap(),
                 },
+                install_policy: None,
+                auth_policy: None,
                 interface: None,
                 installed: false,
                 enabled: true,
@@ -2279,6 +2310,8 @@ enabled = false
                 source: MarketplacePluginSourceSummary::Local {
                     path: AbsolutePathBuf::try_from(tmp.path().join("repo-b/from-b-only")).unwrap(),
                 },
+                install_policy: None,
+                auth_policy: None,
                 interface: None,
                 installed: false,
                 enabled: false,
@@ -2356,6 +2389,8 @@ enabled = true
                         path: AbsolutePathBuf::try_from(tmp.path().join("repo/sample-plugin"))
                             .unwrap(),
                     },
+                    install_policy: None,
+                    auth_policy: None,
                     interface: None,
                     installed: false,
                     enabled: true,
