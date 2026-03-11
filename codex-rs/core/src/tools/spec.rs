@@ -7,6 +7,7 @@ use crate::features::Feature;
 use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use crate::original_image_detail::can_request_original_image_detail;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::handlers::PLAN_TOOL;
@@ -31,6 +32,7 @@ use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -94,6 +96,7 @@ pub enum UnifiedExecBackendConfig {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
+    pub available_models: Vec<ModelPreset>,
     pub shell_type: ConfigShellToolType,
     shell_command_backend: ShellCommandBackendConfig,
     pub unified_exec_backend: UnifiedExecBackendConfig,
@@ -111,6 +114,7 @@ pub(crate) struct ToolsConfig {
     pub code_mode_enabled: bool,
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
+    pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
     pub artifact_tools: bool,
     pub request_user_input: bool,
@@ -122,6 +126,7 @@ pub(crate) struct ToolsConfig {
 
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_info: &'a ModelInfo,
+    pub(crate) available_models: &'a Vec<ModelPreset>,
     pub(crate) features: &'a Features,
     pub(crate) web_search_mode: Option<WebSearchMode>,
     pub(crate) session_source: SessionSource,
@@ -131,6 +136,7 @@ impl ToolsConfig {
     pub fn new(params: &ToolsConfigParams) -> Self {
         let ToolsConfigParams {
             model_info,
+            available_models: available_models_ref,
             features,
             web_search_mode,
             session_source,
@@ -147,6 +153,7 @@ impl ToolsConfig {
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool = features.enabled(Feature::Apps);
         let include_tool_suggest = include_search_tool && features.enabled(Feature::ToolSuggest);
+        let include_original_image_detail = can_request_original_image_detail(features, model_info);
         let include_artifact_tools =
             features.enabled(Feature::Artifact) && codex_artifacts::can_manage_artifact_runtime();
         let include_image_gen_tool =
@@ -201,6 +208,7 @@ impl ToolsConfig {
             );
 
         Self {
+            available_models: available_models_ref.to_vec(),
             shell_type,
             shell_command_backend,
             unified_exec_backend,
@@ -218,6 +226,7 @@ impl ToolsConfig {
             code_mode_enabled: include_code_mode,
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
+            can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
             artifact_tools: include_artifact_tools,
             request_user_input: include_request_user_input,
@@ -696,14 +705,24 @@ Examples of valid command strings:
     })
 }
 
-fn create_view_image_tool() -> ToolSpec {
+fn create_view_image_tool(can_request_original_image_detail: bool) -> ToolSpec {
     // Support only local filesystem path.
-    let properties = BTreeMap::from([(
+    let mut properties = BTreeMap::from([(
         "path".to_string(),
         JsonSchema::String {
             description: Some("Local filesystem path to an image file".to_string()),
         },
     )]);
+    if can_request_original_image_detail {
+        properties.insert(
+            "detail".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional detail override. The only supported value is `original`; omit this field for default resized behavior. Use `original` to preserve the file's original resolution instead of resizing to fit. This is important when high-fidelity image perception or precise localization is needed, especially for CUA agents.".to_string(),
+                ),
+            },
+        );
+    }
 
     ToolSpec::Function(ResponsesApiTool {
         name: VIEW_IMAGE_TOOL_NAME.to_string(),
@@ -772,6 +791,7 @@ fn create_collab_input_items_schema() -> JsonSchema {
 }
 
 fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
+    let available_models_description = spawn_agent_models_description(&config.available_models);
     let properties = BTreeMap::from([
         (
             "message".to_string(),
@@ -822,8 +842,11 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
-        description: r#"Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
+        description: format!(
+            r#"
+        Only use `spawn_agent` if and only if the user explicitly asked for sub-agents or parallel agent work. Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
 
+{available_models_description}
 ### When to delegate vs. do the subtask yourself
 - First, quickly analyze the overall user task and form a succinct high-level plan. Identify which tasks are immediate blockers on the critical path, and which tasks are sidecar tasks that are needed but can run in parallel without blocking the next local step. As part of that plan, explicitly decide what immediate task you should do locally right now. Do this planning step before delegating to agents so you do not hand off the immediate blocking task to a submodel and then waste time waiting on it.
 - Use the smaller subagent when a subtask is easy enough for it to handle and can run in parallel with your local work. Prefer delegating concrete, bounded sidecar tasks that materially advance the main task without blocking your immediate next local step.
@@ -852,7 +875,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
 - Split implementation into disjoint codebase slices and spawn multiple agents for them in parallel when the write scopes do not overlap.
 - Delegate verification only when it can run in parallel with ongoing implementation and is likely to catch a concrete risk before final integration.
 - The key is to find opportunities to spawn multiple independent subtasks in parallel within the same round, while ensuring each subtask is well-defined, self-contained, and materially advances the main task."#
-            .to_string(),
+        ),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -861,6 +884,35 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
         },
         output_schema: None,
     })
+}
+
+fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
+    let visible_models: Vec<&ModelPreset> =
+        models.iter().filter(|model| model.show_in_picker).collect();
+    if visible_models.is_empty() {
+        return "No picker-visible models are currently loaded.".to_string();
+    }
+
+    visible_models
+        .into_iter()
+        .map(|model| {
+            let efforts = model
+                .supported_reasoning_efforts
+                .iter()
+                .map(|preset| format!("{} ({})", preset.effort, preset.description))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "- {} (`{}`): {} Default reasoning effort: {}. Supported reasoning efforts: {}.",
+                model.display_name,
+                model.model,
+                model.description,
+                model.default_reasoning_effort,
+                efforts
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn create_spawn_agents_on_csv_tool() -> ToolSpec {
@@ -1718,7 +1770,7 @@ source: /[\s\S]+/
         enabled_tool_names.join(", ")
     };
     let description = format!(
-        "Runs JavaScript in a Node-backed `node:vm` context. This is a freeform tool: send raw JavaScript source text (no JSON/quotes/markdown fences). Direct tool calls remain available while `{PUBLIC_TOOL_NAME}` is enabled. Inside JavaScript, import nested tools from `tools.js`, for example `import {{ exec_command }} from \"tools.js\"` or `import {{ tools }} from \"tools.js\"`. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import {{ append_notebook_logs_chart }} from \"tools/mcp/ologs.js\"`. `tools[name]` and identifier wrappers like `await shell(args)` remain available for compatibility when the tool name is a valid JS identifier. Nested tool calls resolve to their code-mode result values. Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, store, load }}` from `\"@openai/code_mode\"` (or `\"openai/code_mode\"`); `output_text(value)` surfaces text back to the model and stringifies non-string objects when possible, `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs, `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, `load(key)` returns a cloned stored value or `undefined`, and `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `{PUBLIC_TOOL_NAME}` execution. The default is `10000`. This guards the overall `{PUBLIC_TOOL_NAME}` output, not individual nested tool invocations. The returned content starts with a separate `Script completed` or `Script failed` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker. Function tools require JSON object arguments. Freeform tools require raw strings. `add_content(value)` remains available for compatibility with a content item, content-item array, or string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`. Only content passed to `output_text(...)`, `output_image(...)`, or `add_content(value)` is surfaced back to the model. Enabled nested tools: {enabled_list}."
+        "Runs JavaScript in a Node-backed `node:vm` context. This is a freeform tool: send raw JavaScript source text (no JSON/quotes/markdown fences). Direct tool calls remain available while `{PUBLIC_TOOL_NAME}` is enabled. Inside JavaScript, import nested tools from `tools.js`, for example `import {{ exec_command }} from \"tools.js\"`, `import {{ ALL_TOOLS }} from \"tools.js\"` to inspect the available `{{ module, name, description }}` entries, or `import {{ tools }} from \"tools.js\"` for compatibility with `tools[name]`. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import {{ append_notebook_logs_chart }} from \"tools/mcp/ologs.js\"`. Identifier wrappers like `await exec_command(args)` remain available for compatibility when the tool name is a valid JS identifier. Nested tool calls resolve to their code-mode result values. Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, store, load }}` from `\"@openai/code_mode\"` (or `\"openai/code_mode\"`); `output_text(value)` surfaces text back to the model and stringifies non-string objects when possible, `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs, `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, `load(key)` returns a cloned stored value or `undefined`, and `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `{PUBLIC_TOOL_NAME}` execution. The default is `10000`. This guards the overall `{PUBLIC_TOOL_NAME}` output, not individual nested tool invocations. The returned content starts with a separate `Script completed` or `Script failed` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker. Function tools require JSON object arguments. Freeform tools require raw strings. `add_content(value)` remains available for compatibility with a content item, content-item array, or string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`. Only content passed to `output_text(...)`, `output_image(...)`, or `add_content(value)` is surfaced back to the model. Enabled nested tools: {enabled_list}."
     );
 
     ToolSpec::Freeform(FreeformTool {
@@ -1730,6 +1782,10 @@ source: /[\s\S]+/
             definition: CODE_MODE_FREEFORM_GRAMMAR.to_string(),
         },
     })
+}
+
+fn is_code_mode_nested_tool(spec: &ToolSpec) -> bool {
+    spec.name() != PUBLIC_TOOL_NAME && matches!(spec, ToolSpec::Function(_) | ToolSpec::Freeform(_))
 }
 
 fn create_list_mcp_resources_tool() -> ToolSpec {
@@ -2151,8 +2207,9 @@ pub(crate) fn build_specs_with_discoverable_connectors(
         .build();
         let mut enabled_tool_names = nested_specs
             .into_iter()
-            .map(|spec| spec.spec.name().to_string())
-            .filter(|name| name != PUBLIC_TOOL_NAME)
+            .map(|spec| spec.spec)
+            .filter(is_code_mode_nested_tool)
+            .map(|spec| spec.name().to_string())
             .collect::<Vec<_>>();
         enabled_tool_names.sort();
         enabled_tool_names.dedup();
@@ -2445,7 +2502,7 @@ pub(crate) fn build_specs_with_discoverable_connectors(
 
     push_tool_spec(
         &mut builder,
-        create_view_image_tool(),
+        create_view_image_tool(config.can_request_original_image_detail),
         true,
         config.code_mode_enabled,
     );
@@ -2851,8 +2908,10 @@ mod tests {
         let model_info = model_info_from_models_json("gpt-5-codex");
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -2890,7 +2949,7 @@ mod tests {
                 search_context_size: None,
                 search_content_types: None,
             },
-            create_view_image_tool(),
+            create_view_image_tool(config.can_request_original_image_detail),
         ] {
             expected.insert(tool_name(&spec).to_string(), spec);
         }
@@ -2922,8 +2981,34 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::Collab);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        assert_contains_tool_names(
+            &tools,
+            &["spawn_agent", "send_input", "wait", "close_agent"],
+        );
+        assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
+    }
+
+    #[test]
+    fn test_build_specs_spawn_csv_enables_agent_jobs_and_collab_tools() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::SpawnCsv);
+        features.normalize_dependencies();
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2964,6 +3049,67 @@ mod tests {
     }
 
     #[test]
+    fn view_image_tool_omits_detail_without_original_detail_feature() {
+        let config = test_config();
+        let mut model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        model_info.supports_image_detail_original = true;
+        let features = Features::with_defaults();
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        let view_image = find_tool(&tools, VIEW_IMAGE_TOOL_NAME);
+        let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &view_image.spec else {
+            panic!("view_image should be a function tool");
+        };
+        let JsonSchema::Object { properties, .. } = parameters else {
+            panic!("view_image should use an object schema");
+        };
+        assert!(!properties.contains_key("detail"));
+    }
+
+    #[test]
+    fn view_image_tool_includes_detail_with_original_detail_feature() {
+        let config = test_config();
+        let mut model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        model_info.supports_image_detail_original = true;
+        let mut features = Features::with_defaults();
+        features.enable(Feature::ImageDetailOriginal);
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        let view_image = find_tool(&tools, VIEW_IMAGE_TOOL_NAME);
+        let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &view_image.spec else {
+            panic!("view_image should be a function tool");
+        };
+        let JsonSchema::Object { properties, .. } = parameters else {
+            panic!("view_image should use an object schema");
+        };
+        assert!(properties.contains_key("detail"));
+        let Some(JsonSchema::String {
+            description: Some(description),
+        }) = properties.get("detail")
+        else {
+            panic!("view_image detail should include a description");
+        };
+        assert!(description.contains("only supported value is `original`"));
+        assert!(description.contains("omit this field for default resized behavior"));
+    }
+
+    #[test]
     fn test_build_specs_artifact_tool_enabled() {
         let mut config = test_config();
         let runtime_root = tempfile::TempDir::new().expect("create temp codex home");
@@ -2972,8 +3118,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::Artifact);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2991,8 +3139,10 @@ mod tests {
         features.enable(Feature::SpawnCsv);
         features.normalize_dependencies();
         features.enable(Feature::Sqlite);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::SubAgent(SubAgentSource::Other(
@@ -3021,8 +3171,10 @@ mod tests {
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3035,8 +3187,10 @@ mod tests {
         );
 
         features.enable(Feature::DefaultModeRequestUserInput);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3057,8 +3211,10 @@ mod tests {
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let features = Features::with_defaults();
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3068,8 +3224,10 @@ mod tests {
 
         let mut features = Features::with_defaults();
         features.enable(Feature::RequestPermissionsTool);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3089,8 +3247,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::RequestPermissions);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3107,8 +3267,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.disable(Feature::MemoryTool);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3127,8 +3289,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let features = Features::with_defaults();
 
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3153,8 +3317,10 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::JsRepl);
 
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3175,8 +3341,10 @@ mod tests {
         let mut image_generation_features = default_features.clone();
         image_generation_features.enable(Feature::ImageGeneration);
 
+        let available_models = Vec::new();
         let default_tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &supported_model_info,
+            available_models: &available_models,
             features: &default_features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3191,6 +3359,7 @@ mod tests {
 
         let supported_tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &supported_model_info,
+            available_models: &available_models,
             features: &image_generation_features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3208,6 +3377,7 @@ mod tests {
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &unsupported_model_info,
+            available_models: &available_models,
             features: &image_generation_features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3244,8 +3414,10 @@ mod tests {
     ) {
         let _config = test_config();
         let model_info = model_info_from_models_json(model_slug);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features,
             web_search_mode,
             session_source: SessionSource::Cli,
@@ -3278,8 +3450,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let features = Features::with_defaults();
 
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3306,8 +3480,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let features = Features::with_defaults();
 
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -3347,8 +3523,10 @@ mod tests {
             search_context_size: Some(codex_protocol::config_types::WebSearchContextSize::High),
         };
 
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -3381,8 +3559,10 @@ mod tests {
         model_info.web_search_tool_type = WebSearchToolType::TextAndImage;
         let features = Features::with_defaults();
 
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -3413,8 +3593,10 @@ mod tests {
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let features = Features::with_defaults();
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3436,8 +3618,10 @@ mod tests {
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let features = Features::with_defaults();
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3627,8 +3811,10 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -3651,8 +3837,10 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::ShellZshFork);
 
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -3677,8 +3865,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3703,8 +3893,10 @@ mod tests {
             "list_dir".to_string(),
         ];
         let features = Features::with_defaults();
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3735,8 +3927,10 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -3823,8 +4017,10 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3869,8 +4065,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::Apps);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3954,8 +4152,10 @@ mod tests {
         )]));
 
         let features = Features::with_defaults();
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3964,8 +4164,10 @@ mod tests {
         assert_lacks_tool_name(&tools, SEARCH_TOOL_BM25_TOOL_NAME);
         let mut features = Features::with_defaults();
         features.enable(Feature::Apps);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -4027,8 +4229,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::Apps);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -4145,8 +4349,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -4201,8 +4407,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -4254,8 +4462,10 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::ApplyPatchFreeform);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -4309,8 +4519,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -4516,8 +4728,10 @@ Examples of valid command strings:
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -4623,8 +4837,10 @@ Examples of valid command strings:
         let mut features = Features::with_defaults();
         features.enable(Feature::CodeMode);
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -4639,7 +4855,7 @@ Examples of valid command strings:
 
         assert_eq!(
             description,
-            "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nCode mode declaration:\n```ts\nimport { tools } from \"tools.js\";\ndeclare function view_image(args: {\n  path: string;\n}): Promise<unknown>;\n```"
+            "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nCode mode declaration:\n```ts\nimport { view_image } from \"tools.js\";\ndeclare function view_image(args: {\n  path: string;\n}): Promise<unknown>;\n```"
         );
     }
 
@@ -4651,8 +4867,10 @@ Examples of valid command strings:
         let mut features = Features::with_defaults();
         features.enable(Feature::CodeMode);
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -4688,7 +4906,7 @@ Examples of valid command strings:
 
         assert_eq!(
             description,
-            "Echo text\n\nCode mode declaration:\n```ts\nimport { tools } from \"tools/mcp/sample.js\";\ndeclare function echo(args: {\n  message: string;\n}): Promise<{\n  _meta?: unknown;\n  content: Array<unknown>;\n  isError?: boolean;\n  structuredContent?: unknown;\n}>;\n```"
+            "Echo text\n\nCode mode declaration:\n```ts\nimport { echo } from \"tools/mcp/sample.js\";\ndeclare function echo(args: {\n  message: string;\n}): Promise<{\n  _meta?: unknown;\n  content: Array<unknown>;\n  isError?: boolean;\n  structuredContent?: unknown;\n}>;\n```"
         );
     }
 

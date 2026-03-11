@@ -12749,6 +12749,13 @@
         ],
         "type": "string"
       },
+      "PluginAuthPolicy": {
+        "enum": [
+          "ON_INSTALL",
+          "ON_USE"
+        ],
+        "type": "string"
+      },
       "PluginInstallParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -12766,6 +12773,14 @@
         "title": "PluginInstallParams",
         "type": "object"
       },
+      "PluginInstallPolicy": {
+        "enum": [
+          "NOT_AVAILABLE",
+          "AVAILABLE",
+          "INSTALLED_BY_DEFAULT"
+        ],
+        "type": "string"
+      },
       "PluginInstallResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -12774,6 +12789,16 @@
               "$ref": "#/definitions/v2/AppSummary"
             },
             "type": "array"
+          },
+          "authPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PluginAuthPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -12974,11 +12999,31 @@
       },
       "PluginSummary": {
         "properties": {
+          "authPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PluginAuthPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "enabled": {
             "type": "boolean"
           },
           "id": {
             "type": "string"
+          },
+          "installPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/PluginInstallPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "installed": {
             "type": "boolean"

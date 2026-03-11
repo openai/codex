@@ -10,6 +10,7 @@ use crate::exec_env::create_env;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::ToolRouter;
+use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::code_mode_description::code_mode_tool_reference;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
@@ -52,8 +53,11 @@ enum CodeModeToolKind {
 #[derive(Clone, Debug, Serialize)]
 struct EnabledTool {
     tool_name: String,
+    #[serde(rename = "module")]
+    module_path: String,
     namespace: Vec<String>,
     name: String,
+    description: String,
     kind: CodeModeToolKind,
 }
 
@@ -108,7 +112,7 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
     section.push_str(&format!(
         "- `{PUBLIC_TOOL_NAME}` uses the same Node runtime resolution as `js_repl`. If needed, point `js_repl_node_path` at the Node binary you want Codex to use.\n",
     ));
-    section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to their code-mode result values.\n");
+    section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"`, `import { ALL_TOOLS } from \"tools.js\"` to inspect the available `{ module, name, description }` entries, or `import { tools } from \"tools.js\"` for compatibility with `tools[name]`. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. Identifier wrappers like `await exec_command(args)` remain available for compatibility when the tool name is a valid JS identifier. Nested tool calls resolve to their code-mode result values.\n");
     section.push_str(&format!(
         "- Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, store, load }}` from `@openai/code_mode` (or `\"openai/code_mode\"`). `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs. `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, and `load(key)` returns a cloned stored value or `undefined`. `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `{PUBLIC_TOOL_NAME}` execution; the default is `10000`. This guards the overall `{PUBLIC_TOOL_NAME}` output, not individual nested tool invocations. The returned content starts with a separate `Script completed` or `Script failed` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker.\n",
     ));
@@ -349,25 +353,41 @@ fn truncate_code_mode_result(
 
 async fn build_enabled_tools(exec: &ExecContext) -> Vec<EnabledTool> {
     let router = build_nested_router(exec).await;
-    let mut out = Vec::new();
-    for spec in router.specs() {
-        let tool_name = spec.name().to_string();
-        if tool_name == PUBLIC_TOOL_NAME {
-            continue;
-        }
-
-        let reference = code_mode_tool_reference(&tool_name);
-
-        out.push(EnabledTool {
-            tool_name,
-            namespace: reference.namespace,
-            name: reference.tool_key,
-            kind: tool_kind_for_spec(&spec),
-        });
-    }
+    let mut out = router
+        .specs()
+        .into_iter()
+        .map(|spec| augment_tool_spec_for_code_mode(spec, true))
+        .filter_map(enabled_tool_from_spec)
+        .collect::<Vec<_>>();
     out.sort_by(|left, right| left.tool_name.cmp(&right.tool_name));
     out.dedup_by(|left, right| left.tool_name == right.tool_name);
     out
+}
+
+fn enabled_tool_from_spec(spec: ToolSpec) -> Option<EnabledTool> {
+    let tool_name = spec.name().to_string();
+    if tool_name == PUBLIC_TOOL_NAME {
+        return None;
+    }
+
+    let reference = code_mode_tool_reference(&tool_name);
+
+    let (description, kind) = match spec {
+        ToolSpec::Function(tool) => (tool.description, CodeModeToolKind::Function),
+        ToolSpec::Freeform(tool) => (tool.description, CodeModeToolKind::Freeform),
+        ToolSpec::LocalShell {} | ToolSpec::ImageGeneration { .. } | ToolSpec::WebSearch { .. } => {
+            return None;
+        }
+    };
+
+    Some(EnabledTool {
+        tool_name,
+        module_path: reference.module_path,
+        namespace: reference.namespace,
+        name: reference.tool_key,
+        description,
+        kind,
+    })
 }
 
 async fn build_nested_router(exec: &ExecContext) -> ToolRouter {

@@ -2563,7 +2563,6 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-// TODO(ccunningham): Update once manual remote /compact with no prior user turn becomes a no-op.
 async fn snapshot_request_shape_remote_manual_compact_without_previous_user_messages() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
@@ -2603,19 +2602,15 @@ async fn snapshot_request_shape_remote_manual_compact_without_previous_user_mess
 
     assert_eq!(
         compact_mock.requests().len(),
-        1,
-        "current behavior still issues remote compaction for manual /compact without prior user"
+        0,
+        "manual /compact without prior user should not issue a remote compaction request"
     );
-    let compact_request = compact_mock.single_request();
     let follow_up_request = responses_mock.single_request();
     insta::assert_snapshot!(
         "remote_manual_compact_without_prev_user_shapes",
         format_labeled_requests_snapshot(
-            "Remote manual /compact with no prior user turn still issues a compact request; follow-up turn carries canonical context and new user message.",
-            &[
-                ("Remote Compaction Request", &compact_request),
-                ("Remote Post-Compaction History Layout", &follow_up_request),
-            ]
+            "Remote manual /compact with no prior user turn skips the remote compact request; the follow-up turn carries canonical context and new user message.",
+            &[("Remote Post-Compaction History Layout", &follow_up_request)]
         )
     );
 

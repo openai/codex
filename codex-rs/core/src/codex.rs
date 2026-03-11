@@ -32,6 +32,7 @@ use crate::features::maybe_push_unstable_features_warning;
 #[cfg(test)]
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
+use crate::models_manager::manager::RefreshStrategy;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
@@ -777,6 +778,9 @@ impl TurnContext {
         let features = self.features.clone();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &models_manager
+                .list_models(RefreshStrategy::OnlineIfUncached)
+                .await,
             features: &features,
             web_search_mode: self.tools_config.web_search_mode,
             session_source: self.session_source.clone(),
@@ -1164,6 +1168,7 @@ impl Session {
         session_configuration: &SessionConfiguration,
         per_turn_config: Config,
         model_info: ModelInfo,
+        models_manager: &ModelsManager,
         network: Option<NetworkProxy>,
         sub_id: String,
         js_repl: Arc<JsReplHandle>,
@@ -1185,6 +1190,7 @@ impl Session {
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &models_manager.try_list_models().unwrap_or_default(),
             features: &per_turn_config.features,
             web_search_mode: Some(per_turn_config.web_search_mode.value()),
             session_source: session_source.clone(),
@@ -1928,21 +1934,9 @@ impl Session {
         };
         match conversation_history {
             InitialHistory::New => {
-                // Build and record initial items (user instructions + environment context)
-                // TODO(ccunningham): Defer initial context insertion until the first real turn
-                // starts so it reflects the actual first-turn settings (permissions, etc.) and
-                // we do not emit model-visible "diff" updates before the first user message.
-                let items = self.build_initial_context(&turn_context).await;
-                self.record_conversation_items(&turn_context, &items).await;
-                {
-                    let mut state = self.state.lock().await;
-                    state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
-                }
+                // Defer initial context insertion until the first real turn starts so
+                // turn/start overrides can be merged before we write model-visible context.
                 self.set_previous_turn_settings(None).await;
-                // Ensure initial items are visible to immediate readers (e.g., tests, forks).
-                if !is_subagent {
-                    self.flush_rollout().await;
-                }
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
@@ -2311,6 +2305,7 @@ impl Session {
             &session_configuration,
             per_turn_config,
             model_info,
+            &self.services.models_manager,
             self.services
                 .network_proxy
                 .as_ref()
@@ -5148,6 +5143,11 @@ async fn spawn_review_thread(
     let review_web_search_mode = WebSearchMode::Disabled;
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
+        available_models: &sess
+            .services
+            .models_manager
+            .list_models(RefreshStrategy::OnlineIfUncached)
+            .await,
         features: &review_features,
         web_search_mode: Some(review_web_search_mode),
         session_source: parent_turn_context.session_source.clone(),

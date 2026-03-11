@@ -63,6 +63,44 @@ fn has_subagent_notification(req: &ResponsesRequest) -> bool {
         .any(|text| text.contains("<subagent_notification>"))
 }
 
+fn tool_parameter_description(
+    req: &ResponsesRequest,
+    tool_name: &str,
+    parameter_name: &str,
+) -> Option<String> {
+    req.body_json()
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|tools| {
+            tools.iter().find_map(|tool| {
+                if tool.get("name").and_then(serde_json::Value::as_str) == Some(tool_name) {
+                    tool.get("parameters")
+                        .and_then(|parameters| parameters.get("properties"))
+                        .and_then(|properties| properties.get(parameter_name))
+                        .and_then(|parameter| parameter.get("description"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                } else {
+                    None
+                }
+            })
+        })
+}
+
+fn role_block(description: &str, role_name: &str) -> Option<String> {
+    let role_header = format!("{role_name}: {{");
+    let mut lines = description.lines().skip_while(|line| *line != role_header);
+    let first_line = lines.next()?;
+    let mut block = vec![first_line];
+    for line in lines {
+        if line.ends_with(": {") {
+            break;
+        }
+        block.push(line);
+    }
+    Some(block.join("\n"))
+}
+
 async fn wait_for_spawned_thread_id(test: &TestCodex) -> Result<String> {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
@@ -432,6 +470,61 @@ async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> 
 
     assert_eq!(child_snapshot.model, ROLE_MODEL);
     assert_eq!(child_snapshot.reasoning_effort, Some(ROLE_REASONING_EFFORT));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agent_tool_description_mentions_role_locked_settings() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-turn1-1"),
+            ev_assistant_message("msg-turn1-1", "done"),
+            ev_completed("resp-turn1-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        let role_path = config.codex_home.join("custom-role.toml");
+        std::fs::write(
+            &role_path,
+            format!(
+                "developer_instructions = \"Stay focused\"\nmodel = \"{ROLE_MODEL}\"\nmodel_reasoning_effort = \"{ROLE_REASONING_EFFORT}\"\n",
+            ),
+        )
+        .expect("write role config");
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: Some("Custom role".to_string()),
+                config_file: Some(role_path),
+                nickname_candidates: None,
+            },
+        );
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+
+    let request = resp_mock.single_request();
+    let agent_type_description = tool_parameter_description(&request, "spawn_agent", "agent_type")
+        .expect("spawn_agent agent_type description");
+    let custom_role_description =
+        role_block(&agent_type_description, "custom").expect("custom role description");
+    assert_eq!(
+        custom_role_description,
+        "custom: {\nCustom role\n- This role's model is set to `gpt-5.1-codex-max` and its reasoning effort is set to `high`. These settings cannot be changed.\n}"
+    );
 
     Ok(())
 }

@@ -180,17 +180,49 @@ pub(crate) mod spawn_tool_spec {
         }
 
         format!(
-            r#"Optional type name for the new agent. If omitted, `{DEFAULT_ROLE_NAME}` is used.
-Available roles:
-{}
-            "#,
+            "Optional type name for the new agent. If omitted, `{DEFAULT_ROLE_NAME}` is used.\nAvailable roles:\n{}",
             formatted_roles.join("\n"),
         )
     }
 
     fn format_role(name: &str, declaration: &AgentRoleConfig) -> String {
         if let Some(description) = &declaration.description {
-            format!("{name}: {{\n{description}\n}}")
+            let locked_settings_note = declaration
+                .config_file
+                .as_ref()
+                .and_then(|config_file| {
+                    built_in::config_file_contents(config_file)
+                        .map(str::to_owned)
+                        .or_else(|| std::fs::read_to_string(config_file).ok())
+                })
+                .and_then(|contents| toml::from_str::<TomlValue>(&contents).ok())
+                .map(|role_toml| {
+                    let model = role_toml
+                        .get("model")
+                        .and_then(TomlValue::as_str);
+                    let reasoning_effort = role_toml
+                        .get("model_reasoning_effort")
+                        .and_then(TomlValue::as_str);
+
+                    match (model, reasoning_effort) {
+                        (Some(model), Some(reasoning_effort)) => format!(
+                            "\n- This role's model is set to `{model}` and its reasoning effort is set to `{reasoning_effort}`. These settings cannot be changed."
+                        ),
+                        (Some(model), None) => {
+                            format!(
+                                "\n- This role's model is set to `{model}` and cannot be changed."
+                            )
+                        }
+                        (None, Some(reasoning_effort)) => {
+                            format!(
+                                "\n- This role's reasoning effort is set to `{reasoning_effort}` and cannot be changed."
+                            )
+                        }
+                        (None, None) => String::new(),
+                    }
+                })
+                .unwrap_or_default();
+            format!("{name}: {{\n{description}{locked_settings_note}\n}}")
         } else {
             format!("{name}: no description")
         }
@@ -899,6 +931,56 @@ enabled = false
             .expect("find built-in role");
 
         assert!(user_index < built_in_index);
+    }
+
+    #[test]
+    fn spawn_tool_spec_marks_role_locked_model_and_reasoning_effort() {
+        let tempdir = TempDir::new().expect("create temp dir");
+        let role_path = tempdir.path().join("researcher.toml");
+        fs::write(
+            &role_path,
+            "developer_instructions = \"Research carefully\"\nmodel = \"gpt-5\"\nmodel_reasoning_effort = \"high\"\n",
+        )
+        .expect("write role config");
+        let user_defined_roles = BTreeMap::from([(
+            "researcher".to_string(),
+            AgentRoleConfig {
+                description: Some("Research carefully.".to_string()),
+                config_file: Some(role_path),
+                nickname_candidates: None,
+            },
+        )]);
+
+        let spec = spawn_tool_spec::build(&user_defined_roles);
+
+        assert!(spec.contains(
+            "Research carefully.\n- This role's model is set to `gpt-5` and its reasoning effort is set to `high`. These settings cannot be changed."
+        ));
+    }
+
+    #[test]
+    fn spawn_tool_spec_marks_role_locked_reasoning_effort_only() {
+        let tempdir = TempDir::new().expect("create temp dir");
+        let role_path = tempdir.path().join("reviewer.toml");
+        fs::write(
+            &role_path,
+            "developer_instructions = \"Review carefully\"\nmodel_reasoning_effort = \"medium\"\n",
+        )
+        .expect("write role config");
+        let user_defined_roles = BTreeMap::from([(
+            "reviewer".to_string(),
+            AgentRoleConfig {
+                description: Some("Review carefully.".to_string()),
+                config_file: Some(role_path),
+                nickname_candidates: None,
+            },
+        )]);
+
+        let spec = spawn_tool_spec::build(&user_defined_roles);
+
+        assert!(spec.contains(
+            "Review carefully.\n- This role's reasoning effort is set to `medium` and cannot be changed."
+        ));
     }
 
     #[test]

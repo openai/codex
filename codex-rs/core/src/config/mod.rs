@@ -82,6 +82,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
@@ -1392,12 +1393,40 @@ pub struct RealtimeAudioToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ToolsToml {
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_web_search_tool_config"
+    )]
     pub web_search: Option<WebSearchToolConfig>,
 
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum WebSearchToolConfigInput {
+    Enabled(bool),
+    Config(WebSearchToolConfig),
+}
+
+fn deserialize_optional_web_search_tool_config<'de, D>(
+    deserializer: D,
+) -> Result<Option<WebSearchToolConfig>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<WebSearchToolConfigInput>::deserialize(deserializer)?;
+
+    Ok(match value {
+        None => None,
+        Some(WebSearchToolConfigInput::Enabled(enabled)) => {
+            let _ = enabled;
+            None
+        }
+        Some(WebSearchToolConfigInput::Config(config)) => Some(config),
+    })
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]

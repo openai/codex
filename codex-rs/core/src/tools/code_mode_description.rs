@@ -77,10 +77,17 @@ fn append_code_mode_sample(
     let reference = code_mode_tool_reference(tool_name);
     let local_name = code_mode_local_name(&reference.tool_key);
 
-    format!(
-        "{description}\n\nCode mode declaration:\n```ts\nimport {{ tools }} from \"{}\";\ndeclare function {local_name}({input_name}: {input_type}): Promise<{output_type}>;\n```",
-        reference.module_path
-    )
+    if local_name == reference.tool_key {
+        format!(
+            "{description}\n\nCode mode declaration:\n```ts\nimport {{ {} }} from \"{}\";\ndeclare function {}({input_name}: {input_type}): Promise<{output_type}>;\n```",
+            reference.tool_key, reference.module_path, reference.tool_key
+        )
+    } else {
+        format!(
+            "{description}\n\nCode mode declaration:\n```ts\nimport {{ tools }} from \"{}\";\ndeclare function {local_name}({input_name}: {input_type}): Promise<{output_type}>;\n```",
+            reference.module_path
+        )
+    }
 }
 
 fn code_mode_local_name(tool_key: &str) -> String {
@@ -115,7 +122,6 @@ fn code_mode_local_name(tool_key: &str) -> String {
     {
         identifier.insert(0, '_');
     }
-
     identifier
 }
 
