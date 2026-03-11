@@ -321,14 +321,14 @@ function createModuleResolver(context, callTool, enabledTools, state) {
     }
     const namespacedMatch = /^tools\/(.+)\.js$/.exec(specifier);
     if (!namespacedMatch) {
-      throw new Error(`Unsupported import in code_mode: ${specifier}`);
+      throw new Error(`Unsupported import in exec: ${specifier}`);
     }
 
     const namespace = namespacedMatch[1]
       .split('/')
       .filter((segment) => segment.length > 0);
     if (namespace.length === 0) {
-      throw new Error(`Unsupported import in code_mode: ${specifier}`);
+      throw new Error(`Unsupported import in exec: ${specifier}`);
     }
 
     const cacheKey = namespace.join('/');
@@ -351,7 +351,7 @@ async function runModule(context, request, state, callTool) {
   );
   const mainModule = new SourceTextModule(request.source, {
     context,
-    identifier: 'code_mode_main.mjs',
+    identifier: 'exec_main.mjs',
     importModuleDynamically: async (specifier) => resolveModule(specifier),
   });
 
