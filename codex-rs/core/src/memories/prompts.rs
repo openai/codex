@@ -24,6 +24,7 @@ struct ConsolidationPromptTemplate<'a> {
 struct StageOneInputTemplate<'a> {
     rollout_path: &'a str,
     rollout_cwd: &'a str,
+    rollout_git_branch: &'a str,
     rollout_contents: &'a str,
 }
 
@@ -100,8 +101,10 @@ fn render_selected_input_line(item: &Stage1Output, retained: bool) -> String {
         )
     );
     format!(
-        "- [{status}] thread_id={}, rollout_summary_file={rollout_summary_file}",
-        item.thread_id
+        "- [{status}] thread_id={}, rollout_summary_file={rollout_summary_file}, cwd={}, git_branch={}",
+        item.thread_id,
+        item.cwd.display(),
+        item.git_branch.as_deref().unwrap_or("unknown"),
     )
 }
 
@@ -128,6 +131,7 @@ pub(super) fn build_stage_one_input_message(
     model_info: &ModelInfo,
     rollout_path: &Path,
     rollout_cwd: &Path,
+    rollout_git_branch: Option<&str>,
     rollout_contents: &str,
 ) -> anyhow::Result<String> {
     let rollout_token_limit = model_info
@@ -144,9 +148,11 @@ pub(super) fn build_stage_one_input_message(
 
     let rollout_path = rollout_path.display().to_string();
     let rollout_cwd = rollout_cwd.display().to_string();
+    let rollout_git_branch = rollout_git_branch.unwrap_or("unknown").to_string();
     Ok(StageOneInputTemplate {
         rollout_path: &rollout_path,
         rollout_cwd: &rollout_cwd,
+        rollout_git_branch: &rollout_git_branch,
         rollout_contents: &truncated_rollout_contents,
     }
     .render()?)
@@ -182,6 +188,10 @@ pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) 
 mod tests {
     use super::*;
     use crate::models_manager::model_info::model_info_from_slug;
+    use chrono::TimeZone;
+    use chrono::Utc;
+    use codex_protocol::ThreadId;
+    use std::path::PathBuf;
 
     #[test]
     fn build_stage_one_input_message_truncates_rollout_using_model_context_window() {
@@ -202,6 +212,7 @@ mod tests {
             &model_info,
             Path::new("/tmp/rollout.jsonl"),
             Path::new("/tmp"),
+            Some("feature/test"),
             &input,
         )
         .unwrap();
@@ -210,6 +221,7 @@ mod tests {
         assert!(expected_truncated.starts_with('a'));
         assert!(expected_truncated.ends_with('z'));
         assert!(message.contains(&expected_truncated));
+        assert!(message.contains("rollout_git_branch: feature/test"));
     }
 
     #[test]
@@ -225,10 +237,40 @@ mod tests {
             &model_info,
             Path::new("/tmp/rollout.jsonl"),
             Path::new("/tmp"),
+            None,
             &input,
         )
         .unwrap();
 
         assert!(message.contains(&expected_truncated));
+        assert!(message.contains("rollout_git_branch: unknown"));
+    }
+
+    #[test]
+    fn build_consolidation_prompt_lists_repo_and_branch_provenance() {
+        let thread_id =
+            ThreadId::try_from("0194f5a6-89ab-7cde-8123-456789abcdef").expect("valid thread id");
+        let selection = Phase2InputSelection {
+            selected: vec![Stage1Output {
+                thread_id,
+                rollout_path: PathBuf::from("/tmp/rollout.jsonl"),
+                source_updated_at: Utc.timestamp_opt(1_735_689_600, 0).single().expect("time"),
+                raw_memory: "raw".to_string(),
+                rollout_summary: "summary".to_string(),
+                rollout_slug: Some("branch-memory".to_string()),
+                cwd: PathBuf::from("/tmp/workspace"),
+                git_branch: Some("feature/branch-memory".to_string()),
+                generated_at: Utc.timestamp_opt(1_735_689_601, 0).single().expect("time"),
+            }],
+            previous_selected: Vec::new(),
+            retained_thread_ids: Vec::new(),
+            removed: Vec::new(),
+        };
+
+        let prompt = build_consolidation_prompt(Path::new("/tmp/memories"), &selection);
+
+        assert!(prompt.contains("git_branch=feature/branch-memory"));
+        assert!(prompt.contains("applies_to: repo="));
+        assert!(prompt.contains(&format!("thread_id={thread_id}, rollout_summary_file=")));
     }
 }

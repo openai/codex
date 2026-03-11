@@ -71,6 +71,9 @@ What it does:
 - syncs local memory artifacts under the memories root:
   - `raw_memories.md` (merged raw memories, latest first)
   - `rollout_summaries/` (one summary file per retained rollout)
+  - these artifacts preserve rollout provenance such as `cwd` and `git_branch`
+    so consolidation can
+    keep branch-specific tasks separate
 - prunes stale rollout summaries that are no longer retained
 - if there are no inputs, marks the job successful and exits
 

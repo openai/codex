@@ -265,6 +265,8 @@ description: concise but information-dense description of the primary task(s), o
 task: <primary_task_signature>
 task_group: <repo_or_workflow_bucket>
 task_outcome: <success|partial|fail|uncertain>
+git_branch: <branch name when known; `unknown` when not known>
+git_repo: <canonical repo identifier; prefer git remote URL when known, otherwise the repo/worktree path>
 keywords: k1, k2, k3, ... <searchable handles (tool names, error names, repo concepts, contracts)>
 ---
 
@@ -273,6 +275,8 @@ Then write task-grouped body content (required):
 task: <task signature for this task>
 task_group: <project/workflow topic>
 task_outcome: <success|partial|fail|uncertain>
+git_branch: <branch name when known; `unknown` when not known>
+git_repo: <canonical repo identifier for this task; prefer git remote URL when known>
 - <useful memory bullet>
 - ...
 
@@ -286,6 +290,7 @@ Preferred task-block body shape (strongly recommended):
 - `### Task <n>` blocks should preserve task-specific retrieval signal and consolidation-ready detail.
 - Within each task block, include bullets that explicitly cover (when applicable):
   - user goal / expected outcome,
+  - repo / branch applicability and whether the task was specific to that checkout,
   - what worked (key steps, commands, code paths, artifacts),
   - what did not work or drifted (and what pivot worked),
   - validation state (user confirmation, tests, runtime checks, or missing validation),
@@ -320,6 +325,13 @@ For each task block, include enough detail to be useful for future agent referen
 - what evidence validates the outcome (user feedback, environment/test feedback, or lack of both),
 - reusable procedures/checklists and failure shields that should survive future similar tasks,
 - artifacts and retrieval handles (commands, file paths, error strings, IDs) that make the task easy to rediscover.
+- Treat repo/branch provenance as first-class memory. If the rollout context names a
+  git branch or repo, preserve it in both the top-level frontmatter and each task block.
+- If multiple tasks are similar but tied to different repos or branches, keep them
+  separate rather than blending them into one generic task.
+- When a task is branch-specific (for example comparing against checkout state, working
+  in an unmerged feature branch, or reasoning about local diffs), say that explicitly so
+  Phase 2 can avoid reusing it in the wrong environment.
 
 
 ============================================================

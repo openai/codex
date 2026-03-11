@@ -106,7 +106,7 @@ Under `{{ memory_root }}/`:
     context.
   - source of rollout-level metadata needed for MEMORY.md `### rollout_summary_files`
     annotations;
-    you should be able to find `cwd`, `rollout_path`, and `updated_at` there.
+    you should be able to find `cwd`, `rollout_path`, `updated_at`, and `git_branch` there.
 - `MEMORY.md`
   - merged memories; produce a lightly clustered version if applicable
 - `rollout_summaries/*.md`
@@ -141,6 +141,9 @@ Incremental update and forgetting mechanism:
   threads intact.
 - After `MEMORY.md` cleanup is done, revisit `memory_summary.md` and remove or rewrite stale
   summary/index content that was only supported by removed thread ids.
+- Treat repo / branch provenance as a first-class clustering key, not optional decoration.
+  Similar tasks from different repos or branches should stay separate unless the stored
+  guidance is genuinely branch-agnostic and you say so explicitly.
 
 Outputs:
 Under `{{ memory_root }}/`:
@@ -171,10 +174,13 @@ Each memory block MUST start with:
 # Task Group: <repo / project / workflow / detail-task family; broad but distinguishable>
 
 scope: <what this block covers, when to use it, and notable boundaries>
+applies_to: repo=<canonical repo identity or workflow scope>; branches=<branch names, branch families, or `unknown`>; reuse_rule=<when this memory is safe to reuse vs when to treat it as branch-specific>
 
 - `Task Group` is for retrieval. Choose granularity based on memory density:
   repo / project / workflow / detail-task family.
 - `scope:` is for scanning. Keep it short and operational.
+- `applies_to:` is mandatory. Use it to preserve repo / branch boundaries so future
+  agents do not confuse similar tasks from different checkouts.
 
 Body format (strict):
 
@@ -192,7 +198,7 @@ Required task-oriented body shape (strict):
 ## Task 1: <task description, outcome>
 
 ### rollout_summary_files
-- <rollout_summaries/file1.md> (cwd=<path>, rollout_path=<path>, updated_at=<timestamp>, thread_id=<thread_id>, <optional status/usefulness note>)
+- <rollout_summaries/file1.md> (cwd=<path>, rollout_path=<path>, updated_at=<timestamp>, thread_id=<thread_id>, git_branch=<branch-or-unknown>, <optional status/usefulness note>)
 
 ### keywords
 
@@ -231,8 +237,8 @@ Required task-oriented body shape (strict):
 
 Schema rules (strict):
 - A) Structure and consistency
-  - Exact block shape: `# Task Group`, `scope:`, one or more `## Task <n>`, and
-    `## General Tips`.
+  - Exact block shape: `# Task Group`, `scope:`, `applies_to:`, one or more
+    `## Task <n>`, and `## General Tips`.
   - Keep all tasks and tips inside the task family implied by the block header.
   - Keep entries retrieval-friendly, but not shallow.
   - Do not emit placeholder values (`# Task Group: misc`, `scope: general`, `## Task 1: task`, etc.).
@@ -252,6 +258,10 @@ Schema rules (strict):
   - If a rollout summary is reused across tasks/blocks, each placement should add distinct
     task-local learnings or routing value (not copy-pasted repetition).
   - Do not cluster on keyword overlap alone.
+  - Default to separating memories across different repos or git branches, even when the
+    task wording looks similar.
+  - Merge across branches only when the evidence is clearly branch-agnostic, and state that
+    explicitly in `applies_to:` or the task learnings.
   - When in doubt, preserve boundaries (separate tasks/blocks) rather than over-cluster.
 - C) Provenance and metadata
   - Every `## Task <n>` section must include `### rollout_summary_files`, `### keywords`,
@@ -259,6 +269,7 @@ Schema rules (strict):
   - `### rollout_summary_files` must be task-local (not a block-wide catch-all list).
   - Each rollout annotation must include `cwd=<path>`, `rollout_path=<path>`, and
     `updated_at=<timestamp>`.
+    Include `git_branch=<...>` whenever known.
     If missing from a rollout summary, recover them from `raw_memories.md`.
   - Major learnings should be traceable to rollout summaries listed in the same task section.
   - Order rollout references by freshness and practical usefulness.
@@ -291,6 +302,9 @@ What to write:
   verification steps, and failure shields (symptom -> cause -> fix).
 - Capture stable user preferences/details that generalize so they can also inform
   `memory_summary.md`.
+- Preserve repo / branch applicability in the block header and task details. If a task was
+  done on a feature branch, unmerged checkout, or different repo than the current one, make
+  that easy for future agents to notice before they reuse the memory.
 - `MEMORY.md` should support related-but-not-identical tasks: slightly more general than a
   rollout summary, but still operational and concrete.
 - Use `raw_memories.md` as the routing layer and task inventory.
@@ -305,6 +319,7 @@ What to write:
 - Each block should be useful on its own and materially richer than `memory_summary.md`:
   - include concrete triggers, commands/paths, and failure shields,
   - include outcome-specific notes (what worked, what failed, what remains uncertain),
+  - include repo / branch scope and mismatch warnings when they affect reuse,
   - include scope boundaries / anti-drift notes when they affect future task success,
   - include stale/conflict notes when newer evidence changes prior guidance.
 
@@ -369,6 +384,12 @@ Topic selection and quality rules:
 - Keywords must be representative and directly searchable in `MEMORY.md`.
   Prefer exact strings that a future agent can grep for (repo/project names, user query phrases,
   tool names, error strings, commands, file paths, APIs/contracts). Avoid vague synonyms.
+- When repo / branch context matters, include those handles in keywords or in the topic
+  description so the routing layer can distinguish otherwise-similar memories.
+- For checkout-sensitive work, topic descriptions must explicitly state repo and branch
+  applicability using concrete wording such as `repo=<name or path>; branches=<branch list or unknown>`.
+  Do not omit branch applicability just because the branch is unknown; write `branches=unknown`
+  so future agents can notice the uncertainty.
 
 Required subsection structure (in this order):
 
@@ -394,8 +415,8 @@ Recent Active Memory Window behavior (day-ordered):
 
 Recent-topic format:
 - <topic>: <keyword1>, <keyword2>, <keyword3>, ...
-  - desc: <clear and specific description of what tasks are inside this topic; what future task/user goal this helps with; what kinds of outcomes/artifacts/procedures are covered; and when to search this topic first>
-  - learnings: <some concise, topic-local recent takeaways / decision triggers / updates worth checking first; include useful specifics, but avoid overlap with `## General Tips` (cross-topic, broadly reusable guidance belongs there)>
+  - desc: <clear and specific description of what tasks are inside this topic; what future task/user goal this helps with; what kinds of outcomes/artifacts/procedures are covered; when to search this topic first; and explicit applicability text including `repo=...; branches=...` when the work is checkout-sensitive>
+  - learnings: <some concise, topic-local recent takeaways / decision triggers / updates worth checking first; include useful specifics, including repo / branch mismatch caveats when important; avoid overlap with `## General Tips` (cross-topic, broadly reusable guidance belongs there)>
 
 
 ### <2nd most recent memory day: YYYY-MM-DD>
@@ -413,7 +434,7 @@ Avoid duplicating recent topics. Keep these compact and retrieval-oriented.
 
 Older-topic format (compact):
 - <topic>: <keyword1>, <keyword2>, <keyword3>, ...
-  - desc: <clear and specific description of what is inside this topic and when to use it>
+  - desc: <clear and specific description of what is inside this topic, when to use it, and explicit applicability text including `repo=...; branches=...` when checkout-sensitive>
 
 Notes:
 - Do not include large snippets; push details into MEMORY.md and rollout summaries.
