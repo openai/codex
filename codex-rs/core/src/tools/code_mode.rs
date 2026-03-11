@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::process::ExitStatus;
 use std::sync::Arc;
 
@@ -58,6 +59,7 @@ struct EnabledTool {
 enum HostToNodeMessage {
     Init {
         enabled_tools: Vec<EnabledTool>,
+        stored_values: HashMap<String, JsonValue>,
         source: String,
     },
     Response {
@@ -77,6 +79,7 @@ enum NodeToHostMessage {
     },
     Result {
         content_items: Vec<JsonValue>,
+        stored_values: HashMap<String, JsonValue>,
         #[serde(default)]
         max_output_tokens_per_exec_call: Option<usize>,
     },
@@ -102,7 +105,7 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
     ));
     section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to their code-mode result values.\n");
     section.push_str(&format!(
-        "- Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call }}` from `@openai/code_mode`. `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs. `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `{PUBLIC_TOOL_NAME}` execution; the default is `10000`. This guards the overall `{PUBLIC_TOOL_NAME}` output, not individual nested tool invocations. When truncation happens, the final text uses the unified-exec style `Original token count:` / `Output:` wrapper and the usual `…N tokens truncated…` marker.\n",
+        "- Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, store, load }}` from `@openai/code_mode` (or `\"openai/code_mode\"`). `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs. `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, and `load(key)` returns a cloned stored value or `undefined`. `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `{PUBLIC_TOOL_NAME}` execution; the default is `10000`. This guards the overall `{PUBLIC_TOOL_NAME}` output, not individual nested tool invocations. When truncation happens, the final text uses the unified-exec style `Original token count:` / `Output:` wrapper and the usual `…N tokens truncated…` marker.\n",
     ));
     section.push_str(
         "- Function tools require JSON object arguments. Freeform tools require raw strings.\n",
@@ -125,8 +128,9 @@ pub(crate) async fn execute(
         tracker,
     };
     let enabled_tools = build_enabled_tools(&exec).await;
+    let stored_values = exec.session.services.code_mode_store.stored_values().await;
     let source = build_source(&code, &enabled_tools).map_err(FunctionCallError::RespondToModel)?;
-    execute_node(exec, source, enabled_tools)
+    execute_node(exec, source, enabled_tools, stored_values)
         .await
         .map_err(FunctionCallError::RespondToModel)
 }
@@ -135,6 +139,7 @@ async fn execute_node(
     exec: ExecContext,
     source: String,
     enabled_tools: Vec<EnabledTool>,
+    stored_values: HashMap<String, JsonValue>,
 ) -> Result<Vec<FunctionCallOutputContentItem>, String> {
     let node_path = resolve_compatible_node(exec.turn.config.js_repl_node_path.as_deref()).await?;
 
@@ -178,6 +183,7 @@ async fn execute_node(
         &mut stdin,
         &HostToNodeMessage::Init {
             enabled_tools: enabled_tools.clone(),
+            stored_values,
             source,
         },
     )
@@ -206,8 +212,14 @@ async fn execute_node(
             }
             NodeToHostMessage::Result {
                 content_items,
+                stored_values,
                 max_output_tokens_per_exec_call,
             } => {
+                exec.session
+                    .services
+                    .code_mode_store
+                    .replace_stored_values(stored_values)
+                    .await;
                 final_content_items = Some(truncate_code_mode_result(
                     output_content_items_from_json_values(content_items)?,
                     max_output_tokens_per_exec_call,

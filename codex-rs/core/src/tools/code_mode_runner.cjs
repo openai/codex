@@ -108,6 +108,10 @@ function isValidIdentifier(name) {
   return /^[A-Za-z_$][0-9A-Za-z_$]*$/.test(name);
 }
 
+function cloneJsonValue(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 function createToolCaller(protocol) {
   return (name, input) =>
     protocol.request('tool_call', {
@@ -197,6 +201,21 @@ function normalizeOutputImageUrl(value) {
 }
 
 function createCodeModeModule(context, state) {
+  const load = (key) => {
+    if (typeof key !== 'string') {
+      throw new TypeError('load key must be a string');
+    }
+    if (!Object.prototype.hasOwnProperty.call(state.storedValues, key)) {
+      return undefined;
+    }
+    return cloneJsonValue(state.storedValues[key]);
+  };
+  const store = (key, value) => {
+    if (typeof key !== 'string') {
+      throw new TypeError('store key must be a string');
+    }
+    state.storedValues[key] = cloneJsonValue(value);
+  };
   const outputText = (value) => {
     const item = {
       type: 'input_text',
@@ -215,8 +234,9 @@ function createCodeModeModule(context, state) {
   };
 
   return new SyntheticModule(
-    ['output_text', 'output_image', 'set_max_output_tokens_per_exec_call'],
+    ['load', 'output_text', 'output_image', 'set_max_output_tokens_per_exec_call', 'store'],
     function initCodeModeModule() {
+      this.setExport('load', load);
       this.setExport('output_text', outputText);
       this.setExport('output_image', outputImage);
       this.setExport('set_max_output_tokens_per_exec_call', (value) => {
@@ -224,6 +244,7 @@ function createCodeModeModule(context, state) {
         state.maxOutputTokensPerExecCall = normalized;
         return normalized;
       });
+      this.setExport('store', store);
     },
     { context }
   );
@@ -291,10 +312,9 @@ function createModuleResolver(context, callTool, enabledTools, state) {
     if (specifier === 'tools.js') {
       return toolsModule;
     }
-    if (specifier === '@openai/code_mode') {
+    if (specifier === '@openai/code_mode' || specifier === 'openai/code_mode') {
       return codeModeModule;
     }
-
     const namespacedMatch = /^tools\/(.+)\.js$/.exec(specifier);
     if (!namespacedMatch) {
       throw new Error(`Unsupported import in exec: ${specifier}`);
@@ -318,7 +338,7 @@ function createModuleResolver(context, callTool, enabledTools, state) {
   };
 }
 
-async function runModule(context, protocol, request, state, callTool) {
+async function runModule(context, request, state, callTool) {
   const resolveModule = createModuleResolver(
     context,
     callTool,
@@ -340,6 +360,7 @@ async function main() {
   const request = await protocol.init;
   const state = {
     maxOutputTokensPerExecCall: DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL,
+    storedValues: cloneJsonValue(request.stored_values ?? {}),
   };
   const callTool = createToolCaller(protocol);
   const context = vm.createContext({
@@ -348,10 +369,11 @@ async function main() {
   });
 
   try {
-    await runModule(context, protocol, request, state, callTool);
+    await runModule(context, request, state, callTool);
     await protocol.send({
       type: 'result',
       content_items: readContentItems(context),
+      stored_values: state.storedValues,
       max_output_tokens_per_exec_call: state.maxOutputTokensPerExecCall,
     });
     process.exit(0);
@@ -360,6 +382,7 @@ async function main() {
     await protocol.send({
       type: 'result',
       content_items: readContentItems(context),
+      stored_values: state.storedValues,
       max_output_tokens_per_exec_call: state.maxOutputTokensPerExecCall,
     });
     process.exit(1);

@@ -867,6 +867,7 @@ mod tests {
     use codex_protocol::config_types::TrustLevel;
     use codex_protocol::models::FileSystemPermissions;
     use codex_protocol::models::MacOsAutomationPermission;
+    use codex_protocol::models::MacOsContactsPermission;
     use codex_protocol::models::MacOsPreferencesPermission;
     use codex_protocol::models::MacOsSeatbeltProfileExtensions;
     use codex_protocol::models::PermissionProfile;
@@ -1466,6 +1467,7 @@ permissions:
     macos_preferences: "read_write"
     macos_automation:
       - "com.apple.Notes"
+    macos_launch_services: true
     macos_accessibility: true
     macos_calendar: true
 "#,
@@ -1480,8 +1482,39 @@ permissions:
                     macos_automation: MacOsAutomationPermission::BundleIds(vec![
                         "com.apple.Notes".to_string(),
                     ]),
+                    macos_launch_services: true,
                     macos_accessibility: true,
                     macos_calendar: true,
+                    macos_reminders: false,
+                    macos_contacts: MacOsContactsPermission::None,
+                }),
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn skill_metadata_parses_macos_reminders_permission_yaml() {
+        let parsed = serde_yaml::from_str::<SkillMetadataFile>(
+            r#"
+permissions:
+  macos:
+    macos_reminders: true
+"#,
+        )
+        .expect("parse reminders skill metadata");
+
+        assert_eq!(
+            parsed.permissions,
+            Some(PermissionProfile {
+                macos: Some(MacOsSeatbeltProfileExtensions {
+                    macos_preferences: MacOsPreferencesPermission::ReadOnly,
+                    macos_automation: MacOsAutomationPermission::None,
+                    macos_launch_services: false,
+                    macos_accessibility: false,
+                    macos_calendar: false,
+                    macos_reminders: true,
+                    macos_contacts: MacOsContactsPermission::None,
                 }),
                 ..Default::default()
             })
@@ -1503,6 +1536,7 @@ permissions:
     macos_preferences: "read_write"
     macos_automation:
       - "com.apple.Notes"
+    macos_launch_services: true
     macos_accessibility: true
     macos_calendar: true
 "#,
@@ -1525,8 +1559,11 @@ permissions:
                     macos_automation: MacOsAutomationPermission::BundleIds(vec![
                         "com.apple.Notes".to_string()
                     ],),
+                    macos_launch_services: true,
                     macos_accessibility: true,
                     macos_calendar: true,
+                    macos_reminders: false,
+                    macos_contacts: MacOsContactsPermission::None,
                 }),
                 ..Default::default()
             })
@@ -1548,6 +1585,7 @@ permissions:
     macos_preferences: "read_write"
     macos_automation:
       - "com.apple.Notes"
+    macos_launch_services: true
     macos_accessibility: true
     macos_calendar: true
 "#,
@@ -1570,8 +1608,11 @@ permissions:
                     macos_automation: MacOsAutomationPermission::BundleIds(vec![
                         "com.apple.Notes".to_string()
                     ],),
+                    macos_launch_services: true,
                     macos_accessibility: true,
                     macos_calendar: true,
+                    macos_reminders: false,
+                    macos_contacts: MacOsContactsPermission::None,
                 }),
                 ..Default::default()
             })

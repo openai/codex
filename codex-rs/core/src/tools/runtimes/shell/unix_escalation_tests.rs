@@ -657,6 +657,7 @@ async fn prepare_escalated_exec_permission_profile_unions_turn_and_requested_mac
                 PermissionProfile {
                     macos: Some(MacOsSeatbeltProfileExtensions {
                         macos_calendar: true,
+                        macos_reminders: false,
                         ..Default::default()
                     }),
                     ..Default::default()

@@ -11,11 +11,15 @@ use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadListParams;
+use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use pretty_assertions::assert_eq;
@@ -204,6 +208,169 @@ async fn thread_fork_rejects_unmaterialized_thread() -> Result<()> {
         "unexpected fork error: {}",
         fork_err.error.message
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let preview = "Saved user message";
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        preview,
+        Some("mock_provider"),
+        None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: conversation_id.clone(),
+            ephemeral: true,
+            ..Default::default()
+        })
+        .await?;
+    let fork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    let fork_result = fork_resp.result.clone();
+    let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
+    let fork_thread_id = thread.id.clone();
+
+    assert!(
+        thread.ephemeral,
+        "ephemeral forks should be marked explicitly"
+    );
+    assert_eq!(
+        thread.path, None,
+        "ephemeral forks should not expose a path"
+    );
+    assert_eq!(thread.preview, preview);
+    assert_eq!(thread.status, ThreadStatus::Idle);
+    assert_eq!(thread.name, None);
+    assert_eq!(thread.turns.len(), 1, "expected copied fork history");
+
+    let turn = &thread.turns[0];
+    assert_eq!(turn.status, TurnStatus::Completed);
+    assert_eq!(turn.items.len(), 1, "expected user message item");
+    match &turn.items[0] {
+        ThreadItem::UserMessage { content, .. } => {
+            assert_eq!(
+                content,
+                &vec![UserInput::Text {
+                    text: preview.to_string(),
+                    text_elements: Vec::new(),
+                }]
+            );
+        }
+        other => panic!("expected user message item, got {other:?}"),
+    }
+
+    let thread_json = fork_result
+        .get("thread")
+        .and_then(Value::as_object)
+        .expect("thread/fork result.thread must be an object");
+    assert_eq!(
+        thread_json.get("ephemeral").and_then(Value::as_bool),
+        Some(true),
+        "ephemeral forks should serialize `ephemeral: true`"
+    );
+
+    let deadline = tokio::time::Instant::now() + DEFAULT_READ_TIMEOUT;
+    let notif = loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let message = timeout(remaining, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Notification(notif) = message else {
+            continue;
+        };
+        if notif.method == "thread/status/changed" {
+            let status_changed: ThreadStatusChangedNotification =
+                serde_json::from_value(notif.params.expect("params must be present"))?;
+            if status_changed.thread_id == fork_thread_id {
+                anyhow::bail!(
+                    "thread/fork should introduce the thread without a preceding thread/status/changed"
+                );
+            }
+            continue;
+        }
+        if notif.method == "thread/started" {
+            break notif;
+        }
+    };
+    let started_params = notif.params.clone().expect("params must be present");
+    let started_thread_json = started_params
+        .get("thread")
+        .and_then(Value::as_object)
+        .expect("thread/started params.thread must be an object");
+    assert_eq!(
+        started_thread_json
+            .get("ephemeral")
+            .and_then(Value::as_bool),
+        Some(true),
+        "thread/started should serialize `ephemeral: true` for ephemeral forks"
+    );
+    let started: ThreadStartedNotification =
+        serde_json::from_value(notif.params.expect("params must be present"))?;
+    assert_eq!(started.thread, thread);
+
+    let list_id = mcp
+        .send_thread_list_request(ThreadListParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            model_providers: None,
+            source_kinds: None,
+            archived: None,
+            cwd: None,
+            search_term: None,
+        })
+        .await?;
+    let list_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    let ThreadListResponse { data, .. } = to_response::<ThreadListResponse>(list_resp)?;
+    assert!(
+        data.iter().all(|candidate| candidate.id != fork_thread_id),
+        "ephemeral forks should not appear in thread/list"
+    );
+    assert!(
+        data.iter().any(|candidate| candidate.id == conversation_id),
+        "persistent source thread should remain listed"
+    );
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: fork_thread_id,
+            input: vec![UserInput::Text {
+                text: "continue".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    let _: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
 
     Ok(())
 }
