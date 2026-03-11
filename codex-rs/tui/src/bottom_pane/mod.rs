@@ -15,6 +15,7 @@
 //! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
 use std::path::PathBuf;
 
+use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::pending_input_preview::PendingInputPreview;
@@ -31,6 +32,7 @@ use codex_core::features::Features;
 use codex_core::plugins::PluginCapabilitySummary;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
+use codex_protocol::protocol::Op;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
@@ -148,6 +150,8 @@ pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
 pub(crate) use prompt_args::parse_slash_name;
+pub(crate) use slash_commands::BuiltinCommandFlags;
+pub(crate) use slash_commands::find_builtin_command;
 
 /// Pane displayed in the lower half of the chat UI.
 ///
@@ -408,16 +412,19 @@ impl BottomPane {
             self.request_redraw();
             InputResult::None
         } else {
-            // If a task is running and a status line is visible, allow Esc to
-            // send an interrupt when no popup is active.
+            // If a task is running, allow Esc to send an interrupt when no popup is active.
+            // Final-message streaming can temporarily hide the status widget, but that should not
+            // disable interrupt.
             if key_event.code == KeyCode::Esc
                 && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
                 && self.is_task_running
                 && !self.composer.popup_active()
-                && let Some(status) = &self.status
             {
-                // Send Op::Interrupt
-                status.interrupt();
+                if let Some(status) = &self.status {
+                    status.interrupt();
+                } else {
+                    self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+                }
                 self.request_redraw();
                 return InputResult::None;
             }
@@ -1826,6 +1833,32 @@ mod tests {
             "expected Esc to send Op::Interrupt while composer has text and no popup is active"
         );
         assert_eq!(pane.composer_text(), "still editing");
+    }
+
+    #[test]
+    fn esc_interrupts_running_task_when_status_indicator_hidden() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.hide_status_indicator();
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(
+            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
+            "expected Esc to send Op::Interrupt even when the status indicator is hidden"
+        );
     }
 
     #[test]

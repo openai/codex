@@ -42,9 +42,11 @@ use self::realtime::PendingSteerCompareKey;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 use crate::audio_device::list_realtime_audio_device_names;
+use crate::bottom_pane::BuiltinCommandFlags;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
+use crate::bottom_pane::find_builtin_command;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
@@ -2240,9 +2242,9 @@ impl ChatWidget {
     /// Each pending message numbers attachments from `[Image #1]` relative to its own remote
     /// images. When we concatenate multiple messages after interrupt, we must renumber local-image
     /// placeholders in a stable order and rebase text element byte ranges so the restored composer
-    /// state stays aligned with the merged attachment list. Queued slash-command actions stay in
-    /// the queue so they can still replay after the interrupt instead of being collapsed into plain
-    /// draft text.
+    /// state stays aligned with the merged attachment list. Slash commands are fully serializable
+    /// again, so queued slash drafts are restored alongside ordinary queued follow-ups instead of
+    /// being replayed separately after the interrupt.
     fn drain_restorable_messages_for_restore(&mut self) -> Option<UserMessage> {
         let existing_message = UserMessage {
             text: self.bottom_pane.composer_text(),
@@ -2255,12 +2257,9 @@ impl ChatWidget {
         let has_existing_message = !existing_message.text.is_empty()
             || !existing_message.local_images.is_empty()
             || !existing_message.remote_image_urls.is_empty();
-        let has_pending_user_messages = !self.pending_steers.is_empty()
-            || self
-                .queued_user_messages
-                .iter()
-                .any(|queued| !Self::is_builtin_slash_draft(queued));
-        if !has_existing_message && !has_pending_user_messages {
+        let has_pending_user_messages =
+            !self.pending_steers.is_empty() || !self.queued_user_messages.is_empty();
+        if !has_pending_user_messages {
             return None;
         }
 
@@ -2269,15 +2268,7 @@ impl ChatWidget {
             .drain(..)
             .map(|steer| steer.user_message)
             .collect();
-        let mut retained_queue = VecDeque::new();
-        for queued_message in self.queued_user_messages.drain(..) {
-            if Self::is_builtin_slash_draft(&queued_message) {
-                retained_queue.push_back(queued_message);
-            } else {
-                to_merge.push(queued_message);
-            }
-        }
-        self.queued_user_messages = retained_queue;
+        to_merge.extend(self.queued_user_messages.drain(..));
         if has_existing_message {
             to_merge.push(existing_message);
         }
@@ -4219,6 +4210,9 @@ impl ChatWidget {
                     else {
                         return;
                     };
+                    if self.reject_unavailable_builtin_slash_command(&user_message) {
+                        return;
+                    }
                     let should_submit_now =
                         self.is_session_configured() && !self.is_plan_streaming_in_tui();
                     if should_submit_now {
@@ -4254,6 +4248,9 @@ impl ChatWidget {
                     else {
                         return;
                     };
+                    if self.reject_unavailable_builtin_slash_command(&user_message) {
+                        return;
+                    }
                     self.queue_user_message(user_message);
                 }
                 InputResult::Command(cmd) => {
@@ -4332,7 +4329,10 @@ impl ChatWidget {
     }
 
     fn dispatch_command(&mut self, cmd: SlashCommand) -> QueueReplayControl {
-        if self.bottom_pane.is_task_running() && !cmd.available_during_task() {
+        if self.bottom_pane.is_task_running()
+            && !cmd.available_during_task()
+            && !matches!(cmd, SlashCommand::Model | SlashCommand::Review)
+        {
             self.queue_user_message(format!("/{}", cmd.command()).into());
             return QueueReplayControl::Stop;
         }
@@ -4709,7 +4709,7 @@ impl ChatWidget {
         let trimmed = args.trim();
         let should_queue = self.bottom_pane.is_task_running() && !cmd.available_during_task();
         if trimmed.is_empty() {
-            if should_queue {
+            if should_queue && !matches!(cmd, SlashCommand::Model | SlashCommand::Review) {
                 self.queue_current_inline_bare_slash_command(cmd);
             } else {
                 self.dispatch_command(cmd);
@@ -4993,7 +4993,10 @@ impl ChatWidget {
         match &review_request.target {
             ReviewTarget::UncommittedChanges => "/review uncommitted".into(),
             ReviewTarget::BaseBranch { branch } => format!("/review branch {branch}").into(),
-            ReviewTarget::Commit { sha, .. } => format!("/review commit {sha}").into(),
+            ReviewTarget::Commit { sha, title } => match title.as_deref().map(str::trim) {
+                Some("") | None => format!("/review commit {sha}").into(),
+                Some(title) => format!("/review commit {sha} {title}").into(),
+            },
             ReviewTarget::Custom { instructions } => format!("/review {instructions}").into(),
         }
     }
@@ -5017,19 +5020,64 @@ impl ChatWidget {
         }
     }
 
-    fn parse_builtin_slash_command(text: &str) -> Option<(SlashCommand, &str, usize)> {
+    fn parse_builtin_slash_command<'a>(
+        &self,
+        text: &'a str,
+    ) -> Option<(SlashCommand, &'a str, usize)> {
         let (name, rest, rest_offset) = parse_slash_name(text)?;
-        let cmd = SlashCommand::from_str(name).ok()?;
+        let cmd = find_builtin_command(
+            name,
+            BuiltinCommandFlags {
+                collaboration_modes_enabled: self.collaboration_modes_enabled(),
+                connectors_enabled: self.connectors_enabled(),
+                fast_command_enabled: self.fast_mode_enabled(),
+                personality_command_enabled: self.config.features.enabled(Feature::Personality),
+                realtime_conversation_enabled: self.realtime_conversation_enabled(),
+                audio_device_selection_enabled: self.realtime_audio_device_selection_enabled(),
+                allow_elevate_sandbox: {
+                    #[cfg(target_os = "windows")]
+                    {
+                        codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                            && matches!(
+                                WindowsSandboxLevel::from_config(&self.config),
+                                WindowsSandboxLevel::RestrictedToken
+                            )
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        false
+                    }
+                },
+            },
+        )?;
         Some((cmd, rest, rest_offset))
     }
 
-    fn is_builtin_slash_draft(draft: &UserMessage) -> bool {
-        Self::parse_builtin_slash_command(&draft.text).is_some()
+    fn is_builtin_slash_draft(&self, draft: &UserMessage) -> bool {
+        self.parse_builtin_slash_command(&draft.text).is_some()
+    }
+
+    fn reject_unavailable_builtin_slash_command(&mut self, user_message: &UserMessage) -> bool {
+        let Some((name, _, _)) = parse_slash_name(&user_message.text) else {
+            return false;
+        };
+        if name.contains('/')
+            || self
+                .parse_builtin_slash_command(&user_message.text)
+                .is_some()
+            || SlashCommand::from_str(name).is_err()
+        {
+            return false;
+        }
+
+        self.add_error_message(format!("/{name} is not available in this session."));
+        self.restore_user_message_to_composer(user_message.clone());
+        true
     }
 
     fn execute_serialized_slash_command(&mut self, draft: UserMessage) -> QueueReplayControl {
         let preview = draft.text.clone();
-        let Some((cmd, rest, rest_offset)) = Self::parse_builtin_slash_command(&preview) else {
+        let Some((cmd, rest, rest_offset)) = self.parse_builtin_slash_command(&preview) else {
             self.add_error_message(format!("Failed to replay queued slash command: {preview}"));
             self.restore_user_message_to_composer(draft);
             return QueueReplayControl::Stop;
@@ -5090,6 +5138,8 @@ impl ChatWidget {
     }
 
     fn parse_review_request(args: &str) -> Result<ReviewRequest, String> {
+        const REVIEW_USAGE: &str =
+            "Usage: /review [uncommitted|branch <name>|commit <sha> [title]|<instructions>]";
         let trimmed = args.trim();
         let lowered = trimmed.to_ascii_lowercase();
         let target = if matches!(
@@ -5104,20 +5154,23 @@ impl ChatWidget {
                     branch: value.to_string(),
                 },
                 "branch" => {
-                    return Err(
-                        "Usage: /review [uncommitted|branch <name>|commit <sha>|<instructions>]"
-                            .to_string(),
-                    );
+                    return Err(REVIEW_USAGE.to_string());
                 }
-                "commit" if !value.is_empty() => ReviewTarget::Commit {
-                    sha: value.to_string(),
-                    title: None,
-                },
-                "commit" => {
-                    return Err(
-                        "Usage: /review [uncommitted|branch <name>|commit <sha>|<instructions>]"
-                            .to_string(),
+                "commit" if !value.is_empty() => {
+                    let (sha, title) = value.split_once(char::is_whitespace).map_or(
+                        (value, None),
+                        |(sha, title)| {
+                            let title = title.trim();
+                            (sha, (!title.is_empty()).then_some(title.to_string()))
+                        },
                     );
+                    ReviewTarget::Commit {
+                        sha: sha.to_string(),
+                        title,
+                    }
+                }
+                "commit" => {
+                    return Err(REVIEW_USAGE.to_string());
                 }
                 _ => ReviewTarget::Custom {
                     instructions: trimmed.to_string(),
@@ -6105,7 +6158,7 @@ impl ChatWidget {
             let Some(queued_message) = self.queued_user_messages.pop_front() else {
                 break;
             };
-            let replay_control = if Self::is_builtin_slash_draft(&queued_message) {
+            let replay_control = if self.is_builtin_slash_draft(&queued_message) {
                 self.execute_serialized_slash_command(queued_message)
             } else {
                 self.submit_user_message(queued_message);

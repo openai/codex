@@ -8201,18 +8201,15 @@ async fn user_shell_command_renders_output_not_exploring() {
 }
 
 #[tokio::test]
-async fn model_slash_command_while_task_running_queues_snapshot() {
+async fn model_slash_command_while_task_running_opens_popup_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
 
     chat.dispatch_command(SlashCommand::Model);
 
-    assert_eq!(chat.queued_user_message_texts(), vec!["/model".to_string()]);
-    assert!(
-        !chat.has_active_view(),
-        "expected /model to queue instead of opening a popup"
-    );
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.has_active_view(), "expected /model popup to open");
     assert!(drain_insert_history(&mut rx).is_empty());
 
     let width: u16 = 80;
@@ -8226,7 +8223,7 @@ async fn model_slash_command_while_task_running_queues_snapshot() {
     })
     .unwrap();
     assert_snapshot!(
-        "model_slash_command_while_task_running_queues",
+        "model_slash_command_while_task_running_popup",
         term.backend().vt100().screen().contents()
     );
 }
@@ -8246,6 +8243,37 @@ async fn model_selection_queues_selected_action_while_task_running() {
         chat.queued_user_message_texts(),
         vec!["/model gpt-5.1-codex-max high".to_string()]
     );
+}
+
+#[tokio::test]
+async fn interrupt_restores_queued_model_selection_into_composer() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
+    chat.on_task_started();
+
+    chat.handle_serialized_slash_command(ChatWidget::model_selection_draft(
+        "gpt-5.1-codex-max",
+        Some(ReasoningEffortConfig::High),
+        ModelSelectionScope::Global,
+    ));
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "/model gpt-5.1-codex-max high"
+    );
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(
+        op_rx.try_recv().is_err(),
+        "unexpected outbound op after interrupt restoring queued /model selection"
+    );
+    let _ = drain_insert_history(&mut rx);
 }
 
 #[tokio::test]
@@ -8358,12 +8386,18 @@ async fn esc_interrupts_running_task_with_empty_composer() {
 }
 
 #[tokio::test]
-async fn esc_interrupts_running_task_with_nonempty_composer_and_restores_draft() {
+async fn esc_interrupts_running_task_with_nonempty_composer_without_restoring_draft() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
     chat.bottom_pane
         .set_composer_text("still editing".to_string(), Vec::new(), Vec::new());
+
+    assert!(
+        chat.drain_restorable_messages_for_restore().is_none(),
+        "existing composer text alone should not trigger draft restoration"
+    );
+    assert_eq!(chat.bottom_pane.composer_text(), "still editing");
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
@@ -8393,6 +8427,25 @@ async fn esc_with_model_popup_active_dismisses_popup_without_interrupting() {
         );
     }
     assert!(!chat.has_active_view(), "expected /model popup to close");
+}
+
+#[tokio::test]
+async fn esc_interrupts_running_task_while_final_message_streaming() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_commit_tick();
+    let _ = drain_insert_history(&mut rx);
+
+    assert!(
+        !chat.bottom_pane.status_indicator_visible(),
+        "expected final-message streaming to hide the status indicator"
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    next_interrupt_op(&mut op_rx);
 }
 
 #[tokio::test]
@@ -8452,6 +8505,50 @@ async fn fast_slash_command_updates_and_persists_local_service_tier() {
     );
 
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn disabled_fast_slash_command_with_args_restores_draft_instead_of_queueing() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_feature_enabled(Feature::FastMode, false);
+    chat.on_task_started();
+    chat.bottom_pane
+        .set_composer_text("/fast on".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.bottom_pane.composer_text(), "/fast on");
+    assert!(chat.queued_user_messages.is_empty());
+    assert_no_submit_op(&mut op_rx);
+    let _ = drain_insert_history(&mut rx);
+}
+
+#[tokio::test]
+async fn queued_disabled_fast_slash_draft_replays_as_user_text() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::FastMode, false);
+    chat.on_task_started();
+
+    chat.handle_serialized_slash_command(UserMessage::from("/fast on".to_string()));
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["/fast on".to_string()]
+    );
+
+    chat.on_task_complete(None, false);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "/fast on".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued disabled slash draft Op::UserTurn, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -9322,7 +9419,7 @@ async fn interrupt_restores_queued_messages_into_composer() {
 }
 
 #[tokio::test]
-async fn interrupt_replays_queued_slash_commands_and_restores_drafts() {
+async fn interrupt_restores_queued_slash_commands_into_composer() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
     chat.bottom_pane.set_task_running(true);
@@ -9340,19 +9437,22 @@ async fn interrupt_replays_queued_slash_commands_and_restores_drafts() {
         }),
     });
 
-    assert_eq!(chat.bottom_pane.composer_text(), "queued draft");
-    assert!(chat.has_active_view(), "expected /review popup to open");
+    assert_eq!(chat.bottom_pane.composer_text(), "queued draft\n/review");
+    assert!(
+        !chat.has_active_view(),
+        "expected interrupt restore to keep queued slash drafts in the composer"
+    );
     assert!(chat.queued_user_messages.is_empty());
     assert!(
         op_rx.try_recv().is_err(),
-        "unexpected outbound op after bare /review interrupt replay"
+        "unexpected outbound op after interrupt restore"
     );
 
     let _ = drain_insert_history(&mut rx);
 }
 
 #[tokio::test]
-async fn interrupt_replays_multiple_queued_slash_commands_in_order() {
+async fn interrupt_restores_multiple_queued_slash_commands_into_composer() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
     chat.bottom_pane.set_task_running(true);
@@ -9370,19 +9470,17 @@ async fn interrupt_replays_multiple_queued_slash_commands_in_order() {
         }),
     });
 
-    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(chat.bottom_pane.composer_text(), "/fast status\n/review");
     assert!(
-        inserted
-            .iter()
-            .any(|cell| lines_to_single_string(cell).contains("Fast mode is off.")),
-        "expected /fast status to run before /review popup"
+        !chat.has_active_view(),
+        "expected interrupt restore to keep slash drafts editable"
     );
-    assert!(chat.has_active_view(), "expected /review popup to open");
     assert!(chat.queued_user_messages.is_empty());
     assert!(
         op_rx.try_recv().is_err(),
-        "unexpected outbound op after slash-only interrupt replay"
+        "unexpected outbound op after slash-only interrupt restore"
     );
+    let _ = drain_insert_history(&mut rx);
 }
 
 #[tokio::test]
@@ -11374,20 +11472,14 @@ async fn enter_queues_user_messages_while_review_is_running() {
 }
 
 #[tokio::test]
-async fn review_slash_command_queues_while_task_running() {
+async fn review_slash_command_opens_popup_while_task_running() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
 
     chat.dispatch_command(SlashCommand::Review);
 
-    assert_eq!(
-        chat.queued_user_message_texts(),
-        vec!["/review".to_string()]
-    );
-    assert!(
-        !chat.has_active_view(),
-        "expected /review to queue instead of opening a popup"
-    );
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.has_active_view(), "expected /review popup to open");
     assert!(drain_insert_history(&mut rx).is_empty());
 }
 
@@ -11469,6 +11561,48 @@ async fn queued_review_selection_replays_after_turn_complete() {
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected queued /review branch op"),
             Err(TryRecvError::Disconnected) => panic!("expected queued /review branch op"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn queued_commit_review_selection_preserves_title_after_turn_complete() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    chat.handle_serialized_slash_command(ChatWidget::review_request_draft(&ReviewRequest {
+        target: ReviewTarget::Commit {
+            sha: "abc123".to_string(),
+            title: Some("Preserve commit subject".to_string()),
+        },
+        user_facing_hint: None,
+    }));
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["/review commit abc123 Preserve commit subject".to_string()]
+    );
+
+    chat.on_task_complete(None, false);
+
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::Review { review_request }) => {
+                assert_eq!(
+                    review_request,
+                    ReviewRequest {
+                        target: ReviewTarget::Commit {
+                            sha: "abc123".to_string(),
+                            title: Some("Preserve commit subject".to_string()),
+                        },
+                        user_facing_hint: None,
+                    }
+                );
+                break;
+            }
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected queued /review commit op"),
+            Err(TryRecvError::Disconnected) => panic!("expected queued /review commit op"),
         }
     }
 }
