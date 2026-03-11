@@ -134,6 +134,7 @@ pub fn merge_connectors_with_accessible(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::connectors::connector_install_url;
     use pretty_assertions::assert_eq;
 
     fn app(id: &str) -> AppInfo {

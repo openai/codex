@@ -11,15 +11,15 @@ use std::time::Instant;
 
 use anyhow::Context;
 use async_channel::unbounded;
-use codex_connectors::AllConnectorsCacheKey;
-use codex_connectors::DirectoryListResponse;
 pub use codex_app_server_protocol::AppBranding;
 pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
+use codex_connectors::AllConnectorsCacheKey;
+use codex_connectors::DirectoryListResponse;
 use codex_protocol::protocol::SandboxPolicy;
 use rmcp::model::ToolAnnotations;
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use tracing::warn;
 
 use crate::AuthManager;
@@ -124,6 +124,21 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
     let auth = auth_manager.auth().await;
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
     read_cached_accessible_connectors(&cache_key).map(filter_disallowed_connectors)
+}
+
+pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
+) {
+    if !config.features.enabled(Feature::Apps) {
+        return;
+    }
+
+    let cache_key = accessible_connectors_cache_key(config, auth);
+    let accessible_connectors =
+        filter_disallowed_connectors(accessible_connectors_from_mcp_tools(mcp_tools));
+    write_cached_accessible_connectors(cache_key, &accessible_connectors);
 }
 
 pub async fn list_accessible_connectors_from_mcp_tools_with_options(
@@ -861,15 +876,18 @@ fn format_connector_label(name: &str, _id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ConfigBuilder;
     use crate::config::types::AppConfig;
     use crate::config::types::AppToolConfig;
     use crate::config::types::AppToolsConfig;
     use crate::config::types::AppsDefaultConfig;
+    use crate::features::Feature;
     use crate::mcp_connection_manager::ToolInfo;
     use pretty_assertions::assert_eq;
     use rmcp::model::JsonObject;
     use rmcp::model::Tool;
     use std::sync::Arc;
+    use tempfile::tempdir;
 
     fn annotations(
         destructive_hint: Option<bool>,
@@ -963,6 +981,21 @@ mod tests {
         }
     }
 
+    fn with_accessible_connectors_cache_cleared<R>(f: impl FnOnce() -> R) -> R {
+        let previous = {
+            let mut cache_guard = ACCESSIBLE_CONNECTORS_CACHE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            cache_guard.take()
+        };
+        let result = f();
+        let mut cache_guard = ACCESSIBLE_CONNECTORS_CACHE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *cache_guard = previous;
+        result
+    }
+
     #[test]
     fn merge_connectors_replaces_plugin_placeholder_name_with_accessible_name() {
         let plugin = plugin_app_to_app_info(AppConnectorId("calendar".to_string()));
@@ -1043,6 +1076,62 @@ mod tests {
                 is_accessible: true,
                 is_enabled: true,
                 plugin_display_names: plugin_names(&["beta", "sample"]),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_installed_apps() {
+        let codex_home = tempdir().expect("tempdir should succeed");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config should load");
+        let _ = config.features.set_enabled(Feature::Apps, true);
+        let cache_key = accessible_connectors_cache_key(&config, None);
+        let tools = HashMap::from([
+            (
+                "mcp__codex_apps__calendar_list_events".to_string(),
+                codex_app_tool(
+                    "calendar_list_events",
+                    "calendar",
+                    Some("Google Calendar"),
+                    &["calendar-plugin"],
+                ),
+            ),
+            (
+                "mcp__codex_apps__openai_hidden".to_string(),
+                codex_app_tool(
+                    "openai_hidden",
+                    "connector_openai_hidden",
+                    Some("Hidden"),
+                    &[],
+                ),
+            ),
+        ]);
+
+        let cached = with_accessible_connectors_cache_cleared(|| {
+            refresh_accessible_connectors_cache_from_mcp_tools(&config, None, &tools);
+            read_cached_accessible_connectors(&cache_key).expect("cache should be populated")
+        });
+
+        assert_eq!(
+            cached,
+            vec![AppInfo {
+                id: "calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some(connector_install_url("Google Calendar", "calendar")),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: plugin_names(&["calendar-plugin"]),
             }]
         );
     }

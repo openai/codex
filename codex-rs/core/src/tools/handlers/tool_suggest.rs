@@ -119,7 +119,7 @@ impl ToolHandler for ToolSuggestHandler {
             ));
         }
 
-        let connector = match args.tool_type {
+        let (connector, auth) = match args.tool_type {
             ToolSuggestToolType::Connector => {
                 if args.action_type != ToolSuggestActionType::Install {
                     return Err(FunctionCallError::RespondToModel(
@@ -142,14 +142,16 @@ impl ToolHandler for ToolSuggestHandler {
                         ))
                     })?;
 
-                discoverable_connectors
+                let connector = discoverable_connectors
                     .into_iter()
                     .find(|connector| connector.id == args.tool_id)
                     .ok_or_else(|| {
                         FunctionCallError::RespondToModel(format!(
                             "tool_id must match one of the discoverable connectors exposed by {TOOL_SUGGEST_TOOL_NAME}"
                         ))
-                    })?
+                    })?;
+
+                (connector, auth)
             }
             ToolSuggestToolType::Plugin => {
                 return Err(FunctionCallError::RespondToModel(
@@ -182,6 +184,13 @@ impl ToolHandler for ToolSuggestHandler {
                 warn!(
                     "failed to refresh codex apps tools cache after tool suggestion for {}: {err:#}",
                     connector.id
+                );
+            } else {
+                let mcp_tools = manager.list_all_tools().await;
+                connectors::refresh_accessible_connectors_cache_from_mcp_tools(
+                    &turn.config,
+                    auth.as_ref(),
+                    &mcp_tools,
                 );
             }
         }

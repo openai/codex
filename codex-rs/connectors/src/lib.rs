@@ -182,8 +182,8 @@ where
     F: FnMut(String) -> Fut,
     Fut: Future<Output = anyhow::Result<DirectoryListResponse>>,
 {
-    let response = fetch_page("/connectors/directory/list_workspace?external_logos=true".to_string())
-        .await;
+    let response =
+        fetch_page("/connectors/directory/list_workspace?external_logos=true".to_string()).await;
     match response {
         Ok(response) => Ok(response
             .apps

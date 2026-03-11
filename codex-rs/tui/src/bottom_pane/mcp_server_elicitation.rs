@@ -58,11 +58,11 @@ const APPROVAL_META_KIND_TOOL_SUGGESTION: &str = "tool_suggestion";
 const APPROVAL_PERSIST_KEY: &str = "persist";
 const APPROVAL_PERSIST_SESSION_VALUE: &str = "session";
 const APPROVAL_PERSIST_ALWAYS_VALUE: &str = "always";
-const TOOL_SUGGEST_TOOL_TYPE_KEY: &str = "tool_type";
+const TOOL_TYPE_KEY: &str = "tool_type";
+const TOOL_ID_KEY: &str = "tool_id";
+const TOOL_NAME_KEY: &str = "tool_name";
 const TOOL_SUGGEST_SUGGEST_TYPE_KEY: &str = "suggest_type";
 const TOOL_SUGGEST_REASON_KEY: &str = "suggest_reason";
-const TOOL_SUGGEST_TOOL_ID_KEY: &str = "tool_id";
-const TOOL_SUGGEST_TOOL_NAME_KEY: &str = "tool_name";
 const TOOL_SUGGEST_INSTALL_URL_KEY: &str = "install_url";
 
 #[derive(Clone, PartialEq, Default)]
@@ -328,7 +328,7 @@ fn parse_tool_suggestion_request(meta: Option<&Value>) -> Option<ToolSuggestionR
         return None;
     }
 
-    let tool_type = match meta.get(TOOL_SUGGEST_TOOL_TYPE_KEY).and_then(Value::as_str) {
+    let tool_type = match meta.get(TOOL_TYPE_KEY).and_then(Value::as_str) {
         Some("connector") => ToolSuggestionToolType::Connector,
         Some("plugin") => ToolSuggestionToolType::Plugin,
         _ => return None,
@@ -349,14 +349,8 @@ fn parse_tool_suggestion_request(meta: Option<&Value>) -> Option<ToolSuggestionR
             .get(TOOL_SUGGEST_REASON_KEY)
             .and_then(Value::as_str)?
             .to_string(),
-        tool_id: meta
-            .get(TOOL_SUGGEST_TOOL_ID_KEY)
-            .and_then(Value::as_str)?
-            .to_string(),
-        tool_name: meta
-            .get(TOOL_SUGGEST_TOOL_NAME_KEY)
-            .and_then(Value::as_str)?
-            .to_string(),
+        tool_id: meta.get(TOOL_ID_KEY).and_then(Value::as_str)?.to_string(),
+        tool_name: meta.get(TOOL_NAME_KEY).and_then(Value::as_str)?.to_string(),
         install_url: meta
             .get(TOOL_SUGGEST_INSTALL_URL_KEY)
             .and_then(Value::as_str)?
