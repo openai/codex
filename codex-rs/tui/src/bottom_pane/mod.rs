@@ -420,11 +420,7 @@ impl BottomPane {
                 && self.is_task_running
                 && !self.composer.popup_active()
             {
-                if let Some(status) = &self.status {
-                    status.interrupt();
-                } else {
-                    self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
-                }
+                self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
                 self.request_redraw();
                 return InputResult::None;
             }
@@ -708,7 +704,6 @@ impl BottomPane {
             if !was_running {
                 if self.status.is_none() {
                     self.status = Some(StatusIndicatorWidget::new(
-                        self.app_event_tx.clone(),
                         self.frame_requester.clone(),
                         self.animations_enabled,
                     ));
@@ -735,7 +730,6 @@ impl BottomPane {
     pub(crate) fn ensure_status_indicator(&mut self) {
         if self.status.is_none() {
             self.status = Some(StatusIndicatorWidget::new(
-                self.app_event_tx.clone(),
                 self.frame_requester.clone(),
                 self.animations_enabled,
             ));
