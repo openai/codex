@@ -58,7 +58,7 @@ fn unified_exec_output_schema() -> JsonValue {
                 "description": "Process exit code when the command finished during this call."
             },
             "session_id": {
-                "type": "string",
+                "type": "number",
                 "description": "Session identifier to pass to write_stdin when the process is still running."
             },
             "original_token_count": {

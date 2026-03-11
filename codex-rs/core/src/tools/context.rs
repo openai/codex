@@ -159,7 +159,7 @@ pub struct ExecCommandToolOutput {
     /// Raw bytes returned for this unified exec call before any truncation.
     pub raw_output: Vec<u8>,
     pub max_output_tokens: Option<usize>,
-    pub process_id: Option<String>,
+    pub process_id: Option<i32>,
     pub exit_code: Option<i32>,
     pub original_token_count: Option<usize>,
     pub session_command: Option<Vec<String>>,
@@ -194,7 +194,7 @@ impl ToolOutput for ExecCommandToolOutput {
             #[serde(skip_serializing_if = "Option::is_none")]
             exit_code: Option<i32>,
             #[serde(skip_serializing_if = "Option::is_none")]
-            session_id: Option<String>,
+            session_id: Option<i32>,
             #[serde(skip_serializing_if = "Option::is_none")]
             original_token_count: Option<usize>,
             output: String,
@@ -204,7 +204,7 @@ impl ToolOutput for ExecCommandToolOutput {
             chunk_id: (!self.chunk_id.is_empty()).then(|| self.chunk_id.clone()),
             wall_time_seconds: self.wall_time.as_secs_f64(),
             exit_code: self.exit_code,
-            session_id: self.process_id.clone(),
+            session_id: self.process_id,
             original_token_count: self.original_token_count,
             output: self.truncated_output(),
         };
@@ -593,5 +593,33 @@ mod tests {
             }
             other => panic!("expected FunctionCallOutput, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn exec_command_tool_output_code_mode_result_serializes_numeric_session_id() {
+        let result = ExecCommandToolOutput {
+            event_call_id: "call-42".to_string(),
+            chunk_id: "abc123".to_string(),
+            wall_time: std::time::Duration::from_millis(1250),
+            raw_output: b"hello".to_vec(),
+            max_output_tokens: None,
+            process_id: Some(1000),
+            exit_code: None,
+            original_token_count: None,
+            session_command: None,
+        }
+        .code_mode_result(&ToolPayload::Function {
+            arguments: "{}".to_string(),
+        });
+
+        assert_eq!(
+            result,
+            serde_json::json!({
+                "chunk_id": "abc123",
+                "wall_time_seconds": 1.25,
+                "session_id": 1000,
+                "output": "hello",
+            })
+        );
     }
 }
