@@ -17,6 +17,7 @@ use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermis
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
+use codex_app_server_protocol::AutoApprovalReviewStartedNotification;
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
 use codex_app_server_protocol::CollabAgentState as V2CollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool;
@@ -48,7 +49,6 @@ use codex_app_server_protocol::HookStartedNotification;
 use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
-use codex_app_server_protocol::ItemUpdatedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
@@ -317,33 +317,16 @@ pub(crate) async fn apply_bespoke_event_handling(
                 };
                 match assessment.status {
                     codex_protocol::protocol::GuardianAssessmentStatus::InProgress => {
-                        let first_start = {
-                            let mut state = thread_state.lock().await;
-                            mark_item_started(&mut state.turn_summary, &item)
+                        let notification = AutoApprovalReviewStartedNotification {
+                            item,
+                            thread_id: conversation_id.to_string(),
+                            turn_id,
                         };
-                        if first_start {
-                            let notification = ItemStartedNotification {
-                                item,
-                                thread_id: conversation_id.to_string(),
-                                turn_id,
-                            };
-                            outgoing
-                                .send_server_notification(ServerNotification::ItemStarted(
-                                    notification,
-                                ))
-                                .await;
-                        } else {
-                            let notification = ItemUpdatedNotification {
-                                item,
-                                thread_id: conversation_id.to_string(),
-                                turn_id,
-                            };
-                            outgoing
-                                .send_server_notification(ServerNotification::ItemUpdated(
-                                    notification,
-                                ))
-                                .await;
-                        }
+                        outgoing
+                            .send_server_notification(
+                                ServerNotification::AutoApprovalReviewStarted(notification),
+                            )
+                            .await;
                     }
                     codex_protocol::protocol::GuardianAssessmentStatus::Approved
                     | codex_protocol::protocol::GuardianAssessmentStatus::Denied => {
@@ -360,17 +343,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                             };
                             outgoing
                                 .send_server_notification(ServerNotification::ItemCompleted(
-                                    notification,
-                                ))
-                                .await;
-                        } else {
-                            let notification = ItemUpdatedNotification {
-                                item,
-                                thread_id: conversation_id.to_string(),
-                                turn_id,
-                            };
-                            outgoing
-                                .send_server_notification(ServerNotification::ItemUpdated(
                                     notification,
                                 ))
                                 .await;
@@ -718,22 +690,6 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::RequestUserInput(request) => {
             if matches!(api_version, ApiVersion::V2) {
-                if let Some(item) = item_snapshot(
-                    &thread_state,
-                    Some(request.turn_id.as_str()),
-                    &request.call_id,
-                )
-                .await
-                {
-                    let notification = ItemUpdatedNotification {
-                        thread_id: conversation_id.to_string(),
-                        turn_id: request.turn_id.clone(),
-                        item,
-                    };
-                    outgoing
-                        .send_server_notification(ServerNotification::ItemUpdated(notification))
-                        .await;
-                }
                 let user_input_guard = thread_watch_manager
                     .note_user_input_requested(&conversation_id.to_string())
                     .await;
@@ -812,19 +768,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let call_id = request_id
                     .strip_prefix("mcp_tool_call_approval_")
                     .map(str::to_string);
-                if let Some(call_id) = call_id.as_deref()
-                    && let Some(item) =
-                        item_snapshot(&thread_state, turn_id.as_deref(), call_id).await
-                {
-                    let notification = ItemUpdatedNotification {
-                        thread_id: conversation_id.to_string(),
-                        turn_id: turn_id.clone().unwrap_or_else(|| event_turn_id.clone()),
-                        item,
-                    };
-                    outgoing
-                        .send_server_notification(ServerNotification::ItemUpdated(notification))
-                        .await;
-                }
                 let server_name = request.server_name.clone();
                 let request_body = match request.request.try_into() {
                     Ok(request_body) => request_body,
@@ -3329,9 +3272,9 @@ mod tests {
 
         let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
-            OutgoingMessage::AppServerNotification(ServerNotification::ItemStarted(
-                notification,
-            )) => {
+            OutgoingMessage::AppServerNotification(
+                ServerNotification::AutoApprovalReviewStarted(notification),
+            ) => {
                 assert_eq!(notification.thread_id, conversation_id.to_string());
                 assert_eq!(notification.turn_id, event_turn_id);
                 assert_eq!(

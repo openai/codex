@@ -7830,20 +7830,20 @@
           "properties": {
             "method": {
               "enum": [
-                "item/updated"
+                "item/autoApprovalReviewStarted"
               ],
-              "title": "Item/updatedNotificationMethod",
+              "title": "Item/autoApprovalReviewStartedNotificationMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/v2/ItemUpdatedNotification"
+              "$ref": "#/definitions/v2/AutoApprovalReviewStartedNotification"
             }
           },
           "required": [
             "method",
             "params"
           ],
-          "title": "Item/updatedNotification",
+          "title": "Item/autoApprovalReviewStartedNotification",
           "type": "object"
         },
         {
@@ -9822,6 +9822,27 @@
             "type": "string"
           }
         ]
+      },
+      "AutoApprovalReviewStartedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "item": {
+            "$ref": "#/definitions/v2/ThreadItem"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "threadId",
+          "turnId"
+        ],
+        "title": "AutoApprovalReviewStartedNotification",
+        "type": "object"
       },
       "AutomaticApprovalReview": {
         "properties": {
@@ -12591,27 +12612,6 @@
           "turnId"
         ],
         "title": "ItemStartedNotification",
-        "type": "object"
-      },
-      "ItemUpdatedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "item": {
-            "$ref": "#/definitions/v2/ThreadItem"
-          },
-          "threadId": {
-            "type": "string"
-          },
-          "turnId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "item",
-          "threadId",
-          "turnId"
-        ],
-        "title": "ItemUpdatedNotification",
         "type": "object"
       },
       "ListMcpServerStatusParams": {

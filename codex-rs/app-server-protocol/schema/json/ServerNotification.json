@@ -381,6 +381,25 @@
         }
       ]
     },
+    "AutoApprovalReviewStartedNotification": {
+      "properties": {
+        "item": {
+          "$ref": "#/definitions/ThreadItem"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
     "AutomaticApprovalReview": {
       "properties": {
         "rationale": {
@@ -1361,25 +1380,6 @@
       "type": "object"
     },
     "ItemStartedNotification": {
-      "properties": {
-        "item": {
-          "$ref": "#/definitions/ThreadItem"
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "turnId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "item",
-        "threadId",
-        "turnId"
-      ],
-      "type": "object"
-    },
-    "ItemUpdatedNotification": {
       "properties": {
         "item": {
           "$ref": "#/definitions/ThreadItem"
@@ -3875,20 +3875,20 @@
       "properties": {
         "method": {
           "enum": [
-            "item/updated"
+            "item/autoApprovalReviewStarted"
           ],
-          "title": "Item/updatedNotificationMethod",
+          "title": "Item/autoApprovalReviewStartedNotificationMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/ItemUpdatedNotification"
+          "$ref": "#/definitions/AutoApprovalReviewStartedNotification"
         }
       },
       "required": [
         "method",
         "params"
       ],
-      "title": "Item/updatedNotification",
+      "title": "Item/autoApprovalReviewStartedNotification",
       "type": "object"
     },
     {

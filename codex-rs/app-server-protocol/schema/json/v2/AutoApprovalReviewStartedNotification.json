@@ -1351,6 +1351,6 @@
     "threadId",
     "turnId"
   ],
-  "title": "ItemUpdatedNotification",
+  "title": "AutoApprovalReviewStartedNotification",
   "type": "object"
 }

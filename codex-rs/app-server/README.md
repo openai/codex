@@ -848,7 +848,7 @@ All items emit shared lifecycle events:
 
 - `item/started` — emits the full `item` when a new unit of work begins so the UI can render it immediately; the `item.id` in this payload matches the `itemId` used by deltas.
 - `item/completed` — sends the final `item` once that work finishes (e.g., after a tool call or message completes); treat this as the authoritative state.
-- `item/updated` — sends the latest full `item` when an existing item's approval state changes (for example, manual approval pending, automatic review pending, or approval resolution).
+- `item/autoApprovalReviewStarted` — sent when an automatic approval review begins for an item, with the latest full `item` snapshot.
 
 There are additional item-specific events:
 
