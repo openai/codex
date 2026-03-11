@@ -499,9 +499,11 @@ async fn spawn_agent_tool_description_mentions_role_locked_settings() -> Result<
     let spawn_description =
         tool_description(&request, "spawn_agent").expect("spawn_agent description");
     let custom_role_entry = spawn_description
-        .split("\n}\n")
-        .find(|entry| entry.starts_with("custom: {\n"))
-        .map(|entry| format!("{entry}\n}}"))
+        .split_once("custom: {\n")
+        .and_then(|(_, rest)| {
+            rest.split_once("\ndefault: {")
+                .map(|(custom_entry, _)| format!("custom: {{\n{custom_entry}"))
+        })
         .expect("custom role entry");
     assert_eq!(
         custom_role_entry,
