@@ -1,0 +1,23 @@
+INFO: Streaming build results to: https://app.buildbuddy.io/invocation/demo-build-failure
+[5,509 / 5,513] 99 / 101 tests, 1 failed; Compiling Rust bin core-unit-tests-bin (218 files); 191s local, disk-cache ... (2 actions running)
+ERROR: /home/runner/work/codex/codex/codex-rs/core/BUILD.bazel:12:17: Compiling Rust bin core-unit-tests-bin (218 files) failed: (Exit 1): process_wrapper failed: error executing Rustc command (from rust_test rule target //codex-rs/core:core-unit-tests-bin) bazel-out/local_linux-opt-exec/bin/external/rules_rs++rules_rust+rules_rust/util/process_wrapper/process_wrapper --arg-file ... (remaining 132 arguments skipped)
+error: couldn't read `codex-rs/core/templates/memories/consolidation.md`: No such file or directory (os error 2)
+  --> core/src/memories/prompts.rs:15:10
+   |
+15 | #[derive(Template)]
+   |          ^^^^^^^^
+
+error: couldn't read `codex-rs/core/templates/memories/stage_one_input.md`: No such file or directory (os error 2)
+  --> core/src/memories/prompts.rs:22:10
+   |
+22 | #[derive(Template)]
+   |          ^^^^^^^^
+
+error: couldn't read `codex-rs/core/templates/memories/read_path.md`: No such file or directory (os error 2)
+  --> core/src/memories/prompts.rs:30:10
+   |
+30 | #[derive(Template)]
+   |          ^^^^^^^^
+
+error: aborting due to 3 previous errors
+ERROR: Build did NOT complete successfully

@@ -1,0 +1,3 @@
+INFO: Streaming build results to: https://app.buildbuddy.io/invocation/demo-test-failure
+FAIL: //codex-rs/linux-sandbox:linux-sandbox-all-test (Exit 101) (see bazel-out/local_linux-fastbuild/testlogs/codex-rs/linux-sandbox/linux-sandbox-all-test/test.log)
+INFO: Build completed, 1 test FAILED, 5512 total actions

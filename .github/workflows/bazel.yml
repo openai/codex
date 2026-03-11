@@ -16,6 +16,26 @@ concurrency:
   group: concurrency-group::${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}${{ github.ref_name == 'main' && format('::{0}', github.run_id) || ''}}
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 jobs:
+  summary-demo:
+    runs-on: ubuntu-24.04
+    name: Bazel summary demo
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Show build failure summary demo
+        shell: bash
+        run: |
+          bash .github/scripts/print-bazel-failure-summary.sh \
+            .github/testdata/bazel-summary/console-build-failure.log \
+            .github/testdata/bazel-summary/testlogs
+
+      - name: Show test failure summary demo
+        shell: bash
+        run: |
+          bash .github/scripts/print-bazel-failure-summary.sh \
+            .github/testdata/bazel-summary/console-test-failure.log \
+            .github/testdata/bazel-summary/testlogs
+
   test:
     strategy:
       fail-fast: false
@@ -119,44 +139,23 @@ jobs:
 
           bazel_console_log="$(mktemp)"
 
-          print_failed_bazel_test_logs() {
-            local console_log="$1"
-            local testlogs_dir
+          run_bazel_and_capture() {
+            "$@" >"$bazel_console_log" 2>&1 &
+            local bazel_pid=$!
 
-            testlogs_dir="$(bazel $BAZEL_STARTUP_ARGS info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
-
-            local failed_targets=()
-            while IFS= read -r target; do
-              failed_targets+=("$target")
-            done < <(
-              grep -E '^FAIL: //' "$console_log" \
-                | sed -E 's#^FAIL: (//[^ ]+).*#\1#' \
-                | sort -u
-            )
-
-            if [[ ${#failed_targets[@]} -eq 0 ]]; then
-              echo "No failed Bazel test targets were found in console output."
-              return
-            fi
-
-            for target in "${failed_targets[@]}"; do
-              local rel_path="${target#//}"
-              rel_path="${rel_path/:/\/}"
-              local test_log="${testlogs_dir}/${rel_path}/test.log"
-
-              echo "::group::Bazel test log tail for ${target}"
-              if [[ -f "$test_log" ]]; then
-                tail -n 200 "$test_log"
-              else
-                echo "Missing test log: $test_log"
-              fi
-              echo "::endgroup::"
+            while kill -0 "$bazel_pid" 2>/dev/null; do
+              echo "Bazel still running; raw output is being captured for focused summarization..."
+              sleep 60
             done
+
+            wait "$bazel_pid"
           }
 
           bazel_args=(
             test
             //...
+            --test_summary=terse
+            --noverbose_test_summary
             --test_verbose_timeout_warnings
             --build_metadata=REPO_URL=https://github.com/openai/codex.git
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
@@ -178,13 +177,12 @@ jobs:
             # materializing external repos such as rules_perl). We still use BuildBuddy for
             # remote execution/cache; this only disables the startup-level repo contents cache.
             set +e
-            bazel $BAZEL_STARTUP_ARGS \
+            run_bazel_and_capture bazel $BAZEL_STARTUP_ARGS \
               --noexperimental_remote_repo_contents_cache \
               --bazelrc=.github/workflows/ci.bazelrc \
               "${bazel_args[@]}" \
-              "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" \
-              2>&1 | tee "$bazel_console_log"
-            bazel_status=${PIPESTATUS[0]}
+              "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY"
+            bazel_status=$?
             set -e
           else
             echo "BuildBuddy API key is not available; using local Bazel configuration."
@@ -205,17 +203,17 @@ jobs:
             #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_cache
             #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_executor
             set +e
-            bazel $BAZEL_STARTUP_ARGS \
+            run_bazel_and_capture bazel $BAZEL_STARTUP_ARGS \
               --noexperimental_remote_repo_contents_cache \
               "${bazel_args[@]}" \
               --remote_cache= \
-              --remote_executor= \
-              2>&1 | tee "$bazel_console_log"
-            bazel_status=${PIPESTATUS[0]}
+              --remote_executor=
+            bazel_status=$?
             set -e
           fi
 
           if [[ ${bazel_status:-0} -ne 0 ]]; then
-            print_failed_bazel_test_logs "$bazel_console_log"
+            bazel_testlogs_dir="$(bazel $BAZEL_STARTUP_ARGS info bazel-testlogs 2>/dev/null || echo bazel-testlogs)"
+            bash .github/scripts/print-bazel-failure-summary.sh "$bazel_console_log" "$bazel_testlogs_dir"
             exit "$bazel_status"
           fi
