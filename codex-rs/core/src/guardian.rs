@@ -1022,39 +1022,12 @@ fn guardian_assessment_action_value(action: &GuardianApprovalRequest) -> Value {
         GuardianApprovalRequest::ApplyPatch {
             cwd,
             files,
-            changes,
             change_count,
             ..
         } => serde_json::json!({
             "tool": "apply_patch",
             "cwd": cwd,
             "files": files,
-            "changes": changes
-                .iter()
-                .map(|(path, change)| match change {
-                    codex_protocol::protocol::FileChange::Add { content } => serde_json::json!({
-                        "path": path,
-                        "kind": "add",
-                        "diff": content,
-                    }),
-                    codex_protocol::protocol::FileChange::Delete { content } => {
-                        serde_json::json!({
-                            "path": path,
-                            "kind": "delete",
-                            "diff": content,
-                        })
-                    }
-                    codex_protocol::protocol::FileChange::Update {
-                        unified_diff,
-                        move_path,
-                    } => serde_json::json!({
-                        "path": path,
-                        "kind": "update",
-                        "diff": unified_diff,
-                        "move_path": move_path,
-                    }),
-                })
-                .collect::<Vec<_>>(),
             "change_count": change_count,
         }),
         GuardianApprovalRequest::NetworkAccess {
@@ -1072,15 +1045,11 @@ fn guardian_assessment_action_value(action: &GuardianApprovalRequest) -> Value {
             "port": port,
         }),
         GuardianApprovalRequest::McpToolCall {
-            server,
-            tool_name,
-            arguments,
-            ..
+            server, tool_name, ..
         } => serde_json::json!({
             "tool": "mcp_tool_call",
             "server": server,
             "tool_name": tool_name,
-            "arguments": arguments,
         }),
     }
 }

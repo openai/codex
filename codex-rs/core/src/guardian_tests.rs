@@ -255,7 +255,6 @@ fn guardian_assessment_action_value_redacts_apply_patch_patch_text() {
             "tool": "apply_patch",
             "cwd": "/tmp",
             "files": ["/tmp/guardian.txt"],
-            "changes": [],
             "change_count": 1,
         })
     );

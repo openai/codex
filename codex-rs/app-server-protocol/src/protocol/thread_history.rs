@@ -1652,27 +1652,39 @@ fn guardian_action_command(action: &serde_json::Value) -> Option<String> {
 }
 
 fn guardian_action_changes(action: &serde_json::Value) -> Vec<FileUpdateChange> {
+    if let Some(changes) = action.get("changes").and_then(serde_json::Value::as_array) {
+        return changes
+            .iter()
+            .filter_map(|change| {
+                let path = change.get("path")?.as_str()?.to_string();
+                let diff = change.get("diff")?.as_str()?.to_string();
+                let kind = match change.get("kind")?.as_str()? {
+                    "add" => PatchChangeKind::Add,
+                    "delete" => PatchChangeKind::Delete,
+                    "update" => PatchChangeKind::Update {
+                        move_path: change
+                            .get("move_path")
+                            .and_then(serde_json::Value::as_str)
+                            .map(PathBuf::from),
+                    },
+                    _ => return None,
+                };
+                Some(FileUpdateChange { path, kind, diff })
+            })
+            .collect();
+    }
+
     action
-        .get("changes")
+        .get("files")
         .and_then(serde_json::Value::as_array)
-        .map(|changes| {
-            changes
+        .map(|files| {
+            files
                 .iter()
-                .filter_map(|change| {
-                    let path = change.get("path")?.as_str()?.to_string();
-                    let diff = change.get("diff")?.as_str()?.to_string();
-                    let kind = match change.get("kind")?.as_str()? {
-                        "add" => PatchChangeKind::Add,
-                        "delete" => PatchChangeKind::Delete,
-                        "update" => PatchChangeKind::Update {
-                            move_path: change
-                                .get("move_path")
-                                .and_then(serde_json::Value::as_str)
-                                .map(PathBuf::from),
-                        },
-                        _ => return None,
-                    };
-                    Some(FileUpdateChange { path, kind, diff })
+                .filter_map(serde_json::Value::as_str)
+                .map(|path| FileUpdateChange {
+                    path: path.to_string(),
+                    kind: PatchChangeKind::Update { move_path: None },
+                    diff: String::new(),
                 })
                 .collect()
         })
