@@ -179,6 +179,11 @@ def main() -> int:
         print("\nFile(s) exceed the configured limit:")
         for blob in violations:
             print(f"- {blob.path}: {blob.size_bytes} bytes > {args.max_bytes} bytes")
+        print(
+            "\nIf one of these is a real checked-in asset we want to keep, add its "
+            "repo-relative path to .github/blob-size-allowlist.txt. Otherwise, "
+            "shrink it or keep it out of git."
+        )
         return 1
 
     return 0
