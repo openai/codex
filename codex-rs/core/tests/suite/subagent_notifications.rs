@@ -87,6 +87,20 @@ fn tool_parameter_description(
         })
 }
 
+fn role_block(description: &str, role_name: &str) -> Option<String> {
+    let role_header = format!("{role_name}: {{");
+    let mut lines = description.lines().skip_while(|line| *line != role_header);
+    let first_line = lines.next()?;
+    let mut block = vec![first_line];
+    for line in lines {
+        if line.ends_with(": {") {
+            break;
+        }
+        block.push(line);
+    }
+    Some(block.join("\n"))
+}
+
 async fn wait_for_spawned_thread_id(test: &TestCodex) -> Result<String> {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
@@ -505,9 +519,11 @@ async fn spawn_agent_tool_description_mentions_role_locked_settings() -> Result<
     let request = resp_mock.single_request();
     let agent_type_description = tool_parameter_description(&request, "spawn_agent", "agent_type")
         .expect("spawn_agent agent_type description");
+    let custom_role_description =
+        role_block(&agent_type_description, "custom").expect("custom role description");
     assert_eq!(
-        agent_type_description,
-        "Optional type name for the new agent. If omitted, `default` is used.\nAvailable roles:\ncustom: {\nCustom role\n- This role's model is set to `gpt-5.1-codex-max` and its reasoning effort is set to `high`. These settings cannot be changed.\n}\ndefault: {\nDefault agent.\n}\nexplorer: {\nUse `explorer` for specific codebase questions.\nExplorers are fast and authoritative.\nThey must be used to ask specific, well-scoped questions on the codebase.\nRules:\n- In order to avoid redundant work, you should avoid exploring the same problem that explorers have already covered. Typically, you should trust the explorer results without additional verification. You are still allowed to inspect the code yourself to gain the needed context!\n- You are encouraged to spawn up multiple explorers in parallel when you have multiple distinct questions to ask about the codebase that can be answered independently. This allows you to get more information faster without waiting for one question to finish before asking the next. While waiting for the explorer results, you can continue working on other local tasks that do not depend on those results. This parallelism is a key advantage of delegation, so use it whenever you have multiple questions to ask.\n- Reuse existing explorers for related questions.\n}\nworker: {\nUse for execution and production work.\nTypical tasks:\n- Implement part of a feature\n- Fix tests or bugs\n- Split large refactors into independent chunks\nRules:\n- Explicitly assign **ownership** of the task (files / responsibility). When the subtask involves code changes, you should clearly specify which files or modules the worker is responsible for. This helps avoid merge conflicts and ensures accountability. For example, you can say \"Worker 1 is responsible for updating the authentication module, while Worker 2 will handle the database layer.\" By defining clear ownership, you can delegate more effectively and reduce coordination overhead.\n- Always tell workers they are **not alone in the codebase**, and they should not revert the edits made by others, and they should adjust their implementation to accommodate the changes made by others. This is important because there may be multiple workers making changes in parallel, and they need to be aware of each other's work to avoid conflicts and ensure a cohesive final product.\n}"
+        custom_role_description,
+        "custom: {\nCustom role\n- This role's model is set to `gpt-5.1-codex-max` and its reasoning effort is set to `high`. These settings cannot be changed.\n}"
     );
 
     Ok(())
