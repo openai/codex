@@ -31,6 +31,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -216,7 +217,6 @@ fn queued_message_edit_binding_for_terminal(terminal_name: TerminalName) -> KeyB
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
-use crate::app_event::ModelSelectionScope;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -239,6 +239,7 @@ use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
+use crate::bottom_pane::parse_slash_name;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::clipboard_text;
@@ -727,8 +728,10 @@ pub(crate) struct ChatWidget {
     // When resuming an existing session (selected via resume picker), avoid an
     // immediate redraw on SessionConfigured to prevent a gratuitous UI flicker.
     suppress_session_configured_redraw: bool,
-    // User messages or slash-command actions queued while a turn is in progress.
-    queued_user_messages: VecDeque<QueuedInput>,
+    // User messages queued while a turn is in progress. Some entries are serialized slash-command
+    // drafts and are replayed through the slash-command evaluator instead of being submitted
+    // directly as user turns.
+    queued_user_messages: VecDeque<UserMessage>,
     // Steers already submitted to core but not yet committed into history.
     //
     // The bottom pane shows these above queued drafts until core records the
@@ -868,80 +871,24 @@ impl ThreadComposerState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-enum QueuedInput {
-    UserMessage(UserMessage),
-    SlashCommand(QueuedSlashCommand),
-}
-
-impl QueuedInput {
-    fn preview_text(&self) -> String {
-        match self {
-            Self::UserMessage(message) => message.text.clone(),
-            Self::SlashCommand(command) => command.preview_text(),
-        }
-    }
-
-    fn into_restorable_user_message(self) -> UserMessage {
-        match self {
-            Self::UserMessage(message) => message,
-            Self::SlashCommand(command) => command.into_restorable_user_message(),
-        }
-    }
-}
-
-impl From<UserMessage> for QueuedInput {
-    fn from(message: UserMessage) -> Self {
-        Self::UserMessage(message)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct QueuedSlashCommand {
-    draft: UserMessage,
-    action: QueuedSlashCommandAction,
-}
-
-impl QueuedSlashCommand {
-    fn preview_text(&self) -> String {
-        self.draft.text.clone()
-    }
-
-    fn into_restorable_user_message(self) -> UserMessage {
-        self.draft
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum QueuedSlashCommandAction {
-    Command(SlashCommand),
-    Fast(QueuedFastCommandAction),
-    ModelSelection(QueuedModelSelection),
-    Plan(UserMessage),
-    Rename(String),
-    Review(ReviewRequest),
-    SandboxReadRoot(String),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct QueuedModelSelection {
-    model: String,
-    effort: Option<ReasoningEffortConfig>,
-    scope: ModelSelectionScope,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueueReplayControl {
+    Continue,
+    Stop,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QueuedFastCommandAction {
-    On,
-    Off,
-    Status,
+enum ModelSelectionScope {
+    Global,
+    PlanOnly,
+    AllModes,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ThreadInputState {
     composer: Option<ThreadComposerState>,
     pending_steers: VecDeque<UserMessage>,
-    queued_user_messages: VecDeque<QueuedInput>,
+    queued_user_messages: VecDeque<UserMessage>,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     agent_turn_running: bool,
@@ -2312,7 +2259,7 @@ impl ChatWidget {
             || self
                 .queued_user_messages
                 .iter()
-                .any(|queued| matches!(queued, QueuedInput::UserMessage(_)));
+                .any(|queued| !Self::is_builtin_slash_draft(queued));
         if !has_existing_message && !has_pending_user_messages {
             return None;
         }
@@ -2323,12 +2270,11 @@ impl ChatWidget {
             .map(|steer| steer.user_message)
             .collect();
         let mut retained_queue = VecDeque::new();
-        for queued_input in self.queued_user_messages.drain(..) {
-            match queued_input {
-                QueuedInput::UserMessage(message) => to_merge.push(message),
-                QueuedInput::SlashCommand(command) => {
-                    retained_queue.push_back(QueuedInput::SlashCommand(command));
-                }
+        for queued_message in self.queued_user_messages.drain(..) {
+            if Self::is_builtin_slash_draft(&queued_message) {
+                retained_queue.push_back(queued_message);
+            } else {
+                to_merge.push(queued_message);
             }
         }
         self.queued_user_messages = retained_queue;
@@ -2413,11 +2359,7 @@ impl ChatWidget {
                 self.bottom_pane.set_composer_pending_pastes(Vec::new());
             }
             self.pending_steers.clear();
-            self.queued_user_messages = input_state
-                .pending_steers
-                .into_iter()
-                .map(QueuedInput::from)
-                .collect();
+            self.queued_user_messages = input_state.pending_steers;
             self.queued_user_messages
                 .extend(input_state.queued_user_messages);
         } else {
@@ -4217,8 +4159,8 @@ impl ChatWidget {
             && self.queued_message_edit_binding.is_press(key_event)
             && !self.queued_user_messages.is_empty()
         {
-            if let Some(queued_input) = self.queued_user_messages.pop_back() {
-                self.restore_user_message_to_composer(queued_input.into_restorable_user_message());
+            if let Some(queued_message) = self.queued_user_messages.pop_back() {
+                self.restore_user_message_to_composer(queued_message);
                 self.refresh_pending_input_preview();
                 self.request_redraw();
             }
@@ -4229,7 +4171,6 @@ impl ChatWidget {
             && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
             && self.bottom_pane.is_task_running()
             && self.bottom_pane.no_modal_or_popup_active()
-            && (!self.pending_steers.is_empty() || self.bottom_pane.composer_text().is_empty())
         {
             self.submit_pending_steers_after_interrupt = !self.pending_steers.is_empty();
             if !self.submit_op(Op::Interrupt) {
@@ -4390,24 +4331,10 @@ impl ChatWidget {
         false
     }
 
-    fn dispatch_command(&mut self, cmd: SlashCommand) {
+    fn dispatch_command(&mut self, cmd: SlashCommand) -> QueueReplayControl {
         if self.bottom_pane.is_task_running() && !cmd.available_during_task() {
-            match cmd {
-                SlashCommand::Model => {
-                    self.open_model_popup();
-                    return;
-                }
-                SlashCommand::Review => {
-                    self.open_review_popup();
-                    return;
-                }
-                _ => {}
-            }
-            self.queue_slash_command(QueuedSlashCommand {
-                draft: format!("/{}", cmd.command()).into(),
-                action: QueuedSlashCommandAction::Command(cmd),
-            });
-            return;
+            self.queue_user_message(format!("/{}", cmd.command()).into());
+            return QueueReplayControl::Stop;
         }
         match cmd {
             SlashCommand::Feedback => {
@@ -4415,25 +4342,30 @@ impl ChatWidget {
                     let params = crate::bottom_pane::feedback_disabled_params();
                     self.bottom_pane.show_selection_view(params);
                     self.request_redraw();
-                    return;
+                    return QueueReplayControl::Stop;
                 }
                 // Step 1: pick a category (UI built in feedback_view)
                 let params =
                     crate::bottom_pane::feedback_selection_params(self.app_event_tx.clone());
                 self.bottom_pane.show_selection_view(params);
                 self.request_redraw();
+                QueueReplayControl::Stop
             }
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
+                QueueReplayControl::Stop
             }
             SlashCommand::Clear => {
                 self.app_event_tx.send(AppEvent::ClearUi);
+                QueueReplayControl::Stop
             }
             SlashCommand::Resume => {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
+                QueueReplayControl::Stop
             }
             SlashCommand::Fork => {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
+                QueueReplayControl::Stop
             }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
@@ -4442,25 +4374,30 @@ impl ChatWidget {
                         "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
                     );
                     self.add_info_message(message, None);
-                    return;
+                    return QueueReplayControl::Stop;
                 }
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
                 self.submit_user_message(INIT_PROMPT.to_string().into());
+                QueueReplayControl::Stop
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
                 self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
+                QueueReplayControl::Stop
             }
             SlashCommand::Review => {
                 self.open_review_popup();
+                QueueReplayControl::Stop
             }
             SlashCommand::Rename => {
                 self.session_telemetry
                     .counter("codex.thread.rename", 1, &[]);
                 self.show_rename_prompt();
+                QueueReplayControl::Stop
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+                QueueReplayControl::Stop
             }
             SlashCommand::Fast => {
                 let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
@@ -4469,25 +4406,29 @@ impl ChatWidget {
                     Some(ServiceTier::Fast)
                 };
                 self.set_service_tier_selection(next_tier);
+                QueueReplayControl::Continue
             }
             SlashCommand::Realtime => {
                 if !self.realtime_conversation_enabled() {
-                    return;
+                    return QueueReplayControl::Stop;
                 }
                 if self.realtime_conversation.is_live() {
                     self.request_realtime_conversation_close(None);
                 } else {
                     self.start_realtime_conversation();
                 }
+                QueueReplayControl::Stop
             }
             SlashCommand::Settings => {
                 if !self.realtime_audio_device_selection_enabled() {
-                    return;
+                    return QueueReplayControl::Stop;
                 }
                 self.open_realtime_audio_popup();
+                QueueReplayControl::Stop
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();
+                QueueReplayControl::Stop
             }
             SlashCommand::Plan => {
                 if !self.collaboration_modes_enabled() {
@@ -4495,12 +4436,14 @@ impl ChatWidget {
                         "Collaboration modes are disabled.".to_string(),
                         Some("Enable collaboration modes to use /plan.".to_string()),
                     );
-                    return;
+                    return QueueReplayControl::Stop;
                 }
                 if let Some(mask) = collaboration_modes::plan_mask(self.models_manager.as_ref()) {
                     self.set_collaboration_mask(mask);
+                    QueueReplayControl::Continue
                 } else {
                     self.add_info_message("Plan mode unavailable right now.".to_string(), None);
+                    QueueReplayControl::Stop
                 }
             }
             SlashCommand::Collab => {
@@ -4509,18 +4452,22 @@ impl ChatWidget {
                         "Collaboration modes are disabled.".to_string(),
                         Some("Enable collaboration modes to use /collab.".to_string()),
                     );
-                    return;
+                    return QueueReplayControl::Stop;
                 }
                 self.open_collaboration_modes_popup();
+                QueueReplayControl::Stop
             }
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
+                QueueReplayControl::Stop
             }
             SlashCommand::Approvals => {
                 self.open_permissions_popup();
+                QueueReplayControl::Stop
             }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
+                QueueReplayControl::Stop
             }
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
@@ -4533,7 +4480,7 @@ impl ChatWidget {
                     {
                         // This command should not be visible/recognized outside degraded mode,
                         // but guard anyway in case something dispatches it directly.
-                        return;
+                        return QueueReplayControl::Stop;
                     }
 
                     let Some(preset) = builtin_approval_presets()
@@ -4545,7 +4492,7 @@ impl ChatWidget {
                         self.add_error_message(
                             "Internal error: missing the 'auto' approval preset.".to_string(),
                         );
-                        return;
+                        return QueueReplayControl::Stop;
                     };
 
                     if let Err(err) = self
@@ -4555,7 +4502,7 @@ impl ChatWidget {
                         .can_set(&preset.approval)
                     {
                         self.add_error_message(err.to_string());
-                        return;
+                        return QueueReplayControl::Stop;
                     }
 
                     self.session_telemetry.counter(
@@ -4571,17 +4518,21 @@ impl ChatWidget {
                     let _ = &self.session_telemetry;
                     // Not supported; on non-Windows this command should never be reachable.
                 };
+                QueueReplayControl::Stop
             }
             SlashCommand::SandboxReadRoot => {
                 self.add_error_message(
                     "Usage: /sandbox-add-read-dir <absolute-directory-path>".to_string(),
                 );
+                QueueReplayControl::Stop
             }
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
+                QueueReplayControl::Stop
             }
             SlashCommand::Quit | SlashCommand::Exit => {
                 self.request_quit_without_confirmation();
+                QueueReplayControl::Stop
             }
             SlashCommand::Logout => {
                 if let Err(e) = codex_core::auth::logout(
@@ -4591,6 +4542,7 @@ impl ChatWidget {
                     tracing::error!("failed to logout: {e}");
                 }
                 self.request_quit_without_confirmation();
+                QueueReplayControl::Stop
             }
             // SlashCommand::Undo => {
             //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
@@ -4611,6 +4563,7 @@ impl ChatWidget {
                     };
                     tx.send(AppEvent::DiffResult(text));
                 });
+                QueueReplayControl::Continue
             }
             SlashCommand::Copy => {
                 let Some(text) = self.last_copyable_output.as_deref() else {
@@ -4619,7 +4572,7 @@ impl ChatWidget {
                             .to_string(),
                         None,
                     );
-                    return;
+                    return QueueReplayControl::Continue;
                 };
 
                 let copy_result = clipboard_text::copy_text_to_clipboard(text);
@@ -4639,42 +4592,55 @@ impl ChatWidget {
                         self.add_error_message(format!("Failed to copy to clipboard: {err}"))
                     }
                 }
+                QueueReplayControl::Continue
             }
             SlashCommand::Mention => {
                 self.insert_str("@");
+                QueueReplayControl::Stop
             }
             SlashCommand::Skills => {
                 self.open_skills_menu();
+                QueueReplayControl::Stop
             }
             SlashCommand::Status => {
                 self.add_status_output();
+                QueueReplayControl::Continue
             }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
+                QueueReplayControl::Continue
             }
             SlashCommand::Statusline => {
                 self.open_status_line_setup();
+                QueueReplayControl::Stop
             }
             SlashCommand::Theme => {
                 self.open_theme_picker();
+                QueueReplayControl::Stop
             }
             SlashCommand::Ps => {
                 self.add_ps_output();
+                QueueReplayControl::Continue
             }
             SlashCommand::Clean => {
                 self.clean_background_terminals();
+                QueueReplayControl::Continue
             }
             SlashCommand::MemoryDrop => {
                 self.submit_op(Op::DropMemories);
+                QueueReplayControl::Stop
             }
             SlashCommand::MemoryUpdate => {
                 self.submit_op(Op::UpdateMemories);
+                QueueReplayControl::Stop
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
+                QueueReplayControl::Continue
             }
             SlashCommand::Apps => {
                 self.add_connectors_output();
+                QueueReplayControl::Continue
             }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
@@ -4685,6 +4651,7 @@ impl ChatWidget {
                 } else {
                     self.add_info_message("Rollout path is not available yet.".to_string(), None);
                 }
+                QueueReplayControl::Continue
             }
             SlashCommand::TestApproval => {
                 use codex_protocol::protocol::EventMsg;
@@ -4723,6 +4690,7 @@ impl ChatWidget {
                         grant_root: Some(PathBuf::from("/tmp")),
                     }),
                 }));
+                QueueReplayControl::Stop
             }
         }
     }
@@ -4731,7 +4699,7 @@ impl ChatWidget {
         &mut self,
         cmd: SlashCommand,
         args: String,
-        _text_elements: Vec<TextElement>,
+        text_elements: Vec<TextElement>,
     ) {
         if !cmd.supports_inline_args() {
             self.dispatch_command(cmd);
@@ -4740,165 +4708,158 @@ impl ChatWidget {
 
         let trimmed = args.trim();
         let should_queue = self.bottom_pane.is_task_running() && !cmd.available_during_task();
-        match cmd {
-            SlashCommand::Fast => {
-                if trimmed.is_empty() {
-                    if should_queue {
-                        self.queue_current_inline_bare_slash_command(cmd);
-                    } else {
-                        self.dispatch_command(cmd);
-                    }
-                    return;
-                }
-                let action = match trimmed.to_ascii_lowercase().as_str() {
-                    "on" => QueuedFastCommandAction::On,
-                    "off" => QueuedFastCommandAction::Off,
-                    "status" => QueuedFastCommandAction::Status,
-                    _ => {
-                        self.add_error_message("Usage: /fast [on|off|status]".to_string());
-                        return;
-                    }
-                };
-                if should_queue {
-                    let Some((prepared_args, prepared_elements)) =
-                        self.bottom_pane.prepare_inline_args_submission(false)
-                    else {
-                        return;
-                    };
-                    let args_message = self
-                        .take_prepared_submission_user_message(prepared_args, prepared_elements);
-                    let draft = Self::queued_inline_slash_command_draft(cmd, args_message);
-                    self.queue_slash_command(QueuedSlashCommand {
-                        draft,
-                        action: QueuedSlashCommandAction::Fast(action),
-                    });
-                    return;
-                }
-                match action {
-                    QueuedFastCommandAction::On => {
-                        self.set_service_tier_selection(Some(ServiceTier::Fast))
-                    }
-                    QueuedFastCommandAction::Off => self.set_service_tier_selection(None),
-                    QueuedFastCommandAction::Status => {
-                        let status = if matches!(self.config.service_tier, Some(ServiceTier::Fast))
-                        {
-                            "on"
-                        } else {
-                            "off"
-                        };
-                        self.add_info_message(format!("Fast mode is {status}."), None);
-                    }
-                }
+        if trimmed.is_empty() {
+            if should_queue {
+                self.queue_current_inline_bare_slash_command(cmd);
+            } else {
+                self.dispatch_command(cmd);
             }
-            SlashCommand::Rename if !trimmed.is_empty() => {
+            return;
+        }
+
+        if matches!(cmd, SlashCommand::Plan) && !should_queue {
+            let draft = Self::inline_slash_command_draft(
+                cmd,
+                UserMessage {
+                    text: args,
+                    local_images: self.bottom_pane.composer_local_images(),
+                    remote_image_urls: self.bottom_pane.remote_image_urls(),
+                    text_elements,
+                    mention_bindings: self.bottom_pane.composer_mention_bindings(),
+                },
+            );
+            let pending_pastes = self.bottom_pane.composer_pending_pastes();
+            self.dispatch_command(cmd);
+            if self.active_mode_kind() != ModeKind::Plan {
+                self.restore_user_message_to_composer(draft);
+                self.bottom_pane.set_composer_pending_pastes(pending_pastes);
+                return;
+            }
+
+            let Some((prepared_args, prepared_elements)) =
+                self.bottom_pane.prepare_inline_args_submission(true)
+            else {
+                return;
+            };
+            let args_message =
+                self.take_prepared_submission_user_message(prepared_args, prepared_elements);
+            self.submit_plan_user_message(args_message);
+            return;
+        }
+
+        let record_history = matches!(cmd, SlashCommand::Plan);
+        let Some((prepared_args, prepared_elements)) = self
+            .bottom_pane
+            .prepare_inline_args_submission(record_history)
+        else {
+            return;
+        };
+        let args_message =
+            self.take_prepared_submission_user_message(prepared_args, prepared_elements);
+        if should_queue {
+            self.queue_user_message(Self::inline_slash_command_draft(cmd, args_message));
+            return;
+        }
+        let _ = self.execute_inline_slash_command(cmd, args_message);
+    }
+
+    fn execute_inline_slash_command(
+        &mut self,
+        cmd: SlashCommand,
+        args_message: UserMessage,
+    ) -> QueueReplayControl {
+        match cmd {
+            SlashCommand::Fast => match args_message.text.to_ascii_lowercase().as_str() {
+                "on" => {
+                    self.set_service_tier_selection(Some(ServiceTier::Fast));
+                    QueueReplayControl::Continue
+                }
+                "off" => {
+                    self.set_service_tier_selection(None);
+                    QueueReplayControl::Continue
+                }
+                "status" => {
+                    let status = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
+                        "on"
+                    } else {
+                        "off"
+                    };
+                    self.add_info_message(format!("Fast mode is {status}."), None);
+                    QueueReplayControl::Continue
+                }
+                _ => self.restore_invalid_inline_slash_command(
+                    cmd,
+                    args_message,
+                    "Usage: /fast [on|off|status]".to_string(),
+                ),
+            },
+            SlashCommand::Model => match Self::parse_model_selection_args(&args_message.text) {
+                Ok((model, effort, scope)) => {
+                    self.apply_model_selection(model, effort, scope);
+                    QueueReplayControl::Continue
+                }
+                Err(message) => {
+                    self.restore_invalid_inline_slash_command(cmd, args_message, message)
+                }
+            },
+            SlashCommand::Rename => {
                 self.session_telemetry
                     .counter("codex.thread.rename", 1, &[]);
-                let Some((prepared_args, prepared_elements)) =
-                    self.bottom_pane.prepare_inline_args_submission(false)
-                else {
-                    return;
+                let Some(name) = codex_core::util::normalize_thread_name(&args_message.text) else {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Thread name cannot be empty.".to_string(),
+                    );
                 };
-                let args_message = self.take_prepared_submission_user_message(
-                    prepared_args.clone(),
-                    prepared_elements,
-                );
-                let Some(name) = codex_core::util::normalize_thread_name(&prepared_args) else {
-                    self.add_error_message("Thread name cannot be empty.".to_string());
-                    return;
-                };
-                if should_queue {
-                    let draft = Self::queued_inline_slash_command_draft(cmd, args_message);
-                    self.queue_slash_command(QueuedSlashCommand {
-                        draft,
-                        action: QueuedSlashCommandAction::Rename(name),
-                    });
-                    return;
-                }
                 let cell = Self::rename_confirmation_cell(&name, self.thread_id);
                 self.add_boxed_history(Box::new(cell));
                 self.request_redraw();
                 self.app_event_tx
                     .send(AppEvent::CodexOp(Op::SetThreadName { name }));
+                QueueReplayControl::Continue
             }
-            SlashCommand::Plan if !trimmed.is_empty() => {
-                let Some((prepared_args, prepared_elements)) =
-                    self.bottom_pane.prepare_inline_args_submission(true)
-                else {
-                    return;
-                };
-                let user_message =
-                    self.take_prepared_submission_user_message(prepared_args, prepared_elements);
-                if should_queue {
-                    let draft = Self::queued_inline_slash_command_draft(cmd, user_message.clone());
-                    self.queue_slash_command(QueuedSlashCommand {
-                        draft,
-                        action: QueuedSlashCommandAction::Plan(user_message),
-                    });
-                    return;
-                }
+            SlashCommand::Plan => {
                 self.dispatch_command(cmd);
-                if self.active_mode_kind() != ModeKind::Plan {
-                    return;
+                if self.active_mode_kind() == ModeKind::Plan {
+                    self.submit_plan_user_message(args_message);
+                } else {
+                    self.restore_user_message_to_composer(Self::inline_slash_command_draft(
+                        cmd,
+                        args_message,
+                    ));
                 }
-                self.submit_plan_user_message(user_message);
+                QueueReplayControl::Stop
             }
-            SlashCommand::Review if !trimmed.is_empty() => {
-                let Some((prepared_args, prepared_elements)) =
-                    self.bottom_pane.prepare_inline_args_submission(false)
-                else {
-                    return;
-                };
-                let args_message = self.take_prepared_submission_user_message(
-                    prepared_args.clone(),
-                    prepared_elements,
-                );
-                let review_request = ReviewRequest {
-                    target: ReviewTarget::Custom {
-                        instructions: prepared_args,
-                    },
-                    user_facing_hint: None,
-                };
-                if should_queue {
-                    let draft = Self::queued_inline_slash_command_draft(cmd, args_message);
-                    self.queue_slash_command(QueuedSlashCommand {
-                        draft,
-                        action: QueuedSlashCommandAction::Review(review_request),
-                    });
-                    return;
+            SlashCommand::Review => match Self::parse_review_request(&args_message.text) {
+                Ok(review_request) => {
+                    self.submit_op(Op::Review { review_request });
+                    QueueReplayControl::Stop
                 }
-                self.submit_op(Op::Review { review_request });
-            }
-            SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
-                let Some((prepared_args, prepared_elements)) =
-                    self.bottom_pane.prepare_inline_args_submission(false)
-                else {
-                    return;
-                };
-                let args_message = self.take_prepared_submission_user_message(
-                    prepared_args.clone(),
-                    prepared_elements,
-                );
-                if should_queue {
-                    let draft = Self::queued_inline_slash_command_draft(cmd, args_message);
-                    self.queue_slash_command(QueuedSlashCommand {
-                        draft,
-                        action: QueuedSlashCommandAction::SandboxReadRoot(prepared_args),
-                    });
-                    return;
+                Err(message) => {
+                    self.restore_invalid_inline_slash_command(cmd, args_message, message)
                 }
+            },
+            SlashCommand::SandboxReadRoot => {
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
-                        path: prepared_args,
+                        path: args_message.text,
                     });
+                QueueReplayControl::Stop
             }
-            _ => {
-                if should_queue && trimmed.is_empty() {
-                    self.queue_current_inline_bare_slash_command(cmd);
-                } else {
-                    self.dispatch_command(cmd);
-                }
-            }
+            _ => self.dispatch_command(cmd),
         }
+    }
+
+    fn restore_invalid_inline_slash_command(
+        &mut self,
+        cmd: SlashCommand,
+        args_message: UserMessage,
+        message: String,
+    ) -> QueueReplayControl {
+        self.add_error_message(message);
+        self.restore_user_message_to_composer(Self::inline_slash_command_draft(cmd, args_message));
+        QueueReplayControl::Stop
     }
 
     fn take_prepared_submission_user_message(
@@ -4917,10 +4878,7 @@ impl ChatWidget {
         }
     }
 
-    fn queued_inline_slash_command_draft(
-        cmd: SlashCommand,
-        args_message: UserMessage,
-    ) -> UserMessage {
+    fn inline_slash_command_draft(cmd: SlashCommand, args_message: UserMessage) -> UserMessage {
         let prefix = format!("/{}", cmd.command());
         let UserMessage {
             text,
@@ -4969,60 +4927,32 @@ impl ChatWidget {
         };
         let args_message =
             self.take_prepared_submission_user_message(prepared_args, prepared_elements);
-        self.queue_slash_command(QueuedSlashCommand {
-            draft: Self::queued_inline_slash_command_draft(cmd, args_message),
-            action: QueuedSlashCommandAction::Command(cmd),
-        });
+        self.queue_user_message(Self::inline_slash_command_draft(cmd, args_message));
     }
 
-    fn queue_slash_command(&mut self, command: QueuedSlashCommand) {
-        self.queued_user_messages
-            .push_back(QueuedInput::SlashCommand(command));
-        self.refresh_pending_input_preview();
-    }
-
-    fn queued_model_selection_draft(
+    fn model_selection_draft(
         model: &str,
         effort: Option<ReasoningEffortConfig>,
+        scope: ModelSelectionScope,
     ) -> UserMessage {
         let mut text = format!("/model {model}");
-        if let Some(effort) = effort {
+        if let Some(token) = Self::model_reasoning_effort_token(effort) {
             text.push(' ');
-            text.push_str(Self::status_line_reasoning_effort_label(Some(effort)));
+            text.push_str(token);
+        }
+        if let Some(token) = Self::model_selection_scope_token(scope) {
+            text.push(' ');
+            text.push_str(token);
         }
         text.into()
     }
 
-    fn queue_model_selection_if_task_running(
-        &mut self,
-        model: String,
-        effort: Option<ReasoningEffortConfig>,
-        scope: ModelSelectionScope,
-    ) -> bool {
-        if !self.bottom_pane.is_task_running() {
-            return false;
-        }
-        let draft = Self::queued_model_selection_draft(&model, effort);
-        self.queue_slash_command(QueuedSlashCommand {
-            draft,
-            action: QueuedSlashCommandAction::ModelSelection(QueuedModelSelection {
-                model,
-                effort,
-                scope,
-            }),
-        });
-        true
-    }
-
-    pub(crate) fn apply_or_queue_model_selection(
+    fn apply_model_selection(
         &mut self,
         model: String,
         effort: Option<ReasoningEffortConfig>,
         scope: ModelSelectionScope,
     ) {
-        if self.queue_model_selection_if_task_running(model.clone(), effort, scope) {
-            return;
-        }
         match scope {
             ModelSelectionScope::Global => {
                 self.set_model(&model);
@@ -5059,27 +4989,21 @@ impl ChatWidget {
         }
     }
 
-    fn queued_review_draft(review_request: &ReviewRequest) -> UserMessage {
+    fn review_request_draft(review_request: &ReviewRequest) -> UserMessage {
         match &review_request.target {
-            ReviewTarget::UncommittedChanges => "/review current changes".into(),
-            ReviewTarget::BaseBranch { branch } => format!("/review {branch}").into(),
-            ReviewTarget::Commit { sha, title } => {
-                let subject = title.clone().unwrap_or_else(|| sha.clone());
-                format!("/review {subject}").into()
-            }
+            ReviewTarget::UncommittedChanges => "/review uncommitted".into(),
+            ReviewTarget::BaseBranch { branch } => format!("/review branch {branch}").into(),
+            ReviewTarget::Commit { sha, .. } => format!("/review commit {sha}").into(),
             ReviewTarget::Custom { instructions } => format!("/review {instructions}").into(),
         }
     }
 
-    pub(crate) fn apply_or_queue_review(&mut self, review_request: ReviewRequest) {
+    pub(crate) fn handle_serialized_slash_command(&mut self, draft: UserMessage) {
         if self.bottom_pane.is_task_running() {
-            self.queue_slash_command(QueuedSlashCommand {
-                draft: Self::queued_review_draft(&review_request),
-                action: QueuedSlashCommandAction::Review(review_request),
-            });
+            self.queue_user_message(draft);
             return;
         }
-        self.submit_op(Op::Review { review_request });
+        let _ = self.execute_serialized_slash_command(draft);
     }
 
     fn submit_plan_user_message(&mut self, user_message: UserMessage) {
@@ -5093,52 +5017,206 @@ impl ChatWidget {
         }
     }
 
-    fn execute_queued_slash_command(&mut self, command: QueuedSlashCommand) {
-        match command.action {
-            QueuedSlashCommandAction::Command(cmd) => self.dispatch_command(cmd),
-            QueuedSlashCommandAction::Fast(action) => match action {
-                QueuedFastCommandAction::On => {
-                    self.set_service_tier_selection(Some(ServiceTier::Fast))
+    fn parse_builtin_slash_command(text: &str) -> Option<(SlashCommand, &str, usize)> {
+        let (name, rest, rest_offset) = parse_slash_name(text)?;
+        let cmd = SlashCommand::from_str(name).ok()?;
+        Some((cmd, rest, rest_offset))
+    }
+
+    fn is_builtin_slash_draft(draft: &UserMessage) -> bool {
+        Self::parse_builtin_slash_command(&draft.text).is_some()
+    }
+
+    fn execute_serialized_slash_command(&mut self, draft: UserMessage) -> QueueReplayControl {
+        let preview = draft.text.clone();
+        let Some((cmd, rest, rest_offset)) = Self::parse_builtin_slash_command(&preview) else {
+            self.add_error_message(format!("Failed to replay queued slash command: {preview}"));
+            self.restore_user_message_to_composer(draft);
+            return QueueReplayControl::Stop;
+        };
+        if rest.trim().is_empty() {
+            let replay_control = self.dispatch_command(cmd);
+            if replay_control == QueueReplayControl::Continue
+                && self.bottom_pane.no_modal_or_popup_active()
+            {
+                return QueueReplayControl::Continue;
+            }
+            return QueueReplayControl::Stop;
+        }
+        if !cmd.supports_inline_args() {
+            self.add_error_message(format!("Failed to replay queued slash command: {preview}"));
+            self.restore_user_message_to_composer(draft);
+            return QueueReplayControl::Stop;
+        }
+        let args_message = Self::slash_command_args_message_from_draft(draft, rest_offset);
+        self.execute_inline_slash_command(cmd, args_message)
+    }
+
+    fn slash_command_args_message_from_draft(
+        draft: UserMessage,
+        rest_offset: usize,
+    ) -> UserMessage {
+        let UserMessage {
+            text,
+            local_images,
+            remote_image_urls,
+            text_elements,
+            mention_bindings,
+        } = draft;
+        let rest = &text[rest_offset..];
+        let trimmed_start = rest.len() - rest.trim_start().len();
+        let trimmed_rest = rest.trim();
+        let args_start = rest_offset + trimmed_start;
+        let args_end = args_start + trimmed_rest.len();
+        let text_elements = text_elements
+            .into_iter()
+            .filter_map(|element| {
+                if element.byte_range.end <= args_start || element.byte_range.start >= args_end {
+                    return None;
                 }
-                QueuedFastCommandAction::Off => self.set_service_tier_selection(None),
-                QueuedFastCommandAction::Status => {
-                    let status = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
-                        "on"
-                    } else {
-                        "off"
-                    };
-                    self.add_info_message(format!("Fast mode is {status}."), None);
+                let start = element.byte_range.start.saturating_sub(args_start);
+                let end = element.byte_range.end.min(args_end) - args_start;
+                (start < end).then_some(element.map_range(|_| ByteRange { start, end }))
+            })
+            .collect();
+
+        UserMessage {
+            text: trimmed_rest.to_string(),
+            local_images,
+            remote_image_urls,
+            text_elements,
+            mention_bindings,
+        }
+    }
+
+    fn parse_review_request(args: &str) -> Result<ReviewRequest, String> {
+        let trimmed = args.trim();
+        let lowered = trimmed.to_ascii_lowercase();
+        let target = if matches!(
+            lowered.as_str(),
+            "uncommitted" | "current" | "current changes" | "current-changes"
+        ) {
+            ReviewTarget::UncommittedChanges
+        } else if let Some((keyword, value)) = trimmed.split_once(char::is_whitespace) {
+            let value = value.trim();
+            match keyword.to_ascii_lowercase().as_str() {
+                "branch" if !value.is_empty() => ReviewTarget::BaseBranch {
+                    branch: value.to_string(),
+                },
+                "branch" => {
+                    return Err(
+                        "Usage: /review [uncommitted|branch <name>|commit <sha>|<instructions>]"
+                            .to_string(),
+                    );
                 }
-            },
-            QueuedSlashCommandAction::ModelSelection(selection) => {
-                self.apply_or_queue_model_selection(
-                    selection.model,
-                    selection.effort,
-                    selection.scope,
-                );
-            }
-            QueuedSlashCommandAction::Plan(user_message) => {
-                self.dispatch_command(SlashCommand::Plan);
-                if self.active_mode_kind() == ModeKind::Plan {
-                    self.submit_plan_user_message(user_message);
+                "commit" if !value.is_empty() => ReviewTarget::Commit {
+                    sha: value.to_string(),
+                    title: None,
+                },
+                "commit" => {
+                    return Err(
+                        "Usage: /review [uncommitted|branch <name>|commit <sha>|<instructions>]"
+                            .to_string(),
+                    );
                 }
+                _ => ReviewTarget::Custom {
+                    instructions: trimmed.to_string(),
+                },
             }
-            QueuedSlashCommandAction::Rename(name) => {
-                self.session_telemetry
-                    .counter("codex.thread.rename", 1, &[]);
-                let cell = Self::rename_confirmation_cell(&name, self.thread_id);
-                self.add_boxed_history(Box::new(cell));
-                self.request_redraw();
-                self.app_event_tx
-                    .send(AppEvent::CodexOp(Op::SetThreadName { name }));
+        } else {
+            ReviewTarget::Custom {
+                instructions: trimmed.to_string(),
             }
-            QueuedSlashCommandAction::Review(review_request) => {
-                self.submit_op(Op::Review { review_request });
+        };
+
+        Ok(ReviewRequest {
+            target,
+            user_facing_hint: None,
+        })
+    }
+
+    fn parse_model_selection_args(
+        args: &str,
+    ) -> Result<(String, Option<ReasoningEffortConfig>, ModelSelectionScope), String> {
+        let mut tokens = args.split_whitespace();
+        let Some(model) = tokens.next() else {
+            return Err(
+                "Usage: /model <model> [default|none|minimal|low|medium|high|xhigh] [plan-only|all-modes]"
+                    .to_string(),
+            );
+        };
+
+        let mut effort = None;
+        let mut scope = ModelSelectionScope::Global;
+        for token in tokens {
+            if let Some(parsed_effort) = Self::parse_model_reasoning_effort_token(token) {
+                if effort.is_some() {
+                    return Err(
+                        "Usage: /model <model> [default|none|minimal|low|medium|high|xhigh] [plan-only|all-modes]"
+                            .to_string(),
+                    );
+                }
+                effort = parsed_effort;
+                continue;
             }
-            QueuedSlashCommandAction::SandboxReadRoot(path) => {
-                self.app_event_tx
-                    .send(AppEvent::BeginWindowsSandboxGrantReadRoot { path });
+            if let Some(parsed_scope) = Self::parse_model_scope_token(token) {
+                if scope != ModelSelectionScope::Global {
+                    return Err(
+                        "Usage: /model <model> [default|none|minimal|low|medium|high|xhigh] [plan-only|all-modes]"
+                            .to_string(),
+                    );
+                }
+                scope = parsed_scope;
+                continue;
             }
+            return Err(
+                "Usage: /model <model> [default|none|minimal|low|medium|high|xhigh] [plan-only|all-modes]"
+                    .to_string(),
+            );
+        }
+
+        Ok((model.to_string(), effort, scope))
+    }
+
+    fn parse_model_reasoning_effort_token(token: &str) -> Option<Option<ReasoningEffortConfig>> {
+        match token.to_ascii_lowercase().as_str() {
+            "default" => Some(None),
+            "none" => Some(Some(ReasoningEffortConfig::None)),
+            "minimal" => Some(Some(ReasoningEffortConfig::Minimal)),
+            "low" => Some(Some(ReasoningEffortConfig::Low)),
+            "medium" => Some(Some(ReasoningEffortConfig::Medium)),
+            "high" => Some(Some(ReasoningEffortConfig::High)),
+            "xhigh" => Some(Some(ReasoningEffortConfig::XHigh)),
+            _ => None,
+        }
+    }
+
+    fn parse_model_scope_token(token: &str) -> Option<ModelSelectionScope> {
+        match token.to_ascii_lowercase().as_str() {
+            "plan-only" => Some(ModelSelectionScope::PlanOnly),
+            "all-modes" => Some(ModelSelectionScope::AllModes),
+            "global" => Some(ModelSelectionScope::Global),
+            _ => None,
+        }
+    }
+
+    fn model_reasoning_effort_token(effort: Option<ReasoningEffortConfig>) -> Option<&'static str> {
+        match effort {
+            Some(ReasoningEffortConfig::None) => Some("none"),
+            Some(ReasoningEffortConfig::Minimal) => Some("minimal"),
+            Some(ReasoningEffortConfig::Low) => Some("low"),
+            Some(ReasoningEffortConfig::Medium) => Some("medium"),
+            Some(ReasoningEffortConfig::High) => Some("high"),
+            Some(ReasoningEffortConfig::XHigh) => Some("xhigh"),
+            None => None,
+        }
+    }
+
+    fn model_selection_scope_token(scope: ModelSelectionScope) -> Option<&'static str> {
+        match scope {
+            ModelSelectionScope::Global => None,
+            ModelSelectionScope::PlanOnly => Some("plan-only"),
+            ModelSelectionScope::AllModes => Some("all-modes"),
         }
     }
 
@@ -5229,7 +5307,7 @@ impl ChatWidget {
             || self.bottom_pane.is_task_running()
             || self.is_review_mode
         {
-            self.queued_user_messages.push_back(user_message.into());
+            self.queued_user_messages.push_back(user_message);
             self.refresh_pending_input_preview();
         } else {
             self.submit_user_message(user_message);
@@ -5239,12 +5317,12 @@ impl ChatWidget {
     fn submit_user_message(&mut self, user_message: UserMessage) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
-            self.queued_user_messages.push_front(user_message.into());
+            self.queued_user_messages.push_front(user_message);
             self.refresh_pending_input_preview();
             return;
         }
         if self.is_review_mode {
-            self.queued_user_messages.push_back(user_message.into());
+            self.queued_user_messages.push_back(user_message);
             self.refresh_pending_input_preview();
             return;
         }
@@ -6024,17 +6102,18 @@ impl ChatWidget {
             return;
         }
         while !self.bottom_pane.is_task_running() {
-            let Some(queued_input) = self.queued_user_messages.pop_front() else {
+            let Some(queued_message) = self.queued_user_messages.pop_front() else {
                 break;
             };
-            match queued_input {
-                QueuedInput::UserMessage(user_message) => {
-                    self.submit_user_message(user_message);
-                    break;
-                }
-                QueuedInput::SlashCommand(command) => self.execute_queued_slash_command(command),
-            }
-            if !self.bottom_pane.no_modal_or_popup_active() {
+            let replay_control = if Self::is_builtin_slash_draft(&queued_message) {
+                self.execute_serialized_slash_command(queued_message)
+            } else {
+                self.submit_user_message(queued_message);
+                QueueReplayControl::Stop
+            };
+            if replay_control == QueueReplayControl::Stop
+                || !self.bottom_pane.no_modal_or_popup_active()
+            {
                 break;
             }
         }
@@ -6046,7 +6125,7 @@ impl ChatWidget {
         let queued_messages: Vec<String> = self
             .queued_user_messages
             .iter()
-            .map(QueuedInput::preview_text)
+            .map(|message| message.text.clone())
             .collect();
         let pending_steers: Vec<String> = self
             .pending_steers
@@ -7109,11 +7188,13 @@ impl ChatWidget {
                 return;
             }
 
-            tx.send(AppEvent::ApplyOrQueueModelSelection {
-                model: model_for_action.clone(),
-                effort: effort_for_action,
-                scope: ModelSelectionScope::Global,
-            });
+            tx.send(AppEvent::HandleSlashCommandDraft(
+                Self::model_selection_draft(
+                    &model_for_action,
+                    effort_for_action,
+                    ModelSelectionScope::Global,
+                ),
+            ));
         })]
     }
 
@@ -7180,19 +7261,15 @@ impl ChatWidget {
         let plan_only_actions: Vec<SelectionAction> = vec![Box::new({
             let model = model.clone();
             move |tx| {
-                tx.send(AppEvent::ApplyOrQueueModelSelection {
-                    model: model.clone(),
-                    effort,
-                    scope: ModelSelectionScope::PlanOnly,
-                });
+                tx.send(AppEvent::HandleSlashCommandDraft(
+                    Self::model_selection_draft(&model, effort, ModelSelectionScope::PlanOnly),
+                ));
             }
         })];
         let all_modes_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-            tx.send(AppEvent::ApplyOrQueueModelSelection {
-                model: model.clone(),
-                effort,
-                scope: ModelSelectionScope::AllModes,
-            });
+            tx.send(AppEvent::HandleSlashCommandDraft(
+                Self::model_selection_draft(&model, effort, ModelSelectionScope::AllModes),
+            ));
         })];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
@@ -7280,11 +7357,13 @@ impl ChatWidget {
                         effort: selected_effort,
                     });
             } else {
-                self.apply_or_queue_model_selection(
-                    selected_model,
-                    selected_effort,
-                    ModelSelectionScope::Global,
-                );
+                self.app_event_tx.send(AppEvent::HandleSlashCommandDraft(
+                    Self::model_selection_draft(
+                        selected_model.as_str(),
+                        selected_effort,
+                        ModelSelectionScope::Global,
+                    ),
+                ));
             }
             return;
         }
@@ -7359,11 +7438,13 @@ impl ChatWidget {
                         effort: choice_effort,
                     });
                 } else {
-                    tx.send(AppEvent::ApplyOrQueueModelSelection {
-                        model: model_for_action.clone(),
-                        effort: choice_effort,
-                        scope: ModelSelectionScope::Global,
-                    });
+                    tx.send(AppEvent::HandleSlashCommandDraft(
+                        Self::model_selection_draft(
+                            &model_for_action,
+                            choice_effort,
+                            ModelSelectionScope::Global,
+                        ),
+                    ));
                 }
             })];
 
@@ -9173,7 +9254,7 @@ impl ChatWidget {
     pub(crate) fn queued_user_message_texts(&self) -> Vec<String> {
         self.queued_user_messages
             .iter()
-            .map(QueuedInput::preview_text)
+            .map(|message| message.text.clone())
             .collect()
     }
 
@@ -9356,12 +9437,12 @@ impl ChatWidget {
         items.push(SelectionItem {
             name: "Review uncommitted changes".to_string(),
             actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::ApplyOrQueueReview {
-                    review_request: ReviewRequest {
+                tx.send(AppEvent::HandleSlashCommandDraft(
+                    Self::review_request_draft(&ReviewRequest {
                         target: ReviewTarget::UncommittedChanges,
                         user_facing_hint: None,
-                    },
-                });
+                    }),
+                ));
             })],
             dismiss_on_select: true,
             ..Default::default()
@@ -9409,14 +9490,14 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: format!("{current_branch} -> {branch}"),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    tx3.send(AppEvent::ApplyOrQueueReview {
-                        review_request: ReviewRequest {
+                    tx3.send(AppEvent::HandleSlashCommandDraft(
+                        Self::review_request_draft(&ReviewRequest {
                             target: ReviewTarget::BaseBranch {
                                 branch: branch.clone(),
                             },
                             user_facing_hint: None,
-                        },
-                    });
+                        }),
+                    ));
                 })],
                 dismiss_on_select: true,
                 search_value: Some(option),
@@ -9446,15 +9527,15 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: subject.clone(),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    tx3.send(AppEvent::ApplyOrQueueReview {
-                        review_request: ReviewRequest {
+                    tx3.send(AppEvent::HandleSlashCommandDraft(
+                        Self::review_request_draft(&ReviewRequest {
                             target: ReviewTarget::Commit {
                                 sha: sha.clone(),
                                 title: Some(subject.clone()),
                             },
                             user_facing_hint: None,
-                        },
-                    });
+                        }),
+                    ));
                 })],
                 dismiss_on_select: true,
                 search_value: Some(search_val),
@@ -9483,14 +9564,14 @@ impl ChatWidget {
                 if trimmed.is_empty() {
                     return;
                 }
-                tx.send(AppEvent::ApplyOrQueueReview {
-                    review_request: ReviewRequest {
+                tx.send(AppEvent::HandleSlashCommandDraft(
+                    Self::review_request_draft(&ReviewRequest {
                         target: ReviewTarget::Custom {
                             instructions: trimmed,
                         },
                         user_facing_hint: None,
-                    },
-                });
+                    }),
+                ));
             }),
         );
         self.bottom_pane.show_view(Box::new(view));
@@ -9839,15 +9920,15 @@ pub(crate) fn show_review_commit_picker_with_entries(
         items.push(SelectionItem {
             name: subject.clone(),
             actions: vec![Box::new(move |tx3: &AppEventSender| {
-                tx3.send(AppEvent::ApplyOrQueueReview {
-                    review_request: ReviewRequest {
+                tx3.send(AppEvent::HandleSlashCommandDraft(
+                    ChatWidget::review_request_draft(&ReviewRequest {
                         target: ReviewTarget::Commit {
                             sha: sha.clone(),
                             title: Some(subject.clone()),
                         },
                         user_facing_hint: None,
-                    },
-                });
+                    }),
+                ));
             })],
             dismiss_on_select: true,
             search_value: Some(search_val),

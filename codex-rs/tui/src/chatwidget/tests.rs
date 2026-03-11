@@ -1238,32 +1238,26 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
     )];
     let existing_images = vec![PathBuf::from("/tmp/existing.png")];
 
-    chat.queued_user_messages.push_back(
-        UserMessage {
-            text: first_text,
-            local_images: vec![LocalImageAttachment {
-                placeholder: first_placeholder.to_string(),
-                path: first_images[0].clone(),
-            }],
-            remote_image_urls: Vec::new(),
-            text_elements: first_elements,
-            mention_bindings: Vec::new(),
-        }
-        .into(),
-    );
-    chat.queued_user_messages.push_back(
-        UserMessage {
-            text: second_text,
-            local_images: vec![LocalImageAttachment {
-                placeholder: second_placeholder.to_string(),
-                path: second_images[0].clone(),
-            }],
-            remote_image_urls: Vec::new(),
-            text_elements: second_elements,
-            mention_bindings: Vec::new(),
-        }
-        .into(),
-    );
+    chat.queued_user_messages.push_back(UserMessage {
+        text: first_text,
+        local_images: vec![LocalImageAttachment {
+            placeholder: first_placeholder.to_string(),
+            path: first_images[0].clone(),
+        }],
+        remote_image_urls: Vec::new(),
+        text_elements: first_elements,
+        mention_bindings: Vec::new(),
+    });
+    chat.queued_user_messages.push_back(UserMessage {
+        text: second_text,
+        local_images: vec![LocalImageAttachment {
+            placeholder: second_placeholder.to_string(),
+            path: second_images[0].clone(),
+        }],
+        remote_image_urls: Vec::new(),
+        text_elements: second_elements,
+        mention_bindings: Vec::new(),
+    });
     chat.refresh_pending_input_preview();
 
     chat.bottom_pane
@@ -1327,16 +1321,13 @@ async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
 
     chat.set_collaboration_mask(plan_mask);
     chat.on_task_started();
-    chat.queued_user_messages.push_back(
-        UserMessage {
-            text: "Implement the plan.".to_string(),
-            local_images: Vec::new(),
-            remote_image_urls: Vec::new(),
-            text_elements: Vec::new(),
-            mention_bindings: Vec::new(),
-        }
-        .into(),
-    );
+    chat.queued_user_messages.push_back(UserMessage {
+        text: "Implement the plan.".to_string(),
+        local_images: Vec::new(),
+        remote_image_urls: Vec::new(),
+        text_elements: Vec::new(),
+        mention_bindings: Vec::new(),
+    });
     chat.refresh_pending_input_preview();
 
     chat.handle_codex_event(Event {
@@ -2558,11 +2549,8 @@ async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_sc
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::ApplyOrQueueModelSelection {
-                model,
-                effort: Some(ReasoningEffortConfig::Medium),
-                scope: ModelSelectionScope::Global,
-            } if model == "gpt-5.1-codex-max"
+            AppEvent::HandleSlashCommandDraft(UserMessage { text, .. })
+                if text == "/model gpt-5.1-codex-max medium"
         )),
         "expected model selection event; events: {events:?}"
     );
@@ -2647,11 +2635,8 @@ async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_promp
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::ApplyOrQueueModelSelection {
-                model,
-                effort: Some(ReasoningEffortConfig::Medium),
-                scope: ModelSelectionScope::Global,
-            } if model == "gpt-5"
+            AppEvent::HandleSlashCommandDraft(UserMessage { text, .. })
+                if text == "/model gpt-5 medium"
         )),
         "expected model selection event; events: {events:?}"
     );
@@ -2678,11 +2663,8 @@ async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override(
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::ApplyOrQueueModelSelection {
-                model,
-                effort: Some(ReasoningEffortConfig::High),
-                scope: ModelSelectionScope::AllModes,
-            } if model == "gpt-5.1-codex-max"
+            AppEvent::HandleSlashCommandDraft(UserMessage { text, .. })
+                if text == "/model gpt-5.1-codex-max high all-modes"
         )),
         "expected all-modes model selection event; events: {events:?}"
     );
@@ -2880,11 +2862,8 @@ async fn plan_reasoning_scope_popup_plan_only_does_not_update_all_modes_reasonin
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::ApplyOrQueueModelSelection {
-                model,
-                effort: Some(ReasoningEffortConfig::High),
-                scope: ModelSelectionScope::PlanOnly,
-            } if model == "gpt-5.1-codex-max"
+            AppEvent::HandleSlashCommandDraft(UserMessage { text, .. })
+                if text == "/model gpt-5.1-codex-max high plan-only"
         )),
         "expected plan-only model selection event; events: {events:?}"
     );
@@ -3715,9 +3694,9 @@ async fn alt_up_edits_most_recent_queued_message() {
 
     // Seed two queued messages.
     chat.queued_user_messages
-        .push_back(UserMessage::from("first queued".to_string()).into());
+        .push_back(UserMessage::from("first queued".to_string()));
     chat.queued_user_messages
-        .push_back(UserMessage::from("second queued".to_string()).into());
+        .push_back(UserMessage::from("second queued".to_string()));
     chat.refresh_pending_input_preview();
 
     // Press Alt+Up to edit the most recent (last) queued message.
@@ -3731,7 +3710,7 @@ async fn alt_up_edits_most_recent_queued_message() {
     // And the queue should now contain only the remaining (older) item.
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().preview_text(),
+        chat.queued_user_messages.front().unwrap().text,
         "first queued"
     );
 }
@@ -3749,9 +3728,9 @@ async fn assert_shift_left_edits_most_recent_queued_message_for_terminal(
 
     // Seed two queued messages.
     chat.queued_user_messages
-        .push_back(UserMessage::from("first queued".to_string()).into());
+        .push_back(UserMessage::from("first queued".to_string()));
     chat.queued_user_messages
-        .push_back(UserMessage::from("second queued".to_string()).into());
+        .push_back(UserMessage::from("second queued".to_string()));
     chat.refresh_pending_input_preview();
 
     // Press Shift+Left to edit the most recent (last) queued message.
@@ -3765,7 +3744,7 @@ async fn assert_shift_left_edits_most_recent_queued_message_for_terminal(
     // And the queue should now contain only the remaining (older) item.
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().preview_text(),
+        chat.queued_user_messages.front().unwrap().text,
         "first queued"
     );
 }
@@ -3834,7 +3813,7 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
 
     assert_eq!(chat.queued_user_messages.len(), 3);
     for message in chat.queued_user_messages.iter() {
-        assert_eq!(message.preview_text(), "repeat me");
+        assert_eq!(message.text, "repeat me");
     }
 }
 
@@ -3857,7 +3836,7 @@ async fn streaming_final_answer_keeps_task_running_state() {
 
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().preview_text(),
+        chat.queued_user_messages.front().unwrap().text,
         "queued submission"
     );
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
@@ -4030,7 +4009,7 @@ async fn steer_enter_queues_while_plan_stream_is_active() {
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().preview_text(),
+        chat.queued_user_messages.front().unwrap().text,
         "queued submission"
     );
     assert!(chat.pending_steers.is_empty());
@@ -4523,7 +4502,7 @@ async fn esc_interrupt_sends_all_pending_steers_immediately_and_keeps_existing_d
     }
 
     chat.queued_user_messages
-        .push_back(UserMessage::from("queued draft".to_string()).into());
+        .push_back(UserMessage::from("queued draft".to_string()));
     chat.refresh_pending_input_preview();
     chat.bottom_pane
         .set_composer_text("still editing".to_string(), Vec::new(), Vec::new());
@@ -4548,7 +4527,7 @@ async fn esc_interrupt_sends_all_pending_steers_immediately_and_keeps_existing_d
     assert_eq!(chat.bottom_pane.composer_text(), "still editing");
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().preview_text(),
+        chat.queued_user_messages.front().unwrap().text,
         "queued draft"
     );
 
@@ -4648,7 +4627,7 @@ async fn manual_interrupt_restores_pending_steers_before_queued_messages() {
         .set_composer_text("pending steer".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     chat.queued_user_messages
-        .push_back(UserMessage::from("queued draft".to_string()).into());
+        .push_back(UserMessage::from("queued draft".to_string()));
     chat.refresh_pending_input_preview();
 
     match next_submit_op(&mut op_rx) {
@@ -4690,7 +4669,7 @@ async fn replaced_turn_clears_pending_steers_but_keeps_queued_drafts() {
         .set_composer_text("pending steer".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     chat.queued_user_messages
-        .push_back(UserMessage::from("queued draft".to_string()).into());
+        .push_back(UserMessage::from("queued draft".to_string()));
     chat.refresh_pending_input_preview();
 
     match next_submit_op(&mut op_rx) {
@@ -5414,6 +5393,55 @@ async fn slash_init_skips_when_project_doc_exists() {
 }
 
 #[tokio::test]
+async fn queued_init_replay_stops_after_submitting_user_turn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let tempdir = tempdir().expect("tempdir");
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: ThreadId::new(),
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: tempdir.path().to_path_buf(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: None,
+    };
+    chat.handle_codex_event(Event {
+        id: "configured".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    chat.queued_user_messages.push_back("/init".into());
+    chat.queued_user_messages.push_back("after init".into());
+
+    chat.maybe_send_next_queued_input();
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(
+        items,
+        vec![UserInput::Text {
+            text: include_str!("../../prompt_for_init_command.md").to_string(),
+            text_elements: Vec::new(),
+        }]
+    );
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["after init".to_string()]
+    );
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
 async fn collab_mode_shift_tab_cycles_only_when_idle() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -5612,6 +5640,59 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
         }
     );
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
+async fn queued_plan_replay_stops_after_submitting_user_turn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: ThreadId::new(),
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: None,
+    };
+    chat.handle_codex_event(Event {
+        id: "configured".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    chat.queued_user_messages
+        .push_back("/plan build the plan".into());
+    chat.queued_user_messages
+        .push_back("after plan replay".into());
+
+    chat.maybe_send_next_queued_input();
+
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    assert_eq!(
+        items,
+        vec![UserInput::Text {
+            text: "build the plan".to_string(),
+            text_elements: Vec::new(),
+        }]
+    );
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["after plan replay".to_string()]
+    );
+    assert_no_submit_op(&mut op_rx);
 }
 
 #[tokio::test]
@@ -6314,7 +6395,7 @@ async fn review_commit_picker_shows_subjects_without_timestamps() {
 /// Submitting the custom prompt view sends Op::Review with the typed prompt
 /// and uses the same text for the user-facing hint.
 #[tokio::test]
-async fn custom_prompt_submit_sends_review_op() {
+async fn custom_prompt_submit_serializes_review_draft() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.show_review_custom_prompt();
@@ -6322,19 +6403,11 @@ async fn custom_prompt_submit_sends_review_op() {
     chat.handle_paste("  please audit dependencies  ".to_string());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    // Expect AppEvent::CodexOp(Op::Review { .. }) with trimmed prompt
+    // Expect a serialized /review draft with trimmed prompt.
     let evt = rx.try_recv().expect("expected one app event");
     match evt {
-        AppEvent::ApplyOrQueueReview { review_request } => {
-            assert_eq!(
-                review_request,
-                ReviewRequest {
-                    target: ReviewTarget::Custom {
-                        instructions: "please audit dependencies".to_string(),
-                    },
-                    user_facing_hint: None,
-                }
-            );
+        AppEvent::HandleSlashCommandDraft(UserMessage { text, .. }) => {
+            assert_eq!(text, "/review please audit dependencies");
         }
         other => panic!("unexpected app event: {other:?}"),
     }
@@ -7995,9 +8068,11 @@ async fn single_reasoning_option_skips_selection() {
     }
 
     assert!(
-        events
-            .iter()
-            .any(|ev| matches!(ev, AppEvent::UpdateReasoningEffort(Some(effort)) if *effort == ReasoningEffortConfig::High)),
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::HandleSlashCommandDraft(UserMessage { text, .. })
+                if text == "/model model-with-single-reasoning high"
+        )),
         "expected reasoning effort to be applied automatically; events: {events:?}"
     );
 }
@@ -8126,15 +8201,18 @@ async fn user_shell_command_renders_output_not_exploring() {
 }
 
 #[tokio::test]
-async fn model_slash_command_while_task_running_popup_snapshot() {
+async fn model_slash_command_while_task_running_queues_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
 
     chat.dispatch_command(SlashCommand::Model);
 
-    assert!(chat.queued_user_messages.is_empty());
-    assert!(chat.has_active_view(), "expected /model popup to open");
+    assert_eq!(chat.queued_user_message_texts(), vec!["/model".to_string()]);
+    assert!(
+        !chat.has_active_view(),
+        "expected /model to queue instead of opening a popup"
+    );
     assert!(drain_insert_history(&mut rx).is_empty());
 
     let width: u16 = 80;
@@ -8148,7 +8226,7 @@ async fn model_slash_command_while_task_running_popup_snapshot() {
     })
     .unwrap();
     assert_snapshot!(
-        "model_slash_command_while_task_running_popup",
+        "model_slash_command_while_task_running_queues",
         term.backend().vt100().screen().contents()
     );
 }
@@ -8158,15 +8236,112 @@ async fn model_selection_queues_selected_action_while_task_running() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
     chat.on_task_started();
 
-    chat.apply_or_queue_model_selection(
-        "gpt-5.1-codex-max".to_string(),
+    chat.handle_serialized_slash_command(ChatWidget::model_selection_draft(
+        "gpt-5.1-codex-max",
         Some(ReasoningEffortConfig::High),
         ModelSelectionScope::Global,
-    );
+    ));
 
     assert_eq!(
         chat.queued_user_message_texts(),
         vec!["/model gpt-5.1-codex-max high".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn model_slash_command_with_args_queues_while_task_running_and_replays_after_turn_complete() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
+    chat.on_task_started();
+    chat.bottom_pane.set_composer_text(
+        "/model gpt-5.1-codex-max high all-modes".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["/model gpt-5.1-codex-max high all-modes".to_string()]
+    );
+
+    chat.on_task_complete(None, false);
+
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(chat.current_model(), "gpt-5.1-codex-max");
+    assert_eq!(
+        chat.effective_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
+    assert_eq!(
+        chat.config.plan_mode_reasoning_effort,
+        Some(ReasoningEffortConfig::High)
+    );
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistModelSelection { model, effort }
+                if model == "gpt-5.1-codex-max"
+                    && *effort == Some(ReasoningEffortConfig::High)
+        )),
+        "expected queued typed /model replay to persist the global model selection; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistPlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected queued typed /model replay to persist plan-mode reasoning; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn queued_model_selection_replays_after_turn_complete() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
+    chat.on_task_started();
+
+    chat.handle_serialized_slash_command(ChatWidget::model_selection_draft(
+        "gpt-5.1-codex-max",
+        Some(ReasoningEffortConfig::High),
+        ModelSelectionScope::AllModes,
+    ));
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["/model gpt-5.1-codex-max high all-modes".to_string()]
+    );
+
+    chat.on_task_complete(None, false);
+
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(chat.current_model(), "gpt-5.1-codex-max");
+    assert_eq!(
+        chat.effective_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
+    assert_eq!(
+        chat.config.plan_mode_reasoning_effort,
+        Some(ReasoningEffortConfig::High)
+    );
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistModelSelection { model, effort }
+                if model == "gpt-5.1-codex-max"
+                    && *effort == Some(ReasoningEffortConfig::High)
+        )),
+        "expected queued /model replay to persist the global model selection; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistPlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected queued /model replay to persist plan-mode reasoning; events: {events:?}"
     );
 }
 
@@ -8183,11 +8358,29 @@ async fn esc_interrupts_running_task_with_empty_composer() {
 }
 
 #[tokio::test]
+async fn esc_interrupts_running_task_with_nonempty_composer_and_restores_draft() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.bottom_pane
+        .set_composer_text("still editing".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    next_interrupt_op(&mut op_rx);
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    assert_eq!(chat.bottom_pane.composer_text(), "still editing");
+    assert!(chat.queued_user_messages.is_empty());
+    let _ = drain_insert_history(&mut rx);
+}
+
+#[tokio::test]
 async fn esc_with_model_popup_active_dismisses_popup_without_interrupting() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
-    chat.dispatch_command(SlashCommand::Model);
+    chat.open_model_popup();
 
     assert!(chat.has_active_view(), "expected /model popup to open");
 
@@ -8216,7 +8409,7 @@ async fn esc_with_popup_active_does_not_interrupt_pending_steers() {
         other => panic!("expected Op::UserTurn, got {other:?}"),
     }
 
-    chat.dispatch_command(SlashCommand::Model);
+    chat.open_model_popup();
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
@@ -9097,9 +9290,9 @@ async fn interrupt_restores_queued_messages_into_composer() {
 
     // Queue two user messages while the task is running.
     chat.queued_user_messages
-        .push_back(UserMessage::from("first queued".to_string()).into());
+        .push_back(UserMessage::from("first queued".to_string()));
     chat.queued_user_messages
-        .push_back(UserMessage::from("second queued".to_string()).into());
+        .push_back(UserMessage::from("second queued".to_string()));
     chat.refresh_pending_input_preview();
 
     // Deliver a TurnAborted event with Interrupted reason (as if Esc was pressed).
@@ -9134,12 +9327,9 @@ async fn interrupt_replays_queued_slash_commands_and_restores_drafts() {
 
     chat.bottom_pane.set_task_running(true);
     chat.queued_user_messages
-        .push_back(UserMessage::from("queued draft".to_string()).into());
+        .push_back(UserMessage::from("queued draft".to_string()));
     chat.queued_user_messages
-        .push_back(QueuedInput::SlashCommand(QueuedSlashCommand {
-            draft: UserMessage::from("/review".to_string()),
-            action: QueuedSlashCommandAction::Command(SlashCommand::Review),
-        }));
+        .push_back(UserMessage::from("/review".to_string()));
     chat.refresh_pending_input_preview();
 
     chat.handle_codex_event(Event {
@@ -9167,15 +9357,9 @@ async fn interrupt_replays_multiple_queued_slash_commands_in_order() {
 
     chat.bottom_pane.set_task_running(true);
     chat.queued_user_messages
-        .push_back(QueuedInput::SlashCommand(QueuedSlashCommand {
-            draft: UserMessage::from("/fast status".to_string()),
-            action: QueuedSlashCommandAction::Fast(QueuedFastCommandAction::Status),
-        }));
+        .push_back(UserMessage::from("/fast status".to_string()));
     chat.queued_user_messages
-        .push_back(QueuedInput::SlashCommand(QueuedSlashCommand {
-            draft: UserMessage::from("/review".to_string()),
-            action: QueuedSlashCommandAction::Command(SlashCommand::Review),
-        }));
+        .push_back(UserMessage::from("/review".to_string()));
     chat.refresh_pending_input_preview();
 
     chat.handle_codex_event(Event {
@@ -9210,9 +9394,9 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
         .set_composer_text("current draft".to_string(), Vec::new(), Vec::new());
 
     chat.queued_user_messages
-        .push_back(UserMessage::from("first queued".to_string()).into());
+        .push_back(UserMessage::from("first queued".to_string()));
     chat.queued_user_messages
-        .push_back(UserMessage::from("second queued".to_string()).into());
+        .push_back(UserMessage::from("second queued".to_string()));
     chat.refresh_pending_input_preview();
 
     chat.handle_codex_event(Event {
@@ -11181,7 +11365,7 @@ async fn enter_queues_user_messages_while_review_is_running() {
 
     assert_eq!(chat.queued_user_messages.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().preview_text(),
+        chat.queued_user_messages.front().unwrap().text,
         "Queued while /review is running."
     );
     assert!(chat.pending_steers.is_empty());
@@ -11190,14 +11374,20 @@ async fn enter_queues_user_messages_while_review_is_running() {
 }
 
 #[tokio::test]
-async fn review_slash_command_opens_popup_while_task_running() {
+async fn review_slash_command_queues_while_task_running() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
 
     chat.dispatch_command(SlashCommand::Review);
 
-    assert!(chat.queued_user_messages.is_empty());
-    assert!(chat.has_active_view(), "expected /review popup to open");
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["/review".to_string()]
+    );
+    assert!(
+        !chat.has_active_view(),
+        "expected /review to queue instead of opening a popup"
+    );
     assert!(drain_insert_history(&mut rx).is_empty());
 }
 
@@ -11239,6 +11429,46 @@ async fn review_slash_command_with_args_queues_while_task_running_and_submits_af
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected queued /review op"),
             Err(TryRecvError::Disconnected) => panic!("expected queued /review op"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn queued_review_selection_replays_after_turn_complete() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    chat.handle_serialized_slash_command(ChatWidget::review_request_draft(&ReviewRequest {
+        target: ReviewTarget::BaseBranch {
+            branch: "main".to_string(),
+        },
+        user_facing_hint: None,
+    }));
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["/review branch main".to_string()]
+    );
+
+    chat.on_task_complete(None, false);
+
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::Review { review_request }) => {
+                assert_eq!(
+                    review_request,
+                    ReviewRequest {
+                        target: ReviewTarget::BaseBranch {
+                            branch: "main".to_string(),
+                        },
+                        user_facing_hint: None,
+                    }
+                );
+                break;
+            }
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected queued /review branch op"),
+            Err(TryRecvError::Disconnected) => panic!("expected queued /review branch op"),
         }
     }
 }

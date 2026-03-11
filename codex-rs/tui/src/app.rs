@@ -2712,13 +2712,8 @@ impl App {
                 self.chat_widget.set_model(&model);
                 self.refresh_status_line();
             }
-            AppEvent::ApplyOrQueueModelSelection {
-                model,
-                effort,
-                scope,
-            } => {
-                self.chat_widget
-                    .apply_or_queue_model_selection(model, effort, scope);
+            AppEvent::HandleSlashCommandDraft(draft) => {
+                self.chat_widget.handle_serialized_slash_command(draft);
                 self.refresh_status_line();
             }
             AppEvent::UpdateCollaborationMode(mask) => {
@@ -2740,9 +2735,6 @@ impl App {
             }
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
-            }
-            AppEvent::ApplyOrQueueReview { review_request } => {
-                self.chat_widget.apply_or_queue_review(review_request);
             }
             AppEvent::OpenFullAccessConfirmation {
                 preset,

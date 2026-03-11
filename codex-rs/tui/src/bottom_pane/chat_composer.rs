@@ -50,8 +50,8 @@
 //!
 //! The numeric auto-submit path used by the slash popup performs the same pending-paste expansion
 //! and attachment pruning, and clears pending paste state on success.
-//! Slash commands with arguments (like `/plan` and `/review`) reuse the same preparation path so
-//! pasted content and text elements are preserved when extracting args.
+//! Slash commands with arguments (like `/model`, `/plan`, and `/review`) reuse the same
+//! preparation path so pasted content and text elements are preserved when extracting args.
 //!
 //! # Remote Image Rows (Up/Down/Delete)
 //!

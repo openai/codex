@@ -16,11 +16,11 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::ReviewRequest;
 use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
+use crate::chatwidget::UserMessage;
 use crate::history_cell::HistoryCell;
 
 use codex_core::config::types::ApprovalsReviewer;
@@ -52,13 +52,6 @@ impl RealtimeAudioDeviceKind {
             Self::Speaker => "speaker",
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ModelSelectionScope {
-    Global,
-    PlanOnly,
-    AllModes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,13 +183,9 @@ pub(crate) enum AppEvent {
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
 
-    /// Apply a model selection immediately or queue it when chosen from an interactive picker
-    /// while a task is still running.
-    ApplyOrQueueModelSelection {
-        model: String,
-        effort: Option<ReasoningEffort>,
-        scope: ModelSelectionScope,
-    },
+    /// Evaluate a serialized built-in slash-command draft. If a task is currently running, the
+    /// draft is queued and replayed later through the same path as queued composer input.
+    HandleSlashCommandDraft(UserMessage),
 
     /// Update the active collaboration mask in the running app and widget.
     UpdateCollaborationMode(CollaborationModeMask),
@@ -254,12 +243,6 @@ pub(crate) enum AppEvent {
     /// Open the full model picker (non-auto models).
     OpenAllModelsPopup {
         models: Vec<ModelPreset>,
-    },
-
-    /// Submit a review request immediately or queue it when chosen from an interactive picker
-    /// while a task is still running.
-    ApplyOrQueueReview {
-        review_request: ReviewRequest,
     },
 
     /// Open the confirmation prompt before enabling full access mode.

@@ -119,11 +119,12 @@ impl SlashCommand {
         self.into()
     }
 
-    /// Whether this command supports inline args (for example `/review ...`).
+    /// Whether this command supports inline args (for example `/model ...` or `/review ...`).
     pub fn supports_inline_args(self) -> bool {
         matches!(
             self,
-            SlashCommand::Review
+            SlashCommand::Model
+                | SlashCommand::Review
                 | SlashCommand::Rename
                 | SlashCommand::Plan
                 | SlashCommand::Fast

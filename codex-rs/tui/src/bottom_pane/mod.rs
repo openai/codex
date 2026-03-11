@@ -147,6 +147,7 @@ pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
+pub(crate) use prompt_args::parse_slash_name;
 
 /// Pane displayed in the lower half of the chat UI.
 ///
@@ -408,11 +409,10 @@ impl BottomPane {
             InputResult::None
         } else {
             // If a task is running and a status line is visible, allow Esc to
-            // send an interrupt only from an empty composer with no popup active.
+            // send an interrupt when no popup is active.
             if key_event.code == KeyCode::Esc
                 && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
                 && self.is_task_running
-                && self.composer_text().is_empty()
                 && !self.composer.popup_active()
                 && let Some(status) = &self.status
             {
@@ -1695,7 +1695,7 @@ mod tests {
     }
 
     #[test]
-    fn esc_with_agent_command_without_popup_does_not_interrupt_task() {
+    fn esc_with_agent_command_without_popup_interrupts_task() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
@@ -1711,8 +1711,8 @@ mod tests {
 
         pane.set_task_running(true);
 
-        // Repro: `/agent ` hides the popup (cursor past command name). Esc should
-        // keep editing command text instead of interrupting the running task.
+        // `/agent ` hides the popup once the cursor moves past the command name.
+        // Without an active popup, Esc should interrupt even though the composer has text.
         pane.insert_str("/agent ");
         assert!(
             !pane.composer.popup_active(),
@@ -1721,12 +1721,10 @@ mod tests {
 
         pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
-        while let Ok(ev) = rx.try_recv() {
-            assert!(
-                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
-                "expected Esc to not send Op::Interrupt while typing `/agent`"
-            );
-        }
+        assert!(
+            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
+            "expected Esc to send Op::Interrupt while typing `/agent` with no popup"
+        );
         assert_eq!(pane.composer_text(), "/agent ");
     }
 
@@ -1804,7 +1802,7 @@ mod tests {
     }
 
     #[test]
-    fn esc_with_nonempty_composer_does_not_interrupt_task() {
+    fn esc_with_nonempty_composer_interrupts_task_when_no_popup() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
@@ -1823,12 +1821,10 @@ mod tests {
 
         pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
-        while let Ok(ev) = rx.try_recv() {
-            assert!(
-                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
-                "expected Esc to not send Op::Interrupt while composer has text"
-            );
-        }
+        assert!(
+            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
+            "expected Esc to send Op::Interrupt while composer has text and no popup is active"
+        );
         assert_eq!(pane.composer_text(), "still editing");
     }
 
