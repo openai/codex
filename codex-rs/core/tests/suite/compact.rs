@@ -3297,6 +3297,7 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
     skip_if_no_network!();
 
     let server = start_mock_server().await;
+
     let compact_turn = sse(vec![
         ev_assistant_message("m1", "MANUAL_EMPTY_SUMMARY"),
         ev_completed_with_tokens("r1", 90),
