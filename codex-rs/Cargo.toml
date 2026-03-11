@@ -16,6 +16,7 @@ members = [
     "cloud-tasks",
     "cloud-tasks-client",
     "cli",
+    "code-mode",
     "config",
     "shell-command",
     "shell-escalation",
@@ -98,6 +99,7 @@ codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }
 codex-cloud-requirements = { path = "cloud-requirements" }
+codex-code-mode = { path = "code-mode" }
 codex-config = { path = "config" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
@@ -234,6 +236,7 @@ regex-lite = "0.1.8"
 reqwest = "0.12"
 rmcp = { version = "0.15.0", default-features = false }
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
+v8 = "146.4.0"
 rustls = { version = "0.23", default-features = false, features = [
     "ring",
     "std",

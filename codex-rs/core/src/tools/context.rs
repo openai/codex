@@ -307,7 +307,6 @@ fn content_items_to_code_mode_result(items: &[FunctionCallOutputContentItem]) ->
             .join("\n"),
     )
 }
-
 fn function_tool_response(
     call_id: &str,
     payload: &ToolPayload,

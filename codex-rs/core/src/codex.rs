@@ -390,6 +390,18 @@ impl Codex {
             let _ = config.features.disable(Feature::Collab);
         }
 
+        if config.features.enabled(Feature::CodeMode)
+            && let Some(reason) = codex_code_mode::unsupported_reason()
+        {
+            let _ = config.features.disable(Feature::CodeMode);
+            let message = format!(
+                "Disabled `{}` for this session because it is unavailable: {reason}",
+                crate::tools::code_mode::PUBLIC_TOOL_NAME
+            );
+            warn!("{message}");
+            config.startup_warnings.push(message);
+        }
+
         if config.features.enabled(Feature::JsRepl)
             && let Err(err) = resolve_compatible_node(config.js_repl_node_path.as_deref()).await
         {
@@ -407,17 +419,6 @@ impl Codex {
             warn!("{message}");
             config.startup_warnings.push(message);
         }
-        if config.features.enabled(Feature::CodeMode)
-            && let Err(err) = resolve_compatible_node(config.js_repl_node_path.as_deref()).await
-        {
-            let message = format!(
-                "Disabled `exec` for this session because the configured Node runtime is unavailable or incompatible. {err}"
-            );
-            warn!("{message}");
-            let _ = config.features.disable(Feature::CodeMode);
-            config.startup_warnings.push(message);
-        }
-
         let allowed_skills_for_implicit_invocation =
             loaded_skills.allowed_skills_for_implicit_invocation();
         let user_instructions = get_user_instructions(

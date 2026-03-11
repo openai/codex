@@ -1,0 +1,19 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-code-mode"
+version.workspace = true
+
+[lib]
+name = "codex_code_mode"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[target.'cfg(not(all(target_os = "linux", target_env = "musl")))'.dependencies]
+v8 = { workspace = true }

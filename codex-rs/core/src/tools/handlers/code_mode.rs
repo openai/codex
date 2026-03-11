@@ -38,6 +38,9 @@ impl ToolHandler for CodeModeHandler {
                 "{PUBLIC_TOOL_NAME} is disabled by feature flag"
             )));
         }
+        if let Some(reason) = codex_code_mode::unsupported_reason() {
+            return Err(FunctionCallError::RespondToModel(reason.to_string()));
+        }
 
         let code = match payload {
             ToolPayload::Custom { input } => input,

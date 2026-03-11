@@ -1,0 +1,16 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+rust_library(
+    name = "code-mode",
+    crate_name = "codex_code_mode",
+    crate_root = "src/bazel_stub.rs",
+    srcs = [
+        "src/api.rs",
+        "src/bazel_stub.rs",
+    ],
+    deps = [
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+    visibility = ["//visibility:public"],
+)

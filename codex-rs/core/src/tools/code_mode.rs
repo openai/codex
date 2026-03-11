@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,7 +5,6 @@ use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
-use crate::exec_env::create_env;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::ToolRouter;
@@ -15,24 +13,20 @@ use crate::tools::code_mode_description::code_mode_tool_reference;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
-use crate::tools::js_repl::resolve_compatible_node;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::formatted_truncate_text_content_items_with_policy;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::unified_exec::resolve_max_tokens;
+use codex_code_mode::EnabledTool;
+use codex_code_mode::ToolKind as CodeModeToolKind;
+use codex_code_mode::execute as execute_code_mode;
 use codex_protocol::models::FunctionCallOutputContentItem;
-use serde::Deserialize;
-use serde::Serialize;
 use serde_json::Value as JsonValue;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
-use tokio::io::BufReader;
+use tokio::runtime::Handle;
+use tokio::runtime::RuntimeFlavor;
 
-const CODE_MODE_RUNNER_SOURCE: &str = include_str!("code_mode_runner.cjs");
-const CODE_MODE_BRIDGE_SOURCE: &str = include_str!("code_mode_bridge.js");
 pub(crate) const PUBLIC_TOOL_NAME: &str = "exec";
 
 #[derive(Clone)]
@@ -41,66 +35,14 @@ struct ExecContext {
     turn: Arc<TurnContext>,
     tracker: SharedTurnDiffTracker,
 }
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum CodeModeToolKind {
-    Function,
-    Freeform,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct EnabledTool {
-    tool_name: String,
-    #[serde(rename = "module")]
-    module_path: String,
-    namespace: Vec<String>,
-    name: String,
-    description: String,
-    kind: CodeModeToolKind,
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum HostToNodeMessage {
-    Init {
-        enabled_tools: Vec<EnabledTool>,
-        stored_values: HashMap<String, JsonValue>,
-        source: String,
-    },
-    Response {
-        id: String,
-        code_mode_result: JsonValue,
-    },
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum NodeToHostMessage {
-    ToolCall {
-        id: String,
-        name: String,
-        #[serde(default)]
-        input: Option<JsonValue>,
-    },
-    Result {
-        content_items: Vec<JsonValue>,
-        stored_values: HashMap<String, JsonValue>,
-        #[serde(default)]
-        error_text: Option<String>,
-        #[serde(default)]
-        max_output_tokens_per_exec_call: Option<usize>,
-    },
-}
-
 pub(crate) fn instructions(config: &Config) -> Option<String> {
-    if !config.features.enabled(Feature::CodeMode) {
+    if !config.features.enabled(Feature::CodeMode) || !codex_code_mode::is_supported() {
         return None;
     }
 
     let mut section = String::from("## Exec\n");
     section.push_str(&format!(
-        "- Use `{PUBLIC_TOOL_NAME}` for JavaScript execution in a Node-backed `node:vm` context.\n",
+        "- Use `{PUBLIC_TOOL_NAME}` for JavaScript execution in an embedded V8 runtime.\n",
     ));
     section.push_str(&format!(
         "- `{PUBLIC_TOOL_NAME}` is a freeform/custom tool. Direct `{PUBLIC_TOOL_NAME}` calls must send raw JavaScript tool input. Do not wrap code in JSON, quotes, or markdown code fences.\n",
@@ -108,10 +50,7 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
     section.push_str(&format!(
         "- Direct tool calls remain available while `{PUBLIC_TOOL_NAME}` is enabled.\n",
     ));
-    section.push_str(&format!(
-        "- `{PUBLIC_TOOL_NAME}` uses the same Node runtime resolution as `js_repl`. If needed, point `js_repl_node_path` at the Node binary you want Codex to use.\n",
-    ));
-    section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { ALL_TOOLS } from \"tools.js\"` to inspect the available `{ module, name, description }` entries. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. Nested tool calls resolve to their code-mode result values.\n");
+    section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"`, `import { tools } from \"tools.js\"`, or `import { ALL_TOOLS } from \"tools.js\"` to inspect the available `{ module, name, description }` entries. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to their code-mode result values.\n");
     section.push_str(&format!(
         "- Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, store, load }}` from `@openai/code_mode` (or `\"openai/code_mode\"`). `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs. `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, and `load(key)` returns a cloned stored value or `undefined`. `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `{PUBLIC_TOOL_NAME}` execution; the default is `10000`. This guards the overall `{PUBLIC_TOOL_NAME}` output, not individual nested tool invocations. The returned content starts with a separate `Script completed` or `Script failed` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker.\n",
     ));
@@ -137,171 +76,36 @@ pub(crate) async fn execute(
     };
     let enabled_tools = build_enabled_tools(&exec).await;
     let stored_values = exec.session.services.code_mode_store.stored_values().await;
-    let source = build_source(&code, &enabled_tools).map_err(FunctionCallError::RespondToModel)?;
-    execute_node(exec, source, enabled_tools, stored_values)
-        .await
-        .map_err(FunctionCallError::RespondToModel)
-}
-
-async fn execute_node(
-    exec: ExecContext,
-    source: String,
-    enabled_tools: Vec<EnabledTool>,
-    stored_values: HashMap<String, JsonValue>,
-) -> Result<FunctionToolOutput, String> {
-    let node_path = resolve_compatible_node(exec.turn.config.js_repl_node_path.as_deref()).await?;
     let started_at = std::time::Instant::now();
-
-    let env = create_env(&exec.turn.shell_environment_policy, None);
-    let mut cmd = tokio::process::Command::new(&node_path);
-    cmd.arg("--experimental-vm-modules");
-    cmd.arg("--eval");
-    cmd.arg(CODE_MODE_RUNNER_SOURCE);
-    cmd.current_dir(&exec.turn.cwd);
-    cmd.env_clear();
-    cmd.envs(env);
-    cmd.stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|err| format!("failed to start {PUBLIC_TOOL_NAME} Node runtime: {err}"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| format!("{PUBLIC_TOOL_NAME} runner missing stdout"))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| format!("{PUBLIC_TOOL_NAME} runner missing stderr"))?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| format!("{PUBLIC_TOOL_NAME} runner missing stdin"))?;
-
-    let stderr_task = tokio::spawn(async move {
-        let mut reader = BufReader::new(stderr);
-        let mut buf = Vec::new();
-        let _ = reader.read_to_end(&mut buf).await;
-        String::from_utf8_lossy(&buf).trim().to_string()
-    });
-
-    write_message(
-        &mut stdin,
-        &HostToNodeMessage::Init {
-            enabled_tools: enabled_tools.clone(),
-            stored_values,
-            source,
-        },
+    let callback_exec = exec.clone();
+    let result = execute_code_mode(
+        code,
+        enabled_tools,
+        stored_values,
+        Box::new(move |tool_name, input| run_tool_call(&callback_exec, tool_name, input)),
     )
-    .await?;
-
-    let mut stdout_lines = BufReader::new(stdout).lines();
-    let mut pending_result = None;
-    while let Some(line) = stdout_lines
-        .next_line()
-        .await
-        .map_err(|err| format!("failed to read {PUBLIC_TOOL_NAME} runner stdout: {err}"))?
-    {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let message: NodeToHostMessage = serde_json::from_str(&line).map_err(|err| {
-            format!("invalid {PUBLIC_TOOL_NAME} runner message: {err}; line={line}")
-        })?;
-        match message {
-            NodeToHostMessage::ToolCall { id, name, input } => {
-                let response = HostToNodeMessage::Response {
-                    id,
-                    code_mode_result: call_nested_tool(exec.clone(), name, input).await,
-                };
-                write_message(&mut stdin, &response).await?;
-            }
-            NodeToHostMessage::Result {
-                content_items,
-                stored_values,
-                error_text,
-                max_output_tokens_per_exec_call,
-            } => {
-                exec.session
-                    .services
-                    .code_mode_store
-                    .replace_stored_values(stored_values)
-                    .await;
-                pending_result = Some((
-                    output_content_items_from_json_values(content_items)?,
-                    error_text,
-                    max_output_tokens_per_exec_call,
-                ));
-                break;
-            }
-        }
-    }
-
-    drop(stdin);
-
-    let status = child
-        .wait()
-        .await
-        .map_err(|err| format!("failed to wait for {PUBLIC_TOOL_NAME} runner: {err}"))?;
-    let stderr = stderr_task
-        .await
-        .map_err(|err| format!("failed to collect {PUBLIC_TOOL_NAME} stderr: {err}"))?;
-    let wall_time = started_at.elapsed();
-    let success = status.success();
-
-    let Some((mut content_items, error_text, max_output_tokens_per_exec_call)) = pending_result
-    else {
-        let message = if stderr.is_empty() {
-            format!("{PUBLIC_TOOL_NAME} runner exited without returning a result (status {status})")
-        } else {
-            stderr
-        };
-        return Err(message);
-    };
-
-    if !success {
-        let error_text = error_text.unwrap_or_else(|| {
-            if stderr.is_empty() {
-                format!("Process exited with status {status}")
-            } else {
-                stderr
-            }
-        });
-        content_items.push(FunctionCallOutputContentItem::InputText {
+    .map_err(FunctionCallError::RespondToModel)?;
+    exec.session
+        .services
+        .code_mode_store
+        .replace_stored_values(result.stored_values)
+        .await;
+    let mut items = output_content_items_from_json_values(result.content_items)
+        .map_err(FunctionCallError::RespondToModel)?;
+    if !result.success {
+        let error_text = result
+            .error_text
+            .unwrap_or_else(|| "JavaScript execution failed".to_string());
+        items.push(FunctionCallOutputContentItem::InputText {
             text: format!("Script error:\n{error_text}"),
         });
     }
-
-    let mut content_items =
-        truncate_code_mode_result(content_items, max_output_tokens_per_exec_call);
-    prepend_script_status(&mut content_items, success, wall_time);
+    let mut items = truncate_code_mode_result(items, Some(result.max_output_tokens_per_exec_call));
+    prepend_script_status(&mut items, result.success, started_at.elapsed());
     Ok(FunctionToolOutput::from_content(
-        content_items,
-        Some(success),
+        items,
+        Some(result.success),
     ))
-}
-
-async fn write_message(
-    stdin: &mut tokio::process::ChildStdin,
-    message: &HostToNodeMessage,
-) -> Result<(), String> {
-    let line = serde_json::to_string(message)
-        .map_err(|err| format!("failed to serialize {PUBLIC_TOOL_NAME} message: {err}"))?;
-    stdin
-        .write_all(line.as_bytes())
-        .await
-        .map_err(|err| format!("failed to write {PUBLIC_TOOL_NAME} message: {err}"))?;
-    stdin
-        .write_all(b"\n")
-        .await
-        .map_err(|err| format!("failed to write {PUBLIC_TOOL_NAME} message newline: {err}"))?;
-    stdin
-        .flush()
-        .await
-        .map_err(|err| format!("failed to flush {PUBLIC_TOOL_NAME} message: {err}"))
 }
 
 fn prepend_script_status(
@@ -319,17 +123,6 @@ fn prepend_script_status(
         }
     );
     content_items.insert(0, FunctionCallOutputContentItem::InputText { text: header });
-}
-
-fn build_source(user_code: &str, enabled_tools: &[EnabledTool]) -> Result<String, String> {
-    let enabled_tools_json = serde_json::to_string(enabled_tools)
-        .map_err(|err| format!("failed to serialize enabled tools: {err}"))?;
-    Ok(CODE_MODE_BRIDGE_SOURCE
-        .replace(
-            "__CODE_MODE_ENABLED_TOOLS_PLACEHOLDER__",
-            &enabled_tools_json,
-        )
-        .replace("__CODE_MODE_USER_CODE_PLACEHOLDER__", user_code))
 }
 
 fn truncate_code_mode_result(
@@ -411,32 +204,45 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
     )
 }
 
+fn run_tool_call(
+    exec: &ExecContext,
+    tool_name: String,
+    input: Option<JsonValue>,
+) -> Result<JsonValue, String> {
+    match Handle::current().runtime_flavor() {
+        RuntimeFlavor::MultiThread => tokio::task::block_in_place(|| {
+            Handle::current().block_on(call_nested_tool(exec.clone(), tool_name, input))
+        }),
+        RuntimeFlavor::CurrentThread => Err(format!(
+            "{PUBLIC_TOOL_NAME} tool calls require a multi-thread Tokio runtime"
+        )),
+        _ => Err(format!(
+            "{PUBLIC_TOOL_NAME} tool calls require a supported Tokio runtime"
+        )),
+    }
+}
+
 async fn call_nested_tool(
     exec: ExecContext,
     tool_name: String,
     input: Option<JsonValue>,
-) -> JsonValue {
+) -> Result<JsonValue, String> {
     if tool_name == PUBLIC_TOOL_NAME {
-        return JsonValue::String(format!("{PUBLIC_TOOL_NAME} cannot invoke itself"));
+        return Ok(JsonValue::String(format!(
+            "{PUBLIC_TOOL_NAME} cannot invoke itself"
+        )));
     }
 
     let router = build_nested_router(&exec).await;
-
     let specs = router.specs();
     let payload = if let Some((server, tool)) = exec.session.parse_mcp_tool_name(&tool_name).await {
-        match serialize_function_tool_arguments(&tool_name, input) {
-            Ok(raw_arguments) => ToolPayload::Mcp {
-                server,
-                tool,
-                raw_arguments,
-            },
-            Err(error) => return JsonValue::String(error),
+        ToolPayload::Mcp {
+            server,
+            tool,
+            raw_arguments: serialize_function_tool_arguments(&tool_name, input)?,
         }
     } else {
-        match build_nested_tool_payload(&specs, &tool_name, input) {
-            Ok(payload) => payload,
-            Err(error) => return JsonValue::String(error),
-        }
+        build_nested_tool_payload(&specs, &tool_name, input)?
     };
 
     let call = ToolCall {
@@ -452,12 +258,10 @@ async fn call_nested_tool(
             call,
             ToolCallSource::CodeMode,
         )
-        .await;
+        .await
+        .map_err(|error| error.to_string())?;
 
-    match result {
-        Ok(result) => result.code_mode_result(),
-        Err(error) => JsonValue::String(error.to_string()),
-    }
+    Ok(result.code_mode_result())
 }
 
 fn tool_kind_for_spec(spec: &ToolSpec) -> CodeModeToolKind {
@@ -481,8 +285,7 @@ fn build_nested_tool_payload(
     tool_name: &str,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
-    let actual_kind = tool_kind_for_name(specs, tool_name)?;
-    match actual_kind {
+    match tool_kind_for_name(specs, tool_name)? {
         CodeModeToolKind::Function => build_function_tool_payload(tool_name, input),
         CodeModeToolKind::Freeform => build_freeform_tool_payload(tool_name, input),
     }

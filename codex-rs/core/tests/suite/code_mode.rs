@@ -24,6 +24,14 @@ use std::fs;
 use std::time::Duration;
 use wiremock::MockServer;
 
+macro_rules! skip_on_bazel {
+    ($result:expr) => {
+        if option_env!("BAZEL_PACKAGE").is_some() {
+            return $result;
+        }
+    };
+}
+
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
     req.custom_tool_call_output(call_id)
         .get("output")
@@ -157,6 +165,7 @@ async fn run_code_mode_turn_with_rmcp(
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_return_exec_command_output() -> Result<()> {
+    skip_on_bazel!(Ok(()));
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -203,6 +212,7 @@ add_content(JSON.stringify(await exec_command({ cmd: "printf code_mode_exec_mark
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_truncate_final_result_with_configured_budget() -> Result<()> {
+    skip_on_bazel!(Ok(()));
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -248,6 +258,7 @@ Total\ output\ lines:\ 1\n
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_returns_accumulated_output_when_script_fails() -> Result<()> {
+    skip_on_bazel!(Ok(()));
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -291,6 +302,7 @@ Error:\ boom\n
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_output_serialized_text_via_openai_code_mode_module() -> Result<()> {
+    skip_on_bazel!(Ok(()));
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -320,6 +332,7 @@ output_text({ json: true });
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_surfaces_output_text_stringify_errors() -> Result<()> {
+    skip_on_bazel!(Ok(()));
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -363,6 +376,7 @@ output_text(circular);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_output_images_via_openai_code_mode_module() -> Result<()> {
+    skip_on_bazel!(Ok(()));
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -415,6 +429,7 @@ output_image("data:image/png;base64,AAA");
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
+    skip_on_bazel!(Ok(()));
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -456,6 +471,7 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_print_structured_mcp_tool_result_fields() -> Result<()> {
+    skip_on_bazel!(Ok(()));
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -496,6 +512,7 @@ contentLength=0"
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_exports_all_tools_metadata_for_builtin_tools() -> Result<()> {
+    skip_on_bazel!(Ok(()));
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -531,7 +548,47 @@ add_content(JSON.stringify(tool));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_can_access_namespaced_mcp_tool_from_flat_tools_namespace() -> Result<()> {
+    skip_on_bazel!(Ok(()));
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+import { tools } from "tools.js";
+
+const { structuredContent, isError } = await tools["mcp__rmcp__echo"]({
+  message: "ping",
+});
+add_content(
+  `echo=${structuredContent?.echo ?? "missing"}\n` +
+    `env=${structuredContent?.env ?? "missing"}\n` +
+    `isError=${String(isError)}`
+);
+"#;
+
+    let (_test, second_mock) =
+        run_code_mode_turn_with_rmcp(&server, "use exec to run the rmcp echo tool", code).await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec rmcp echo call failed unexpectedly: {output}"
+    );
+    assert_eq!(
+        output,
+        "echo=ECHOING: ping
+env=propagated-env
+isError=false"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_exports_all_tools_metadata_for_namespaced_mcp_tools() -> Result<()> {
+    skip_on_bazel!(Ok(()));
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -570,6 +627,7 @@ add_content(JSON.stringify(tool));
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_print_content_only_mcp_tool_result_fields() -> Result<()> {
+    skip_on_bazel!(Ok(()));
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -615,6 +673,7 @@ isError=false"
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_print_error_mcp_tool_result_fields() -> Result<()> {
+    skip_on_bazel!(Ok(()));
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -655,6 +714,7 @@ structuredContent=null"
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_store_and_load_values_across_turns() -> Result<()> {
+    skip_on_bazel!(Ok(()));
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
