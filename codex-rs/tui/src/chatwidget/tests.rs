@@ -1867,6 +1867,7 @@ async fn make_chatwidget_manual(
         adaptive_chunking: crate::streaming::chunking::AdaptiveChunkingPolicy::default(),
         stream_controller: None,
         plan_stream_controller: None,
+        active_guardian_reviews: Vec::new(),
         last_copyable_output: None,
         running_commands: HashMap::new(),
         pending_collab_spawn_requests: HashMap::new(),
@@ -9449,6 +9450,97 @@ async fn guardian_review_background_event_renders_reviewed_command_snapshot() {
     assert_snapshot!(
         "guardian_review_background_event_renders_reviewed_command",
         rendered
+    );
+}
+
+#[tokio::test]
+async fn guardian_parallel_reviews_render_aggregate_status_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    for (id, command) in [
+        ("guardian-1", "rm -rf '/tmp/guardian target 1'"),
+        ("guardian-2", "rm -rf '/tmp/guardian target 2'"),
+    ] {
+        chat.handle_codex_event(Event {
+            id: format!("event-{id}"),
+            msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+                id: id.to_string(),
+                turn_id: "turn-1".to_string(),
+                status: GuardianAssessmentStatus::InProgress,
+                risk_score: None,
+                risk_level: None,
+                rationale: None,
+                action: Some(serde_json::json!({
+                    "tool": "shell",
+                    "command": command,
+                })),
+            }),
+        });
+    }
+
+    let rendered = render_bottom_popup(&chat, 72);
+    assert_snapshot!(
+        "guardian_parallel_reviews_render_aggregate_status",
+        rendered
+    );
+}
+
+#[tokio::test]
+async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    chat.handle_codex_event(Event {
+        id: "event-guardian-1".into(),
+        msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+            id: "guardian-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            status: GuardianAssessmentStatus::InProgress,
+            risk_score: None,
+            risk_level: None,
+            rationale: None,
+            action: Some(serde_json::json!({
+                "tool": "shell",
+                "command": "rm -rf '/tmp/guardian target 1'",
+            })),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "event-guardian-2".into(),
+        msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+            id: "guardian-2".to_string(),
+            turn_id: "turn-1".to_string(),
+            status: GuardianAssessmentStatus::InProgress,
+            risk_score: None,
+            risk_level: None,
+            rationale: None,
+            action: Some(serde_json::json!({
+                "tool": "shell",
+                "command": "rm -rf '/tmp/guardian target 2'",
+            })),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "event-guardian-1-denied".into(),
+        msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+            id: "guardian-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            status: GuardianAssessmentStatus::Denied,
+            risk_score: Some(92),
+            risk_level: Some(GuardianRiskLevel::High),
+            rationale: Some("Would delete important data.".to_string()),
+            action: Some(serde_json::json!({
+                "tool": "shell",
+                "command": "rm -rf '/tmp/guardian target 1'",
+            })),
+        }),
+    });
+
+    assert_eq!(chat.current_status_header, "Reviewing approval request");
+    assert_eq!(
+        chat.current_status_details,
+        Some("rm -rf '/tmp/guardian target 2'".to_string())
     );
 }
 
