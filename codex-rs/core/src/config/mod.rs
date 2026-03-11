@@ -70,7 +70,7 @@ use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::config_types::WebSearchToolConfig;
+use codex_protocol::config_types::WebSearchToolConfigValue;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::openai_models::ModelsResponse;
@@ -1392,8 +1392,10 @@ pub struct RealtimeAudioToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ToolsToml {
+    /// Enable the native `web_search` tool with `true`/`false`, or provide a
+    /// table with `enabled` and additional parameters.
     #[serde(default)]
-    pub web_search: Option<WebSearchToolConfig>,
+    pub web_search: Option<WebSearchToolConfigValue>,
 
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
@@ -1457,7 +1459,7 @@ pub struct AgentRoleToml {
 impl From<ToolsToml> for Tools {
     fn from(tools_toml: ToolsToml) -> Self {
         Self {
-            web_search: tools_toml.web_search.is_some().then_some(true),
+            web_search: tools_toml.web_search.map(|web_search| web_search.enabled()),
             view_image: tools_toml.view_image,
         }
     }
@@ -1756,11 +1758,13 @@ fn resolve_web_search_config(
     let base = config_toml
         .tools
         .as_ref()
-        .and_then(|tools| tools.web_search.as_ref());
+        .and_then(|tools| tools.web_search.as_ref())
+        .and_then(WebSearchToolConfigValue::as_config);
     let profile = config_profile
         .tools
         .as_ref()
-        .and_then(|tools| tools.web_search.as_ref());
+        .and_then(|tools| tools.web_search.as_ref())
+        .and_then(WebSearchToolConfigValue::as_config);
 
     match (base, profile) {
         (None, None) => None,

@@ -231,4 +231,5 @@ export type { WebSearchItem } from "./WebSearchItem";
 export type { WebSearchLocation } from "./WebSearchLocation";
 export type { WebSearchMode } from "./WebSearchMode";
 export type { WebSearchToolConfig } from "./WebSearchToolConfig";
+export type { WebSearchToolConfigValue } from "./WebSearchToolConfigValue";
 export * as v2 from "./v2";

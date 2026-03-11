@@ -145,14 +145,39 @@ impl WebSearchLocation {
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
 #[schemars(deny_unknown_fields)]
 pub struct WebSearchToolConfig {
+    pub enabled: Option<bool>,
     pub context_size: Option<WebSearchContextSize>,
     pub allowed_domains: Option<Vec<String>>,
     pub location: Option<WebSearchLocation>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum WebSearchToolConfigValue {
+    Enabled(bool),
+    Config(WebSearchToolConfig),
+}
+
+impl WebSearchToolConfigValue {
+    pub fn enabled(&self) -> bool {
+        match self {
+            Self::Enabled(enabled) => *enabled,
+            Self::Config(config) => config.enabled.unwrap_or(true),
+        }
+    }
+
+    pub fn as_config(&self) -> Option<&WebSearchToolConfig> {
+        match self {
+            Self::Enabled(_) => None,
+            Self::Config(config) => Some(config),
+        }
+    }
+}
+
 impl WebSearchToolConfig {
     pub fn merge(&self, other: &Self) -> Self {
         Self {
+            enabled: other.enabled.or(self.enabled),
             context_size: other.context_size.or(self.context_size),
             allowed_domains: other
                 .allowed_domains
@@ -511,6 +536,7 @@ mod tests {
     #[test]
     fn web_search_tool_config_merge_prefers_overlay_values() {
         let base = WebSearchToolConfig {
+            enabled: Some(true),
             context_size: Some(WebSearchContextSize::Low),
             allowed_domains: Some(vec!["openai.com".to_string()]),
             location: Some(WebSearchLocation {
@@ -521,6 +547,7 @@ mod tests {
             }),
         };
         let overlay = WebSearchToolConfig {
+            enabled: Some(false),
             context_size: Some(WebSearchContextSize::High),
             allowed_domains: None,
             location: Some(WebSearchLocation {
@@ -532,6 +559,7 @@ mod tests {
         };
 
         let expected = WebSearchToolConfig {
+            enabled: Some(false),
             context_size: Some(WebSearchContextSize::High),
             allowed_domains: Some(vec!["openai.com".to_string()]),
             location: Some(WebSearchLocation {
@@ -543,5 +571,17 @@ mod tests {
         };
 
         assert_eq!(expected, base.merge(&overlay));
+    }
+
+    #[test]
+    fn web_search_tool_config_value_defaults_object_form_to_enabled() {
+        let config_value = WebSearchToolConfigValue::Config(WebSearchToolConfig {
+            enabled: None,
+            context_size: Some(WebSearchContextSize::Low),
+            allowed_domains: None,
+            location: None,
+        });
+
+        assert_eq!(config_value.enabled(), true);
     }
 }

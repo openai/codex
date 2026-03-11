@@ -1504,10 +1504,11 @@
         "web_search": {
           "allOf": [
             {
-              "$ref": "#/definitions/WebSearchToolConfig"
+              "$ref": "#/definitions/WebSearchToolConfigValue"
             }
           ],
-          "default": null
+          "default": null,
+          "description": "Enable the native `web_search` tool with `true`/`false`, or provide a table with `enabled` and additional parameters."
         }
       },
       "type": "object"
@@ -1661,11 +1662,24 @@
         "context_size": {
           "$ref": "#/definitions/WebSearchContextSize"
         },
+        "enabled": {
+          "type": "boolean"
+        },
         "location": {
           "$ref": "#/definitions/WebSearchLocation"
         }
       },
       "type": "object"
+    },
+    "WebSearchToolConfigValue": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/WebSearchToolConfig"
+        }
+      ]
     },
     "WindowsSandboxModeToml": {
       "enum": [

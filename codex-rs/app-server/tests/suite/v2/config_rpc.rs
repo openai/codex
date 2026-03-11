@@ -26,6 +26,7 @@ use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchLocation;
 use codex_protocol::config_types::WebSearchToolConfig;
+use codex_protocol::config_types::WebSearchToolConfigValue;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -131,11 +132,12 @@ view_image = false
     assert_eq!(
         tools,
         ToolsV2 {
-            web_search: Some(WebSearchToolConfig {
+            web_search: Some(WebSearchToolConfigValue::Config(WebSearchToolConfig {
+                enabled: None,
                 context_size: Some(WebSearchContextSize::Low),
                 allowed_domains: Some(vec!["example.com".to_string()]),
                 location: None,
-            }),
+            })),
             view_image: Some(false),
         }
     );
@@ -203,7 +205,8 @@ location = { country = "US", city = "New York", timezone = "America/New_York" }
 
     assert_eq!(
         config.tools.expect("tools present").web_search,
-        Some(WebSearchToolConfig {
+        Some(WebSearchToolConfigValue::Config(WebSearchToolConfig {
+            enabled: None,
             context_size: Some(WebSearchContextSize::High),
             allowed_domains: Some(vec!["example.com".to_string()]),
             location: Some(WebSearchLocation {
@@ -212,8 +215,61 @@ location = { country = "US", city = "New York", timezone = "America/New_York" }
                 city: Some("New York".to_string()),
                 timezone: Some("America/New_York".to_string()),
             }),
+        })),
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_bool_web_search_toggle() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+[tools]
+web_search = false
+"#,
+    )?;
+    let codex_home_path = codex_home.path().canonicalize()?;
+    let user_file = AbsolutePathBuf::try_from(codex_home_path.join("config.toml"))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: true,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse {
+        config,
+        origins,
+        layers,
+    } = to_response(resp)?;
+
+    assert_eq!(
+        config.tools,
+        Some(ToolsV2 {
+            web_search: Some(WebSearchToolConfigValue::Enabled(false)),
+            view_image: None,
         }),
     );
+    assert_eq!(
+        origins.get("tools.web_search").expect("origin").name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+
+    let layers = layers.expect("layers present");
+    assert_layers_user_then_optional_system(&layers, user_file)?;
 
     Ok(())
 }

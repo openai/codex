@@ -16963,7 +16963,7 @@
           "web_search": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/WebSearchToolConfig"
+                "$ref": "#/definitions/v2/WebSearchToolConfigValue"
               },
               {
                 "type": "null"
@@ -17634,6 +17634,12 @@
               }
             ]
           },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "location": {
             "anyOf": [
               {
@@ -17646,6 +17652,16 @@
           }
         },
         "type": "object"
+      },
+      "WebSearchToolConfigValue": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "$ref": "#/definitions/v2/WebSearchToolConfig"
+          }
+        ]
       },
       "WindowsSandboxSetupCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",

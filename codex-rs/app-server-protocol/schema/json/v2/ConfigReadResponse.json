@@ -741,7 +741,7 @@
         "web_search": {
           "anyOf": [
             {
-              "$ref": "#/definitions/WebSearchToolConfig"
+              "$ref": "#/definitions/WebSearchToolConfigValue"
             },
             {
               "type": "null"
@@ -828,6 +828,12 @@
             }
           ]
         },
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "location": {
           "anyOf": [
             {
@@ -840,6 +846,16 @@
         }
       },
       "type": "object"
+    },
+    "WebSearchToolConfigValue": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/WebSearchToolConfig"
+        }
+      ]
     }
   },
   "properties": {

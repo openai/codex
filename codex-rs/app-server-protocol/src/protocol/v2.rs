@@ -23,7 +23,7 @@ use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::config_types::WebSearchToolConfig;
+use codex_protocol::config_types::WebSearchToolConfigValue;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::Resource as McpResource;
@@ -498,7 +498,7 @@ pub struct SandboxWorkspaceWrite {
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct ToolsV2 {
-    pub web_search: Option<WebSearchToolConfig>,
+    pub web_search: Option<WebSearchToolConfigValue>,
     pub view_image: Option<bool>,
 }
 
