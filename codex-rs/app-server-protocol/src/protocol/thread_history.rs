@@ -1607,19 +1607,35 @@ fn thread_item_from_guardian_assessment_action(
 }
 
 fn guardian_action_command(action: &serde_json::Value) -> Option<String> {
-    match action.get("command")? {
-        serde_json::Value::String(command) => Some(command.clone()),
-        serde_json::Value::Array(command) => {
-            let args = command
-                .iter()
-                .map(serde_json::Value::as_str)
-                .collect::<Option<Vec<_>>>()?;
-            shlex::try_join(args.iter().copied())
-                .ok()
-                .or_else(|| Some(args.join(" ")))
-        }
-        _ => None,
+    if let Some(command) = action.get("command") {
+        return match command {
+            serde_json::Value::String(command) => Some(command.clone()),
+            serde_json::Value::Array(command) => {
+                let args = command
+                    .iter()
+                    .map(serde_json::Value::as_str)
+                    .collect::<Option<Vec<_>>>()?;
+                shlex::try_join(args.iter().copied())
+                    .ok()
+                    .or_else(|| Some(args.join(" ")))
+            }
+            _ => None,
+        };
     }
+
+    let program = action.get("program")?.as_str()?;
+    let argv = action
+        .get("argv")?
+        .as_array()?
+        .iter()
+        .map(serde_json::Value::as_str)
+        .collect::<Option<Vec<_>>>()?;
+    let args = std::iter::once(program)
+        .chain(argv.iter().skip(1).copied())
+        .collect::<Vec<_>>();
+    shlex::try_join(args.iter().copied())
+        .ok()
+        .or_else(|| Some(args.join(" ")))
 }
 
 fn guardian_action_changes(action: &serde_json::Value) -> Vec<FileUpdateChange> {
@@ -2572,6 +2588,70 @@ mod tests {
                         risk_score: Some(88),
                         risk_level: Some(RiskLevel::High),
                         rationale: Some("Would exfiltrate data.".into()),
+                    }),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn reconstructs_declined_guardian_execve_item() {
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-guardian".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "run the command".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::GuardianAssessment(codex_protocol::protocol::GuardianAssessmentEvent {
+                id: "guardian-execve-1".into(),
+                turn_id: "turn-guardian".into(),
+                status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
+                risk_score: Some(91),
+                risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
+                rationale: Some("Would delete an important file.".into()),
+                action: Some(serde_json::json!({
+                    "tool": "shell",
+                    "program": "/bin/rm",
+                    "argv": ["/bin/rm", "-rf", "/tmp/important.sqlite"],
+                    "cwd": "/repo",
+                })),
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].items[1],
+            ThreadItem::CommandExecution {
+                id: "guardian-execve-1".into(),
+                command: "/bin/rm -rf /tmp/important.sqlite".into(),
+                cwd: PathBuf::from("/repo"),
+                process_id: None,
+                status: CommandExecutionStatus::Declined,
+                command_actions: Vec::new(),
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+                approval: Some(ItemApprovalState {
+                    status: ItemApprovalStatus::Declined,
+                    pending_kind: None,
+                    resolved_by: Some(ItemApprovalResolvedBy::Automatic),
+                    automatic_review: Some(AutomaticApprovalReview {
+                        status: AutomaticApprovalReviewStatus::Denied,
+                        risk_score: Some(91),
+                        risk_level: Some(RiskLevel::High),
+                        rationale: Some("Would delete an important file.".into()),
                     }),
                 }),
             }
