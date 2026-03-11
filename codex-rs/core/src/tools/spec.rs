@@ -1443,8 +1443,8 @@ fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSp
     })
 }
 
-fn create_tool_suggest_tool(discoverable_connectors: &[AppInfo]) -> ToolSpec {
-    let discoverable_tool_ids = discoverable_connectors
+fn create_tool_suggest_tool(discoverable_tools: &[AppInfo]) -> ToolSpec {
+    let discoverable_tool_ids = discoverable_tools
         .iter()
         .map(|connector| connector.id.as_str())
         .collect::<Vec<_>>()
@@ -1485,9 +1485,10 @@ fn create_tool_suggest_tool(discoverable_connectors: &[AppInfo]) -> ToolSpec {
             },
         ),
     ]);
-    let discoverable_tools = format_discoverable_tools(discoverable_connectors);
-    let description = TOOL_SUGGEST_DESCRIPTION_TEMPLATE
-        .replace("{{discoverable_tools}}", discoverable_tools.as_str());
+    let description = TOOL_SUGGEST_DESCRIPTION_TEMPLATE.replace(
+        "{{discoverable_tools}}",
+        format_discoverable_tools(discoverable_tools).as_str(),
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: TOOL_SUGGEST_TOOL_NAME.to_string(),
@@ -1507,8 +1508,8 @@ fn create_tool_suggest_tool(discoverable_connectors: &[AppInfo]) -> ToolSpec {
     })
 }
 
-fn format_discoverable_tools(discoverable_connectors: &[AppInfo]) -> String {
-    let mut connectors = discoverable_connectors.to_vec();
+fn format_discoverable_tools(discoverable_tools: &[AppInfo]) -> String {
+    let mut connectors = discoverable_tools.to_vec();
     connectors.sort_by(|left, right| {
         left.name
             .cmp(&right.name)
@@ -2138,14 +2139,14 @@ pub(crate) fn build_specs(
     app_tools: Option<HashMap<String, ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
-    build_specs_with_discoverable_connectors(config, mcp_tools, app_tools, None, dynamic_tools)
+    build_specs_with_discoverable_tools(config, mcp_tools, app_tools, None, dynamic_tools)
 }
 
-pub(crate) fn build_specs_with_discoverable_connectors(
+pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
     app_tools: Option<HashMap<String, ToolInfo>>,
-    discoverable_connectors: Option<Vec<AppInfo>>,
+    discoverable_tools: Option<Vec<AppInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
@@ -2197,7 +2198,7 @@ pub(crate) fn build_specs_with_discoverable_connectors(
 
     if config.code_mode_enabled {
         let nested_config = config.for_code_mode_nested_tools();
-        let (nested_specs, _) = build_specs_with_discoverable_connectors(
+        let (nested_specs, _) = build_specs_with_discoverable_tools(
             &nested_config,
             mcp_tools.clone(),
             app_tools.clone(),
@@ -2359,14 +2360,11 @@ pub(crate) fn build_specs_with_discoverable_connectors(
     }
 
     if config.tool_suggest
-        && let Some(discoverable_connectors) = discoverable_connectors
+        && let Some(discoverable_tools) = discoverable_tools
             .as_ref()
-            .filter(|connectors| !connectors.is_empty())
+            .filter(|tools| !tools.is_empty())
     {
-        builder.push_spec_with_parallel_support(
-            create_tool_suggest_tool(discoverable_connectors),
-            true,
-        );
+        builder.push_spec_with_parallel_support(create_tool_suggest_tool(discoverable_tools), true);
         builder.register_handler(TOOL_SUGGEST_TOOL_NAME, tool_suggest_handler);
     }
 
@@ -4169,7 +4167,7 @@ mod tests {
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
         });
-        let (tools, _) = build_specs_with_discoverable_connectors(
+        let (tools, _) = build_specs_with_discoverable_tools(
             &tools_config,
             None,
             None,
@@ -4230,7 +4228,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_suggest_description_lists_discoverable_connectors() {
+    fn tool_suggest_description_lists_discoverable_tools() {
         let config = test_config();
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
@@ -4246,7 +4244,7 @@ mod tests {
             session_source: SessionSource::Cli,
         });
 
-        let discoverable_connectors = vec![
+        let discoverable_tools = vec![
             AppInfo {
                 id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
                 name: "Google Calendar".to_string(),
@@ -4285,11 +4283,11 @@ mod tests {
             },
         ];
 
-        let (tools, _) = build_specs_with_discoverable_connectors(
+        let (tools, _) = build_specs_with_discoverable_tools(
             &tools_config,
             None,
             None,
-            Some(discoverable_connectors),
+            Some(discoverable_tools),
             &[],
         )
         .build();

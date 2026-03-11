@@ -1358,7 +1358,7 @@ impl JsReplManager {
                         .collect(),
                 ),
                 app_tools: None,
-                discoverable_connectors: None,
+                discoverable_tools: None,
                 dynamic_tools: exec.turn.dynamic_tools.as_slice(),
             },
         );

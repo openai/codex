@@ -12,7 +12,7 @@ use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::ToolsConfig;
-use crate::tools::spec::build_specs_with_discoverable_connectors;
+use crate::tools::spec::build_specs_with_discoverable_tools;
 use codex_app_server_protocol::AppInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::LocalShellAction;
@@ -41,7 +41,7 @@ pub struct ToolRouter {
 pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<HashMap<String, Tool>>,
     pub(crate) app_tools: Option<HashMap<String, ToolInfo>>,
-    pub(crate) discoverable_connectors: Option<Vec<AppInfo>>,
+    pub(crate) discoverable_tools: Option<Vec<AppInfo>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
 
@@ -50,14 +50,14 @@ impl ToolRouter {
         let ToolRouterParams {
             mcp_tools,
             app_tools,
-            discoverable_connectors,
+            discoverable_tools,
             dynamic_tools,
         } = params;
-        let builder = build_specs_with_discoverable_connectors(
+        let builder = build_specs_with_discoverable_tools(
             config,
             mcp_tools,
             app_tools,
-            discoverable_connectors,
+            discoverable_tools,
             dynamic_tools,
         );
         let (specs, registry) = builder.build();
@@ -283,7 +283,7 @@ mod tests {
                         .collect(),
                 ),
                 app_tools,
-                discoverable_connectors: None,
+                discoverable_tools: None,
                 dynamic_tools: turn.dynamic_tools.as_slice(),
             },
         );
@@ -339,7 +339,7 @@ mod tests {
                         .collect(),
                 ),
                 app_tools,
-                discoverable_connectors: None,
+                discoverable_tools: None,
                 dynamic_tools: turn.dynamic_tools.as_slice(),
             },
         );

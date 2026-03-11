@@ -100,14 +100,14 @@ pub async fn list_accessible_connectors_from_mcp_tools(
     )
 }
 
-pub(crate) async fn list_tool_suggest_discoverable_connectors_with_auth(
+pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     config: &Config,
     auth: Option<&CodexAuth>,
     accessible_connectors: &[AppInfo],
 ) -> anyhow::Result<Vec<AppInfo>> {
     let directory_connectors =
         list_directory_connectors_for_tool_suggest_with_auth(config, auth).await?;
-    Ok(filter_tool_suggest_discoverable_connectors(
+    Ok(filter_tool_suggest_discoverable_tools(
         directory_connectors,
         accessible_connectors,
     ))
@@ -319,7 +319,7 @@ fn write_cached_accessible_connectors(
     });
 }
 
-fn filter_tool_suggest_discoverable_connectors(
+fn filter_tool_suggest_discoverable_tools(
     directory_connectors: Vec<AppInfo>,
     accessible_connectors: &[AppInfo],
 ) -> Vec<AppInfo> {
@@ -1527,8 +1527,8 @@ mod tests {
     }
 
     #[test]
-    fn filter_tool_suggest_discoverable_connectors_keeps_only_allowlisted_uninstalled_apps() {
-        let filtered = filter_tool_suggest_discoverable_connectors(
+    fn filter_tool_suggest_discoverable_tools_keeps_only_allowlisted_uninstalled_apps() {
+        let filtered = filter_tool_suggest_discoverable_tools(
             vec![
                 named_app(
                     "connector_2128aebfecb84f64a069897515042a44",

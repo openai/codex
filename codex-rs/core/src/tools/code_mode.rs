@@ -409,7 +409,7 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
         ToolRouterParams {
             mcp_tools: Some(mcp_tools),
             app_tools: None,
-            discoverable_connectors: None,
+            discoverable_tools: None,
             dynamic_tools: exec.turn.dynamic_tools.as_slice(),
         },
     )

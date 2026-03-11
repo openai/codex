@@ -130,8 +130,8 @@ impl ToolHandler for ToolSuggestHandler {
                 }
 
                 let auth = session.services.auth_manager.auth().await;
-                let discoverable_connectors =
-                    connectors::list_tool_suggest_discoverable_connectors_with_auth(
+                let discoverable_tools =
+                    connectors::list_tool_suggest_discoverable_tools_with_auth(
                         &turn.config,
                         auth.as_ref(),
                         &[],
@@ -143,12 +143,12 @@ impl ToolHandler for ToolSuggestHandler {
                         ))
                     })?;
 
-                let connector = discoverable_connectors
+                let connector = discoverable_tools
                     .into_iter()
                     .find(|connector| connector.id == args.tool_id)
                     .ok_or_else(|| {
                         FunctionCallError::RespondToModel(format!(
-                            "tool_id must match one of the discoverable connectors exposed by {TOOL_SUGGEST_TOOL_NAME}"
+                            "tool_id must match one of the discoverable tools exposed by {TOOL_SUGGEST_TOOL_NAME}"
                         ))
                     })?;
 
