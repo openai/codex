@@ -1887,7 +1887,12 @@ impl CodexMessageProcessor {
 
     pub(crate) async fn drain_background_tasks(&self) {
         self.background_tasks.close();
-        self.background_tasks.wait().await;
+        if tokio::time::timeout(Duration::from_secs(10), self.background_tasks.wait())
+            .await
+            .is_err()
+        {
+            warn!("timed out waiting for background tasks to shut down; proceeding");
+        }
     }
 
     pub(crate) async fn shutdown_threads(&self) {

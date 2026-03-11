@@ -42,9 +42,12 @@ pub(crate) fn request_span(
         client_version(initialize_client_info.as_ref(), session),
     );
 
-    let parent_trace = request.trace.as_ref().map(|trace| W3cTraceContext {
-        traceparent: trace.traceparent.clone(),
-        tracestate: trace.tracestate.clone(),
+    let parent_trace = request.trace.as_ref().and_then(|trace| {
+        trace.traceparent.as_ref()?;
+        Some(W3cTraceContext {
+            traceparent: trace.traceparent.clone(),
+            tracestate: trace.tracestate.clone(),
+        })
     });
     attach_parent_context(&span, method, &request.id, parent_trace.as_ref());
 
