@@ -2,6 +2,7 @@ use crate::history_cell::PlainHistoryCell;
 use crate::render::line_utils::prefix_lines;
 use crate::text_formatting::truncate_text;
 use codex_protocol::ThreadId;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentRef;
@@ -34,6 +35,12 @@ struct AgentLabel<'a> {
     thread_id: Option<ThreadId>,
     nickname: Option<&'a str>,
     role: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SpawnRequestSummary {
+    pub(crate) model: String,
+    pub(crate) reasoning_effort: ReasoningEffortConfig,
 }
 
 pub(crate) fn agent_picker_status_dot_spans(is_closed: bool) -> Vec<Span<'static>> {
@@ -74,7 +81,10 @@ pub(crate) fn sort_agent_picker_threads(agent_threads: &mut [(ThreadId, AgentPic
     });
 }
 
-pub(crate) fn spawn_end(ev: CollabAgentSpawnEndEvent) -> PlainHistoryCell {
+pub(crate) fn spawn_end(
+    ev: CollabAgentSpawnEndEvent,
+    spawn_request: Option<&SpawnRequestSummary>,
+) -> PlainHistoryCell {
     let CollabAgentSpawnEndEvent {
         call_id: _,
         sender_thread_id: _,
@@ -93,6 +103,7 @@ pub(crate) fn spawn_end(ev: CollabAgentSpawnEndEvent) -> PlainHistoryCell {
                 nickname: new_agent_nickname.as_deref(),
                 role: new_agent_role.as_deref(),
             },
+            spawn_request,
         ),
         None => title_text("Agent spawn failed"),
     };
@@ -122,6 +133,7 @@ pub(crate) fn interaction_end(ev: CollabAgentInteractionEndEvent) -> PlainHistor
             nickname: receiver_agent_nickname.as_deref(),
             role: receiver_agent_role.as_deref(),
         },
+        None,
     );
 
     let mut details = Vec::new();
@@ -141,7 +153,7 @@ pub(crate) fn waiting_begin(ev: CollabWaitingBeginEvent) -> PlainHistoryCell {
     let receiver_agents = merge_wait_receivers(&receiver_thread_ids, receiver_agents);
 
     let title = match receiver_agents.as_slice() {
-        [receiver] => title_with_agent("Waiting for", agent_label_from_ref(receiver)),
+        [receiver] => title_with_agent("Waiting for", agent_label_from_ref(receiver), None),
         [] => title_text("Waiting for agents"),
         _ => title_text(format!("Waiting for {} agents", receiver_agents.len())),
     };
@@ -187,6 +199,7 @@ pub(crate) fn close_end(ev: CollabCloseEndEvent) -> PlainHistoryCell {
                 nickname: receiver_agent_nickname.as_deref(),
                 role: receiver_agent_role.as_deref(),
             },
+            None,
         ),
         Vec::new(),
     )
@@ -209,6 +222,7 @@ pub(crate) fn resume_begin(ev: CollabResumeBeginEvent) -> PlainHistoryCell {
                 nickname: receiver_agent_nickname.as_deref(),
                 role: receiver_agent_role.as_deref(),
             },
+            None,
         ),
         Vec::new(),
     )
@@ -232,6 +246,7 @@ pub(crate) fn resume_end(ev: CollabResumeEndEvent) -> PlainHistoryCell {
                 nickname: receiver_agent_nickname.as_deref(),
                 role: receiver_agent_role.as_deref(),
             },
+            None,
         ),
         vec![status_summary_line(&status)],
     )
@@ -249,9 +264,14 @@ fn title_text(title: impl Into<String>) -> Line<'static> {
     title_spans_line(vec![Span::from(title.into()).bold()])
 }
 
-fn title_with_agent(prefix: &str, agent: AgentLabel<'_>) -> Line<'static> {
+fn title_with_agent(
+    prefix: &str,
+    agent: AgentLabel<'_>,
+    spawn_request: Option<&SpawnRequestSummary>,
+) -> Line<'static> {
     let mut spans = vec![Span::from(format!("{prefix} ")).bold()];
     spans.extend(agent_label_spans(agent));
+    spans.extend(spawn_request_spans(spawn_request));
     title_spans_line(spans)
 }
 
@@ -296,6 +316,25 @@ fn agent_label_spans(agent: AgentLabel<'_>) -> Vec<Span<'static>> {
     }
 
     spans
+}
+
+fn spawn_request_spans(spawn_request: Option<&SpawnRequestSummary>) -> Vec<Span<'static>> {
+    let Some(spawn_request) = spawn_request else {
+        return Vec::new();
+    };
+
+    let model = spawn_request.model.trim();
+    if model.is_empty() && spawn_request.reasoning_effort == ReasoningEffortConfig::default() {
+        return Vec::new();
+    }
+
+    let details = if model.is_empty() {
+        format!("({})", spawn_request.reasoning_effort)
+    } else {
+        format!("({model} {})", spawn_request.reasoning_effort)
+    };
+
+    vec![Span::from(" ").dim(), Span::from(details).magenta()]
 }
 
 fn prompt_line(prompt: &str) -> Option<Line<'static>> {
@@ -460,15 +499,21 @@ mod tests {
         let bob_id = ThreadId::from_string("00000000-0000-0000-0000-000000000003")
             .expect("valid bob thread id");
 
-        let spawn = spawn_end(CollabAgentSpawnEndEvent {
-            call_id: "call-spawn".to_string(),
-            sender_thread_id,
-            new_thread_id: Some(robie_id),
-            new_agent_nickname: Some("Robie".to_string()),
-            new_agent_role: Some("explorer".to_string()),
-            prompt: "Compute 11! and reply with just the integer result.".to_string(),
-            status: AgentStatus::PendingInit,
-        });
+        let spawn = spawn_end(
+            CollabAgentSpawnEndEvent {
+                call_id: "call-spawn".to_string(),
+                sender_thread_id,
+                new_thread_id: Some(robie_id),
+                new_agent_nickname: Some("Robie".to_string()),
+                new_agent_role: Some("explorer".to_string()),
+                prompt: "Compute 11! and reply with just the integer result.".to_string(),
+                status: AgentStatus::PendingInit,
+            },
+            Some(&SpawnRequestSummary {
+                model: "gpt-5".to_string(),
+                reasoning_effort: ReasoningEffortConfig::High,
+            }),
+        );
 
         let send = interaction_end(CollabAgentInteractionEndEvent {
             call_id: "call-send".to_string(),
@@ -540,15 +585,21 @@ mod tests {
             .expect("valid sender thread id");
         let robie_id = ThreadId::from_string("00000000-0000-0000-0000-000000000002")
             .expect("valid robie thread id");
-        let cell = spawn_end(CollabAgentSpawnEndEvent {
-            call_id: "call-spawn".to_string(),
-            sender_thread_id,
-            new_thread_id: Some(robie_id),
-            new_agent_nickname: Some("Robie".to_string()),
-            new_agent_role: Some("explorer".to_string()),
-            prompt: String::new(),
-            status: AgentStatus::PendingInit,
-        });
+        let cell = spawn_end(
+            CollabAgentSpawnEndEvent {
+                call_id: "call-spawn".to_string(),
+                sender_thread_id,
+                new_thread_id: Some(robie_id),
+                new_agent_nickname: Some("Robie".to_string()),
+                new_agent_role: Some("explorer".to_string()),
+                prompt: String::new(),
+                status: AgentStatus::PendingInit,
+            },
+            Some(&SpawnRequestSummary {
+                model: "gpt-5".to_string(),
+                reasoning_effort: ReasoningEffortConfig::High,
+            }),
+        );
 
         let lines = cell.display_lines(200);
         let title = &lines[0];
@@ -558,6 +609,8 @@ mod tests {
         assert_eq!(title.spans[4].content.as_ref(), "[explorer]");
         assert_eq!(title.spans[4].style.fg, None);
         assert!(!title.spans[4].style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(title.spans[6].content.as_ref(), "(gpt-5 high)");
+        assert_eq!(title.spans[6].style.fg, Some(Color::Magenta));
     }
 
     fn cell_to_text(cell: &PlainHistoryCell) -> String {
