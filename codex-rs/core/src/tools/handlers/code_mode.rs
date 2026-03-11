@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::code_mode;
+use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -33,21 +34,20 @@ impl ToolHandler for CodeModeHandler {
         } = invocation;
 
         if !session.features().enabled(Feature::CodeMode) {
-            return Err(FunctionCallError::RespondToModel(
-                "code_mode is disabled by feature flag".to_string(),
-            ));
+            return Err(FunctionCallError::RespondToModel(format!(
+                "{PUBLIC_TOOL_NAME} is disabled by feature flag"
+            )));
         }
 
         let code = match payload {
             ToolPayload::Custom { input } => input,
             _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "code_mode expects raw JavaScript source text".to_string(),
-                ));
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "{PUBLIC_TOOL_NAME} expects raw JavaScript source text"
+                )));
             }
         };
 
-        let content_items = code_mode::execute(session, turn, tracker, code).await?;
-        Ok(FunctionToolOutput::from_content(content_items, Some(true)))
+        code_mode::execute(session, turn, tracker, code).await
     }
 }

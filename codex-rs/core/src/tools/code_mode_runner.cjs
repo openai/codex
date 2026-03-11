@@ -104,8 +104,8 @@ function readContentItems(context) {
   }
 }
 
-function isValidIdentifier(name) {
-  return /^[A-Za-z_$][0-9A-Za-z_$]*$/.test(name);
+function formatErrorText(error) {
+  return String(error && error.stack ? error.stack : error);
 }
 
 function cloneJsonValue(value) {
@@ -135,12 +135,25 @@ function createToolsNamespace(callTool, enabledTools) {
   return Object.freeze(tools);
 }
 
+function createAllToolsMetadata(enabledTools) {
+  return Object.freeze(
+    enabledTools.map(({ module: modulePath, name, description }) =>
+      Object.freeze({
+        module: modulePath,
+        name,
+        description,
+      })
+    )
+  );
+}
+
 function createToolsModule(context, callTool, enabledTools) {
   const tools = createToolsNamespace(callTool, enabledTools);
-  const exportNames = ['tools'];
+  const allTools = createAllToolsMetadata(enabledTools);
+  const exportNames = ['ALL_TOOLS'];
 
   for (const { tool_name } of enabledTools) {
-    if (tool_name !== 'tools' && isValidIdentifier(tool_name)) {
+    if (tool_name !== 'ALL_TOOLS') {
       exportNames.push(tool_name);
     }
   }
@@ -150,9 +163,9 @@ function createToolsModule(context, callTool, enabledTools) {
   return new SyntheticModule(
     uniqueExportNames,
     function initToolsModule() {
-      this.setExport('tools', tools);
+      this.setExport('ALL_TOOLS', allTools);
       for (const exportName of uniqueExportNames) {
-        if (exportName !== 'tools') {
+        if (exportName !== 'ALL_TOOLS') {
           this.setExport(exportName, tools[exportName]);
         }
       }
@@ -279,10 +292,10 @@ function createNamespacedToolsNamespace(callTool, enabledTools, namespace) {
 
 function createNamespacedToolsModule(context, callTool, enabledTools, namespace) {
   const tools = createNamespacedToolsNamespace(callTool, enabledTools, namespace);
-  const exportNames = ['tools'];
+  const exportNames = [];
 
   for (const exportName of Object.keys(tools)) {
-    if (exportName !== 'tools' && isValidIdentifier(exportName)) {
+    if (exportName !== 'ALL_TOOLS') {
       exportNames.push(exportName);
     }
   }
@@ -292,11 +305,8 @@ function createNamespacedToolsModule(context, callTool, enabledTools, namespace)
   return new SyntheticModule(
     uniqueExportNames,
     function initNamespacedToolsModule() {
-      this.setExport('tools', tools);
       for (const exportName of uniqueExportNames) {
-        if (exportName !== 'tools') {
-          this.setExport(exportName, tools[exportName]);
-        }
+        this.setExport(exportName, tools[exportName]);
       }
     },
     { context }
@@ -317,14 +327,14 @@ function createModuleResolver(context, callTool, enabledTools, state) {
     }
     const namespacedMatch = /^tools\/(.+)\.js$/.exec(specifier);
     if (!namespacedMatch) {
-      throw new Error(`Unsupported import in code_mode: ${specifier}`);
+      throw new Error(`Unsupported import in exec: ${specifier}`);
     }
 
     const namespace = namespacedMatch[1]
       .split('/')
       .filter((segment) => segment.length > 0);
     if (namespace.length === 0) {
-      throw new Error(`Unsupported import in code_mode: ${specifier}`);
+      throw new Error(`Unsupported import in exec: ${specifier}`);
     }
 
     const cacheKey = namespace.join('/');
@@ -347,7 +357,7 @@ async function runModule(context, request, state, callTool) {
   );
   const mainModule = new SourceTextModule(request.source, {
     context,
-    identifier: 'code_mode_main.mjs',
+    identifier: 'exec_main.mjs',
     importModuleDynamically: async (specifier) => resolveModule(specifier),
   });
 
@@ -378,11 +388,11 @@ async function main() {
     });
     process.exit(0);
   } catch (error) {
-    process.stderr.write(`${String(error && error.stack ? error.stack : error)}\n`);
     await protocol.send({
       type: 'result',
       content_items: readContentItems(context),
       stored_values: state.storedValues,
+      error_text: formatErrorText(error),
       max_output_tokens_per_exec_call: state.maxOutputTokensPerExecCall,
     });
     process.exit(1);
@@ -391,7 +401,7 @@ async function main() {
 
 void main().catch(async (error) => {
   try {
-    process.stderr.write(`${String(error && error.stack ? error.stack : error)}\n`);
+    process.stderr.write(`${formatErrorText(error)}\n`);
   } finally {
     process.exitCode = 1;
   }

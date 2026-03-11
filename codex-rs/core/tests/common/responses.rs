@@ -416,6 +416,11 @@ pub struct WebSocketConnectionConfig {
     /// Tests use this to force websocket setup into an in-flight state so first-turn warmup paths
     /// can be exercised deterministically.
     pub accept_delay: Option<Duration>,
+    /// Whether the server should send a websocket close frame after all scripted responses.
+    ///
+    /// Tests can disable this to simulate a peer that surfaces a terminal event but never
+    /// completes the close handshake.
+    pub close_after_requests: bool,
 }
 
 pub struct WebSocketTestServer {
@@ -1168,6 +1173,7 @@ pub async fn start_websocket_server(connections: Vec<Vec<Vec<Value>>>) -> WebSoc
             requests,
             response_headers: Vec::new(),
             accept_delay: None,
+            close_after_requests: true,
         })
         .collect();
     start_websocket_server_with_headers(connections).await
@@ -1261,6 +1267,7 @@ pub async fn start_websocket_server_with_headers(
                 log.push(Vec::new());
                 log.len() - 1
             };
+            let close_after_requests = connection.close_after_requests;
             for request_events in connection.requests {
                 let Some(Ok(message)) = ws_stream.next().await else {
                     break;
@@ -1324,7 +1331,12 @@ pub async fn start_websocket_server_with_headers(
                 }
             }
 
-            let _ = ws_stream.close(None).await;
+            if close_after_requests {
+                let _ = ws_stream.close(None).await;
+            } else {
+                let _ = shutdown_rx.await;
+                return;
+            }
 
             if connections.lock().unwrap().is_empty() {
                 return;

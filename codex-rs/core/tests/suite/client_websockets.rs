@@ -49,10 +49,12 @@ use tracing_test::traced_test;
 const MODEL: &str = "gpt-5.2-codex";
 const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
+const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
 
 struct WebsocketTestHarness {
     _codex_home: TempDir,
     client: ModelClient,
+    conversation_id: ThreadId,
     model_info: ModelInfo,
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummary,
@@ -87,6 +89,10 @@ async fn responses_websocket_streams_request() {
     assert_eq!(
         handshake.header(OPENAI_BETA_HEADER),
         Some(WS_V2_BETA_HEADER_VALUE.to_string())
+    );
+    assert_eq!(
+        handshake.header(X_CLIENT_REQUEST_ID_HEADER),
+        Some(harness.conversation_id.to_string())
     );
 
     server.shutdown().await;
@@ -653,6 +659,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
         requests: vec![vec![ev_response_created("resp-1"), ev_completed("resp-1")]],
         response_headers: vec![("X-Reasoning-Included".to_string(), "true".to_string())],
         accept_delay: None,
+        close_after_requests: true,
     }])
     .await;
 
@@ -725,6 +732,7 @@ async fn responses_websocket_emits_rate_limit_events() {
             ("X-Reasoning-Included".to_string(), "true".to_string()),
         ],
         accept_delay: None,
+        close_after_requests: true,
     }])
     .await;
 
@@ -1370,6 +1378,65 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_v2_surfaces_terminal_error_without_close_handshake() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![
+            vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+            vec![json!({
+                "type": "response.failed",
+                "response": {
+                    "error": {
+                        "code": "invalid_prompt",
+                        "message": "synthetic websocket failure"
+                    }
+                }
+            })],
+        ],
+        response_headers: Vec::new(),
+        accept_delay: None,
+        close_after_requests: false,
+    }])
+    .await;
+
+    let harness = websocket_harness_with_v2(&server, true).await;
+    let mut session = harness.client.new_session();
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
+
+    stream_until_complete(&mut session, &harness, &prompt_one).await;
+
+    let mut second_stream = session
+        .stream(
+            &prompt_two,
+            &harness.model_info,
+            &harness.session_telemetry,
+            harness.effort,
+            harness.summary,
+            None,
+            None,
+        )
+        .await
+        .expect("websocket stream failed");
+
+    let saw_error = tokio::time::timeout(Duration::from_secs(2), async {
+        while let Some(event) = second_stream.next().await {
+            if event.is_err() {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .expect("timed out waiting for terminal websocket error");
+
+    assert!(saw_error, "expected second websocket stream to error");
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_v2_sets_openai_beta_header() {
     skip_if_no_network!();
 
@@ -1545,6 +1612,7 @@ async fn websocket_harness_with_options(
     WebsocketTestHarness {
         _codex_home: codex_home,
         client,
+        conversation_id,
         model_info,
         effort,
         summary,

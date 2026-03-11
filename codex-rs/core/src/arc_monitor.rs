@@ -127,7 +127,7 @@ pub(crate) async fn monitor_action(
 
     let url = read_non_empty_env_var(CODEX_ARC_MONITOR_ENDPOINT_OVERRIDE).unwrap_or_else(|| {
         format!(
-            "{}/api/codex/safety/arc",
+            "{}/codex/safety/arc",
             turn_context.config.chatgpt_base_url.trim_end_matches('/')
         )
     });
@@ -703,7 +703,7 @@ mod tests {
             .await;
 
         Mock::given(method("POST"))
-            .and(path("/api/codex/safety/arc"))
+            .and(path("/codex/safety/arc"))
             .and(header("authorization", "Bearer Access Token"))
             .and(header("chatgpt-account-id", "account_id"))
             .and(body_json(serde_json::json!({
@@ -817,7 +817,7 @@ mod tests {
     async fn monitor_action_rejects_legacy_response_fields() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/api/codex/safety/arc"))
+            .and(path("/codex/safety/arc"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "outcome": "steer-model",
                 "reason": "legacy high-risk action",

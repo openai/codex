@@ -55,13 +55,6 @@ globalThis.add_content = (value) => {
   return contentItems;
 };
 
-globalThis.tools = new Proxy(Object.create(null), {
-  get(_target, prop) {
-    const name = String(prop);
-    return async (args) => __codex_tool_call(name, args);
-  },
-});
-
 globalThis.console = Object.freeze({
   log() {},
   info() {},
@@ -71,7 +64,7 @@ globalThis.console = Object.freeze({
 });
 
 for (const name of __codexEnabledToolNames) {
-  if (/^[A-Za-z_$][0-9A-Za-z_$]*$/.test(name) && !(name in globalThis)) {
+  if (!(name in globalThis)) {
     Object.defineProperty(globalThis, name, {
       value: async (args) => __codex_tool_call(name, args),
       configurable: true,

@@ -17,7 +17,11 @@ const TRACESTATE_ENV_VAR: &str = "TRACESTATE";
 static TRACEPARENT_CONTEXT: OnceLock<Option<Context>> = OnceLock::new();
 
 pub fn current_span_w3c_trace_context() -> Option<W3cTraceContext> {
-    let context = Span::current().context();
+    span_w3c_trace_context(&Span::current())
+}
+
+pub fn span_w3c_trace_context(span: &Span) -> Option<W3cTraceContext> {
+    let context = span.context();
     if !context.span().span_context().is_valid() {
         return None;
     }

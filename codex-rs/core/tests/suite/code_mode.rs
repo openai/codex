@@ -24,14 +24,35 @@ use std::fs;
 use std::time::Duration;
 use wiremock::MockServer;
 
-fn custom_tool_output_text_and_success(
+fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
+    req.custom_tool_call_output(call_id)
+        .get("output")
+        .and_then(Value::as_array)
+        .expect("custom tool output should be serialized as content items")
+        .clone()
+}
+
+fn text_item(items: &[Value], index: usize) -> &str {
+    items[index]
+        .get("text")
+        .and_then(Value::as_str)
+        .expect("content item should be input_text")
+}
+
+fn custom_tool_output_body_and_success(
     req: &ResponsesRequest,
     call_id: &str,
 ) -> (String, Option<bool>) {
-    let (output, success) = req
+    let (_, success) = req
         .custom_tool_call_output_content_and_success(call_id)
         .expect("custom tool output should be present");
-    (output.unwrap_or_default(), success)
+    let items = custom_tool_output_items(req, call_id);
+    let output = items
+        .iter()
+        .skip(1)
+        .filter_map(|item| item.get("text").and_then(Value::as_str))
+        .collect();
+    (output, success)
 }
 
 async fn run_code_mode_turn(
@@ -50,7 +71,7 @@ async fn run_code_mode_turn(
         server,
         sse(vec![
             ev_response_created("resp-1"),
-            ev_custom_tool_call("call-1", "code_mode", code),
+            ev_custom_tool_call("call-1", "exec", code),
             ev_completed("resp-1"),
         ]),
     )
@@ -114,7 +135,7 @@ async fn run_code_mode_turn_with_rmcp(
         server,
         sse(vec![
             ev_response_created("resp-1"),
-            ev_custom_tool_call("call-1", "code_mode", code),
+            ev_custom_tool_call("call-1", "exec", code),
             ev_completed("resp-1"),
         ]),
     )
@@ -141,7 +162,7 @@ async fn code_mode_can_return_exec_command_output() -> Result<()> {
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "use code_mode to run exec_command",
+        "use exec to run exec_command",
         r#"
 import { exec_command } from "tools.js";
 
@@ -152,13 +173,16 @@ add_content(JSON.stringify(await exec_command({ cmd: "printf code_mode_exec_mark
     .await?;
 
     let req = second_mock.single_request();
-    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
-    assert_ne!(
-        success,
-        Some(false),
-        "code_mode call failed unexpectedly: {output}"
+    let items = custom_tool_output_items(&req, "call-1");
+    assert_eq!(items.len(), 2);
+    assert_regex_match(
+        concat!(
+            r"(?s)\A",
+            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
+        text_item(&items, 0),
     );
-    let parsed: Value = serde_json::from_str(&output)?;
+    let parsed: Value = serde_json::from_str(text_item(&items, 1))?;
     assert!(
         parsed
             .get("chunk_id")
@@ -184,7 +208,7 @@ async fn code_mode_can_truncate_final_result_with_configured_budget() -> Result<
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "use code_mode to truncate the final result",
+        "use exec to truncate the final result",
         r#"
 import { exec_command } from "tools.js";
 import { set_max_output_tokens_per_exec_call } from "@openai/code_mode";
@@ -201,22 +225,66 @@ add_content(JSON.stringify(await exec_command({
     .await?;
 
     let req = second_mock.single_request();
-    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
-    assert_ne!(
-        success,
-        Some(false),
-        "code_mode call failed unexpectedly: {output}"
+    let items = custom_tool_output_items(&req, "call-1");
+    assert_eq!(items.len(), 2);
+    assert_regex_match(
+        concat!(
+            r"(?s)\A",
+            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
+        text_item(&items, 0),
     );
     let expected_pattern = r#"(?sx)
 \A
-Original\ token\ count:\ \d+\n
-Output:\n
 Total\ output\ lines:\ 1\n
 \n
-\{"chunk_id".*…\d+\ tokens\ truncated….*
+.*…\d+\ tokens\ truncated….*
 \z
 "#;
-    assert_regex_match(expected_pattern, &output);
+    assert_regex_match(expected_pattern, text_item(&items, 1));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_returns_accumulated_output_when_script_fails() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use code_mode to surface script failures",
+        r#"
+add_content("before crash");
+add_content("still before crash");
+throw new Error("boom");
+"#,
+        false,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let items = custom_tool_output_items(&req, "call-1");
+    assert_eq!(items.len(), 4);
+    assert_regex_match(
+        concat!(
+            r"(?s)\A",
+            r"Script failed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
+        text_item(&items, 0),
+    );
+    assert_eq!(text_item(&items, 1), "before crash");
+    assert_eq!(text_item(&items, 2), "still before crash");
+    assert_regex_match(
+        r#"(?sx)
+\A
+Script\ error:\n
+Error:\ boom\n
+(?:\s+at\ .+\n?)+
+\z
+"#,
+        text_item(&items, 3),
+    );
 
     Ok(())
 }
@@ -228,7 +296,7 @@ async fn code_mode_can_output_serialized_text_via_openai_code_mode_module() -> R
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "use code_mode to return structured text",
+        "use exec to return structured text",
         r#"
 import { output_text } from "@openai/code_mode";
 
@@ -239,11 +307,11 @@ output_text({ json: true });
     .await?;
 
     let req = second_mock.single_request();
-    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "code_mode call failed unexpectedly: {output}"
+        "exec call failed unexpectedly: {output}"
     );
     assert_eq!(output, r#"{"json":true}"#);
 
@@ -257,7 +325,7 @@ async fn code_mode_surfaces_output_text_stringify_errors() -> Result<()> {
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "use code_mode to return circular text",
+        "use exec to return circular text",
         r#"
 import { output_text } from "@openai/code_mode";
 
@@ -270,14 +338,25 @@ output_text(circular);
     .await?;
 
     let req = second_mock.single_request();
-    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
+    let items = custom_tool_output_items(&req, "call-1");
+    let (_, success) = req
+        .custom_tool_call_output_content_and_success("call-1")
+        .expect("custom tool output should be present");
     assert_ne!(
         success,
         Some(true),
         "circular stringify unexpectedly succeeded"
     );
-    assert!(output.contains("code_mode execution failed"));
-    assert!(output.contains("Converting circular structure to JSON"));
+    assert_eq!(items.len(), 2);
+    assert_regex_match(
+        concat!(
+            r"(?s)\A",
+            r"Script failed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
+        text_item(&items, 0),
+    );
+    assert!(text_item(&items, 1).contains("Script error:"));
+    assert!(text_item(&items, 1).contains("Converting circular structure to JSON"));
 
     Ok(())
 }
@@ -289,7 +368,7 @@ async fn code_mode_can_output_images_via_openai_code_mode_module() -> Result<()>
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "use code_mode to return images",
+        "use exec to return images",
         r#"
 import { output_image } from "@openai/code_mode";
 
@@ -301,28 +380,34 @@ output_image("data:image/png;base64,AAA");
     .await?;
 
     let req = second_mock.single_request();
-    let (_, success) = custom_tool_output_text_and_success(&req, "call-1");
+    let items = custom_tool_output_items(&req, "call-1");
+    let (_, success) = custom_tool_output_body_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
         "code_mode image output failed unexpectedly"
     );
+    assert_eq!(items.len(), 3);
+    assert_regex_match(
+        concat!(
+            r"(?s)\A",
+            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
+        text_item(&items, 0),
+    );
     assert_eq!(
-        req.custom_tool_call_output("call-1"),
+        items[1],
         serde_json::json!({
-            "type": "custom_tool_call_output",
-            "call_id": "call-1",
-            "output": [
-                {
-                    "type": "input_image",
-                    "image_url": "https://example.com/image.jpg"
-                },
-                {
-                    "type": "input_image",
-                    "image_url": "data:image/png;base64,AAA"
-                }
-            ]
-        })
+            "type": "input_image",
+            "image_url": "https://example.com/image.jpg"
+        }),
+    );
+    assert_eq!(
+        items[2],
+        serde_json::json!({
+            "type": "input_image",
+            "image_url": "data:image/png;base64,AAA"
+        }),
     );
 
     Ok(())
@@ -342,14 +427,25 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
     );
 
     let (test, second_mock) =
-        run_code_mode_turn(&server, "use code_mode to run apply_patch", &code, true).await?;
+        run_code_mode_turn(&server, "use exec to run apply_patch", &code, true).await?;
 
     let req = second_mock.single_request();
-    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
+    let items = custom_tool_output_items(&req, "call-1");
+    let (_, success) = req
+        .custom_tool_call_output_content_and_success("call-1")
+        .expect("custom tool output should be present");
     assert_ne!(
         success,
         Some(false),
-        "code_mode apply_patch call failed unexpectedly: {output}"
+        "exec apply_patch call failed unexpectedly: {items:?}"
+    );
+    assert_eq!(items.len(), 2);
+    assert_regex_match(
+        concat!(
+            r"(?s)\A",
+            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
+        text_item(&items, 0),
     );
 
     let file_path = test.cwd_path().join(file_name);
@@ -378,15 +474,14 @@ add_content(
 "#;
 
     let (_test, second_mock) =
-        run_code_mode_turn_with_rmcp(&server, "use code_mode to run the rmcp echo tool", code)
-            .await?;
+        run_code_mode_turn_with_rmcp(&server, "use exec to run the rmcp echo tool", code).await?;
 
     let req = second_mock.single_request();
-    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "code_mode rmcp echo call failed unexpectedly: {output}"
+        "exec rmcp echo call failed unexpectedly: {output}"
     );
     assert_eq!(
         output,
@@ -400,39 +495,74 @@ contentLength=0"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_can_access_namespaced_mcp_tool_from_flat_tools_namespace() -> Result<()> {
+async fn code_mode_exports_all_tools_metadata_for_builtin_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let code = r#"
-import { tools } from "tools.js";
+import { ALL_TOOLS } from "tools.js";
 
-const { structuredContent, isError } = await tools["mcp__rmcp__echo"]({
-  message: "ping",
-});
-add_content(
-  `echo=${structuredContent?.echo ?? "missing"}\n` +
-    `env=${structuredContent?.env ?? "missing"}\n` +
-    `isError=${String(isError)}`
-);
+const tool = ALL_TOOLS.find(({ module, name }) => module === "tools.js" && name === "view_image");
+add_content(JSON.stringify(tool));
 "#;
 
     let (_test, second_mock) =
-        run_code_mode_turn_with_rmcp(&server, "use code_mode to run the rmcp echo tool", code)
-            .await?;
+        run_code_mode_turn(&server, "use exec to inspect ALL_TOOLS", code, false).await?;
 
     let req = second_mock.single_request();
-    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "code_mode rmcp echo call failed unexpectedly: {output}"
+        "exec ALL_TOOLS lookup failed unexpectedly: {output}"
     );
+
+    let parsed: Value = serde_json::from_str(&output)?;
     assert_eq!(
-        output,
-        "echo=ECHOING: ping
-env=propagated-env
-isError=false"
+        parsed,
+        serde_json::json!({
+            "module": "tools.js",
+            "name": "view_image",
+            "description": "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nCode mode declaration:\n```ts\nimport { view_image } from \"tools.js\";\ndeclare function view_image(args: {\n  path: string;\n}): Promise<unknown>;\n```",
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exports_all_tools_metadata_for_namespaced_mcp_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+import { ALL_TOOLS } from "tools.js";
+
+const tool = ALL_TOOLS.find(
+  ({ module, name }) => module === "tools/mcp/rmcp.js" && name === "echo"
+);
+add_content(JSON.stringify(tool));
+"#;
+
+    let (_test, second_mock) =
+        run_code_mode_turn_with_rmcp(&server, "use exec to inspect ALL_TOOLS", code).await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec ALL_TOOLS MCP lookup failed unexpectedly: {output}"
+    );
+
+    let parsed: Value = serde_json::from_str(&output)?;
+    assert_eq!(
+        parsed,
+        serde_json::json!({
+            "module": "tools/mcp/rmcp.js",
+            "name": "echo",
+            "description": "Echo back the provided message and include environment data.\n\nCode mode declaration:\n```ts\nimport { echo } from \"tools/mcp/rmcp.js\";\ndeclare function echo(args: {\n  env_var?: string;\n  message: string;\n}): Promise<{\n  _meta?: unknown;\n  content: Array<unknown>;\n  isError?: boolean;\n  structuredContent?: unknown;\n}>;\n```",
+        })
     );
 
     Ok(())
@@ -460,17 +590,17 @@ add_content(
 
     let (_test, second_mock) = run_code_mode_turn_with_rmcp(
         &server,
-        "use code_mode to run the rmcp image scenario tool",
+        "use exec to run the rmcp image scenario tool",
         code,
     )
     .await?;
 
     let req = second_mock.single_request();
-    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "code_mode rmcp image scenario call failed unexpectedly: {output}"
+        "exec rmcp image scenario call failed unexpectedly: {output}"
     );
     assert_eq!(
         output,
@@ -504,15 +634,14 @@ add_content(
 "#;
 
     let (_test, second_mock) =
-        run_code_mode_turn_with_rmcp(&server, "use code_mode to call rmcp echo badly", code)
-            .await?;
+        run_code_mode_turn_with_rmcp(&server, "use exec to call rmcp echo badly", code).await?;
 
     let req = second_mock.single_request();
-    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "code_mode rmcp error call failed unexpectedly: {output}"
+        "exec rmcp error call failed unexpectedly: {output}"
     );
     assert_eq!(
         output,
@@ -540,7 +669,7 @@ async fn code_mode_can_store_and_load_values_across_turns() -> Result<()> {
             ev_response_created("resp-1"),
             ev_custom_tool_call(
                 "call-1",
-                "code_mode",
+                "exec",
                 r#"
 import { store } from "@openai/code_mode";
 
@@ -565,11 +694,11 @@ add_content("stored");
 
     let first_request = first_follow_up.single_request();
     let (first_output, first_success) =
-        custom_tool_output_text_and_success(&first_request, "call-1");
+        custom_tool_output_body_and_success(&first_request, "call-1");
     assert_ne!(
         first_success,
         Some(false),
-        "code_mode store call failed unexpectedly: {first_output}"
+        "exec store call failed unexpectedly: {first_output}"
     );
     assert_eq!(first_output, "stored");
 
@@ -579,7 +708,7 @@ add_content("stored");
             ev_response_created("resp-3"),
             ev_custom_tool_call(
                 "call-2",
-                "code_mode",
+                "exec",
                 r#"
 import { load } from "openai/code_mode";
 
@@ -603,11 +732,11 @@ add_content(JSON.stringify(load("nb")));
 
     let second_request = second_follow_up.single_request();
     let (second_output, second_success) =
-        custom_tool_output_text_and_success(&second_request, "call-2");
+        custom_tool_output_body_and_success(&second_request, "call-2");
     assert_ne!(
         second_success,
         Some(false),
-        "code_mode load call failed unexpectedly: {second_output}"
+        "exec load call failed unexpectedly: {second_output}"
     );
     let loaded: Value = serde_json::from_str(&second_output)?;
     assert_eq!(

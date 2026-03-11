@@ -520,9 +520,12 @@ impl DeveloperInstructions {
     }
 
     pub fn realtime_start_message() -> Self {
+        Self::realtime_start_message_with_instructions(REALTIME_START_INSTRUCTIONS.trim())
+    }
+
+    pub fn realtime_start_message_with_instructions(instructions: &str) -> Self {
         DeveloperInstructions::new(format!(
-            "{REALTIME_CONVERSATION_OPEN_TAG}\n{}\n{REALTIME_CONVERSATION_CLOSE_TAG}",
-            REALTIME_START_INSTRUCTIONS.trim()
+            "{REALTIME_CONVERSATION_OPEN_TAG}\n{instructions}\n{REALTIME_CONVERSATION_CLOSE_TAG}"
         ))
     }
 
