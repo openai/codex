@@ -7,7 +7,7 @@ pub(crate) enum UnifiedExecError {
     CreateProcess { message: String },
     // The model is trained on `session_id`, but internally we track a `process_id`.
     #[error("Unknown process id {process_id}")]
-    UnknownProcessId { process_id: String },
+    UnknownProcessId { process_id: i32 },
     #[error("failed to write to stdin")]
     WriteToStdin,
     #[error(

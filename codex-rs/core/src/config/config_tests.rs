@@ -3965,6 +3965,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             realtime_audio: RealtimeAudioConfig::default(),
+            experimental_realtime_start_instructions: None,
             experimental_realtime_ws_base_url: None,
             experimental_realtime_ws_model: None,
             experimental_realtime_ws_backend_prompt: None,
@@ -4100,6 +4101,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         realtime_audio: RealtimeAudioConfig::default(),
+        experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
         experimental_realtime_ws_backend_prompt: None,
@@ -4233,6 +4235,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         realtime_audio: RealtimeAudioConfig::default(),
+        experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
         experimental_realtime_ws_backend_prompt: None,
@@ -4352,6 +4355,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         realtime_audio: RealtimeAudioConfig::default(),
+        experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
         experimental_realtime_ws_backend_prompt: None,
@@ -5259,6 +5263,34 @@ async fn feature_requirements_reject_legacy_aliases() {
             .contains("use canonical feature key `multi_agent`"),
         "{err}"
     );
+}
+
+#[test]
+fn experimental_realtime_start_instructions_load_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+experimental_realtime_start_instructions = "start instructions from config"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.experimental_realtime_start_instructions.as_deref(),
+        Some("start instructions from config")
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.experimental_realtime_start_instructions.as_deref(),
+        Some("start instructions from config")
+    );
+    Ok(())
 }
 
 #[test]

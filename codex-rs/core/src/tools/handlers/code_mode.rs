@@ -48,7 +48,6 @@ impl ToolHandler for CodeModeHandler {
             }
         };
 
-        let content_items = code_mode::execute(session, turn, tracker, code).await?;
-        Ok(FunctionToolOutput::from_content(content_items, Some(true)))
+        code_mode::execute(session, turn, tracker, code).await
     }
 }

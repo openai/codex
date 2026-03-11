@@ -159,7 +159,7 @@ pub struct ExecCommandToolOutput {
     /// Raw bytes returned for this unified exec call before any truncation.
     pub raw_output: Vec<u8>,
     pub max_output_tokens: Option<usize>,
-    pub process_id: Option<String>,
+    pub process_id: Option<i32>,
     pub exit_code: Option<i32>,
     pub original_token_count: Option<usize>,
     pub session_command: Option<Vec<String>>,
@@ -194,7 +194,7 @@ impl ToolOutput for ExecCommandToolOutput {
             #[serde(skip_serializing_if = "Option::is_none")]
             exit_code: Option<i32>,
             #[serde(skip_serializing_if = "Option::is_none")]
-            session_id: Option<String>,
+            session_id: Option<i32>,
             #[serde(skip_serializing_if = "Option::is_none")]
             original_token_count: Option<usize>,
             output: String,
@@ -204,7 +204,7 @@ impl ToolOutput for ExecCommandToolOutput {
             chunk_id: (!self.chunk_id.is_empty()).then(|| self.chunk_id.clone()),
             wall_time_seconds: self.wall_time.as_secs_f64(),
             exit_code: self.exit_code,
-            session_id: self.process_id.clone(),
+            session_id: self.process_id,
             original_token_count: self.original_token_count,
             output: self.truncated_output(),
         };

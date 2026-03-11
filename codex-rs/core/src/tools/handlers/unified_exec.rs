@@ -190,7 +190,7 @@ impl ToolHandler for UnifiedExecHandler {
                     )
                 {
                     let approval_policy = context.turn.approval_policy.value();
-                    manager.release_process_id(&process_id).await;
+                    manager.release_process_id(process_id).await;
                     return Err(FunctionCallError::RespondToModel(format!(
                         "approval policy is {approval_policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {approval_policy:?}"
                     )));
@@ -211,7 +211,7 @@ impl ToolHandler for UnifiedExecHandler {
                     ) {
                         Ok(normalized) => normalized,
                         Err(err) => {
-                            manager.release_process_id(&process_id).await;
+                            manager.release_process_id(process_id).await;
                             return Err(FunctionCallError::RespondToModel(err));
                         }
                     };
@@ -228,7 +228,7 @@ impl ToolHandler for UnifiedExecHandler {
                 )
                 .await?
                 {
-                    manager.release_process_id(&process_id).await;
+                    manager.release_process_id(process_id).await;
                     return Ok(ExecCommandToolOutput {
                         event_call_id: String::new(),
                         chunk_id: String::new(),
@@ -271,7 +271,7 @@ impl ToolHandler for UnifiedExecHandler {
                 let args: WriteStdinArgs = parse_arguments(&arguments)?;
                 let response = manager
                     .write_stdin(WriteStdinRequest {
-                        process_id: &args.session_id.to_string(),
+                        process_id: args.session_id,
                         input: &args.chars,
                         yield_time_ms: args.yield_time_ms,
                         max_output_tokens: args.max_output_tokens,

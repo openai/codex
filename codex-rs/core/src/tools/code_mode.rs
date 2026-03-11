@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::process::ExitStatus;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
@@ -11,6 +11,7 @@ use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::ToolRouter;
 use crate::tools::code_mode_description::code_mode_tool_reference;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
 use crate::tools::js_repl::resolve_compatible_node;
@@ -82,6 +83,8 @@ enum NodeToHostMessage {
         content_items: Vec<JsonValue>,
         stored_values: HashMap<String, JsonValue>,
         #[serde(default)]
+        error_text: Option<String>,
+        #[serde(default)]
         max_output_tokens_per_exec_call: Option<usize>,
     },
 }
@@ -106,7 +109,7 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
     ));
     section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to their code-mode result values.\n");
     section.push_str(&format!(
-        "- Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, store, load }}` from `@openai/code_mode` (or `\"openai/code_mode\"`). `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs. `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, and `load(key)` returns a cloned stored value or `undefined`. `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `{PUBLIC_TOOL_NAME}` execution; the default is `10000`. This guards the overall `{PUBLIC_TOOL_NAME}` output, not individual nested tool invocations. When truncation happens, the final text uses the unified-exec style `Original token count:` / `Output:` wrapper and the usual `…N tokens truncated…` marker.\n",
+        "- Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, store, load }}` from `@openai/code_mode` (or `\"openai/code_mode\"`). `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs. `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, and `load(key)` returns a cloned stored value or `undefined`. `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `{PUBLIC_TOOL_NAME}` execution; the default is `10000`. This guards the overall `{PUBLIC_TOOL_NAME}` output, not individual nested tool invocations. The returned content starts with a separate `Script completed` or `Script failed` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker.\n",
     ));
     section.push_str(
         "- Function tools require JSON object arguments. Freeform tools require raw strings.\n",
@@ -122,7 +125,7 @@ pub(crate) async fn execute(
     turn: Arc<TurnContext>,
     tracker: SharedTurnDiffTracker,
     code: String,
-) -> Result<Vec<FunctionCallOutputContentItem>, FunctionCallError> {
+) -> Result<FunctionToolOutput, FunctionCallError> {
     let exec = ExecContext {
         session,
         turn,
@@ -141,8 +144,9 @@ async fn execute_node(
     source: String,
     enabled_tools: Vec<EnabledTool>,
     stored_values: HashMap<String, JsonValue>,
-) -> Result<Vec<FunctionCallOutputContentItem>, String> {
+) -> Result<FunctionToolOutput, String> {
     let node_path = resolve_compatible_node(exec.turn.config.js_repl_node_path.as_deref()).await?;
+    let started_at = std::time::Instant::now();
 
     let env = create_env(&exec.turn.shell_environment_policy, None);
     let mut cmd = tokio::process::Command::new(&node_path);
@@ -191,7 +195,7 @@ async fn execute_node(
     .await?;
 
     let mut stdout_lines = BufReader::new(stdout).lines();
-    let mut final_content_items = None;
+    let mut pending_result = None;
     while let Some(line) = stdout_lines
         .next_line()
         .await
@@ -214,6 +218,7 @@ async fn execute_node(
             NodeToHostMessage::Result {
                 content_items,
                 stored_values,
+                error_text,
                 max_output_tokens_per_exec_call,
             } => {
                 exec.session
@@ -221,8 +226,9 @@ async fn execute_node(
                     .code_mode_store
                     .replace_stored_values(stored_values)
                     .await;
-                final_content_items = Some(truncate_code_mode_result(
+                pending_result = Some((
                     output_content_items_from_json_values(content_items)?,
+                    error_text,
                     max_output_tokens_per_exec_call,
                 ));
                 break;
@@ -239,20 +245,39 @@ async fn execute_node(
     let stderr = stderr_task
         .await
         .map_err(|err| format!("failed to collect {PUBLIC_TOOL_NAME} stderr: {err}"))?;
+    let wall_time = started_at.elapsed();
+    let success = status.success();
 
-    match final_content_items {
-        Some(content_items) if status.success() => Ok(content_items),
-        Some(_) => Err(format_runner_failure(
-            &format!("{PUBLIC_TOOL_NAME} execution failed"),
-            status,
-            &stderr,
-        )),
-        None => Err(format_runner_failure(
-            &format!("{PUBLIC_TOOL_NAME} runner exited without returning a result"),
-            status,
-            &stderr,
-        )),
+    let Some((mut content_items, error_text, max_output_tokens_per_exec_call)) = pending_result
+    else {
+        let message = if stderr.is_empty() {
+            format!("{PUBLIC_TOOL_NAME} runner exited without returning a result (status {status})")
+        } else {
+            stderr
+        };
+        return Err(message);
+    };
+
+    if !success {
+        let error_text = error_text.unwrap_or_else(|| {
+            if stderr.is_empty() {
+                format!("Process exited with status {status}")
+            } else {
+                stderr
+            }
+        });
+        content_items.push(FunctionCallOutputContentItem::InputText {
+            text: format!("Script error:\n{error_text}"),
+        });
     }
+
+    let mut content_items =
+        truncate_code_mode_result(content_items, max_output_tokens_per_exec_call);
+    prepend_script_status(&mut content_items, success, wall_time);
+    Ok(FunctionToolOutput::from_content(
+        content_items,
+        Some(success),
+    ))
 }
 
 async fn write_message(
@@ -275,15 +300,21 @@ async fn write_message(
         .map_err(|err| format!("failed to flush {PUBLIC_TOOL_NAME} message: {err}"))
 }
 
-fn append_stderr(message: String, stderr: &str) -> String {
-    if stderr.trim().is_empty() {
-        return message;
-    }
-    format!("{message}\n\nnode stderr:\n{stderr}")
-}
-
-fn format_runner_failure(message: &str, status: ExitStatus, stderr: &str) -> String {
-    append_stderr(format!("{message} (status {status})"), stderr)
+fn prepend_script_status(
+    content_items: &mut Vec<FunctionCallOutputContentItem>,
+    success: bool,
+    wall_time: Duration,
+) {
+    let wall_time_seconds = ((wall_time.as_secs_f32()) * 10.0).round() / 10.0;
+    let header = format!(
+        "{}\nWall time {wall_time_seconds:.1} seconds\nOutput:\n",
+        if success {
+            "Script completed"
+        } else {
+            "Script failed"
+        }
+    );
+    content_items.insert(0, FunctionCallOutputContentItem::InputText { text: header });
 }
 
 fn build_source(user_code: &str, enabled_tools: &[EnabledTool]) -> Result<String, String> {
@@ -302,25 +333,17 @@ fn truncate_code_mode_result(
     max_output_tokens_per_exec_call: Option<usize>,
 ) -> Vec<FunctionCallOutputContentItem> {
     let max_output_tokens = resolve_max_tokens(max_output_tokens_per_exec_call);
+    let policy = TruncationPolicy::Tokens(max_output_tokens);
     if items
         .iter()
         .all(|item| matches!(item, FunctionCallOutputContentItem::InputText { .. }))
     {
-        let (mut truncated_items, original_token_count) =
-            formatted_truncate_text_content_items_with_policy(
-                &items,
-                TruncationPolicy::Tokens(max_output_tokens),
-            );
-        if let Some(original_token_count) = original_token_count
-            && let Some(FunctionCallOutputContentItem::InputText { text }) =
-                truncated_items.first_mut()
-        {
-            *text = format!("Original token count: {original_token_count}\nOutput:\n{text}");
-        }
+        let (truncated_items, _) =
+            formatted_truncate_text_content_items_with_policy(&items, policy);
         return truncated_items;
     }
 
-    truncate_function_output_items_with_policy(&items, TruncationPolicy::Tokens(max_output_tokens))
+    truncate_function_output_items_with_policy(&items, policy)
 }
 
 async fn build_enabled_tools(exec: &ExecContext) -> Vec<EnabledTool> {

@@ -138,6 +138,8 @@ pub enum Feature {
     EnableRequestCompression,
     /// Enable collab tools.
     Collab,
+    /// Enable CSV-backed agent job tools.
+    SpawnCsv,
     /// Enable apps.
     Apps,
     /// Enable plugins.
@@ -414,6 +416,9 @@ impl Features {
     }
 
     pub(crate) fn normalize_dependencies(&mut self) {
+        if self.enabled(Feature::SpawnCsv) && !self.enabled(Feature::Collab) {
+            self.enable(Feature::Collab);
+        }
         if self.enabled(Feature::JsReplToolsOnly) && !self.enabled(Feature::JsRepl) {
             tracing::warn!("js_repl_tools_only requires js_repl; disabling js_repl_tools_only");
             self.disable(Feature::JsReplToolsOnly);
@@ -691,6 +696,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
             announcement: "NEW: Multi-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SpawnCsv,
+        key: "spawn_csv",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -995,6 +1006,27 @@ mod tests {
     fn collab_is_legacy_alias_for_multi_agent() {
         assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
         assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
+    }
+
+    #[test]
+    fn spawn_csv_is_under_development() {
+        assert_eq!(Feature::SpawnCsv.stage(), Stage::UnderDevelopment);
+        assert_eq!(Feature::SpawnCsv.default_enabled(), false);
+    }
+
+    #[test]
+    fn spawn_csv_normalization_enables_multi_agent_one_way() {
+        let mut spawn_csv_features = Features::with_defaults();
+        spawn_csv_features.enable(Feature::SpawnCsv);
+        spawn_csv_features.normalize_dependencies();
+        assert_eq!(spawn_csv_features.enabled(Feature::SpawnCsv), true);
+        assert_eq!(spawn_csv_features.enabled(Feature::Collab), true);
+
+        let mut collab_features = Features::with_defaults();
+        collab_features.enable(Feature::Collab);
+        collab_features.normalize_dependencies();
+        assert_eq!(collab_features.enabled(Feature::Collab), true);
+        assert_eq!(collab_features.enabled(Feature::SpawnCsv), false);
     }
 
     #[test]

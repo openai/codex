@@ -104,6 +104,10 @@ function readContentItems(context) {
   }
 }
 
+function formatErrorText(error) {
+  return String(error && error.stack ? error.stack : error);
+}
+
 function isValidIdentifier(name) {
   return /^[A-Za-z_$][0-9A-Za-z_$]*$/.test(name);
 }
@@ -378,11 +382,11 @@ async function main() {
     });
     process.exit(0);
   } catch (error) {
-    process.stderr.write(`${String(error && error.stack ? error.stack : error)}\n`);
     await protocol.send({
       type: 'result',
       content_items: readContentItems(context),
       stored_values: state.storedValues,
+      error_text: formatErrorText(error),
       max_output_tokens_per_exec_call: state.maxOutputTokensPerExecCall,
     });
     process.exit(1);
@@ -391,7 +395,7 @@ async function main() {
 
 void main().catch(async (error) => {
   try {
-    process.stderr.write(`${String(error && error.stack ? error.stack : error)}\n`);
+    process.stderr.write(`${formatErrorText(error)}\n`);
   } finally {
     process.exitCode = 1;
   }

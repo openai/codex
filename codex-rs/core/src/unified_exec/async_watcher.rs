@@ -110,7 +110,7 @@ pub(crate) fn spawn_exit_watcher(
     call_id: String,
     command: Vec<String>,
     cwd: PathBuf,
-    process_id: String,
+    process_id: i32,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     started_at: Instant,
 ) {
@@ -129,7 +129,7 @@ pub(crate) fn spawn_exit_watcher(
             call_id,
             command,
             cwd,
-            Some(process_id),
+            Some(process_id.to_string()),
             transcript,
             String::new(),
             exit_code,
