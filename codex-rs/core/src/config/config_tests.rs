@@ -2837,7 +2837,8 @@ async fn set_feature_enabled_updates_profile() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn set_feature_enabled_clears_default_false_feature_in_profile() -> anyhow::Result<()> {
+async fn set_feature_enabled_persists_default_false_feature_disable_in_profile()
+-> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
 
     ConfigEditsBuilder::new(codex_home.path())
@@ -2864,7 +2865,7 @@ async fn set_feature_enabled_clears_default_false_feature_in_profile() -> anyhow
             .features
             .as_ref()
             .and_then(|features| features.entries.get("smart_approvals")),
-        None,
+        Some(&false),
     );
     assert_eq!(
         parsed
@@ -2872,6 +2873,46 @@ async fn set_feature_enabled_clears_default_false_feature_in_profile() -> anyhow
             .as_ref()
             .and_then(|features| features.entries.get("smart_approvals")),
         None,
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn set_feature_enabled_profile_disable_overrides_root_enable() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    ConfigEditsBuilder::new(codex_home.path())
+        .set_feature_enabled("smart_approvals", true)
+        .apply()
+        .await?;
+
+    ConfigEditsBuilder::new(codex_home.path())
+        .with_profile(Some("dev"))
+        .set_feature_enabled("smart_approvals", false)
+        .apply()
+        .await?;
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    let parsed: ConfigToml = toml::from_str(&serialized)?;
+    let profile = parsed
+        .profiles
+        .get("dev")
+        .expect("profile should be created");
+
+    assert_eq!(
+        parsed
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("smart_approvals")),
+        Some(&true),
+    );
+    assert_eq!(
+        profile
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("smart_approvals")),
+        Some(&false),
     );
 
     Ok(())

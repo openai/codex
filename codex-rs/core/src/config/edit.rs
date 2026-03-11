@@ -860,10 +860,12 @@ impl ConfigEditsBuilder {
 
     /// Enable or disable a feature flag by key under the `[features]` table.
     ///
-    /// Disabling a default-false feature clears the scoped key instead of
+    /// Disabling a default-false feature clears the root-scoped key instead of
     /// persisting `false`, so the config does not pin the feature once it
-    /// graduates to globally enabled.
+    /// graduates to globally enabled. Profile-scoped disables still persist
+    /// `false` so they can override an inherited root enable.
     pub fn set_feature_enabled(mut self, key: &str, enabled: bool) -> Self {
+        let profile_scoped = self.profile.is_some();
         let segments = if let Some(profile) = self.profile.as_ref() {
             vec![
                 "profiles".to_string(),
@@ -878,7 +880,7 @@ impl ConfigEditsBuilder {
             .iter()
             .find(|spec| spec.key == key)
             .is_some_and(|spec| !spec.default_enabled);
-        if enabled || !is_default_false_feature {
+        if enabled || profile_scoped || !is_default_false_feature {
             self.edits.push(ConfigEdit::SetPath {
                 segments,
                 value: value(enabled),
