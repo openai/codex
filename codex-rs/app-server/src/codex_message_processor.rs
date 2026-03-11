@@ -6506,9 +6506,17 @@ impl CodexMessageProcessor {
                         };
 
                         // For now, we send a notification for every event,
-                        // JSON-serializing the `Event` as-is, but these should
-                        // be migrated to be variants of `ServerNotification`
-                        // instead.
+                        // Legacy `codex/event/*` notifications are still
+                        // produced here because the in-process app-server lane
+                        // (`codex exec` and other in-process consumers) still
+                        // depends on them. External transports now drop
+                        // `OutgoingMessage::Notification` in `transport.rs`,
+                        // so stdio/websocket clients only observe the typed
+                        // `ServerNotification` translations emitted below.
+                        //
+                        // TODO: remove this raw legacy-notification emission
+                        // entirely once the remaining in-process consumers are
+                        // migrated off `codex/event/*`.
                         let event_formatted = match &event.msg {
                             EventMsg::TurnStarted(_) => "task_started",
                             EventMsg::TurnComplete(_) => "task_complete",

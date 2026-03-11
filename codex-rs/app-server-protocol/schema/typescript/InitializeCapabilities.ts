@@ -12,6 +12,6 @@ export type InitializeCapabilities = {
 experimentalApi: boolean, 
 /**
  * Exact notification method names that should be suppressed for this
- * connection (for example `codex/event/session_configured`).
+ * connection (for example `thread/started`).
  */
 optOutNotificationMethods?: Array<string> | null, };
