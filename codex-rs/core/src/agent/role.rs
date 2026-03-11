@@ -957,7 +957,7 @@ enabled = false
         let spec = spawn_tool_spec::build(&user_defined_roles);
 
         assert!(spec.contains(
-            "Research carefully.\n- This role's model and reasoning effort are set by the role and cannot be changed."
+            "Research carefully.\n- This role's model is set to `gpt-5` and its reasoning effort is set to `high`. These settings cannot be changed."
         ));
     }
 
@@ -982,7 +982,7 @@ enabled = false
         let spec = spawn_tool_spec::build(&user_defined_roles);
 
         assert!(spec.contains(
-            "Review carefully.\n- This role's reasoning effort is set by the role and cannot be changed."
+            "Review carefully.\n- This role's reasoning effort is set to `medium` and cannot be changed."
         ));
     }
 
