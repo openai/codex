@@ -540,7 +540,7 @@ async fn code_mode_exports_all_tools_metadata_for_builtin_tools() -> Result<()> 
     let code = r#"
 import { ALL_TOOLS } from "tools.js";
 
-const tool = ALL_TOOLS.find(({ module, name }) => module === "tools.js" && name === "exec_command");
+const tool = ALL_TOOLS.find(({ module, name }) => module === "tools.js" && name === "view_image");
 add_content(JSON.stringify(tool));
 "#;
 
@@ -560,8 +560,8 @@ add_content(JSON.stringify(tool));
         parsed,
         serde_json::json!({
             "module": "tools.js",
-            "name": "exec_command",
-            "description": "Runs a command in a PTY, returning output or a session ID for ongoing interaction.",
+            "name": "view_image",
+            "description": "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nCode mode declaration:\n```ts\nimport { tools } from \"tools.js\";\ndeclare function view_image(args: {\n  path: string;\n}): Promise<unknown>;\n```",
         })
     );
 
@@ -599,7 +599,7 @@ add_content(JSON.stringify(tool));
         serde_json::json!({
             "module": "tools/mcp/rmcp.js",
             "name": "echo",
-            "description": "Echo back the provided message and include environment data.",
+            "description": "Echo back the provided message and include environment data.\n\nCode mode declaration:\n```ts\nimport { tools } from \"tools/mcp/rmcp.js\";\ndeclare function echo(args: {\n  env_var?: string;\n  message: string;\n}): Promise<{\n  _meta?: unknown;\n  content: Array<unknown>;\n  isError?: boolean;\n  structuredContent?: unknown;\n}>;\n```",
         })
     );
 

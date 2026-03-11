@@ -10,6 +10,7 @@ use crate::exec_env::create_env;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::ToolRouter;
+use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::code_mode_description::code_mode_tool_reference;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
@@ -351,46 +352,40 @@ fn truncate_code_mode_result(
 
 async fn build_enabled_tools(exec: &ExecContext) -> Vec<EnabledTool> {
     let router = build_nested_router(exec).await;
-    let mut out = Vec::new();
-    for spec in router.specs() {
-        let tool_name = spec.name().to_string();
-        if tool_name == PUBLIC_TOOL_NAME {
-            continue;
-        }
-
-        let reference = code_mode_tool_reference(&tool_name);
-
-        out.push(EnabledTool {
-            tool_name,
-            module_path: reference.module_path,
-            namespace: reference.namespace,
-            name: reference.tool_key,
-            description: tool_description_for_spec(&spec),
-            kind: tool_kind_for_spec(&spec),
-        });
-    }
+    let mut out = router
+        .specs()
+        .into_iter()
+        .map(|spec| augment_tool_spec_for_code_mode(spec, true))
+        .filter_map(enabled_tool_from_spec)
+        .collect::<Vec<_>>();
     out.sort_by(|left, right| left.tool_name.cmp(&right.tool_name));
     out.dedup_by(|left, right| left.tool_name == right.tool_name);
     out
 }
 
-fn tool_description_for_spec(spec: &ToolSpec) -> String {
-    match spec {
-        ToolSpec::Function(tool) => tool.description.clone(),
-        ToolSpec::Freeform(tool) => tool.description.clone(),
-        ToolSpec::LocalShell {} => "Runs shell commands on your local machine.".to_string(),
-        ToolSpec::ImageGeneration { .. } => "Generates images from text prompts.".to_string(),
-        ToolSpec::WebSearch {
-            external_web_access,
-            ..
-        } => {
-            if external_web_access == &Some(true) {
-                "Searches the live web for up-to-date information.".to_string()
-            } else {
-                "Searches the web for information.".to_string()
-            }
-        }
+fn enabled_tool_from_spec(spec: ToolSpec) -> Option<EnabledTool> {
+    let tool_name = spec.name().to_string();
+    if tool_name == PUBLIC_TOOL_NAME {
+        return None;
     }
+
+    let reference = code_mode_tool_reference(&tool_name);
+    let (description, kind) = match spec {
+        ToolSpec::Function(tool) => (tool.description, CodeModeToolKind::Function),
+        ToolSpec::Freeform(tool) => (tool.description, CodeModeToolKind::Freeform),
+        ToolSpec::LocalShell {} | ToolSpec::ImageGeneration { .. } | ToolSpec::WebSearch { .. } => {
+            return None;
+        }
+    };
+
+    Some(EnabledTool {
+        tool_name,
+        module_path: reference.module_path,
+        namespace: reference.namespace,
+        name: reference.tool_key,
+        description,
+        kind,
+    })
 }
 
 async fn build_nested_router(exec: &ExecContext) -> ToolRouter {

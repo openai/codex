@@ -1636,6 +1636,10 @@ source: /[\s\S]+/
     })
 }
 
+fn is_code_mode_nested_tool(spec: &ToolSpec) -> bool {
+    spec.name() != PUBLIC_TOOL_NAME && matches!(spec, ToolSpec::Function(_) | ToolSpec::Freeform(_))
+}
+
 fn create_list_mcp_resources_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -2041,8 +2045,9 @@ pub(crate) fn build_specs(
         .build();
         let mut enabled_tool_names = nested_specs
             .into_iter()
-            .map(|spec| spec.spec.name().to_string())
-            .filter(|name| name != PUBLIC_TOOL_NAME)
+            .map(|spec| spec.spec)
+            .filter(is_code_mode_nested_tool)
+            .map(|spec| spec.name().to_string())
             .collect::<Vec<_>>();
         enabled_tool_names.sort();
         enabled_tool_names.dedup();
