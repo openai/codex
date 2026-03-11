@@ -280,7 +280,8 @@ fn run_bwrap_with_proc_fallback(
             network_mode,
         )
     {
-        eprintln!("codex-linux-sandbox: bwrap could not mount /proc; retrying with --no-proc");
+        // Keep the retry silent so sandbox-internal diagnostics do not leak into the
+        // child process stderr stream.
         mount_proc = false;
     }
 

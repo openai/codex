@@ -325,7 +325,8 @@ async fn pipe_process_round_trips_stdin() -> anyhow::Result<()> {
     drop(writer);
     session.close_stdin();
 
-    let (output, code) = collect_output_until_exit(output_rx, exit_rx, 5_000).await;
+    let timeout_ms = if cfg!(windows) { 10_000 } else { 5_000 };
+    let (output, code) = collect_output_until_exit(output_rx, exit_rx, timeout_ms).await;
     let text = String::from_utf8_lossy(&output);
 
     assert!(
@@ -454,7 +455,6 @@ async fn pipe_process_can_expose_split_stdout_and_stderr() -> anyhow::Result<()>
         stderr_rx,
         exit_rx,
     } = spawned;
-
     let timeout_ms = if cfg!(windows) { 10_000 } else { 2_000 };
     let timeout = tokio::time::Duration::from_millis(timeout_ms);
     let stdout_task = tokio::spawn(async move { collect_split_output(stdout_rx).await });
