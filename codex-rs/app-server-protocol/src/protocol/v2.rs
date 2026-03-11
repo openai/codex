@@ -4327,8 +4327,10 @@ impl From<CoreRiskLevel> for RiskLevel {
 #[ts(export_to = "v2/")]
 pub struct AutomaticApprovalReview {
     pub status: AutomaticApprovalReviewStatus,
+    #[serde(alias = "risk_score")]
     #[ts(type = "number | null")]
     pub risk_score: Option<u8>,
+    #[serde(alias = "risk_level")]
     pub risk_level: Option<RiskLevel>,
     pub rationale: Option<String>,
 }
@@ -7296,6 +7298,26 @@ mod tests {
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
+            }
+        );
+    }
+
+    #[test]
+    fn automatic_approval_review_deserializes_legacy_snake_case_risk_fields() {
+        let review: AutomaticApprovalReview = serde_json::from_value(json!({
+            "status": "denied",
+            "risk_score": 91,
+            "risk_level": "high",
+            "rationale": "too risky"
+        }))
+        .expect("legacy snake_case automatic review should deserialize");
+        assert_eq!(
+            review,
+            AutomaticApprovalReview {
+                status: AutomaticApprovalReviewStatus::Denied,
+                risk_score: Some(91),
+                risk_level: Some(RiskLevel::High),
+                rationale: Some("too risky".to_string()),
             }
         );
     }
