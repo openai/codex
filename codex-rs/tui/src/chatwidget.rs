@@ -615,6 +615,10 @@ pub(crate) struct ChatWidget {
     full_reasoning_buffer: String,
     // Current status header shown in the status indicator.
     current_status_header: String,
+    // Current status details shown beneath the header, if any.
+    current_status_details: Option<String>,
+    current_status_details_capitalization: StatusDetailsCapitalization,
+    current_status_details_max_lines: usize,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
     // Set when commentary output completes; once stream queues go idle we restore the status row.
@@ -1052,7 +1056,12 @@ impl ChatWidget {
         }
 
         self.bottom_pane.ensure_status_indicator();
-        self.set_status_header(self.current_status_header.clone());
+        self.set_status(
+            self.current_status_header.clone(),
+            self.current_status_details.clone(),
+            self.current_status_details_capitalization,
+            self.current_status_details_max_lines,
+        );
         self.pending_status_indicator_restore = false;
     }
 
@@ -1067,6 +1076,9 @@ impl ChatWidget {
         details_max_lines: usize,
     ) {
         self.current_status_header = header.clone();
+        self.current_status_details = details.clone();
+        self.current_status_details_capitalization = details_capitalization;
+        self.current_status_details_max_lines = details_max_lines;
         self.bottom_pane
             .update_status(header, details, details_capitalization, details_max_lines);
     }
@@ -2676,7 +2688,16 @@ impl ChatWidget {
         debug!("BackgroundEvent: {message}");
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(true);
-        self.set_status_header(message);
+        if let Some(command) = message.strip_prefix("Reviewing approval request: ") {
+            self.set_status(
+                String::from("Reviewing approval request"),
+                Some(command.to_string()),
+                StatusDetailsCapitalization::Preserve,
+                1,
+            );
+        } else {
+            self.set_status_header(message);
+        }
     }
 
     fn on_hook_started(&mut self, event: codex_protocol::protocol::HookStartedEvent) {
@@ -3363,6 +3384,9 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
+            current_status_details: None,
+            current_status_details_capitalization: StatusDetailsCapitalization::CapitalizeFirst,
+            current_status_details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
             retry_status_header: None,
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
@@ -3548,6 +3572,9 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
+            current_status_details: None,
+            current_status_details_capitalization: StatusDetailsCapitalization::CapitalizeFirst,
+            current_status_details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
             retry_status_header: None,
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
@@ -3725,6 +3752,9 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
+            current_status_details: None,
+            current_status_details_capitalization: StatusDetailsCapitalization::CapitalizeFirst,
+            current_status_details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
             retry_status_header: None,
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,

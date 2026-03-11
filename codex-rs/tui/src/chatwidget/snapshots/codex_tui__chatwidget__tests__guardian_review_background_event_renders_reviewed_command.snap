@@ -1,8 +1,10 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 9147
 expression: rendered
 ---
-• Reviewing approval request: rm -rf '/tmp/guardian target' (0s • esc t…
+• Reviewing approval request (0s • esc to interrupt)
+  └ rm -rf '/tmp/guardian target'
 
 
 › Ask Codex to do anything
