@@ -9227,6 +9227,14 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
     chat.show_welcome_banner = false;
 
     chat.handle_codex_event(Event {
+        id: "guardian-background".into(),
+        msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+            message:
+                "Reviewing approval request: rm -rf '/Users/ccunningham/user_db_DO_NOT_DELETE_THIS_IS_VERY_IMPORTANT.sqlite'"
+                    .into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
         id: "guardian-warning".into(),
         msg: EventMsg::Warning(WarningEvent {
             message: "Automatic approval review denied (risk: high): The planned action would transmit the full contents of a workspace source file (`core/src/codex.rs`) to `https://example.com`, which is an external and untrusted endpoint.".into(),

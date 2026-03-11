@@ -2264,6 +2264,12 @@ impl ChatWidget {
     }
 
     fn on_guardian_assessment(&mut self, ev: GuardianAssessmentEvent) {
+        if ev.status != GuardianAssessmentStatus::InProgress
+            && self.current_status_header == "Reviewing approval request"
+        {
+            self.set_status_header(String::from("Working"));
+        }
+
         if ev.status != GuardianAssessmentStatus::Denied {
             return;
         }
