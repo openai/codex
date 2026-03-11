@@ -41,6 +41,7 @@ use crate::config::Config;
 use crate::error::CodexErr;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
+use crate::guardian::review_approval_request_with_cancel;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
 use crate::mcp_tool_call::lookup_mcp_tool_metadata;
@@ -405,6 +406,7 @@ async fn handle_exec_approval(
         ..
     } = event;
     let decision = if routes_approval_to_guardian(parent_ctx) {
+        let review_cancel = cancel_token.child_token();
         let review_rx = spawn_guardian_review(
             Arc::clone(parent_session),
             Arc::clone(parent_ctx),
@@ -421,12 +423,14 @@ async fn handle_exec_approval(
                 justification: None,
             },
             reason,
+            review_cancel.clone(),
         );
         await_approval_with_cancel(
             async move { review_rx.await.unwrap_or_default() },
             parent_session,
             &approval_id_for_op,
             cancel_token,
+            Some(&review_cancel),
         )
         .await
     } else {
@@ -448,6 +452,7 @@ async fn handle_exec_approval(
             parent_session,
             &approval_id_for_op,
             cancel_token,
+            None,
         )
         .await
     };
@@ -485,6 +490,7 @@ async fn handle_patch_approval(
             .map(|path| AbsolutePathBuf::from_absolute_path(parent_ctx.cwd.join(path)).ok())
             .collect::<Option<Vec<_>>>();
         if let Some(files) = maybe_files {
+            let review_cancel = cancel_token.child_token();
             let patch = changes
                 .iter()
                 .map(|(path, change)| match change {
@@ -524,12 +530,14 @@ async fn handle_patch_approval(
                     patch,
                 },
                 reason,
+                review_cancel.clone(),
             );
             await_approval_with_cancel(
                 async move { review_rx.await.unwrap_or_default() },
                 parent_session,
                 &approval_id,
                 cancel_token,
+                Some(&review_cancel),
             )
             .await
         } else {
@@ -541,6 +549,7 @@ async fn handle_patch_approval(
                 parent_session,
                 &approval_id,
                 cancel_token,
+                None,
             )
             .await
         }
@@ -553,6 +562,7 @@ async fn handle_patch_approval(
             parent_session,
             &approval_id,
             cancel_token,
+            None,
         )
         .await
     };
@@ -630,17 +640,20 @@ async fn maybe_auto_review_mcp_request_user_input(
         &invocation.tool,
     )
     .await;
+    let review_cancel = cancel_token.child_token();
     let review_rx = spawn_guardian_review(
         Arc::clone(parent_session),
         Arc::clone(parent_ctx),
         build_guardian_mcp_tool_review_request(&event.call_id, &invocation, metadata.as_ref()),
         None,
+        review_cancel.clone(),
     );
     let decision = await_approval_with_cancel(
         async move { review_rx.await.unwrap_or_default() },
         parent_session,
         &event.call_id,
         cancel_token,
+        Some(&review_cancel),
     )
     .await;
     let selected_label = match decision {
@@ -678,6 +691,7 @@ fn spawn_guardian_review(
     turn: Arc<TurnContext>,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
+    cancel_token: CancellationToken,
 ) -> oneshot::Receiver<ReviewDecision> {
     let (tx, rx) = oneshot::channel();
     std::thread::spawn(move || {
@@ -688,11 +702,12 @@ fn spawn_guardian_review(
             let _ = tx.send(ReviewDecision::Denied);
             return;
         };
-        let decision = runtime.block_on(review_approval_request(
+        let decision = runtime.block_on(review_approval_request_with_cancel(
             &session,
             &turn,
             request,
             retry_reason,
+            cancel_token,
         ));
         let _ = tx.send(decision);
     });
@@ -783,6 +798,7 @@ async fn await_approval_with_cancel<F>(
     parent_session: &Session,
     approval_id: &str,
     cancel_token: &CancellationToken,
+    review_cancel_token: Option<&CancellationToken>,
 ) -> codex_protocol::protocol::ReviewDecision
 where
     F: core::future::Future<Output = codex_protocol::protocol::ReviewDecision>,
@@ -790,6 +806,9 @@ where
     tokio::select! {
         biased;
         _ = cancel_token.cancelled() => {
+            if let Some(review_cancel_token) = review_cancel_token {
+                review_cancel_token.cancel();
+            }
             parent_session
                 .notify_approval(approval_id, codex_protocol::protocol::ReviewDecision::Abort)
                 .await;

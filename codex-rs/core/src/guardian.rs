@@ -298,6 +298,7 @@ async fn run_guardian_review(
     turn: Arc<TurnContext>,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
+    external_cancel: Option<CancellationToken>,
 ) -> ReviewDecision {
     let assessment_id = guardian_request_id(&request).to_string();
     let action_summary = guardian_assessment_action_value(&request);
@@ -337,7 +338,17 @@ async fn run_guardian_review(
             // after the caller has already timed out.
             cancel_token.cancel();
             None
-        }
+        },
+        _ = async {
+            if let Some(external_cancel) = external_cancel.as_ref() {
+                external_cancel.cancelled().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => {
+            cancel_token.cancel();
+            return ReviewDecision::Abort;
+        },
     };
 
     let assessment = match review {
@@ -408,7 +419,31 @@ pub(crate) async fn review_approval_request(
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
 ) -> ReviewDecision {
-    run_guardian_review(Arc::clone(session), Arc::clone(turn), request, retry_reason).await
+    run_guardian_review(
+        Arc::clone(session),
+        Arc::clone(turn),
+        request,
+        retry_reason,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn review_approval_request_with_cancel(
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+    cancel_token: CancellationToken,
+) -> ReviewDecision {
+    run_guardian_review(
+        Arc::clone(session),
+        Arc::clone(turn),
+        request,
+        retry_reason,
+        Some(cancel_token),
+    )
+    .await
 }
 
 /// Builds the guardian user content items from:
