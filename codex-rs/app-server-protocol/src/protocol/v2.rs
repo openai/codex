@@ -498,7 +498,9 @@ pub struct SandboxWorkspaceWrite {
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct ToolsV2 {
-    pub web_search: Option<WebSearchToolConfig>,
+    #[serde(alias = "web_search_request")]
+    pub web_search: Option<bool>,
+    pub web_search_config: Option<WebSearchToolConfig>,
     pub view_image: Option<bool>,
 }
 

@@ -1502,12 +1502,17 @@
           "type": "boolean"
         },
         "web_search": {
+          "default": null,
+          "type": "boolean"
+        },
+        "web_search_config": {
           "allOf": [
             {
               "$ref": "#/definitions/WebSearchToolConfig"
             }
           ],
-          "default": null
+          "default": null,
+          "description": "Additional parameters for the native `web_search` tool."
         }
       },
       "type": "object"

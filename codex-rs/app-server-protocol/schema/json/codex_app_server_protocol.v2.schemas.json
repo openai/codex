@@ -14782,6 +14782,12 @@
           ]
         },
         "web_search": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "web_search_config": {
           "anyOf": [
             {
               "$ref": "#/definitions/WebSearchToolConfig"

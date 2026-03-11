@@ -242,7 +242,10 @@ async fn web_search_tool_config_from_config_toml_is_forwarded_to_request() {
         home.path().join("config.toml"),
         r#"web_search = "live"
 
-[tools.web_search]
+[tools]
+web_search = true
+
+[tools.web_search_config]
 context_size = "high"
 allowed_domains = ["example.com"]
 location = { country = "US", city = "New York", timezone = "America/New_York" }

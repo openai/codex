@@ -1392,8 +1392,12 @@ pub struct RealtimeAudioToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ToolsToml {
+    #[serde(default, alias = "web_search_request")]
+    pub web_search: Option<bool>,
+
+    /// Additional parameters for the native `web_search` tool.
     #[serde(default)]
-    pub web_search: Option<WebSearchToolConfig>,
+    pub web_search_config: Option<WebSearchToolConfig>,
 
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
@@ -1457,7 +1461,7 @@ pub struct AgentRoleToml {
 impl From<ToolsToml> for Tools {
     fn from(tools_toml: ToolsToml) -> Self {
         Self {
-            web_search: tools_toml.web_search.is_some().then_some(true),
+            web_search: tools_toml.web_search,
             view_image: tools_toml.view_image,
         }
     }
@@ -1756,11 +1760,11 @@ fn resolve_web_search_config(
     let base = config_toml
         .tools
         .as_ref()
-        .and_then(|tools| tools.web_search.as_ref());
+        .and_then(|tools| tools.web_search_config.as_ref());
     let profile = config_profile
         .tools
         .as_ref()
-        .and_then(|tools| tools.web_search.as_ref());
+        .and_then(|tools| tools.web_search_config.as_ref());
 
     match (base, profile) {
         (None, None) => None,

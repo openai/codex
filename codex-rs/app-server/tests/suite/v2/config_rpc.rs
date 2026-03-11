@@ -96,12 +96,13 @@ async fn config_read_includes_tools() -> Result<()> {
         r#"
 model = "gpt-user"
 
-[tools.web_search]
+[tools]
+web_search = true
+view_image = false
+
+[tools.web_search_config]
 context_size = "low"
 allowed_domains = ["example.com"]
-
-[tools]
-view_image = false
 "#,
     )?;
     let codex_home_path = codex_home.path().canonicalize()?;
@@ -131,7 +132,8 @@ view_image = false
     assert_eq!(
         tools,
         ToolsV2 {
-            web_search: Some(WebSearchToolConfig {
+            web_search: Some(true),
+            web_search_config: Some(WebSearchToolConfig {
                 context_size: Some(WebSearchContextSize::Low),
                 allowed_domains: Some(vec!["example.com".to_string()]),
                 location: None,
@@ -140,8 +142,14 @@ view_image = false
         }
     );
     assert_eq!(
+        origins.get("tools.web_search").expect("origin").name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+    assert_eq!(
         origins
-            .get("tools.web_search.context_size")
+            .get("tools.web_search_config.context_size")
             .expect("origin")
             .name,
         ConfigLayerSource::User {
@@ -150,7 +158,7 @@ view_image = false
     );
     assert_eq!(
         origins
-            .get("tools.web_search.allowed_domains.0")
+            .get("tools.web_search_config.allowed_domains.0")
             .expect("origin")
             .name,
         ConfigLayerSource::User {
@@ -178,7 +186,10 @@ async fn config_read_includes_nested_web_search_tool_config() -> Result<()> {
         r#"
 web_search = "live"
 
-[tools.web_search]
+[tools]
+web_search = true
+
+[tools.web_search_config]
 context_size = "high"
 allowed_domains = ["example.com"]
 location = { country = "US", city = "New York", timezone = "America/New_York" }
@@ -202,16 +213,111 @@ location = { country = "US", city = "New York", timezone = "America/New_York" }
     let ConfigReadResponse { config, .. } = to_response(resp)?;
 
     assert_eq!(
-        config.tools.expect("tools present").web_search,
-        Some(WebSearchToolConfig {
-            context_size: Some(WebSearchContextSize::High),
-            allowed_domains: Some(vec!["example.com".to_string()]),
-            location: Some(WebSearchLocation {
-                country: Some("US".to_string()),
-                region: None,
-                city: Some("New York".to_string()),
-                timezone: Some("America/New_York".to_string()),
+        config.tools,
+        Some(ToolsV2 {
+            web_search: Some(true),
+            web_search_config: Some(WebSearchToolConfig {
+                context_size: Some(WebSearchContextSize::High),
+                allowed_domains: Some(vec!["example.com".to_string()]),
+                location: Some(WebSearchLocation {
+                    country: Some("US".to_string()),
+                    region: None,
+                    city: Some("New York".to_string()),
+                    timezone: Some("America/New_York".to_string()),
+                }),
             }),
+            view_image: None,
+        }),
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_nested_web_search_config_without_bool() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+web_search = "live"
+
+[tools.web_search_config]
+context_size = "high"
+allowed_domains = ["example.com"]
+location = { country = "US", city = "New York", timezone = "America/New_York" }
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse { config, .. } = to_response(resp)?;
+
+    assert_eq!(
+        config.tools,
+        Some(ToolsV2 {
+            web_search: None,
+            web_search_config: Some(WebSearchToolConfig {
+                context_size: Some(WebSearchContextSize::High),
+                allowed_domains: Some(vec!["example.com".to_string()]),
+                location: Some(WebSearchLocation {
+                    country: Some("US".to_string()),
+                    region: None,
+                    city: Some("New York".to_string()),
+                    timezone: Some("America/New_York".to_string()),
+                }),
+            }),
+            view_image: None,
+        }),
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_accepts_legacy_web_search_request_key() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+[tools]
+web_search_request = true
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse { config, .. } = to_response(resp)?;
+
+    assert_eq!(
+        config.tools,
+        Some(ToolsV2 {
+            web_search: Some(true),
+            web_search_config: None,
+            view_image: None,
         }),
     );
 

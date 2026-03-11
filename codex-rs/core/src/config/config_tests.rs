@@ -14,6 +14,11 @@ use crate::config_loader::RequirementSource;
 use crate::features::Feature;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
+use codex_protocol::config_types::WebSearchContextSize;
+use codex_protocol::config_types::WebSearchFilters;
+use codex_protocol::config_types::WebSearchLocation;
+use codex_protocol::config_types::WebSearchUserLocation;
+use codex_protocol::config_types::WebSearchUserLocationType;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -1371,6 +1376,100 @@ fn web_search_mode_disabled_overrides_legacy_request() {
     assert_eq!(
         resolve_web_search_mode(&cfg, &profile, &features),
         Some(WebSearchMode::Disabled)
+    );
+}
+
+#[test]
+fn web_search_config_reads_tools_web_search_config() {
+    let cfg = ConfigToml {
+        tools: Some(ToolsToml {
+            web_search: Some(true),
+            web_search_config: Some(WebSearchToolConfig {
+                context_size: Some(WebSearchContextSize::High),
+                allowed_domains: Some(vec!["example.com".to_string()]),
+                location: Some(WebSearchLocation {
+                    country: Some("US".to_string()),
+                    region: None,
+                    city: Some("New York".to_string()),
+                    timezone: Some("America/New_York".to_string()),
+                }),
+            }),
+            view_image: None,
+        }),
+        ..Default::default()
+    };
+    let profile = ConfigProfile::default();
+
+    assert_eq!(
+        resolve_web_search_config(&cfg, &profile),
+        Some(WebSearchConfig {
+            filters: Some(WebSearchFilters {
+                allowed_domains: Some(vec!["example.com".to_string()]),
+            }),
+            user_location: Some(WebSearchUserLocation {
+                r#type: WebSearchUserLocationType::Approximate,
+                country: Some("US".to_string()),
+                region: None,
+                city: Some("New York".to_string()),
+                timezone: Some("America/New_York".to_string()),
+            }),
+            search_context_size: Some(WebSearchContextSize::High),
+        }),
+    );
+}
+
+#[test]
+fn web_search_config_profile_overrides_base_values() {
+    let cfg = ConfigToml {
+        tools: Some(ToolsToml {
+            web_search: Some(true),
+            web_search_config: Some(WebSearchToolConfig {
+                context_size: Some(WebSearchContextSize::Low),
+                allowed_domains: Some(vec!["example.com".to_string()]),
+                location: Some(WebSearchLocation {
+                    country: Some("US".to_string()),
+                    region: Some("CA".to_string()),
+                    city: None,
+                    timezone: Some("America/Los_Angeles".to_string()),
+                }),
+            }),
+            view_image: None,
+        }),
+        ..Default::default()
+    };
+    let profile = ConfigProfile {
+        tools: Some(ToolsToml {
+            web_search: None,
+            web_search_config: Some(WebSearchToolConfig {
+                context_size: Some(WebSearchContextSize::High),
+                allowed_domains: None,
+                location: Some(WebSearchLocation {
+                    country: None,
+                    region: Some("NY".to_string()),
+                    city: Some("New York".to_string()),
+                    timezone: None,
+                }),
+            }),
+            view_image: None,
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        resolve_web_search_config(&cfg, &profile),
+        Some(WebSearchConfig {
+            filters: Some(WebSearchFilters {
+                allowed_domains: Some(vec!["example.com".to_string()]),
+            }),
+            user_location: Some(WebSearchUserLocation {
+                r#type: WebSearchUserLocationType::Approximate,
+                country: Some("US".to_string()),
+                region: Some("NY".to_string()),
+                city: Some("New York".to_string()),
+                timezone: Some("America/Los_Angeles".to_string()),
+            }),
+            search_context_size: Some(WebSearchContextSize::High),
+        }),
     );
 }
 
