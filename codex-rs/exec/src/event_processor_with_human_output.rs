@@ -1257,6 +1257,7 @@ fn format_collab_status(status: &AgentStatus) -> String {
     match status {
         AgentStatus::PendingInit => "pending init".to_string(),
         AgentStatus::Running => "running".to_string(),
+        AgentStatus::Interrupted => "interrupted".to_string(),
         AgentStatus::Completed(Some(message)) => {
             let preview = truncate_preview(message.trim(), 120);
             if preview.is_empty() {
@@ -1286,6 +1287,7 @@ fn style_for_agent_status(
     match status {
         AgentStatus::PendingInit | AgentStatus::Shutdown => processor.dimmed,
         AgentStatus::Running => processor.cyan,
+        AgentStatus::Interrupted => processor.yellow,
         AgentStatus::Completed(_) => processor.green,
         AgentStatus::Errored(_) | AgentStatus::NotFound => processor.red,
     }

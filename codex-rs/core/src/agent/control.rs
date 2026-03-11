@@ -697,8 +697,13 @@ mod tests {
             reason: TurnAbortReason::Interrupted,
         }));
 
-        let expected = AgentStatus::Errored("Interrupted".to_string());
+        let expected = AgentStatus::Interrupted;
         assert_eq!(status, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn interrupted_status_is_not_final() {
+        assert_eq!(is_final(&AgentStatus::Interrupted), false);
     }
 
     #[tokio::test]
