@@ -3698,17 +3698,17 @@ impl ChatComposer {
         true
     }
 
+    /// Replaces the contextual footer label for the currently viewed agent.
+    ///
+    /// Returning `false` means the value was unchanged, so callers can skip redraw work. This
+    /// field is intentionally just cached presentation state; `ChatComposer` does not infer which
+    /// thread is active on its own.
     pub(crate) fn set_active_agent_label(&mut self, active_agent_label: Option<String>) -> bool {
         if self.active_agent_label == active_agent_label {
             return false;
         }
         self.active_agent_label = active_agent_label;
         true
-    }
-
-    #[cfg(test)]
-    pub(crate) fn active_agent_label(&self) -> Option<&str> {
-        self.active_agent_label.as_deref()
     }
 }
 

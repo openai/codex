@@ -1035,6 +1035,10 @@ impl ChatWidget {
         self.bottom_pane.set_status_line(status_line);
     }
 
+    /// Forwards the contextual active-agent label into the bottom-pane footer pipeline.
+    ///
+    /// `ChatWidget` stays a pass-through here so `App` remains the owner of "which thread is the
+    /// user actually looking at?" and the footer stack remains a pure renderer of that decision.
     pub(crate) fn set_active_agent_label(&mut self, active_agent_label: Option<String>) {
         self.bottom_pane.set_active_agent_label(active_agent_label);
     }
@@ -8001,11 +8005,6 @@ impl ChatWidget {
     #[cfg(test)]
     pub(crate) fn pending_thread_approvals(&self) -> &[String] {
         self.bottom_pane.pending_thread_approvals()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn active_agent_label(&self) -> Option<&str> {
-        self.bottom_pane.active_agent_label()
     }
 
     #[cfg(test)]
