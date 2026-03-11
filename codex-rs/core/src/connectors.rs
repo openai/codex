@@ -26,7 +26,6 @@ use crate::config::types::AppToolApproval;
 use crate::config::types::AppsConfigToml;
 use crate::default_client::is_first_party_chat_originator;
 use crate::default_client::originator;
-use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
 use crate::mcp::ToolPluginProvenance;
