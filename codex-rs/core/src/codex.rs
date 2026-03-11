@@ -1986,19 +1986,6 @@ impl Session {
         state.clear_connector_selection();
     }
 
-    pub(crate) async fn seed_inherited_next_turn_permissions(
-        &self,
-        permissions: PermissionProfile,
-    ) {
-        let mut state = self.state.lock().await;
-        state.seed_inherited_next_turn_permissions(permissions);
-    }
-
-    pub(crate) async fn take_inherited_next_turn_permissions(&self) -> Option<PermissionProfile> {
-        let mut state = self.state.lock().await;
-        state.take_inherited_next_turn_permissions()
-    }
-
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
         let turn_context = self.new_default_turn().await;
         let is_subagent = {

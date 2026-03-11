@@ -14,7 +14,6 @@ use crate::state_db;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
@@ -106,9 +105,6 @@ impl AgentControl {
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
-            .await;
-        let inherited_turn_permissions = self
-            .inherited_turn_permissions_for_source(&state, session_source.as_ref())
             .await;
         let session_source = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -215,14 +211,6 @@ impl AgentControl {
         // to subscribe or drain this newly created thread.
         // TODO(jif) add helper for drain
         state.notify_thread_created(new_thread.thread_id);
-        if let Some(inherited_turn_permissions) = inherited_turn_permissions {
-            new_thread
-                .thread
-                .codex
-                .session
-                .seed_inherited_next_turn_permissions(inherited_turn_permissions)
-                .await;
-        }
 
         self.send_input(new_thread.thread_id, items).await?;
         self.maybe_start_completion_watcher(new_thread.thread_id, notification_source);
@@ -496,22 +484,6 @@ impl AgentControl {
 
         let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
         parent_thread.codex.session.user_shell().shell_snapshot()
-    }
-
-    async fn inherited_turn_permissions_for_source(
-        &self,
-        state: &Arc<ThreadManagerState>,
-        session_source: Option<&SessionSource>,
-    ) -> Option<PermissionProfile> {
-        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        })) = session_source
-        else {
-            return None;
-        };
-
-        let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
-        parent_thread.codex.session.granted_turn_permissions().await
     }
 }
 #[cfg(test)]

@@ -422,8 +422,8 @@ impl ApprovalOverlay {
 
     fn try_handle_shortcut(&mut self, key_event: &KeyEvent) -> bool {
         if matches!(
-            self.view.as_ref(),
-            Some(ApprovalOverlayView::Permissions { .. })
+            self.current_request.as_ref(),
+            Some(ApprovalRequest::Permissions { .. })
         ) {
             return false;
         }
@@ -1151,10 +1151,7 @@ mod tests {
         view.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
 
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
-        let Some(ApprovalOverlayView::Permissions { picker }) = view.view.as_ref() else {
-            panic!("expected permissions picker view");
-        };
-        assert_eq!(picker.search_query(), "o".to_string());
+        assert_eq!(view.list.search_query_for_test(), "o".to_string());
     }
 
     #[test]

@@ -54,7 +54,7 @@ pub(crate) use app_link_view::AppLinkView;
 pub(crate) use app_link_view::AppLinkViewParams;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
-pub(crate) use approval_overlay::permission_request_lines;
+pub(crate) use approval_overlay::format_additional_permissions_rule;
 pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
 pub(crate) use request_user_input::RequestUserInputOverlay;
@@ -810,6 +810,14 @@ impl BottomPane {
         let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
         self.push_view(Box::new(view));
         true
+    }
+
+    pub(crate) fn selected_index_for_active_view(&self, view_id: &'static str) -> Option<usize> {
+        self.view_stack.last().and_then(|view| {
+            (view.view_id() == Some(view_id))
+                .then(|| view.selected_index())
+                .flatten()
+        })
     }
 
     /// Update the pending-input preview shown above the composer.

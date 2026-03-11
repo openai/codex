@@ -184,13 +184,6 @@ impl PendingInteractiveReplayState {
                     .or_default()
                     .push(ev.call_id.clone());
             }
-            EventMsg::RequestPermissions(ev) => {
-                self.request_permissions_call_ids.insert(ev.call_id.clone());
-                self.request_permissions_call_ids_by_turn_id
-                    .entry(ev.turn_id.clone())
-                    .or_default()
-                    .push(ev.call_id.clone());
-            }
             // A turn ending (normally or aborted/replaced) invalidates any unresolved
             // turn-scoped approvals, permission prompts, and request_user_input prompts.
             EventMsg::TurnComplete(ev) => {
@@ -263,23 +256,6 @@ impl PendingInteractiveReplayState {
                         .remove(&ev.turn_id);
                 }
             }
-            EventMsg::RequestPermissions(ev) => {
-                self.request_permissions_call_ids.remove(&ev.call_id);
-                let mut remove_turn_entry = false;
-                if let Some(call_ids) = self
-                    .request_permissions_call_ids_by_turn_id
-                    .get_mut(&ev.turn_id)
-                {
-                    call_ids.retain(|call_id| call_id != &ev.call_id);
-                    if call_ids.is_empty() {
-                        remove_turn_entry = true;
-                    }
-                }
-                if remove_turn_entry {
-                    self.request_permissions_call_ids_by_turn_id
-                        .remove(&ev.turn_id);
-                }
-            }
             _ => {}
         }
     }
@@ -304,9 +280,6 @@ impl PendingInteractiveReplayState {
             }
             EventMsg::RequestUserInput(ev) => {
                 self.request_user_input_call_ids.contains(&ev.call_id)
-            }
-            EventMsg::RequestPermissions(ev) => {
-                self.request_permissions_call_ids.contains(&ev.call_id)
             }
             _ => true,
         }
@@ -347,14 +320,6 @@ impl PendingInteractiveReplayState {
         if let Some(call_ids) = self.patch_approval_call_ids_by_turn_id.remove(turn_id) {
             for call_id in call_ids {
                 self.patch_approval_call_ids.remove(&call_id);
-            }
-        }
-    }
-
-    fn clear_request_permissions_turn(&mut self, turn_id: &str) {
-        if let Some(call_ids) = self.request_permissions_call_ids_by_turn_id.remove(turn_id) {
-            for call_id in call_ids {
-                self.request_permissions_call_ids.remove(&call_id);
             }
         }
     }

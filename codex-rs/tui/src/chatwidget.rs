@@ -2327,14 +2327,6 @@ impl ChatWidget {
         );
     }
 
-    fn on_request_permissions(&mut self, ev: RequestPermissionsEvent) {
-        let ev2 = ev.clone();
-        self.defer_or_handle(
-            |q| q.push_request_permissions(ev),
-            |s| s.handle_request_permissions_now(ev2),
-        );
-    }
-
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         if is_unified_exec_source(ev.source) {
@@ -3109,7 +3101,7 @@ impl ChatWidget {
             ApprovalRequest::Permissions {
                 thread_id,
                 thread_label: None,
-                id: ev.call_id,
+                call_id: ev.call_id,
                 reason: ev.reason,
                 permissions: ev.permissions,
             },
@@ -3145,20 +3137,6 @@ impl ChatWidget {
             summary: Notification::user_input_request_summary(&ev.request.questions),
         });
         self.bottom_pane.push_user_input_request(ev);
-        self.request_redraw();
-    }
-
-    pub(crate) fn handle_request_permissions_now(&mut self, ev: RequestPermissionsEvent) {
-        self.flush_answer_stream_with_separator();
-        let request = ApprovalRequest::Permissions {
-            thread_id: self.thread_id.unwrap_or_default(),
-            thread_label: None,
-            call_id: ev.call_id,
-            reason: ev.reason,
-            permissions: ev.permissions,
-        };
-        self.bottom_pane
-            .push_approval_request(request, &self.config.features);
         self.request_redraw();
     }
 

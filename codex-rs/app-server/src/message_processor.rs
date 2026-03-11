@@ -155,6 +155,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
+    pub(crate) thread_manager: Option<Arc<ThreadManager>>,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) cloud_requirements: CloudRequirementsLoader,
@@ -173,6 +174,7 @@ impl MessageProcessor {
             outgoing,
             arg0_paths,
             config,
+            thread_manager,
             cli_overrides,
             loader_overrides,
             cloud_requirements,
@@ -196,16 +198,18 @@ impl MessageProcessor {
         auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));
-        let thread_manager = Arc::new(ThreadManager::new(
-            config.as_ref(),
-            auth_manager.clone(),
-            session_source,
-            CollaborationModesConfig {
-                default_mode_request_user_input: config
-                    .features
-                    .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
-            },
-        ));
+        let thread_manager = thread_manager.unwrap_or_else(|| {
+            Arc::new(ThreadManager::new(
+                config.as_ref(),
+                auth_manager.clone(),
+                session_source,
+                CollaborationModesConfig {
+                    default_mode_request_user_input: config
+                        .features
+                        .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+                },
+            ))
+        });
         // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
         thread_manager
             .plugins_manager()

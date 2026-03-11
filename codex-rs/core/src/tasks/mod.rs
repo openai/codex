@@ -375,14 +375,10 @@ impl Session {
         task: RunningTask,
         token_usage_at_turn_start: TokenUsage,
     ) {
-        let inherited_permissions = self.take_inherited_next_turn_permissions().await;
         let mut active = self.active_turn.lock().await;
         let mut turn = ActiveTurn::default();
         let mut turn_state = turn.turn_state.lock().await;
         turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
-        if let Some(inherited_permissions) = inherited_permissions {
-            turn_state.record_granted_permissions(inherited_permissions);
-        }
         drop(turn_state);
         turn.add_task(task);
         *active = Some(turn);

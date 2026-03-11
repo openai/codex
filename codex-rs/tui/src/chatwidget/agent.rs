@@ -2232,6 +2232,7 @@ async fn process_in_process_command(
 
             let response = PermissionsRequestApprovalResponse {
                 permissions: granted_permission_profile_from_core(response.permissions),
+                scope: response.scope.into(),
             };
             let result = match serde_json::to_value(response) {
                 Ok(value) => value,
