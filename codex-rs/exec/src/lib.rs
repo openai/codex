@@ -1840,7 +1840,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thread_start_params_omit_review_policy_when_guardian_feature_disabled() {
+    async fn thread_start_params_omit_review_policy_when_review_policy_is_manual_only() {
         let codex_home = tempdir().expect("create temp codex home");
         let cwd = tempdir().expect("create temp cwd");
         let config = ConfigBuilder::default()
@@ -1875,7 +1875,7 @@ mod tests {
 
         assert_eq!(
             params.approval_review_policy,
-            Some(codex_app_server_protocol::ApprovalReviewPolicy::ManualOnly)
+            Some(codex_app_server_protocol::ApprovalReviewPolicy::AutoOnly)
         );
     }
 
