@@ -290,6 +290,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     let CodexSpawnOk { codex, .. } = Codex::spawn(
         config,
         auth_manager,
+        Arc::new(crate::AppsMcpCookieStore::default()),
         models_manager,
         skills_manager,
         plugins_manager,

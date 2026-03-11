@@ -58,6 +58,7 @@ pub(crate) async fn run_codex_thread_interactive(
     let CodexSpawnOk { codex, .. } = Codex::spawn(
         config,
         auth_manager,
+        Arc::clone(&parent_session.services.apps_mcp_cookie_store),
         models_manager,
         Arc::clone(&parent_session.services.skills_manager),
         Arc::clone(&parent_session.services.plugins_manager),

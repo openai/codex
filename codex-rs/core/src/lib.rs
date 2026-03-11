@@ -9,6 +9,7 @@ mod analytics_client;
 pub mod api_bridge;
 mod apply_patch;
 mod apps;
+mod apps_mcp_cookie_store;
 mod arc_monitor;
 pub mod auth;
 mod client;
@@ -90,6 +91,8 @@ mod seatbelt_permissions;
 mod thread_manager;
 pub mod web_search;
 pub mod windows_sandbox_read_grants;
+pub use apps_mcp_cookie_store::AppsMcpCookieStore;
+pub use codex_protocol::protocol::InitialHistory;
 pub use thread_manager::NewThread;
 pub use thread_manager::ThreadManager;
 #[deprecated(note = "use ThreadManager")]
