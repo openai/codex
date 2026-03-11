@@ -43,6 +43,8 @@ use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::GrantedPermissionProfile as V2GrantedPermissionProfile;
+use codex_app_server_protocol::HookCompletedNotification;
+use codex_app_server_protocol::HookStartedNotification;
 use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -273,6 +275,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             if let ApiVersion::V2 = api_version {
                 match event.payload {
                     RealtimeEvent::SessionUpdated { .. } => {}
+                    RealtimeEvent::InputTranscriptDelta(_) => {}
+                    RealtimeEvent::OutputTranscriptDelta(_) => {}
                     RealtimeEvent::AudioOut(audio) => {
                         let notification = ThreadRealtimeOutputAudioDeltaNotification {
                             thread_id: conversation_id.to_string(),
@@ -304,7 +308,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                                 "handoff_id": handoff.handoff_id,
                                 "item_id": handoff.item_id,
                                 "input_transcript": handoff.input_transcript,
-                                "messages": handoff.messages,
+                                "active_transcript": handoff.active_transcript,
                             }),
                         };
                         outgoing
@@ -1307,6 +1311,30 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
+        }
+        EventMsg::HookStarted(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = HookStartedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event.turn_id,
+                    run: event.run.into(),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::HookStarted(notification))
+                    .await;
+            }
+        }
+        EventMsg::HookCompleted(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = HookCompletedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event.turn_id,
+                    run: event.run.into(),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::HookCompleted(notification))
+                    .await;
+            }
         }
         EventMsg::ExitedReviewMode(review_event) => {
             let review = match review_event.review_output {
@@ -2599,6 +2627,7 @@ mod tests {
     use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::models::MacOsAutomationPermission;
+    use codex_protocol::models::MacOsContactsPermission;
     use codex_protocol::models::MacOsPreferencesPermission;
     use codex_protocol::models::MacOsSeatbeltProfileExtensions;
     use codex_protocol::plan_tool::PlanItemArg;
@@ -2688,8 +2717,11 @@ mod tests {
                     "com.apple.Notes".to_string(),
                     "com.apple.Reminders".to_string(),
                 ]),
+                macos_launch_services: true,
                 macos_accessibility: true,
                 macos_calendar: true,
+                macos_reminders: true,
+                macos_contacts: MacOsContactsPermission::ReadWrite,
             }),
             ..Default::default()
         };
@@ -2703,8 +2735,11 @@ mod tests {
                     macos: Some(MacOsSeatbeltProfileExtensions {
                         macos_preferences: MacOsPreferencesPermission::ReadOnly,
                         macos_automation: MacOsAutomationPermission::None,
+                        macos_launch_services: false,
                         macos_accessibility: false,
                         macos_calendar: false,
+                        macos_reminders: false,
+                        macos_contacts: MacOsContactsPermission::None,
                     }),
                     ..Default::default()
                 },
@@ -2721,8 +2756,28 @@ mod tests {
                         macos_automation: MacOsAutomationPermission::BundleIds(vec![
                             "com.apple.Notes".to_string(),
                         ]),
+                        macos_launch_services: false,
                         macos_accessibility: false,
                         macos_calendar: false,
+                        macos_reminders: false,
+                        macos_contacts: MacOsContactsPermission::None,
+                    }),
+                    ..Default::default()
+                },
+            ),
+            (
+                serde_json::json!({
+                    "launchServices": true,
+                }),
+                CorePermissionProfile {
+                    macos: Some(MacOsSeatbeltProfileExtensions {
+                        macos_preferences: MacOsPreferencesPermission::None,
+                        macos_automation: MacOsAutomationPermission::None,
+                        macos_launch_services: true,
+                        macos_accessibility: false,
+                        macos_calendar: false,
+                        macos_reminders: false,
+                        macos_contacts: MacOsContactsPermission::None,
                     }),
                     ..Default::default()
                 },
@@ -2735,8 +2790,11 @@ mod tests {
                     macos: Some(MacOsSeatbeltProfileExtensions {
                         macos_preferences: MacOsPreferencesPermission::None,
                         macos_automation: MacOsAutomationPermission::None,
+                        macos_launch_services: false,
                         macos_accessibility: true,
                         macos_calendar: false,
+                        macos_reminders: false,
+                        macos_contacts: MacOsContactsPermission::None,
                     }),
                     ..Default::default()
                 },
@@ -2749,8 +2807,45 @@ mod tests {
                     macos: Some(MacOsSeatbeltProfileExtensions {
                         macos_preferences: MacOsPreferencesPermission::None,
                         macos_automation: MacOsAutomationPermission::None,
+                        macos_launch_services: false,
                         macos_accessibility: false,
                         macos_calendar: true,
+                        macos_reminders: false,
+                        macos_contacts: MacOsContactsPermission::None,
+                    }),
+                    ..Default::default()
+                },
+            ),
+            (
+                serde_json::json!({
+                    "reminders": true,
+                }),
+                CorePermissionProfile {
+                    macos: Some(MacOsSeatbeltProfileExtensions {
+                        macos_preferences: MacOsPreferencesPermission::None,
+                        macos_automation: MacOsAutomationPermission::None,
+                        macos_launch_services: false,
+                        macos_accessibility: false,
+                        macos_calendar: false,
+                        macos_reminders: true,
+                        macos_contacts: MacOsContactsPermission::None,
+                    }),
+                    ..Default::default()
+                },
+            ),
+            (
+                serde_json::json!({
+                    "contacts": "read_only",
+                }),
+                CorePermissionProfile {
+                    macos: Some(MacOsSeatbeltProfileExtensions {
+                        macos_preferences: MacOsPreferencesPermission::None,
+                        macos_automation: MacOsAutomationPermission::None,
+                        macos_launch_services: false,
+                        macos_accessibility: false,
+                        macos_calendar: false,
+                        macos_reminders: false,
+                        macos_contacts: MacOsContactsPermission::ReadOnly,
                     }),
                     ..Default::default()
                 },

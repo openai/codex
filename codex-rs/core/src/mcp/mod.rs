@@ -268,7 +268,7 @@ fn effective_mcp_servers(
     let servers = configured_mcp_servers(config, plugins_manager);
     with_codex_apps_mcp(
         servers,
-        config.features.enabled(Feature::Apps),
+        config.features.apps_enabled_for_auth(auth),
         auth,
         config,
     )

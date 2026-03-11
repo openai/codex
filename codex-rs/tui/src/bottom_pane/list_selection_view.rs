@@ -677,6 +677,10 @@ impl BottomPaneView for ListSelectionView {
         self.view_id
     }
 
+    fn selected_index(&self) -> Option<usize> {
+        self.selected_actual_idx()
+    }
+
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         if let Some(cb) = &self.on_cancel {
             cb(&self.app_event_tx);

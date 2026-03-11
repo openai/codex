@@ -27,6 +27,19 @@
   (subpath "/System/iOSSupport/System/Library/SubFrameworks")
   (subpath "/usr/lib"))
 
+; System Framework and AppKit resources
+(allow file-read* file-test-existence
+  (subpath "/Library/Apple/System/Library/Frameworks")
+  (subpath "/Library/Apple/System/Library/PrivateFrameworks")
+  (subpath "/Library/Apple/usr/lib")
+  (subpath "/System/Library/Frameworks")
+  (subpath "/System/Library/PrivateFrameworks")
+  (subpath "/System/Library/SubFrameworks")
+  (subpath "/System/iOSSupport/System/Library/Frameworks")
+  (subpath "/System/iOSSupport/System/Library/PrivateFrameworks")
+  (subpath "/System/iOSSupport/System/Library/SubFrameworks")
+  (subpath "/usr/lib"))
+
 ; Allow guarded vnodes.
 (allow system-mac-syscall (mac-policy-name "vnguard"))
 
@@ -86,6 +99,11 @@
 ; Allow reading standard config directories.
 (allow file-read* (subpath "/etc"))
 (allow file-read* (subpath "/private/etc"))
+
+(allow file-read* file-test-existence
+  (literal "/System/Library/CoreServices")
+  (literal "/System/Library/CoreServices/.SystemVersionPlatform.plist")
+  (literal "/System/Library/CoreServices/SystemVersion.plist"))
 
 ; Some processes read /var metadata during startup.
 (allow file-read-metadata (subpath "/var"))

@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use codex_protocol::models::MacOsAutomationPermission;
+use codex_protocol::models::MacOsContactsPermission;
 use codex_protocol::models::MacOsPreferencesPermission;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 
@@ -24,8 +25,14 @@ pub(crate) fn merge_macos_seatbelt_profile_extensions(
                 &base.macos_automation,
                 &permissions.macos_automation,
             ),
+            macos_launch_services: base.macos_launch_services || permissions.macos_launch_services,
             macos_accessibility: base.macos_accessibility || permissions.macos_accessibility,
             macos_calendar: base.macos_calendar || permissions.macos_calendar,
+            macos_reminders: base.macos_reminders || permissions.macos_reminders,
+            macos_contacts: union_macos_contacts_permission(
+                &base.macos_contacts,
+                &permissions.macos_contacts,
+            ),
         }),
         None => Some(permissions.clone()),
     }
@@ -45,8 +52,12 @@ pub(crate) fn intersect_macos_seatbelt_profile_extensions(
             Some(MacOsSeatbeltProfileExtensions {
                 macos_preferences: requested.macos_preferences.min(granted.macos_preferences),
                 macos_automation,
+                macos_launch_services: requested.macos_launch_services
+                    && granted.macos_launch_services,
                 macos_accessibility: requested.macos_accessibility && granted.macos_accessibility,
                 macos_calendar: requested.macos_calendar && granted.macos_calendar,
+                macos_reminders: requested.macos_reminders && granted.macos_reminders,
+                macos_contacts: requested.macos_contacts.min(granted.macos_contacts),
             })
         }
         _ => None,
@@ -61,6 +72,17 @@ fn union_macos_preferences_permission(
     base: &MacOsPreferencesPermission,
     requested: &MacOsPreferencesPermission,
 ) -> MacOsPreferencesPermission {
+    if base < requested {
+        requested.clone()
+    } else {
+        base.clone()
+    }
+}
+
+fn union_macos_contacts_permission(
+    base: &MacOsContactsPermission,
+    requested: &MacOsContactsPermission,
+) -> MacOsContactsPermission {
     if base < requested {
         requested.clone()
     } else {
@@ -133,8 +155,10 @@ mod tests {
     use super::intersect_macos_seatbelt_profile_extensions;
     use super::merge_macos_seatbelt_profile_extensions;
     use super::union_macos_automation_permission;
+    use super::union_macos_contacts_permission;
     use super::union_macos_preferences_permission;
     use codex_protocol::models::MacOsAutomationPermission;
+    use codex_protocol::models::MacOsContactsPermission;
     use codex_protocol::models::MacOsPreferencesPermission;
     use codex_protocol::models::MacOsSeatbeltProfileExtensions;
     use pretty_assertions::assert_eq;
@@ -146,8 +170,11 @@ mod tests {
             macos_automation: MacOsAutomationPermission::BundleIds(vec![
                 "com.apple.Calendar".to_string(),
             ]),
+            macos_launch_services: false,
             macos_accessibility: false,
             macos_calendar: false,
+            macos_reminders: false,
+            macos_contacts: MacOsContactsPermission::ReadOnly,
         };
         let requested = MacOsSeatbeltProfileExtensions {
             macos_preferences: MacOsPreferencesPermission::ReadWrite,
@@ -155,8 +182,11 @@ mod tests {
                 "com.apple.Notes".to_string(),
                 "com.apple.Calendar".to_string(),
             ]),
+            macos_launch_services: true,
             macos_accessibility: true,
             macos_calendar: true,
+            macos_reminders: true,
+            macos_contacts: MacOsContactsPermission::ReadWrite,
         };
 
         let merged =
@@ -170,8 +200,11 @@ mod tests {
                     "com.apple.Calendar".to_string(),
                     "com.apple.Notes".to_string(),
                 ]),
+                macos_launch_services: true,
                 macos_accessibility: true,
                 macos_calendar: true,
+                macos_reminders: true,
+                macos_contacts: MacOsContactsPermission::ReadWrite,
             }
         );
     }
@@ -219,8 +252,11 @@ mod tests {
             macos_automation: MacOsAutomationPermission::BundleIds(vec![
                 "com.apple.Notes".to_string(),
             ]),
+            macos_launch_services: false,
             macos_accessibility: true,
             macos_calendar: true,
+            macos_reminders: false,
+            macos_contacts: MacOsContactsPermission::None,
         };
         let granted = MacOsSeatbeltProfileExtensions::default();
 
@@ -228,5 +264,15 @@ mod tests {
             intersect_macos_seatbelt_profile_extensions(Some(requested), Some(granted));
 
         assert_eq!(intersected, Some(MacOsSeatbeltProfileExtensions::default()));
+    }
+
+    #[test]
+    fn union_macos_contacts_permission_does_not_downgrade() {
+        let base = MacOsContactsPermission::ReadWrite;
+        let requested = MacOsContactsPermission::ReadOnly;
+
+        let merged = union_macos_contacts_permission(&base, &requested);
+
+        assert_eq!(merged, MacOsContactsPermission::ReadWrite);
     }
 }

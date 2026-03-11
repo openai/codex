@@ -160,6 +160,7 @@ pub(crate) mod tools {
     use codex_protocol::config_types::WebSearchUserLocationType;
     use serde::Deserialize;
     use serde::Serialize;
+    use serde_json::Value;
 
     /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
     /// Responses API.
@@ -268,6 +269,8 @@ pub(crate) mod tools {
         /// `properties` must be present in `required`.
         pub(crate) strict: bool,
         pub(crate) parameters: JsonSchema,
+        #[serde(skip)]
+        pub(crate) output_schema: Option<Value>,
     }
 }
 

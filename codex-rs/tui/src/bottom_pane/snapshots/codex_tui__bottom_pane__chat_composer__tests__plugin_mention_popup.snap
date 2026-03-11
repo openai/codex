@@ -8,6 +8,6 @@ expression: terminal.backend()
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"  Sample Plugin  Plugin that includes the Figma MCP server and Skills for common workflows          "
+"  Sample Plugin  [Plugin] Plugin that includes the Figma MCP server and Skills for common workflows "
 "                                                                                                    "
 "  Press enter to insert or esc to close                                                             "

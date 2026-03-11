@@ -17,6 +17,13 @@ use crate::tools::format_exec_output_str;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::protocol::ReadOnlyAccess;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use tracing::Span;
 
@@ -39,8 +46,8 @@ use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::ShellHandler;
 use crate::tools::handlers::UnifiedExecHandler;
@@ -81,6 +88,12 @@ use std::time::Duration as StdDuration;
 
 #[path = "codex_tests_guardian.rs"]
 mod guardian_tests;
+
+use codex_protocol::models::function_call_output_content_items_to_text;
+
+fn expect_text_tool_output(output: &FunctionToolOutput) -> String {
+    function_call_output_content_items_to_text(&output.body).unwrap_or_default()
+}
 
 struct InstructionsTestCase {
     slug: &'static str,
@@ -138,6 +151,26 @@ fn developer_input_texts(items: &[ResponseItem]) -> Vec<&str> {
             _ => None,
         })
         .collect()
+}
+
+fn default_image_save_developer_message_text() -> String {
+    let image_output_dir = crate::stream_events_utils::default_image_generation_output_dir();
+    format!(
+        "Generated images are saved to {} as {} by default.",
+        image_output_dir.display(),
+        image_output_dir.join("<image_id>.png").display(),
+    )
+}
+
+fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
+    let router = Arc::new(ToolRouter::from_config(
+        &turn_context.tools_config,
+        None,
+        None,
+        turn_context.dynamic_tools.as_slice(),
+    ));
+    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+    ToolCallRuntime::new(router, session, turn_context, tracker)
 }
 
 fn make_connector(id: &str, name: &str) -> AppInfo {
@@ -1594,7 +1627,7 @@ fn prefers_structured_content_when_present() {
         meta: None,
     };
 
-    let got = FunctionCallOutputPayload::from(&ctr);
+    let got = ctr.into_function_call_output_payload();
     let expected = FunctionCallOutputPayload {
         body: FunctionCallOutputBody::Text(
             serde_json::to_string(&json!({
@@ -1676,7 +1709,7 @@ fn falls_back_to_content_when_structured_is_null() {
         meta: None,
     };
 
-    let got = FunctionCallOutputPayload::from(&ctr);
+    let got = ctr.into_function_call_output_payload();
     let expected = FunctionCallOutputPayload {
         body: FunctionCallOutputBody::Text(
             serde_json::to_string(&vec![text_block("hello"), text_block("world")]).unwrap(),
@@ -1696,7 +1729,7 @@ fn success_flag_reflects_is_error_true() {
         meta: None,
     };
 
-    let got = FunctionCallOutputPayload::from(&ctr);
+    let got = ctr.into_function_call_output_payload();
     let expected = FunctionCallOutputPayload {
         body: FunctionCallOutputBody::Text(
             serde_json::to_string(&json!({ "message": "bad" })).unwrap(),
@@ -1716,7 +1749,7 @@ fn success_flag_true_with_no_error_and_content_used() {
         meta: None,
     };
 
-    let got = FunctionCallOutputPayload::from(&ctr);
+    let got = ctr.into_function_call_output_payload();
     let expected = FunctionCallOutputPayload {
         body: FunctionCallOutputBody::Text(
             serde_json::to_string(&vec![text_block("alpha")]).unwrap(),
@@ -1887,6 +1920,100 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
 }
 
 #[tokio::test]
+async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_only_update() {
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    let workspace = tempfile::tempdir().expect("create temp dir");
+    let project_root = workspace.path().join("project");
+    let original_cwd = project_root.join("subdir");
+    let docs_dir = original_cwd.join("docs");
+    std::fs::create_dir_all(&docs_dir).expect("create docs dir");
+    let docs_dir =
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs_dir).expect("docs");
+
+    session_configuration.cwd = original_cwd;
+    session_configuration.sandbox_policy =
+        codex_config::Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            read_only_access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: true,
+                readable_roots: vec![docs_dir.clone()],
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        });
+    session_configuration.file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+            },
+            access: FileSystemAccessMode::Write,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: docs_dir },
+            access: FileSystemAccessMode::Read,
+        },
+    ]);
+
+    let updated = session_configuration
+        .apply(&SessionSettingsUpdate {
+            cwd: Some(project_root),
+            ..Default::default()
+        })
+        .expect("cwd-only update should succeed");
+
+    assert_eq!(
+        updated.file_system_sandbox_policy,
+        session_configuration.file_system_sandbox_policy
+    );
+}
+
+#[tokio::test]
+async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_update() {
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    let workspace = tempfile::tempdir().expect("create temp dir");
+    let project_root = workspace.path().join("project");
+    let original_cwd = project_root.join("subdir");
+    let docs_dir = original_cwd.join("docs");
+    std::fs::create_dir_all(&docs_dir).expect("create docs dir");
+    let docs_dir =
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs_dir).expect("docs");
+
+    session_configuration.cwd = original_cwd;
+    session_configuration.sandbox_policy =
+        codex_config::Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            read_only_access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: true,
+                readable_roots: vec![docs_dir],
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        });
+    session_configuration.file_system_sandbox_policy =
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            session_configuration.sandbox_policy.get(),
+            &session_configuration.cwd,
+        );
+
+    let updated = session_configuration
+        .apply(&SessionSettingsUpdate {
+            cwd: Some(project_root.clone()),
+            ..Default::default()
+        })
+        .expect("cwd-only update should succeed");
+
+    assert_eq!(
+        updated.file_system_sandbox_policy,
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+            updated.sandbox_policy.get(),
+            &project_root,
+        )
+    );
+}
+
+#[tokio::test]
 async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
@@ -1951,6 +2078,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let skills_manager = Arc::new(SkillsManager::new(
         config.codex_home.clone(),
         Arc::clone(&plugins_manager),
+        true,
     ));
     let result = Session::new(
         session_configuration,
@@ -2053,6 +2181,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let skills_manager = Arc::new(SkillsManager::new(
         config.codex_home.clone(),
         Arc::clone(&plugins_manager),
+        true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
 
@@ -2075,6 +2204,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         ),
         hooks: Hooks::new(HooksConfig {
             legacy_notify_argv: config.notify.clone(),
+            ..HooksConfig::default()
         }),
         rollout: Mutex::new(None),
         user_shell: Arc::new(default_user_shell()),
@@ -2105,6 +2235,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
         ),
+        code_mode_store: Default::default(),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -2129,6 +2260,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         conversation_id,
         tx_event,
         agent_status: agent_status_tx,
+        out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
@@ -2163,6 +2295,132 @@ async fn notify_request_permissions_response_ignores_unmatched_call_id() {
         .await;
 
     assert_eq!(session.granted_turn_permissions().await, None);
+}
+
+#[tokio::test]
+async fn request_permissions_emits_event_when_reject_policy_allows_requests() {
+    let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    Arc::get_mut(&mut turn_context)
+        .expect("single turn context ref")
+        .approval_policy
+        .set(crate::protocol::AskForApproval::Reject(
+            crate::protocol::RejectConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: false,
+                request_permissions: false,
+                mcp_elicitations: true,
+            },
+        ))
+        .expect("test setup should allow updating approval policy");
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let call_id = "call-1".to_string();
+    let expected_response = codex_protocol::request_permissions::RequestPermissionsResponse {
+        permissions: codex_protocol::models::PermissionProfile {
+            network: Some(codex_protocol::models::NetworkPermissions {
+                enabled: Some(true),
+            }),
+            ..Default::default()
+        },
+        scope: PermissionGrantScope::Turn,
+    };
+
+    let handle = tokio::spawn({
+        let session = Arc::clone(&session);
+        let turn_context = Arc::clone(&turn_context);
+        let call_id = call_id.clone();
+        async move {
+            session
+                .request_permissions(
+                    turn_context.as_ref(),
+                    call_id,
+                    codex_protocol::request_permissions::RequestPermissionsArgs {
+                        reason: Some("need network".to_string()),
+                        permissions: codex_protocol::models::PermissionProfile {
+                            network: Some(codex_protocol::models::NetworkPermissions {
+                                enabled: Some(true),
+                            }),
+                            ..Default::default()
+                        },
+                    },
+                )
+                .await
+        }
+    });
+
+    let request_event = tokio::time::timeout(StdDuration::from_secs(1), rx.recv())
+        .await
+        .expect("request_permissions event timed out")
+        .expect("request_permissions event missing");
+    let EventMsg::RequestPermissions(request) = request_event.msg else {
+        panic!("expected request_permissions event");
+    };
+    assert_eq!(request.call_id, call_id);
+
+    session
+        .notify_request_permissions_response(&request.call_id, expected_response.clone())
+        .await;
+
+    let response = tokio::time::timeout(StdDuration::from_secs(1), handle)
+        .await
+        .expect("request_permissions future timed out")
+        .expect("request_permissions join error");
+
+    assert_eq!(response, Some(expected_response));
+}
+
+#[tokio::test]
+async fn request_permissions_returns_empty_grant_when_reject_policy_blocks_requests() {
+    let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    Arc::get_mut(&mut turn_context)
+        .expect("single turn context ref")
+        .approval_policy
+        .set(crate::protocol::AskForApproval::Reject(
+            crate::protocol::RejectConfig {
+                sandbox_approval: false,
+                rules: false,
+                skill_approval: false,
+                request_permissions: true,
+                mcp_elicitations: false,
+            },
+        ))
+        .expect("test setup should allow updating approval policy");
+
+    let response = session
+        .request_permissions(
+            &turn_context,
+            "call-1".to_string(),
+            codex_protocol::request_permissions::RequestPermissionsArgs {
+                reason: Some("need network".to_string()),
+                permissions: codex_protocol::models::PermissionProfile {
+                    network: Some(codex_protocol::models::NetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                    ..Default::default()
+                },
+            },
+        )
+        .await;
+
+    assert_eq!(
+        response,
+        Some(
+            codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: codex_protocol::models::PermissionProfile::default(),
+                scope: PermissionGrantScope::Turn,
+            }
+        )
+    );
+    assert!(
+        tokio::time::timeout(StdDuration::from_millis(50), rx.recv())
+            .await
+            .is_err(),
+        "unexpected request_permissions event emitted",
+    );
 }
 
 #[tokio::test]
@@ -2483,6 +2741,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let skills_manager = Arc::new(SkillsManager::new(
         config.codex_home.clone(),
         Arc::clone(&plugins_manager),
+        true,
     ));
     let network_approval = Arc::new(NetworkApprovalService::default());
 
@@ -2505,6 +2764,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         ),
         hooks: Hooks::new(HooksConfig {
             legacy_notify_argv: config.notify.clone(),
+            ..HooksConfig::default()
         }),
         rollout: Mutex::new(None),
         user_shell: Arc::new(default_user_shell()),
@@ -2535,6 +2795,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
         ),
+        code_mode_store: Default::default(),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -2559,6 +2820,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         conversation_id,
         tx_event,
         agent_status: agent_status_tx,
+        out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
         features: config.features.clone(),
         pending_mcp_server_refresh_config: Mutex::new(None),
@@ -2882,6 +3144,114 @@ async fn build_initial_context_uses_previous_realtime_state() {
             .any(|text| text.contains("<realtime_conversation>")),
         "did not expect a duplicate realtime update, got {resumed_developer_texts:?}"
     );
+}
+
+#[tokio::test]
+async fn build_initial_context_omits_default_image_save_location_with_image_history() {
+    let (session, turn_context) = make_session_and_context().await;
+    session
+        .replace_history(
+            vec![ResponseItem::ImageGenerationCall {
+                id: "ig-test".to_string(),
+                status: "completed".to_string(),
+                revised_prompt: Some("a tiny blue square".to_string()),
+                result: "Zm9v".to_string(),
+            }],
+            None,
+        )
+        .await;
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context);
+    assert!(
+        !developer_texts
+            .iter()
+            .any(|text| text.contains("Generated images are saved to")),
+        "expected initial context to omit image save instructions even with image history, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_initial_context_omits_default_image_save_location_without_image_history() {
+    let (session, turn_context) = make_session_and_context().await;
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_texts = developer_input_texts(&initial_context);
+
+    assert!(
+        !developer_texts
+            .iter()
+            .any(|text| text.contains("Generated images are saved to")),
+        "expected initial context to omit image save instructions without image history, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn handle_output_item_done_records_image_save_message_after_successful_save() {
+    let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let call_id = "ig_history_records_message";
+    let expected_saved_path = crate::stream_events_utils::default_image_generation_output_dir()
+        .join(format!("{call_id}.png"));
+    let _ = std::fs::remove_file(&expected_saved_path);
+    let item = ResponseItem::ImageGenerationCall {
+        id: call_id.to_string(),
+        status: "completed".to_string(),
+        revised_prompt: Some("a tiny blue square".to_string()),
+        result: "Zm9v".to_string(),
+    };
+
+    let mut ctx = HandleOutputCtx {
+        sess: Arc::clone(&session),
+        turn_context: Arc::clone(&turn_context),
+        tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
+        cancellation_token: CancellationToken::new(),
+    };
+    handle_output_item_done(&mut ctx, item.clone(), None)
+        .await
+        .expect("image generation item should succeed");
+
+    let history = session.clone_history().await;
+    let expected_message: ResponseItem =
+        DeveloperInstructions::new(default_image_save_developer_message_text()).into();
+    assert_eq!(history.raw_items(), &[expected_message, item]);
+    assert_eq!(
+        std::fs::read(&expected_saved_path).expect("saved file"),
+        b"foo"
+    );
+    let _ = std::fs::remove_file(&expected_saved_path);
+}
+
+#[tokio::test]
+async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
+    let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let call_id = "ig_history_no_message";
+    let expected_saved_path = crate::stream_events_utils::default_image_generation_output_dir()
+        .join(format!("{call_id}.png"));
+    let _ = std::fs::remove_file(&expected_saved_path);
+    let item = ResponseItem::ImageGenerationCall {
+        id: call_id.to_string(),
+        status: "completed".to_string(),
+        revised_prompt: Some("broken payload".to_string()),
+        result: "_-8".to_string(),
+    };
+
+    let mut ctx = HandleOutputCtx {
+        sess: Arc::clone(&session),
+        turn_context: Arc::clone(&turn_context),
+        tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
+        cancellation_token: CancellationToken::new(),
+    };
+    handle_output_item_done(&mut ctx, item.clone(), None)
+        .await
+        .expect("image generation item should still complete");
+
+    let history = session.clone_history().await;
+    assert_eq!(history.raw_items(), &[item]);
+    assert!(!expected_saved_path.exists());
 }
 
 #[tokio::test]
@@ -3913,13 +4283,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         })
         .await;
 
-    let output = match resp2.expect("expected Ok result") {
-        ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            ..
-        } => content,
-        _ => panic!("unexpected tool output"),
-    };
+    let output = expect_text_tool_output(&resp2.expect("expected Ok result"));
 
     #[derive(Deserialize, PartialEq, Eq, Debug)]
     struct ResponseExecMetadata {

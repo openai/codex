@@ -26,7 +26,6 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
-use std::time::Duration;
 
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
@@ -87,7 +86,7 @@ impl UnifiedExecContext {
 #[derive(Debug)]
 pub(crate) struct ExecCommandRequest {
     pub command: Vec<String>,
-    pub process_id: String,
+    pub process_id: i32,
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
     pub workdir: Option<PathBuf>,
@@ -102,36 +101,22 @@ pub(crate) struct ExecCommandRequest {
 
 #[derive(Debug)]
 pub(crate) struct WriteStdinRequest<'a> {
-    pub process_id: &'a str,
+    pub process_id: i32,
     pub input: &'a str,
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct UnifiedExecResponse {
-    pub event_call_id: String,
-    pub chunk_id: String,
-    pub wall_time: Duration,
-    pub output: String,
-    /// Raw bytes returned for this unified exec call before any truncation.
-    pub raw_output: Vec<u8>,
-    pub process_id: Option<String>,
-    pub exit_code: Option<i32>,
-    pub original_token_count: Option<usize>,
-    pub session_command: Option<Vec<String>>,
-}
-
 #[derive(Default)]
 pub(crate) struct ProcessStore {
-    processes: HashMap<String, ProcessEntry>,
-    reserved_process_ids: HashSet<String>,
+    processes: HashMap<i32, ProcessEntry>,
+    reserved_process_ids: HashSet<i32>,
 }
 
 impl ProcessStore {
-    fn remove(&mut self, process_id: &str) -> Option<ProcessEntry> {
-        self.reserved_process_ids.remove(process_id);
-        self.processes.remove(process_id)
+    fn remove(&mut self, process_id: i32) -> Option<ProcessEntry> {
+        self.reserved_process_ids.remove(&process_id);
+        self.processes.remove(&process_id)
     }
 }
 
@@ -159,7 +144,7 @@ impl Default for UnifiedExecProcessManager {
 struct ProcessEntry {
     process: Arc<UnifiedExecProcess>,
     call_id: String,
-    process_id: String,
+    process_id: i32,
     command: Vec<String>,
     tty: bool,
     network_approval_id: Option<String>,
@@ -192,6 +177,7 @@ mod tests {
     use crate::codex::make_session_and_context;
     use crate::protocol::AskForApproval;
     use crate::protocol::SandboxPolicy;
+    use crate::tools::context::ExecCommandToolOutput;
     use crate::unified_exec::ExecCommandRequest;
     use crate::unified_exec::WriteStdinRequest;
     use core_test_support::skip_if_sandbox;
@@ -218,7 +204,7 @@ mod tests {
         turn: &Arc<TurnContext>,
         cmd: &str,
         yield_time_ms: u64,
-    ) -> Result<UnifiedExecResponse, UnifiedExecError> {
+    ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
         let context =
             UnifiedExecContext::new(Arc::clone(session), Arc::clone(turn), "call".to_string());
         let process_id = session
@@ -252,10 +238,10 @@ mod tests {
 
     async fn write_stdin(
         session: &Arc<Session>,
-        process_id: &str,
+        process_id: i32,
         input: &str,
         yield_time_ms: u64,
-    ) -> Result<UnifiedExecResponse, UnifiedExecError> {
+    ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
         session
             .services
             .unified_exec_manager
@@ -308,11 +294,7 @@ mod tests {
         let (session, turn) = test_session_and_turn().await;
 
         let open_shell = exec_command(&session, &turn, "bash -i", 2_500).await?;
-        let process_id = open_shell
-            .process_id
-            .as_ref()
-            .expect("expected process_id")
-            .as_str();
+        let process_id = open_shell.process_id.expect("expected process_id");
 
         write_stdin(
             &session,
@@ -330,7 +312,7 @@ mod tests {
         )
         .await?;
         assert!(
-            out_2.output.contains("codex"),
+            out_2.truncated_output().contains("codex"),
             "expected environment variable output"
         );
 
@@ -344,15 +326,11 @@ mod tests {
         let (session, turn) = test_session_and_turn().await;
 
         let shell_a = exec_command(&session, &turn, "bash -i", 2_500).await?;
-        let session_a = shell_a
-            .process_id
-            .as_ref()
-            .expect("expected process id")
-            .clone();
+        let session_a = shell_a.process_id.expect("expected process id");
 
         write_stdin(
             &session,
-            session_a.as_str(),
+            session_a,
             "export CODEX_INTERACTIVE_SHELL_VAR=codex\n",
             2_500,
         )
@@ -366,23 +344,19 @@ mod tests {
             "short command should not report a process id if it exits quickly"
         );
         assert!(
-            !out_2.output.contains("codex"),
+            !out_2.truncated_output().contains("codex"),
             "short command should run in a fresh shell"
         );
 
         let out_3 = write_stdin(
             &session,
-            shell_a
-                .process_id
-                .as_ref()
-                .expect("expected process id")
-                .as_str(),
+            shell_a.process_id.expect("expected process id"),
             "echo $CODEX_INTERACTIVE_SHELL_VAR\n",
             2_500,
         )
         .await?;
         assert!(
-            out_3.output.contains("codex"),
+            out_3.truncated_output().contains("codex"),
             "session should preserve state"
         );
 
@@ -398,11 +372,7 @@ mod tests {
         let (session, turn) = test_session_and_turn().await;
 
         let open_shell = exec_command(&session, &turn, "bash -i", 2_500).await?;
-        let process_id = open_shell
-            .process_id
-            .as_ref()
-            .expect("expected process id")
-            .as_str();
+        let process_id = open_shell.process_id.expect("expected process id");
 
         write_stdin(
             &session,
@@ -420,7 +390,7 @@ mod tests {
         )
         .await?;
         assert!(
-            !out_2.output.contains(TEST_VAR_VALUE),
+            !out_2.truncated_output().contains(TEST_VAR_VALUE),
             "timeout too short should yield incomplete output"
         );
 
@@ -429,8 +399,41 @@ mod tests {
         let out_3 = write_stdin(&session, process_id, "", 100).await?;
 
         assert!(
-            out_3.output.contains(TEST_VAR_VALUE),
+            out_3.truncated_output().contains(TEST_VAR_VALUE),
             "subsequent poll should retrieve output"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unified_exec_pause_blocks_yield_timeout() -> anyhow::Result<()> {
+        skip_if_sandbox!(Ok(()));
+
+        let (session, turn) = test_session_and_turn().await;
+        session.set_out_of_band_elicitation_pause_state(true);
+
+        let paused_session = Arc::clone(&session);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            paused_session.set_out_of_band_elicitation_pause_state(false);
+        });
+
+        let started = tokio::time::Instant::now();
+        let response =
+            exec_command(&session, &turn, "sleep 1 && echo unified-exec-done", 250).await?;
+
+        assert!(
+            started.elapsed() >= Duration::from_secs(2),
+            "pause should block the unified exec yield timeout"
+        );
+        assert!(
+            response.truncated_output().contains("unified-exec-done"),
+            "exec_command should wait for output after the pause lifts"
+        );
+        assert!(
+            response.process_id.is_none(),
+            "completed command should not leave a background process"
         );
 
         Ok(())
@@ -444,7 +447,7 @@ mod tests {
         let result = exec_command(&session, &turn, "echo codex", 120_000).await?;
 
         assert!(result.process_id.is_some());
-        assert!(result.output.contains("codex"));
+        assert!(result.truncated_output().contains("codex"));
 
         Ok(())
     }
@@ -459,7 +462,7 @@ mod tests {
             result.process_id.is_some(),
             "completed command should report a process id"
         );
-        assert!(result.output.contains("codex"));
+        assert!(result.truncated_output().contains("codex"));
 
         assert!(
             session
@@ -482,11 +485,7 @@ mod tests {
         let (session, turn) = test_session_and_turn().await;
 
         let open_shell = exec_command(&session, &turn, "bash -i", 2_500).await?;
-        let process_id = open_shell
-            .process_id
-            .as_ref()
-            .expect("expected process id")
-            .as_str();
+        let process_id = open_shell.process_id.expect("expected process id");
 
         write_stdin(&session, process_id, "exit\n", 2_500).await?;
 

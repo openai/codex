@@ -1,13 +1,11 @@
-use async_trait::async_trait;
-use codex_protocol::models::FunctionCallOutputBody;
-
 use crate::function_tool::FunctionCallError;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use async_trait::async_trait;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
 use codex_protocol::request_user_input::RequestUserInputArgs;
@@ -59,11 +57,13 @@ pub struct RequestUserInputHandler {
 
 #[async_trait]
 impl ToolHandler for RequestUserInputHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -116,10 +116,7 @@ impl ToolHandler for RequestUserInputHandler {
             ))
         })?;
 
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            success: Some(true),
-        })
+        Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
 

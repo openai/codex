@@ -9,8 +9,8 @@ use crate::exec::StreamOutput;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::ExecCommandSource;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -21,7 +21,6 @@ use crate::tools::js_repl::JS_REPL_PRAGMA_PREFIX;
 use crate::tools::js_repl::JsReplArgs;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 
 pub struct JsReplHandler;
@@ -95,6 +94,8 @@ async fn emit_js_repl_exec_end(
 }
 #[async_trait]
 impl ToolHandler for JsReplHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -106,7 +107,7 @@ impl ToolHandler for JsReplHandler {
         )
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -173,24 +174,23 @@ impl ToolHandler for JsReplHandler {
         )
         .await;
 
-        Ok(ToolOutput::Function {
-            body: if items.is_empty() {
-                FunctionCallOutputBody::Text(content)
-            } else {
-                FunctionCallOutputBody::ContentItems(items)
-            },
-            success: Some(true),
-        })
+        if items.is_empty() {
+            Ok(FunctionToolOutput::from_text(content, Some(true)))
+        } else {
+            Ok(FunctionToolOutput::from_content(items, Some(true)))
+        }
     }
 }
 
 #[async_trait]
 impl ToolHandler for JsReplResetHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         if !invocation.session.features().enabled(Feature::JsRepl) {
             return Err(FunctionCallError::RespondToModel(
                 "js_repl is disabled by feature flag".to_string(),
@@ -198,10 +198,10 @@ impl ToolHandler for JsReplResetHandler {
         }
         let manager = invocation.turn.js_repl.manager().await?;
         manager.reset().await?;
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text("js_repl kernel reset".to_string()),
-            success: Some(true),
-        })
+        Ok(FunctionToolOutput::from_text(
+            "js_repl kernel reset".to_string(),
+            Some(true),
+        ))
     }
 }
 

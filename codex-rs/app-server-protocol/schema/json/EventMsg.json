@@ -2820,6 +2820,58 @@
         },
         {
           "properties": {
+            "run": {
+              "$ref": "#/definitions/HookRunSummary"
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "hook_started"
+              ],
+              "title": "HookStartedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run",
+            "type"
+          ],
+          "title": "HookStartedEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "run": {
+              "$ref": "#/definitions/HookRunSummary"
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "hook_completed"
+              ],
+              "title": "HookCompletedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run",
+            "type"
+          ],
+          "title": "HookCompletedEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
             "delta": {
               "type": "string"
             },
@@ -2963,9 +3015,15 @@
               "description": "Identifier for the collab tool call.",
               "type": "string"
             },
+            "model": {
+              "type": "string"
+            },
             "prompt": {
               "description": "Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
               "type": "string"
+            },
+            "reasoning_effort": {
+              "$ref": "#/definitions/ReasoningEffort"
             },
             "sender_thread_id": {
               "allOf": [
@@ -2985,7 +3043,9 @@
           },
           "required": [
             "call_id",
+            "model",
             "prompt",
+            "reasoning_effort",
             "sender_thread_id",
             "type"
           ],
@@ -3756,6 +3816,142 @@
       ],
       "type": "object"
     },
+    "HookEventName": {
+      "enum": [
+        "session_start",
+        "stop"
+      ],
+      "type": "string"
+    },
+    "HookExecutionMode": {
+      "enum": [
+        "sync",
+        "async"
+      ],
+      "type": "string"
+    },
+    "HookHandlerType": {
+      "enum": [
+        "command",
+        "prompt",
+        "agent"
+      ],
+      "type": "string"
+    },
+    "HookOutputEntry": {
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/HookOutputEntryKind"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "type": "object"
+    },
+    "HookOutputEntryKind": {
+      "enum": [
+        "warning",
+        "stop",
+        "feedback",
+        "context",
+        "error"
+      ],
+      "type": "string"
+    },
+    "HookRunStatus": {
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "blocked",
+        "stopped"
+      ],
+      "type": "string"
+    },
+    "HookRunSummary": {
+      "properties": {
+        "completed_at": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "display_order": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "duration_ms": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/definitions/HookOutputEntry"
+          },
+          "type": "array"
+        },
+        "event_name": {
+          "$ref": "#/definitions/HookEventName"
+        },
+        "execution_mode": {
+          "$ref": "#/definitions/HookExecutionMode"
+        },
+        "handler_type": {
+          "$ref": "#/definitions/HookHandlerType"
+        },
+        "id": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/definitions/HookScope"
+        },
+        "source_path": {
+          "type": "string"
+        },
+        "started_at": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/definitions/HookRunStatus"
+        },
+        "status_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "display_order",
+        "entries",
+        "event_name",
+        "execution_mode",
+        "handler_type",
+        "id",
+        "scope",
+        "source_path",
+        "started_at",
+        "status"
+      ],
+      "type": "object"
+    },
+    "HookScope": {
+      "enum": [
+        "thread",
+        "turn"
+      ],
+      "type": "string"
+    },
     "ImageDetail": {
       "enum": [
         "auto",
@@ -3856,6 +4052,14 @@
         }
       ]
     },
+    "MacOsContactsPermission": {
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ],
+      "type": "string"
+    },
     "MacOsPreferencesPermission": {
       "enum": [
         "none",
@@ -3882,6 +4086,18 @@
           "default": false,
           "type": "boolean"
         },
+        "macos_contacts": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MacOsContactsPermission"
+            }
+          ],
+          "default": "none"
+        },
+        "macos_launch_services": {
+          "default": false,
+          "type": "boolean"
+        },
         "macos_preferences": {
           "allOf": [
             {
@@ -3889,6 +4105,10 @@
             }
           ],
           "default": "read_only"
+        },
+        "macos_reminders": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -4486,6 +4706,32 @@
         {
           "additionalProperties": false,
           "properties": {
+            "InputTranscriptDelta": {
+              "$ref": "#/definitions/RealtimeTranscriptDelta"
+            }
+          },
+          "required": [
+            "InputTranscriptDelta"
+          ],
+          "title": "InputTranscriptDeltaRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "OutputTranscriptDelta": {
+              "$ref": "#/definitions/RealtimeTranscriptDelta"
+            }
+          },
+          "required": [
+            "OutputTranscriptDelta"
+          ],
+          "title": "OutputTranscriptDeltaRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "AudioOut": {
               "$ref": "#/definitions/RealtimeAudioFrame"
             }
@@ -4556,7 +4802,44 @@
         }
       ]
     },
-    "RealtimeHandoffMessage": {
+    "RealtimeHandoffRequested": {
+      "properties": {
+        "active_transcript": {
+          "items": {
+            "$ref": "#/definitions/RealtimeTranscriptEntry"
+          },
+          "type": "array"
+        },
+        "handoff_id": {
+          "type": "string"
+        },
+        "input_transcript": {
+          "type": "string"
+        },
+        "item_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "active_transcript",
+        "handoff_id",
+        "input_transcript",
+        "item_id"
+      ],
+      "type": "object"
+    },
+    "RealtimeTranscriptDelta": {
+      "properties": {
+        "delta": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "delta"
+      ],
+      "type": "object"
+    },
+    "RealtimeTranscriptEntry": {
       "properties": {
         "role": {
           "type": "string"
@@ -4568,32 +4851,6 @@
       "required": [
         "role",
         "text"
-      ],
-      "type": "object"
-    },
-    "RealtimeHandoffRequested": {
-      "properties": {
-        "handoff_id": {
-          "type": "string"
-        },
-        "input_transcript": {
-          "type": "string"
-        },
-        "item_id": {
-          "type": "string"
-        },
-        "messages": {
-          "items": {
-            "$ref": "#/definitions/RealtimeHandoffMessage"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "handoff_id",
-        "input_transcript",
-        "item_id",
-        "messages"
       ],
       "type": "object"
     },
@@ -4683,12 +4940,22 @@
           "description": "Reject MCP elicitation prompts.",
           "type": "boolean"
         },
+        "request_permissions": {
+          "default": false,
+          "description": "Reject approval prompts related to built-in permission requests.",
+          "type": "boolean"
+        },
         "rules": {
           "description": "Reject prompts triggered by execpolicy `prompt` rules.",
           "type": "boolean"
         },
         "sandbox_approval": {
           "description": "Reject approval prompts related to sandbox escalation.",
+          "type": "boolean"
+        },
+        "skill_approval": {
+          "default": false,
+          "description": "Reject approval prompts triggered by skill script execution.",
           "type": "boolean"
         }
       },
@@ -8690,6 +8957,58 @@
     },
     {
       "properties": {
+        "run": {
+          "$ref": "#/definitions/HookRunSummary"
+        },
+        "turn_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "enum": [
+            "hook_started"
+          ],
+          "title": "HookStartedEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run",
+        "type"
+      ],
+      "title": "HookStartedEventMsg",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "run": {
+          "$ref": "#/definitions/HookRunSummary"
+        },
+        "turn_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "enum": [
+            "hook_completed"
+          ],
+          "title": "HookCompletedEventMsgType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run",
+        "type"
+      ],
+      "title": "HookCompletedEventMsg",
+      "type": "object"
+    },
+    {
+      "properties": {
         "delta": {
           "type": "string"
         },
@@ -8833,9 +9152,15 @@
           "description": "Identifier for the collab tool call.",
           "type": "string"
         },
+        "model": {
+          "type": "string"
+        },
         "prompt": {
           "description": "Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
           "type": "string"
+        },
+        "reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
         },
         "sender_thread_id": {
           "allOf": [
@@ -8855,7 +9180,9 @@
       },
       "required": [
         "call_id",
+        "model",
         "prompt",
+        "reasoning_effort",
         "sender_thread_id",
         "type"
       ],

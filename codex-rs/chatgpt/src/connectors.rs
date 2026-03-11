@@ -1,3 +1,6 @@
+use codex_core::AuthManager;
+use codex_core::config::Config;
+use codex_core::token_data::TokenData;
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -7,9 +10,6 @@ use crate::chatgpt_token::init_chatgpt_token_from_auth;
 
 use codex_connectors::AllConnectorsCacheKey;
 use codex_connectors::DirectoryListResponse;
-use codex_core::config::Config;
-use codex_core::features::Feature;
-use codex_core::token_data::TokenData;
 
 pub use codex_core::connectors::AppInfo;
 pub use codex_core::connectors::connector_display_label;
@@ -25,8 +25,16 @@ use codex_core::plugins::PluginsManager;
 
 const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
 
+async fn apps_enabled(config: &Config) -> bool {
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        false,
+        config.cli_auth_credentials_store_mode,
+    );
+    config.features.apps_enabled(Some(&auth_manager)).await
+}
 pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    if !config.features.enabled(Feature::Apps) {
+    if !apps_enabled(config).await {
         return Ok(Vec::new());
     }
     let (connectors_result, accessible_result) = tokio::join!(
@@ -46,7 +54,7 @@ pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>
 }
 
 pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>> {
-    if !config.features.enabled(Feature::Apps) {
+    if !apps_enabled(config).await {
         return Some(Vec::new());
     }
 
@@ -68,7 +76,7 @@ pub async fn list_all_connectors_with_options(
     config: &Config,
     force_refetch: bool,
 ) -> anyhow::Result<Vec<AppInfo>> {
-    if !config.features.enabled(Feature::Apps) {
+    if !apps_enabled(config).await {
         return Ok(Vec::new());
     }
     init_chatgpt_token_from_auth(&config.codex_home, config.cli_auth_credentials_store_mode)

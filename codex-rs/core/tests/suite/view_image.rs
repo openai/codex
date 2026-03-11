@@ -41,6 +41,10 @@ use serde_json::Value;
 use tokio::time::Duration;
 use wiremock::BodyPrintLimit;
 use wiremock::MockServer;
+#[cfg(not(debug_assertions))]
+use wiremock::ResponseTemplate;
+#[cfg(not(debug_assertions))]
+use wiremock::matchers::body_string_contains;
 
 fn image_messages(body: &Value) -> Vec<&Value> {
     body.get("input")
@@ -857,25 +861,11 @@ async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()>
         request.inputs_of_type("input_image").is_empty(),
         "non-image file should not produce an input_image message"
     );
-    let function_output = request.function_call_output(call_id);
-    let output_items = function_output
-        .get("output")
-        .and_then(Value::as_array)
-        .expect("function_call_output should be a content item array");
-    assert_eq!(
-        output_items.len(),
-        1,
-        "non-image placeholder should be returned as a single content item"
-    );
-    assert_eq!(
-        output_items[0].get("type").and_then(Value::as_str),
-        Some("input_text"),
-        "non-image placeholder should be returned as input_text"
-    );
-    let placeholder = output_items[0]
-        .get("text")
-        .and_then(Value::as_str)
-        .expect("placeholder text present");
+    let (placeholder, success) = request
+        .function_call_output_content_and_success(call_id)
+        .expect("function_call_output should be present");
+    assert_eq!(success, None);
+    let placeholder = placeholder.expect("placeholder text present");
 
     assert!(
         placeholder.contains("Codex could not read the local image at")

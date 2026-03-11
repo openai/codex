@@ -805,6 +805,13 @@ impl BottomPane {
         true
     }
 
+    pub(crate) fn selected_index_for_active_view(&self, view_id: &'static str) -> Option<usize> {
+        self.view_stack
+            .last()
+            .filter(|view| view.view_id() == Some(view_id))
+            .and_then(|view| view.selected_index())
+    }
+
     /// Update the pending-input preview shown above the composer.
     pub(crate) fn set_pending_input_preview(
         &mut self,
@@ -1163,6 +1170,16 @@ impl BottomPane {
 
     pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
         if self.composer.set_status_line_enabled(enabled) {
+            self.request_redraw();
+        }
+    }
+
+    /// Updates the contextual footer label and requests a redraw only when it changed.
+    ///
+    /// This keeps the footer plumbing cheap during thread transitions where `App` may recompute
+    /// the label several times while the visible thread settles.
+    pub(crate) fn set_active_agent_label(&mut self, active_agent_label: Option<String>) {
+        if self.composer.set_active_agent_label(active_agent_label) {
             self.request_redraw();
         }
     }

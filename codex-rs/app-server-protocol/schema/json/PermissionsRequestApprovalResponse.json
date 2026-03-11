@@ -63,6 +63,22 @@
             "null"
           ]
         },
+        "contacts": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsContactsPermission"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "launchServices": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "preferences": {
           "anyOf": [
             {
@@ -71,6 +87,12 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "reminders": {
+          "type": [
+            "boolean",
+            "null"
           ]
         }
       },
@@ -137,6 +159,14 @@
           "type": "object"
         }
       ]
+    },
+    "MacOsContactsPermission": {
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ],
+      "type": "string"
     },
     "MacOsPreferencesPermission": {
       "enum": [

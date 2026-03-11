@@ -73,7 +73,9 @@ pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = concat!(
     "This action was rejected due to unacceptable risk. ",
     "The agent must not attempt to achieve the same outcome via workaround, ",
     "indirect execution, or policy circumvention. ",
-    "Proceed only with a materially safer alternative, or stop and request user input.",
+    "Proceed only with a materially safer alternative, ",
+    "or if the user explicitly approves the action after being informed of the risk. ",
+    "Otherwise, stop and request user input.",
 );
 
 /// Whether this turn should route `on-request` approval prompts through the
@@ -685,6 +687,7 @@ fn build_guardian_subagent_config(
         )?);
     }
     for feature in [
+        Feature::SpawnCsv,
         Feature::Collab,
         Feature::WebSearchRequest,
         Feature::WebSearchCached,
@@ -731,8 +734,8 @@ fn truncate_guardian_action_value(value: Value) -> Value {
     }
 }
 
-fn format_guardian_action_pretty(action: &GuardianApprovalRequest) -> String {
-    let mut value = match action {
+pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest) -> Value {
+    match action {
         GuardianApprovalRequest::Shell {
             command,
             cwd,
@@ -871,7 +874,11 @@ fn format_guardian_action_pretty(action: &GuardianApprovalRequest) -> String {
             }
             action
         }
-    };
+    }
+}
+
+fn format_guardian_action_pretty(action: &GuardianApprovalRequest) -> String {
+    let mut value = guardian_approval_request_to_json(action);
     value = truncate_guardian_action_value(value);
     serde_json::to_string_pretty(&value).unwrap_or_else(|_| "null".to_string())
 }

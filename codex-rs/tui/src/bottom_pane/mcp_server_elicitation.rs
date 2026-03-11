@@ -223,7 +223,7 @@ impl McpServerElicitationFormRequest {
             (McpServerElicitationResponseMode::FormContent, Vec::new())
         } else if requested_schema.is_null() || (is_tool_approval && is_empty_object_schema) {
             let mut options = vec![McpServerElicitationOption {
-                label: "Approve Once".to_string(),
+                label: "Allow".to_string(),
                 description: Some("Run the tool and continue.".to_string()),
                 value: Value::String(APPROVAL_ACCEPT_ONCE_VALUE.to_string()),
             }];
@@ -234,7 +234,7 @@ impl McpServerElicitationFormRequest {
                 )
             {
                 options.push(McpServerElicitationOption {
-                    label: "Approve this session".to_string(),
+                    label: "Allow for this session".to_string(),
                     description: Some(
                         "Run the tool and remember this choice for this session.".to_string(),
                     ),
@@ -1690,7 +1690,7 @@ mod tests {
                     input: McpServerElicitationFieldInput::Select {
                         options: vec![
                             McpServerElicitationOption {
-                                label: "Approve Once".to_string(),
+                                label: "Allow".to_string(),
                                 description: Some("Run the tool and continue.".to_string()),
                                 value: Value::String(APPROVAL_ACCEPT_ONCE_VALUE.to_string()),
                             },
@@ -1744,7 +1744,7 @@ mod tests {
                     input: McpServerElicitationFieldInput::Select {
                         options: vec![
                             McpServerElicitationOption {
-                                label: "Approve Once".to_string(),
+                                label: "Allow".to_string(),
                                 description: Some("Run the tool and continue.".to_string()),
                                 value: Value::String(APPROVAL_ACCEPT_ONCE_VALUE.to_string()),
                             },

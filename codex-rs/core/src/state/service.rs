@@ -22,11 +22,34 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use codex_hooks::Hooks;
 use codex_otel::SessionTelemetry;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde_json::Value as JsonValue;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+
+pub(crate) struct CodeModeStoreService {
+    stored_values: Mutex<HashMap<String, JsonValue>>,
+}
+
+impl Default for CodeModeStoreService {
+    fn default() -> Self {
+        Self {
+            stored_values: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl CodeModeStoreService {
+    pub(crate) async fn stored_values(&self) -> HashMap<String, JsonValue> {
+        self.stored_values.lock().await.clone()
+    }
+
+    pub(crate) async fn replace_stored_values(&self, values: HashMap<String, JsonValue>) {
+        *self.stored_values.lock().await = values;
+    }
+}
 
 pub(crate) struct SessionServices {
     pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
@@ -59,4 +82,5 @@ pub(crate) struct SessionServices {
     pub(crate) state_db: Option<StateDbHandle>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
+    pub(crate) code_mode_store: CodeModeStoreService,
 }
