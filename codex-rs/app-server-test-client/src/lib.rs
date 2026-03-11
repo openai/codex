@@ -88,20 +88,6 @@ use url::Url;
 use uuid::Uuid;
 
 const NOTIFICATIONS_TO_OPT_OUT: &[&str] = &[
-    // Legacy codex/event (v1-style) deltas.
-    "codex/event/agent_message_content_delta",
-    "codex/event/agent_message_delta",
-    "codex/event/agent_reasoning_delta",
-    "codex/event/reasoning_content_delta",
-    "codex/event/reasoning_raw_content_delta",
-    "codex/event/exec_command_output_delta",
-    // Other legacy events.
-    "codex/event/exec_approval_request",
-    "codex/event/exec_command_begin",
-    "codex/event/exec_command_end",
-    "codex/event/exec_output",
-    "codex/event/item_started",
-    "codex/event/item_completed",
     // v2 item deltas.
     "command/exec/outputDelta",
     "item/agentMessage/delta",

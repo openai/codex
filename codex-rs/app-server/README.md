@@ -115,7 +115,7 @@ Example with notification opt-out:
     "capabilities": {
       "experimentalApi": true,
       "optOutNotificationMethods": [
-        "codex/event/session_configured",
+        "thread/started",
         "item/agentMessage/delta"
       ]
     }
@@ -722,12 +722,12 @@ Clients can suppress specific notifications per connection by sending exact meth
 
 - Exact-match only: `item/agentMessage/delta` suppresses only that method.
 - Unknown method names are ignored.
-- Applies to both legacy (`codex/event/*`) and v2 (`thread/*`, `turn/*`, `item/*`, etc.) notifications.
+- Applies to app-server typed notifications such as `thread/*`, `turn/*`, `item/*`, and `rawResponseItem/*`.
 - Does not apply to requests/responses/errors.
 
 Examples:
 
-- Opt out of legacy session setup event: `codex/event/session_configured`
+- Opt out of thread lifecycle notifications: `thread/started`
 - Opt out of streamed agent text deltas: `item/agentMessage/delta`
 
 ### Fuzzy file search events (experimental)

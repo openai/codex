@@ -54,7 +54,7 @@ pub struct InitializeCapabilities {
     #[serde(default)]
     pub experimental_api: bool,
     /// Exact notification method names that should be suppressed for this
-    /// connection (for example `codex/event/session_configured`).
+    /// connection (for example `thread/started`).
     #[ts(optional = nullable)]
     pub opt_out_notification_methods: Option<Vec<String>>,
 }
