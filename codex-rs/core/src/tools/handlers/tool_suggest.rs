@@ -7,7 +7,6 @@ use codex_app_server_protocol::McpElicitationObjectType;
 use codex_app_server_protocol::McpElicitationSchema;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_rmcp_client::ElicitationAction;
 use rmcp::model::RequestId;
 use serde::Deserialize;
@@ -18,8 +17,8 @@ use tracing::warn;
 use crate::connectors;
 use crate::function_tool::FunctionCallError;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -89,11 +88,13 @@ struct ToolSuggestResult {
 
 #[async_trait]
 impl ToolHandler for ToolSuggestHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             payload,
             session,
@@ -209,10 +210,7 @@ impl ToolHandler for ToolSuggestHandler {
             ))
         })?;
 
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            success: Some(true),
-        })
+        Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
 

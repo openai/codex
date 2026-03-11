@@ -165,9 +165,12 @@ fn default_image_save_developer_message_text() -> String {
 fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
     let router = Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
-        None,
-        None,
-        turn_context.dynamic_tools.as_slice(),
+        crate::tools::router::ToolRouterParams {
+            mcp_tools: None,
+            app_tools: None,
+            discoverable_connectors: None,
+            dynamic_tools: turn_context.dynamic_tools.as_slice(),
+        },
     ));
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     ToolCallRuntime::new(router, session, turn_context, tracker)
