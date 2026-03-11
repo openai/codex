@@ -8,6 +8,7 @@ use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::ReviewDecision;
@@ -24,6 +25,7 @@ use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -40,6 +42,8 @@ use crate::error::CodexErr;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
+use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
+use crate::mcp_tool_call::lookup_mcp_tool_metadata;
 use crate::models_manager::manager::ModelsManager;
 use codex_protocol::protocol::InitialHistory;
 
@@ -94,12 +98,14 @@ pub(crate) async fn run_codex_thread_interactive(
     let parent_session_clone = Arc::clone(&parent_session);
     let parent_ctx_clone = Arc::clone(&parent_ctx);
     let codex_for_events = Arc::clone(&codex);
+    let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::<String, McpInvocation>::new()));
     tokio::spawn(async move {
         forward_events(
             codex_for_events,
             tx_sub,
             parent_session_clone,
             parent_ctx_clone,
+            pending_mcp_invocations,
             cancel_token_events,
         )
         .await;
@@ -206,6 +212,7 @@ async fn forward_events(
     tx_sub: Sender<Event>,
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
+    pending_mcp_invocations: Arc<Mutex<HashMap<String, McpInvocation>>>,
     cancel_token: CancellationToken,
 ) {
     let cancelled = cancel_token.cancelled();
@@ -291,10 +298,40 @@ async fn forward_events(
                             id,
                             &parent_session,
                             &parent_ctx,
+                            &pending_mcp_invocations,
                             event,
                             &cancel_token,
                         )
                         .await;
+                    }
+                    Event {
+                        id,
+                        msg: EventMsg::McpToolCallBegin(event),
+                    } => {
+                        pending_mcp_invocations
+                            .lock()
+                            .await
+                            .insert(event.call_id.clone(), event.invocation.clone());
+                        match tx_sub.send(Event { id, msg: EventMsg::McpToolCallBegin(event) }).or_cancel(&cancel_token).await {
+                            Ok(Ok(())) => {}
+                            _ => {
+                                shutdown_delegate(&codex).await;
+                                break;
+                            }
+                        }
+                    }
+                    Event {
+                        id,
+                        msg: EventMsg::McpToolCallEnd(event),
+                    } => {
+                        pending_mcp_invocations.lock().await.remove(&event.call_id);
+                        match tx_sub.send(Event { id, msg: EventMsg::McpToolCallEnd(event) }).or_cancel(&cancel_token).await {
+                            Ok(Ok(())) => {}
+                            _ => {
+                                shutdown_delegate(&codex).await;
+                                break;
+                            }
+                        }
                     }
                     other => {
                         match tx_sub.send(other).or_cancel(&cancel_token).await {
@@ -532,9 +569,24 @@ async fn handle_request_user_input(
     id: String,
     parent_session: &Arc<Session>,
     parent_ctx: &Arc<TurnContext>,
+    pending_mcp_invocations: &Arc<Mutex<HashMap<String, McpInvocation>>>,
     event: RequestUserInputEvent,
     cancel_token: &CancellationToken,
 ) {
+    if routes_approval_to_guardian(parent_ctx)
+        && let Some(response) = maybe_auto_review_mcp_request_user_input(
+            parent_session,
+            parent_ctx,
+            pending_mcp_invocations,
+            &event,
+            cancel_token,
+        )
+        .await
+    {
+        let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
+        return;
+    }
+
     let args = RequestUserInputArgs {
         questions: event.questions,
     };
@@ -548,6 +600,77 @@ async fn handle_request_user_input(
     )
     .await;
     let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
+}
+
+async fn maybe_auto_review_mcp_request_user_input(
+    parent_session: &Arc<Session>,
+    parent_ctx: &Arc<TurnContext>,
+    pending_mcp_invocations: &Arc<Mutex<HashMap<String, McpInvocation>>>,
+    event: &RequestUserInputEvent,
+    cancel_token: &CancellationToken,
+) -> Option<RequestUserInputResponse> {
+    const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_call_approval_";
+    const MCP_TOOL_APPROVAL_ACCEPT: &str = "Allow";
+    const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this session";
+
+    let question = event.questions.iter().find(|question| {
+        question
+            .id
+            .starts_with(MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX)
+    })?;
+    let invocation = pending_mcp_invocations
+        .lock()
+        .await
+        .get(&event.call_id)
+        .cloned()?;
+    let metadata = lookup_mcp_tool_metadata(
+        parent_session.as_ref(),
+        parent_ctx.as_ref(),
+        &invocation.server,
+        &invocation.tool,
+    )
+    .await;
+    let review_rx = spawn_guardian_review(
+        Arc::clone(parent_session),
+        Arc::clone(parent_ctx),
+        build_guardian_mcp_tool_review_request(&event.call_id, &invocation, metadata.as_ref()),
+        None,
+    );
+    let decision = await_approval_with_cancel(
+        async move { review_rx.await.unwrap_or_default() },
+        parent_session,
+        &event.call_id,
+        cancel_token,
+    )
+    .await;
+    let selected_label = match decision {
+        ReviewDecision::ApprovedForSession => question
+            .options
+            .as_ref()
+            .and_then(|options| {
+                options
+                    .iter()
+                    .find(|option| option.label == MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION)
+            })
+            .map(|option| option.label.clone())
+            .unwrap_or_else(|| MCP_TOOL_APPROVAL_ACCEPT.to_string()),
+        ReviewDecision::Approved
+        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+        | ReviewDecision::NetworkPolicyAmendment { .. } => MCP_TOOL_APPROVAL_ACCEPT.to_string(),
+        ReviewDecision::Denied | ReviewDecision::Abort => {
+            return Some(RequestUserInputResponse {
+                answers: HashMap::new(),
+            });
+        }
+    };
+    Some(RequestUserInputResponse {
+        answers: HashMap::from([(
+            question.id.clone(),
+            codex_protocol::request_user_input::RequestUserInputAnswer {
+                answers: vec![selected_label],
+            },
+        )]),
+    })
 }
 
 fn spawn_guardian_review(
