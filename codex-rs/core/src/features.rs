@@ -170,6 +170,8 @@ pub enum Feature {
     Artifact,
     /// Enable Fast mode selection in the TUI and request layer.
     FastMode,
+    /// Enable inline Responses API server-side compaction for auto-compaction flows.
+    ServerSideCompaction,
     /// Enable voice transcription in the TUI composer.
     VoiceTranscription,
     /// Enable experimental realtime voice conversation mode in the TUI.
@@ -795,6 +797,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "fast_mode",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ServerSideCompaction,
+        key: "server_side_compaction",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::VoiceTranscription,

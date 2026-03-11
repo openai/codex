@@ -626,6 +626,16 @@ pub fn ev_assistant_message(id: &str, text: &str) -> Value {
     })
 }
 
+pub fn ev_compaction(encrypted_content: &str) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "compaction",
+            "encrypted_content": encrypted_content,
+        }
+    })
+}
+
 pub fn user_message_item(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,

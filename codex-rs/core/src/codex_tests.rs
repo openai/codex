@@ -55,6 +55,7 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::AppInfo;
+use codex_git::GhostCommit;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -112,6 +113,30 @@ fn user_message(text: &str) -> ResponseItem {
     }
 }
 
+fn developer_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
+fn environment_context_message(cwd: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: format!("<environment_context>\n<cwd>{cwd}</cwd>\n</environment_context>"),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
 fn assistant_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -133,6 +158,12 @@ fn skill_message(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
+    }
+}
+
+fn ghost_snapshot(id: &str) -> ResponseItem {
+    ResponseItem::GhostSnapshot {
+        ghost_commit: GhostCommit::new(id.to_string(), None, Vec::new(), Vec::new()),
     }
 }
 
@@ -251,6 +282,47 @@ fn assistant_message_stream_parsers_seed_plan_parser_across_added_and_delta_boun
     );
     assert_eq!(tail.visible_text, "");
     assert!(tail.plan_segments.is_empty());
+}
+
+#[test]
+fn server_side_compaction_replacement_history_keeps_compaction_item_and_ghost_snapshots() {
+    let prior_snapshot = ghost_snapshot("ghost-before");
+    let same_turn_snapshot = ghost_snapshot("ghost-during");
+    let current_history = vec![
+        user_message("earlier"),
+        prior_snapshot.clone(),
+        developer_message("<model_switch>\nuse the new model"),
+        environment_context_message("/fresh"),
+        user_message("current turn"),
+        skill_message(
+            "<skill>\n<name>demo</name>\n<path>/tmp/skills/demo/SKILL.md</path>\nbody\n</skill>",
+        ),
+        developer_message("PLUGIN_HINT"),
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("tool result".to_string()),
+        },
+        same_turn_snapshot.clone(),
+        ResponseItem::Compaction {
+            encrypted_content: "INLINE_SUMMARY_1".to_string(),
+        },
+    ];
+    let compaction_item = ResponseItem::Compaction {
+        encrypted_content: "INLINE_SUMMARY_2".to_string(),
+    };
+
+    let mut replacement_history = vec![compaction_item.clone()];
+    replacement_history.extend(
+        current_history
+            .iter()
+            .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
+            .cloned(),
+    );
+
+    assert_eq!(
+        replacement_history,
+        vec![compaction_item, prior_snapshot, same_turn_snapshot]
+    );
 }
 
 fn make_mcp_tool(

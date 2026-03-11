@@ -1,0 +1,20 @@
+---
+source: core/tests/suite/compact_remote.rs
+assertion_line: 558
+expression: "format_labeled_requests_snapshot(\"Inline server-side compaction: the compacting turn opts into context_management, and the next request reuses the streamed compaction checkpoint directly.\",\n&[(\"Inline Compaction Request\", &requests[1]),\n(\"Post-Inline-Compaction History Layout\", &requests[2]),])"
+---
+Scenario: Inline server-side compaction: the compacting turn opts into context_management, and the next request reuses the streamed compaction checkpoint directly.
+
+## Inline Compaction Request
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user[2]:
+    [01] <AGENTS_MD>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:inline compact turn one
+03:message/assistant:FIRST_REMOTE_REPLY
+04:message/user:inline compact turn two
+
+## Post-Inline-Compaction History Layout
+00:compaction:encrypted=true
+01:message/assistant:AFTER_INLINE_REPLY
+02:message/user:inline compact turn three

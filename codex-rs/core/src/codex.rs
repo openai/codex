@@ -80,6 +80,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
@@ -2401,6 +2402,7 @@ impl Session {
             BaseInstructions {
                 text: base_instructions,
             },
+            false,
         );
         let startup_turn_metadata_header = startup_turn_context
             .turn_metadata_state
@@ -3233,6 +3235,40 @@ impl Session {
         state.record_items(items.iter(), turn_context.truncation_policy);
     }
 
+    pub(crate) async fn apply_server_side_compaction(
+        &self,
+        turn_context: &TurnContext,
+        item: ResponseItem,
+    ) {
+        let current_history = self.clone_history().await;
+        let mut replacement_history = vec![item.clone()];
+        replacement_history.extend(
+            current_history
+                .raw_items()
+                .iter()
+                .filter(|history_item| matches!(history_item, ResponseItem::GhostSnapshot { .. }))
+                .cloned(),
+        );
+
+        let reference_context_item = Some(turn_context.to_turn_context_item());
+        let compacted_item = CompactedItem {
+            message: String::new(),
+            replacement_history: Some(replacement_history.clone()),
+        };
+        self.replace_compacted_history(replacement_history, reference_context_item, compacted_item)
+            .await;
+        self.recompute_token_usage(turn_context).await;
+        debug!(
+            turn_id = %turn_context.sub_id,
+            "applied local server-side compaction"
+        );
+        self.services.session_telemetry.counter(
+            "codex.compaction_checkpoint_applied",
+            1,
+            &[("mode", "server_side")],
+        );
+    }
+
     pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
         self.services
             .session_telemetry
@@ -3333,7 +3369,6 @@ impl Session {
     pub(crate) fn features(&self) -> ManagedFeatures {
         self.features.clone()
     }
-
     pub(crate) async fn collaboration_mode(&self) -> CollaborationMode {
         let state = self.state.lock().await;
         state.session_configuration.collaboration_mode.clone()
@@ -5355,11 +5390,8 @@ pub(crate) async fn run_turn(
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
-    if run_pre_sampling_compact(&sess, &turn_context)
-        .await
-        .is_err()
-    {
-        error!("Failed to run pre-sampling compact");
+    if let Err(err) = run_pre_sampling_compact(&sess, &turn_context).await {
+        error!("Failed to run pre-sampling compact: {err}");
         return None;
     }
 
@@ -5645,6 +5677,7 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
+            inline_server_side_compaction_enabled(&sess, &turn_context),
             &turn_enabled_connectors,
             skills_outcome,
             &mut server_model_warning_emitted_for_turn,
@@ -5674,18 +5707,18 @@ pub(crate) async fn run_turn(
                 );
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if token_limit_reached && needs_follow_up {
-                    if run_auto_compact(
+                if token_limit_reached
+                    && needs_follow_up
+                    && !inline_server_side_compaction_enabled(&sess, &turn_context)
+                    && run_auto_compact(
                         &sess,
                         &turn_context,
                         InitialContextInjection::BeforeLastUserMessage,
                     )
                     .await
                     .is_err()
-                    {
-                        return None;
-                    }
-                    continue;
+                {
+                    return None;
                 }
 
                 if !needs_follow_up {
@@ -5836,6 +5869,12 @@ pub(crate) async fn run_turn(
     last_agent_message
 }
 
+fn inline_server_side_compaction_enabled(sess: &Session, turn_context: &TurnContext) -> bool {
+    sess.enabled(Feature::ServerSideCompaction)
+        && should_use_remote_compact_task(&turn_context.provider)
+        && turn_context.model_info.auto_compact_token_limit().is_some()
+}
+
 async fn run_pre_sampling_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -5852,8 +5891,10 @@ async fn run_pre_sampling_compact(
         .model_info
         .auto_compact_token_limit()
         .unwrap_or(i64::MAX);
-    // Compact if the total usage tokens are greater than the auto compact limit
-    if total_usage_tokens >= auto_compact_limit {
+    // Compact if the total usage tokens are greater than or equal to the auto-compact limit.
+    if total_usage_tokens >= auto_compact_limit
+        && !inline_server_side_compaction_enabled(sess, turn_context)
+    {
         run_auto_compact(sess, turn_context, InitialContextInjection::DoNotInject).await?;
     }
     Ok(())
@@ -5861,17 +5902,13 @@ async fn run_pre_sampling_compact(
 
 /// Runs pre-sampling compaction against the previous model when switching to a smaller
 /// context-window model.
-///
-/// Returns `Ok(true)` when compaction ran successfully, `Ok(false)` when compaction was skipped
-/// because the model/context-window preconditions were not met, and `Err(_)` only when compaction
-/// was attempted and failed.
 async fn maybe_run_previous_model_inline_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     total_usage_tokens: i64,
-) -> CodexResult<bool> {
+) -> CodexResult<()> {
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
-        return Ok(false);
+        return Ok(());
     };
     let previous_model_turn_context = Arc::new(
         turn_context
@@ -5880,10 +5917,10 @@ async fn maybe_run_previous_model_inline_compact(
     );
 
     let Some(old_context_window) = previous_model_turn_context.model_context_window() else {
-        return Ok(false);
+        return Ok(());
     };
     let Some(new_context_window) = turn_context.model_context_window() else {
-        return Ok(false);
+        return Ok(());
     };
     let new_auto_compact_limit = turn_context
         .model_info
@@ -5899,9 +5936,8 @@ async fn maybe_run_previous_model_inline_compact(
             InitialContextInjection::DoNotInject,
         )
         .await?;
-        return Ok(true);
     }
-    Ok(false)
+    Ok(())
 }
 
 async fn run_auto_compact(
@@ -6088,6 +6124,7 @@ fn build_prompt(
     router: &ToolRouter,
     turn_context: &TurnContext,
     base_instructions: BaseInstructions,
+    inline_server_side_compaction_enabled: bool,
 ) -> Prompt {
     Prompt {
         input,
@@ -6096,6 +6133,7 @@ fn build_prompt(
         base_instructions,
         personality: turn_context.personality,
         output_schema: turn_context.final_output_json_schema.clone(),
+        inline_server_side_compaction_enabled,
     }
 }
 #[allow(clippy::too_many_arguments)]
@@ -6114,6 +6152,7 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
+    inline_server_side_compaction_enabled: bool,
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     server_model_warning_emitted_for_turn: &mut bool,
@@ -6136,6 +6175,7 @@ async fn run_sampling_request(
         router.as_ref(),
         turn_context.as_ref(),
         base_instructions,
+        inline_server_side_compaction_enabled,
     );
     let mut retries = 0;
     loop {
@@ -6975,6 +7015,28 @@ async fn try_run_sampling_request(
                     continue;
                 }
 
+                if matches!(item, ResponseItem::Compaction { .. }) {
+                    let turn_item = TurnItem::ContextCompaction(match previously_active_item {
+                        Some(TurnItem::ContextCompaction(item)) => item,
+                        _ => ContextCompactionItem::new(),
+                    });
+                    debug!(
+                        turn_id = %turn_context.sub_id,
+                        "emitting streamed server-side raw compaction item for immediate local checkpoint apply"
+                    );
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::RawResponseItem(RawResponseItemEvent { item: item.clone() }),
+                    )
+                    .await;
+                    sess.apply_server_side_compaction(turn_context.as_ref(), item)
+                        .await;
+                    sess.emit_turn_item_started(&turn_context, &turn_item).await;
+                    sess.emit_turn_item_completed(&turn_context, turn_item)
+                        .await;
+                    continue;
+                }
+
                 let mut ctx = HandleOutputCtx {
                     sess: sess.clone(),
                     turn_context: turn_context.clone(),
@@ -6994,6 +7056,9 @@ async fn try_run_sampling_request(
                 needs_follow_up |= output_result.needs_follow_up;
             }
             ResponseEvent::OutputItemAdded(item) => {
+                if matches!(item, ResponseItem::Compaction { .. }) {
+                    continue;
+                }
                 if let Some(turn_item) = handle_non_tool_response_item(
                     sess.as_ref(),
                     turn_context.as_ref(),

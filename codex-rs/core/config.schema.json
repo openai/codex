@@ -444,6 +444,9 @@
             "search_tool": {
               "type": "boolean"
             },
+            "server_side_compaction": {
+              "type": "boolean"
+            },
             "shell_snapshot": {
               "type": "boolean"
             },
@@ -1943,6 +1946,9 @@
           "type": "boolean"
         },
         "search_tool": {
+          "type": "boolean"
+        },
+        "server_side_compaction": {
           "type": "boolean"
         },
         "shell_snapshot": {

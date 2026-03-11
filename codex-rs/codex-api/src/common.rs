@@ -141,6 +141,23 @@ impl From<VerbosityConfig> for OpenAiVerbosity {
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct ContextManagement {
+    pub r#type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compact_threshold: Option<i64>,
+}
+
+impl ContextManagement {
+    pub fn compaction(compact_threshold: i64) -> Self {
+        Self {
+            r#type: "compaction".to_string(),
+            compact_threshold: Some(compact_threshold),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct ResponsesApiRequest {
     pub model: String,
     pub instructions: String,
@@ -158,6 +175,8 @@ pub struct ResponsesApiRequest {
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_management: Option<Vec<ContextManagement>>,
 }
 
 impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
@@ -177,6 +196,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
             service_tier: request.service_tier.clone(),
             prompt_cache_key: request.prompt_cache_key.clone(),
             text: request.text.clone(),
+            context_management: request.context_management.clone(),
             generate: None,
             client_metadata: None,
         }
@@ -203,6 +223,8 @@ pub struct ResponseCreateWsRequest {
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_management: Option<Vec<ContextManagement>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generate: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

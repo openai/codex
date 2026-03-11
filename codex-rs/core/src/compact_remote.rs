@@ -99,6 +99,7 @@ async fn run_remote_compact_task_inner_impl(
         base_instructions,
         personality: turn_context.personality,
         output_schema: None,
+        inline_server_side_compaction_enabled: false,
     };
 
     let mut new_history = sess

@@ -52,6 +52,7 @@ use codex_api::SseTelemetry;
 use codex_api::TransportError;
 use codex_api::WebsocketTelemetry;
 use codex_api::build_conversation_headers;
+use codex_api::common::ContextManagement as ApiContextManagement;
 use codex_api::common::Reasoning;
 use codex_api::common::ResponsesWsRequest;
 use codex_api::create_text_param_for_request;
@@ -535,6 +536,14 @@ impl ModelClientSession {
         };
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
         let prompt_cache_key = Some(self.client.state.conversation_id.to_string());
+        let context_management = if prompt.inline_server_side_compaction_enabled {
+            model_info
+                .auto_compact_token_limit()
+                .map(ApiContextManagement::compaction)
+                .map(|entry| vec![entry])
+        } else {
+            None
+        };
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions: instructions.clone(),
@@ -553,6 +562,7 @@ impl ModelClientSession {
             },
             prompt_cache_key,
             text,
+            context_management,
         };
         Ok(request)
     }
