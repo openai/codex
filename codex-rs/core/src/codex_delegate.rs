@@ -10,6 +10,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RequestUserInputEvent;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
@@ -20,8 +21,10 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value;
 use std::time::Duration;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
@@ -34,6 +37,9 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
+use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::review_approval_request;
+use crate::guardian::routes_approval_to_guardian;
 use crate::models_manager::manager::ModelsManager;
 use codex_protocol::protocol::InitialHistory;
 
@@ -342,8 +348,8 @@ async fn forward_ops(
 async fn handle_exec_approval(
     codex: &Codex,
     turn_id: String,
-    parent_session: &Session,
-    parent_ctx: &TurnContext,
+    parent_session: &Arc<Session>,
+    parent_ctx: &Arc<TurnContext>,
     event: ExecApprovalRequestEvent,
     cancel_token: &CancellationToken,
 ) {
@@ -361,27 +367,53 @@ async fn handle_exec_approval(
         available_decisions,
         ..
     } = event;
-    // Race approval with cancellation and timeout to avoid hangs.
-    let approval_fut = parent_session.request_command_approval(
-        parent_ctx,
-        call_id,
-        approval_id,
-        command,
-        cwd,
-        reason,
-        network_approval_context,
-        proposed_execpolicy_amendment,
-        additional_permissions,
-        skill_metadata,
-        available_decisions,
-    );
-    let decision = await_approval_with_cancel(
-        approval_fut,
-        parent_session,
-        &approval_id_for_op,
-        cancel_token,
-    )
-    .await;
+    let decision = if routes_approval_to_guardian(parent_ctx) {
+        let review_rx = spawn_guardian_review(
+            Arc::clone(parent_session),
+            Arc::clone(parent_ctx),
+            GuardianApprovalRequest::Shell {
+                id: approval_id_for_op.clone(),
+                command,
+                cwd,
+                sandbox_permissions: if additional_permissions.is_some() {
+                    crate::sandboxing::SandboxPermissions::WithAdditionalPermissions
+                } else {
+                    crate::sandboxing::SandboxPermissions::UseDefault
+                },
+                additional_permissions,
+                justification: None,
+            },
+            reason,
+        );
+        await_approval_with_cancel(
+            async move { review_rx.await.unwrap_or_default() },
+            parent_session,
+            &approval_id_for_op,
+            cancel_token,
+        )
+        .await
+    } else {
+        let approval_fut = parent_session.request_command_approval(
+            parent_ctx,
+            call_id,
+            approval_id,
+            command,
+            cwd,
+            reason,
+            network_approval_context,
+            proposed_execpolicy_amendment,
+            additional_permissions,
+            skill_metadata,
+            available_decisions,
+        );
+        await_approval_with_cancel(
+            approval_fut,
+            parent_session,
+            &approval_id_for_op,
+            cancel_token,
+        )
+        .await
+    };
 
     let _ = codex
         .submit(Op::ExecApproval {
@@ -396,8 +428,8 @@ async fn handle_exec_approval(
 async fn handle_patch_approval(
     codex: &Codex,
     _id: String,
-    parent_session: &Session,
-    parent_ctx: &TurnContext,
+    parent_session: &Arc<Session>,
+    parent_ctx: &Arc<TurnContext>,
     event: ApplyPatchApprovalRequestEvent,
     cancel_token: &CancellationToken,
 ) {
@@ -409,16 +441,74 @@ async fn handle_patch_approval(
         ..
     } = event;
     let approval_id = call_id.clone();
-    let decision_rx = parent_session
-        .request_patch_approval(parent_ctx, call_id, changes, reason, grant_root)
-        .await;
-    let decision = await_approval_with_cancel(
-        async move { decision_rx.await.unwrap_or_default() },
-        parent_session,
-        &approval_id,
-        cancel_token,
-    )
-    .await;
+    let decision = if routes_approval_to_guardian(parent_ctx) {
+        let change_count = changes.len();
+        let files = changes
+            .keys()
+            .map(|path| {
+                AbsolutePathBuf::from_absolute_path(parent_ctx.cwd.join(path))
+                    .expect("guardian delegated patch paths should resolve against cwd")
+            })
+            .collect::<Vec<_>>();
+        let patch = changes
+            .iter()
+            .map(|(path, change)| match change {
+                codex_protocol::protocol::FileChange::Add { content } => {
+                    format!("*** Add File: {}\n{}", path.display(), content)
+                }
+                codex_protocol::protocol::FileChange::Delete { content } => {
+                    format!("*** Delete File: {}\n{}", path.display(), content)
+                }
+                codex_protocol::protocol::FileChange::Update {
+                    unified_diff,
+                    move_path,
+                } => {
+                    if let Some(move_path) = move_path {
+                        format!(
+                            "*** Update File: {}\n*** Move to: {}\n{}",
+                            path.display(),
+                            move_path.display(),
+                            unified_diff
+                        )
+                    } else {
+                        format!("*** Update File: {}\n{}", path.display(), unified_diff)
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let review_rx = spawn_guardian_review(
+            Arc::clone(parent_session),
+            Arc::clone(parent_ctx),
+            GuardianApprovalRequest::ApplyPatch {
+                id: approval_id.clone(),
+                cwd: parent_ctx.cwd.clone(),
+                files,
+                changes,
+                change_count,
+                patch,
+            },
+            reason,
+        );
+        await_approval_with_cancel(
+            async move { review_rx.await.unwrap_or_default() },
+            parent_session,
+            &approval_id,
+            cancel_token,
+        )
+        .await
+    } else {
+        let decision_rx = parent_session
+            .request_patch_approval(parent_ctx, call_id, changes, reason, grant_root)
+            .await;
+        await_approval_with_cancel(
+            async move { decision_rx.await.unwrap_or_default() },
+            parent_session,
+            &approval_id,
+            cancel_token,
+        )
+        .await
+    };
     let _ = codex
         .submit(Op::PatchApproval {
             id: approval_id,
@@ -430,8 +520,8 @@ async fn handle_patch_approval(
 async fn handle_request_user_input(
     codex: &Codex,
     id: String,
-    parent_session: &Session,
-    parent_ctx: &TurnContext,
+    parent_session: &Arc<Session>,
+    parent_ctx: &Arc<TurnContext>,
     event: RequestUserInputEvent,
     cancel_token: &CancellationToken,
 ) {
@@ -450,10 +540,33 @@ async fn handle_request_user_input(
     let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
 }
 
+fn spawn_guardian_review(
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+) -> oneshot::Receiver<ReviewDecision> {
+    let (tx, rx) = oneshot::channel();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("guardian delegate review runtime should initialize");
+        let decision = runtime.block_on(review_approval_request(
+            &session,
+            &turn,
+            request,
+            retry_reason,
+        ));
+        let _ = tx.send(decision);
+    });
+    rx
+}
+
 async fn handle_request_permissions(
     codex: &Codex,
-    parent_session: &Session,
-    parent_ctx: &TurnContext,
+    parent_session: &Arc<Session>,
+    parent_ctx: &Arc<TurnContext>,
     event: RequestPermissionsEvent,
     cancel_token: &CancellationToken,
 ) {
