@@ -30,6 +30,7 @@ use crate::upstream::UpstreamClient;
 use crate::upstream::proxy_for_connect;
 use anyhow::Context as _;
 use anyhow::Result;
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use rama_core::Layer;
 use rama_core::Service;
 use rama_core::error::BoxError;
@@ -38,7 +39,6 @@ use rama_core::error::OpaqueError;
 use rama_core::extensions::ExtensionsMut;
 use rama_core::extensions::ExtensionsRef;
 use rama_core::layer::AddInputExtensionLayer;
-use rama_core::rt::Executor;
 use rama_core::service::service_fn;
 use rama_http::Body;
 use rama_http::HeaderMap;
@@ -113,11 +113,17 @@ async fn run_http_proxy_with_listener(
     listener: TcpListener,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 ) -> Result<()> {
+    ensure_rustls_crypto_provider();
+
     let addr = listener
         .local_addr()
         .context("read HTTP proxy listener local addr")?;
 
-    let http_service = HttpServer::auto(Executor::new()).service(
+    // This proxy listener only needs HTTP/1 proxy semantics. Using Rama's auto builder
+    // forces every accepted socket through the HTTP version sniffing pre-read path before proxy
+    // request parsing, which can stall some local clients on macOS before CONNECT/absolute-form
+    // handling runs at all.
+    let http_service = HttpServer::http1().service(
         (
             UpgradeLayer::new(
                 MethodMatcher::CONNECT,
@@ -977,7 +983,14 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rama_http::Method;
     use rama_http::Request;
+    use std::net::Ipv4Addr;
+    use std::net::TcpListener as StdTcpListener;
     use std::sync::Arc;
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener as TokioTcpListener;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
 
     #[tokio::test]
     async fn http_connect_accept_blocks_in_limited_mode() {
@@ -1022,6 +1035,65 @@ mod tests {
 
         let (response, _request) = http_connect_accept(None, req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn http_proxy_listener_accepts_plain_http1_connect_requests() {
+        let target_listener = TokioTcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("target listener should bind");
+        let target_addr = target_listener
+            .local_addr()
+            .expect("target listener should expose local addr");
+        let target_task = tokio::spawn(async move {
+            let (mut stream, _) = target_listener
+                .accept()
+                .await
+                .expect("target listener should accept");
+            let mut buf = [0_u8; 1];
+            let _ = timeout(Duration::from_secs(1), stream.read(&mut buf)).await;
+        });
+
+        let state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["127.0.0.1".to_string()],
+            allow_local_binding: true,
+            ..NetworkProxySettings::default()
+        }));
+        let listener =
+            StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("proxy listener should bind");
+        let proxy_addr = listener
+            .local_addr()
+            .expect("proxy listener should expose local addr");
+        let proxy_task = tokio::spawn(run_http_proxy_with_std_listener(state, listener, None));
+
+        let mut stream = tokio::net::TcpStream::connect(proxy_addr)
+            .await
+            .expect("client should connect to proxy");
+        let request = format!(
+            "CONNECT 127.0.0.1:{port} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n",
+            port = target_addr.port()
+        );
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .expect("client should write CONNECT request");
+
+        let mut buf = [0_u8; 256];
+        let bytes_read = timeout(Duration::from_secs(2), stream.read(&mut buf))
+            .await
+            .expect("proxy should respond before timeout")
+            .expect("client should read proxy response");
+        let response = String::from_utf8_lossy(&buf[..bytes_read]);
+        assert!(
+            response.starts_with("HTTP/1.1 200 OK\r\n"),
+            "unexpected proxy response: {response:?}"
+        );
+
+        drop(stream);
+        proxy_task.abort();
+        let _ = proxy_task.await;
+        target_task.abort();
+        let _ = target_task.await;
     }
 
     #[tokio::test(flavor = "current_thread")]
