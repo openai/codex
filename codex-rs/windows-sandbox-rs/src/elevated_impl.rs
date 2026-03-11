@@ -203,6 +203,7 @@ mod windows_impl {
     }
 
     /// Launches the command runner under the sandbox user and captures its output.
+    #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture(
         policy_json_or_preset: &str,
         sandbox_policy_cwd: &Path,
@@ -533,6 +534,7 @@ mod stub {
     }
 
     /// Stub implementation for non-Windows targets; sandboxing only works on Windows.
+    #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture(
         _policy_json_or_preset: &str,
         _sandbox_policy_cwd: &Path,

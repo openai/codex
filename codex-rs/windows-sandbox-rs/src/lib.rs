@@ -236,6 +236,7 @@ mod windows_impl {
         pub timed_out: bool,
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture(
         policy_json_or_preset: &str,
         sandbox_policy_cwd: &Path,
@@ -585,6 +586,7 @@ mod stub {
         pub timed_out: bool,
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture(
         _policy_json_or_preset: &str,
         _sandbox_policy_cwd: &Path,
