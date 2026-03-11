@@ -500,19 +500,14 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
 
     let server = start_mock_server().await;
 
-    let first_turn = sse(vec![
-        ev_assistant_message("m0", FIRST_REPLY),
-        ev_completed_with_tokens("r0", 80),
-    ]);
-
     // Compact run where the API reports zero tokens in usage. Our local
     // estimator should still compute a non-zero context size for the compacted
     // history.
-    let compact_turn = sse(vec![
+    let sse_compact = sse(vec![
         ev_assistant_message("m1", SUMMARY_TEXT),
         ev_completed_with_tokens("r1", 0),
     ]);
-    mount_sse_sequence(&server, vec![first_turn, compact_turn]).await;
+    mount_sse_once(&server, sse_compact).await;
 
     let model_provider = non_openai_model_provider(&server);
     let mut builder = test_codex().with_config(move |config| {
@@ -521,53 +516,39 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
     });
     let codex = builder.build(&server).await.unwrap().codex;
 
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "USER_ONE".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-        })
-        .await
-        .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
     // Trigger manual compact and collect TokenCount events for the compact turn.
     codex.submit(Op::Compact).await.unwrap();
 
-    let mut token_counts = Vec::new();
-    loop {
-        let event = codex.next_event().await.unwrap();
-        match event.msg {
-            EventMsg::TokenCount(tc) => {
-                if let Some(info) = tc.info {
-                    token_counts.push(info.last_token_usage.total_tokens);
-                }
-            }
-            EventMsg::TurnComplete(_) => break,
-            _ => {}
-        }
-    }
+    // First TokenCount: from the compact API call (usage.total_tokens = 0).
+    let first = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::TokenCount(tc) => tc
+            .info
+            .as_ref()
+            .map(|info| info.last_token_usage.total_tokens),
+        _ => None,
+    })
+    .await;
 
-    let compact_api_tokens = token_counts
-        .iter()
-        .rev()
-        .nth(1)
-        .copied()
-        .expect("compact turn should emit API and local TokenCount events");
-    let last = token_counts
-        .last()
-        .copied()
-        .expect("compact turn should emit at least one TokenCount event");
+    // Second TokenCount: from the local post-compaction estimate.
+    let last = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::TokenCount(tc) => tc
+            .info
+            .as_ref()
+            .map(|info| info.last_token_usage.total_tokens),
+        _ => None,
+    })
+    .await;
+
+    // Ensure the compact task itself completes.
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     assert_eq!(
-        compact_api_tokens, 0,
-        "expected compact API TokenCount to report zero tokens"
+        first, 0,
+        "expected first TokenCount from compact API usage to be zero"
     );
     assert!(
         last > 0,
-        "final TokenCount should reflect a non-zero estimated context size after compaction"
+        "second TokenCount should reflect a non-zero estimated context size after compaction"
     );
 }
 
@@ -3316,11 +3297,15 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
     skip_if_no_network!();
 
     let server = start_mock_server().await;
+    let compact_turn = sse(vec![
+        ev_assistant_message("m1", "MANUAL_EMPTY_SUMMARY"),
+        ev_completed_with_tokens("r1", 90),
+    ]);
     let follow_up_turn = sse(vec![
         ev_assistant_message("m2", FINAL_REPLY),
         ev_completed_with_tokens("r2", 80),
     ]);
-    let request_log = mount_sse_once(&server, follow_up_turn).await;
+    let request_log = mount_sse_sequence(&server, vec![compact_turn, follow_up_turn]).await;
 
     let model_provider = non_openai_model_provider(&server);
     let codex = test_codex()
@@ -3351,15 +3336,18 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
     let requests = request_log.requests();
     assert_eq!(
         requests.len(),
-        1,
-        "expected follow-up turn request only after no-op manual /compact"
+        2,
+        "expected manual /compact request and follow-up turn request"
     );
 
     insta::assert_snapshot!(
         "manual_compact_without_prev_user_shapes",
         format_labeled_requests_snapshot(
-            "Manual /compact with no prior user turn is a no-op; the follow-up turn carries canonical context and the new user message.",
-            &[("Local Post-Compaction History Layout", &requests[0])]
+            "Manual /compact with no prior user turn currently still issues a compaction request; follow-up turn carries canonical context and the new user message.",
+            &[
+                ("Local Compaction Request", &requests[0]),
+                ("Local Post-Compaction History Layout", &requests[1]),
+            ]
         )
     );
 }

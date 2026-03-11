@@ -96,17 +96,8 @@ async fn run_compact_task_inner(
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
         .await;
-    let mut history = sess.clone_history().await;
-    if matches!(
-        initial_context_injection,
-        InitialContextInjection::DoNotInject
-    ) && history.raw_items().is_empty()
-    {
-        sess.emit_turn_item_completed(&turn_context, compaction_item)
-            .await;
-        return Ok(());
-    }
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
+    let mut history = sess.clone_history().await;
     history.record_items(
         &[initial_input_for_turn.into()],
         turn_context.truncation_policy,
