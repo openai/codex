@@ -26,6 +26,7 @@ use crate::guardian::guardian_approval_request_to_json;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
 use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
@@ -386,6 +387,16 @@ struct McpToolApprovalPromptOptions {
     allow_persistent_approval: bool,
 }
 
+struct McpToolApprovalElicitationRequest<'a> {
+    server: &'a str,
+    metadata: Option<&'a McpToolApprovalMetadata>,
+    tool_params: Option<&'a serde_json::Value>,
+    tool_params_display: Option<&'a [RenderedMcpToolApprovalParam]>,
+    question: RequestUserInputQuestion,
+    message_override: Option<&'a str>,
+    prompt_options: McpToolApprovalPromptOptions,
+}
+
 const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_call_approval";
 const MCP_TOOL_APPROVAL_ACCEPT: &str = "Allow";
 const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this session";
@@ -535,20 +546,22 @@ async fn maybe_request_mcp_tool_approval(
         let params = build_mcp_tool_approval_elicitation_request(
             sess.as_ref(),
             turn_context.as_ref(),
-            &invocation.server,
-            metadata,
-            rendered_template
-                .as_ref()
-                .and_then(|rendered_template| rendered_template.tool_params.as_ref())
-                .or(invocation.arguments.as_ref()),
-            tool_params_display.as_deref(),
-            question.clone(),
-            rendered_template.as_ref().and_then(|rendered_template| {
-                monitor_reason
-                    .is_none()
-                    .then_some(rendered_template.elicitation_message.as_str())
-            }),
-            prompt_options,
+            McpToolApprovalElicitationRequest {
+                server: &invocation.server,
+                metadata,
+                tool_params: rendered_template
+                    .as_ref()
+                    .and_then(|rendered_template| rendered_template.tool_params.as_ref())
+                    .or(invocation.arguments.as_ref()),
+                tool_params_display: tool_params_display.as_deref(),
+                question,
+                message_override: rendered_template.as_ref().and_then(|rendered_template| {
+                    monitor_reason
+                        .is_none()
+                        .then_some(rendered_template.elicitation_message.as_str())
+                }),
+                prompt_options,
+            },
         );
         let decision = parse_mcp_tool_approval_elicitation_response(
             sess.request_mcp_server_elicitation(turn_context.as_ref(), request_id, params)
@@ -845,31 +858,24 @@ fn arc_monitor_interrupt_message(reason: &str) -> String {
 fn build_mcp_tool_approval_elicitation_request(
     sess: &Session,
     turn_context: &TurnContext,
-    server: &str,
-    metadata: Option<&McpToolApprovalMetadata>,
-    tool_params: Option<&serde_json::Value>,
-    tool_params_display: Option<
-        &[crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam],
-    >,
-    question: RequestUserInputQuestion,
-    message_override: Option<&str>,
-    prompt_options: McpToolApprovalPromptOptions,
+    request: McpToolApprovalElicitationRequest<'_>,
 ) -> McpServerElicitationRequestParams {
-    let message = message_override
+    let message = request
+        .message_override
         .map(ToString::to_string)
-        .unwrap_or_else(|| question.question.trim_end_matches('?').to_string());
+        .unwrap_or_else(|| request.question.question.trim_end_matches('?').to_string());
 
     McpServerElicitationRequestParams {
         thread_id: sess.conversation_id.to_string(),
         turn_id: Some(turn_context.sub_id.clone()),
-        server_name: server.to_string(),
+        server_name: request.server.to_string(),
         request: McpServerElicitationRequest::Form {
             meta: build_mcp_tool_approval_elicitation_meta(
-                server,
-                metadata,
-                tool_params,
-                tool_params_display,
-                prompt_options,
+                request.server,
+                request.metadata,
+                request.tool_params,
+                request.tool_params_display,
+                request.prompt_options,
             ),
             message,
             requested_schema: McpElicitationSchema {
@@ -886,9 +892,7 @@ fn build_mcp_tool_approval_elicitation_meta(
     server: &str,
     metadata: Option<&McpToolApprovalMetadata>,
     tool_params: Option<&serde_json::Value>,
-    tool_params_display: Option<
-        &[crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam],
-    >,
+    tool_params_display: Option<&[RenderedMcpToolApprovalParam]>,
     prompt_options: McpToolApprovalPromptOptions,
 ) -> Option<serde_json::Value> {
     let mut meta = serde_json::Map::new();
@@ -1350,21 +1354,24 @@ mod tests {
         let request = build_mcp_tool_approval_elicitation_request(
             &session,
             &turn_context,
-            CODEX_APPS_MCP_SERVER_NAME,
-            Some(&approval_metadata(
-                Some("calendar"),
-                Some("Calendar"),
-                Some("Manage events and schedules."),
-                Some("Create Event"),
-                Some("Create a calendar event."),
-            )),
-            Some(&serde_json::json!({
-                "Calendar": "primary",
-                "Title": "Roadmap review",
-            })),
-            question,
-            Some("Allow Calendar to create an event"),
-            prompt_options(true, true),
+            McpToolApprovalElicitationRequest {
+                server: CODEX_APPS_MCP_SERVER_NAME,
+                metadata: Some(&approval_metadata(
+                    Some("calendar"),
+                    Some("Calendar"),
+                    Some("Manage events and schedules."),
+                    Some("Create Event"),
+                    Some("Create a calendar event."),
+                )),
+                tool_params: Some(&serde_json::json!({
+                    "Calendar": "primary",
+                    "Title": "Roadmap review",
+                })),
+                tool_params_display: None,
+                question,
+                message_override: Some("Allow Calendar to create an event"),
+                prompt_options: prompt_options(true, true),
+            },
         );
 
         assert_eq!(
