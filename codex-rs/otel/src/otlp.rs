@@ -75,10 +75,26 @@ pub(crate) fn build_http_client(
     tls: &OtelTlsConfig,
     timeout_var: &str,
 ) -> Result<reqwest::blocking::Client, Box<dyn Error>> {
-    if tokio::runtime::Handle::try_current().is_ok() {
+    if current_tokio_runtime_is_multi_thread() {
         tokio::task::block_in_place(|| build_http_client_inner(tls, timeout_var))
+    } else if tokio::runtime::Handle::try_current().is_ok() {
+        let tls = tls.clone();
+        let timeout_var = timeout_var.to_string();
+        std::thread::spawn(move || {
+            build_http_client_inner(&tls, &timeout_var).map_err(|err| err.to_string())
+        })
+        .join()
+        .map_err(|_| config_error("failed to join OTLP blocking HTTP client builder thread"))?
+        .map_err(config_error)
     } else {
         build_http_client_inner(tls, timeout_var)
+    }
+}
+
+pub(crate) fn current_tokio_runtime_is_multi_thread() -> bool {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread,
+        Err(_) => false,
     }
 }
 
@@ -129,6 +145,54 @@ fn build_http_client_inner(
         .map_err(|error| Box::new(error) as Box<dyn Error>)
 }
 
+pub(crate) fn build_async_http_client(
+    tls: Option<&OtelTlsConfig>,
+    timeout_var: &str,
+) -> Result<reqwest::Client, Box<dyn Error>> {
+    let mut builder = reqwest::Client::builder().timeout(resolve_otlp_timeout(timeout_var));
+
+    if let Some(tls) = tls {
+        if let Some(path) = tls.ca_certificate.as_ref() {
+            let (pem, location) = read_bytes(path)?;
+            let certificate = ReqwestCertificate::from_pem(pem.as_slice()).map_err(|error| {
+                config_error(format!(
+                    "failed to parse certificate {}: {error}",
+                    location.display()
+                ))
+            })?;
+            builder = builder
+                .tls_built_in_root_certs(false)
+                .add_root_certificate(certificate);
+        }
+
+        match (&tls.client_certificate, &tls.client_private_key) {
+            (Some(cert_path), Some(key_path)) => {
+                let (mut cert_pem, cert_location) = read_bytes(cert_path)?;
+                let (key_pem, key_location) = read_bytes(key_path)?;
+                cert_pem.extend_from_slice(key_pem.as_slice());
+                let identity = ReqwestIdentity::from_pem(cert_pem.as_slice()).map_err(|error| {
+                    config_error(format!(
+                        "failed to parse client identity using {} and {}: {error}",
+                        cert_location.display(),
+                        key_location.display()
+                    ))
+                })?;
+                builder = builder.identity(identity).https_only(true);
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(config_error(
+                    "client_certificate and client_private_key must both be provided for mTLS",
+                ));
+            }
+            (None, None) => {}
+        }
+    }
+
+    builder
+        .build()
+        .map_err(|error| Box::new(error) as Box<dyn Error>)
+}
+
 pub(crate) fn resolve_otlp_timeout(signal_var: &str) -> Duration {
     if let Some(timeout) = read_timeout_env(signal_var) {
         return timeout;
@@ -160,4 +224,49 @@ fn read_bytes(path: &AbsolutePathBuf) -> Result<(Vec<u8>, PathBuf), Box<dyn Erro
 
 fn config_error(message: impl Into<String>) -> Box<dyn Error> {
     Box::new(io::Error::new(ErrorKind::InvalidData, message.into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use tokio::runtime::Builder;
+
+    #[test]
+    fn current_tokio_runtime_is_multi_thread_detects_runtime_flavor() {
+        assert!(!current_tokio_runtime_is_multi_thread());
+
+        let current_thread_runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+        assert_eq!(
+            current_thread_runtime.block_on(async { current_tokio_runtime_is_multi_thread() }),
+            false
+        );
+
+        let multi_thread_runtime = Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("multi-thread runtime");
+        assert_eq!(
+            multi_thread_runtime.block_on(async { current_tokio_runtime_is_multi_thread() }),
+            true
+        );
+    }
+
+    #[test]
+    fn build_http_client_works_in_current_thread_runtime() {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+
+        let client = runtime.block_on(async {
+            build_http_client(&OtelTlsConfig::default(), OTEL_EXPORTER_OTLP_TIMEOUT)
+        });
+
+        assert!(client.is_ok());
+    }
 }
