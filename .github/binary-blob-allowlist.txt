@@ -1,4 +1,0 @@
-# Paths are matched exactly, relative to the repository root.
-# Keep this list short and limited to intentional large binary assets.
-
-.github/codex-cli-splash.png
