@@ -1,0 +1,24 @@
+running 22 tests
+
+---- suite::landlock::bwrap_populates_minimal_dev_nodes stdout ----
+
+thread 'suite::landlock::bwrap_populates_minimal_dev_nodes' (41549) panicked at linux-sandbox/tests/suite/landlock.rs:247:6:
+sandboxed command should execute: Sandbox(Denied { output: ExecToolCallOutput { exit_code: 1, stderr: StreamOutput { text: "bwrap: setting up uid map: Permission denied\n", truncated_after_lines: None } } })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- suite::landlock::bwrap_preserves_writable_dev_shm_bind_mount stdout ----
+
+thread 'suite::landlock::bwrap_preserves_writable_dev_shm_bind_mount' (41550) panicked at linux-sandbox/tests/suite/landlock.rs:285:6:
+sandboxed command should execute: Sandbox(Denied { output: ExecToolCallOutput { exit_code: 1, stderr: StreamOutput { text: "bwrap: setting up uid map: Permission denied\n", truncated_after_lines: None } } })
+
+---- suite::landlock::test_dev_null_write stdout ----
+
+thread 'suite::landlock::test_dev_null_write' (41619) panicked at linux-sandbox/tests/suite/landlock.rs:223:6:
+sandboxed command should execute: Sandbox(Denied { output: ExecToolCallOutput { exit_code: 1, stderr: StreamOutput { text: "bwrap: setting up uid map: Permission denied\n", truncated_after_lines: None } } })
+
+failures:
+    suite::landlock::bwrap_populates_minimal_dev_nodes
+    suite::landlock::bwrap_preserves_writable_dev_shm_bind_mount
+    suite::landlock::test_dev_null_write
+
+test result: FAILED. 19 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
