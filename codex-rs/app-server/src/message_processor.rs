@@ -41,6 +41,7 @@ use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
+use codex_core::auth::ExternalAuthOverrideGuard;
 use codex_core::auth::ExternalAuthRefreshContext;
 use codex_core::auth::ExternalAuthRefreshReason;
 use codex_core::auth::ExternalAuthRefresher;
@@ -140,6 +141,7 @@ pub(crate) struct MessageProcessor {
     external_agent_config_api: ExternalAgentConfigApi,
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
+    _external_auth_override_guard: ExternalAuthOverrideGuard,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -194,10 +196,12 @@ impl MessageProcessor {
             },
             |thread_manager| thread_manager.auth_manager(),
         );
-        auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
-        auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
-            outgoing: outgoing.clone(),
-        }));
+        let external_auth_override_guard = auth_manager.push_external_auth_override(
+            Arc::new(ExternalAuthRefreshBridge {
+                outgoing: outgoing.clone(),
+            }),
+            config.forced_chatgpt_workspace_id.clone(),
+        );
         let thread_manager = thread_manager.unwrap_or_else(|| {
             Arc::new(ThreadManager::new(
                 config.as_ref(),
@@ -242,6 +246,7 @@ impl MessageProcessor {
             external_agent_config_api,
             config,
             config_warnings: Arc::new(config_warnings),
+            _external_auth_override_guard: external_auth_override_guard,
         }
     }
 

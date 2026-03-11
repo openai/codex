@@ -449,6 +449,7 @@ mod tests {
             id: "call-1".to_string(),
             response: codex_protocol::request_permissions::RequestPermissionsResponse {
                 permissions: codex_protocol::models::PermissionProfile::default(),
+                scope: codex_protocol::request_permissions::PermissionGrantScope::Turn,
             },
         });
 
@@ -783,6 +784,7 @@ mod tests {
             id: "call-1".to_string(),
             response: codex_protocol::request_permissions::RequestPermissionsResponse {
                 permissions: codex_protocol::models::PermissionProfile::default(),
+                scope: codex_protocol::request_permissions::PermissionGrantScope::Turn,
             },
         });
 

@@ -229,11 +229,6 @@ impl MultiSelectPicker {
         self.filtered_indices.len()
     }
 
-    #[cfg(test)]
-    pub(crate) fn search_query(&self) -> &str {
-        &self.search_query
-    }
-
     /// Returns the maximum number of rows that can be displayed at once.
     fn max_visible_rows(len: usize) -> usize {
         MAX_POPUP_ROWS.min(len.max(1))

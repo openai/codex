@@ -3026,6 +3026,7 @@ async fn deferred_request_permissions_keeps_originating_thread_after_switch() {
             id,
             response: codex_protocol::request_permissions::RequestPermissionsResponse {
                 permissions,
+                ..
             },
         } if id == "perm-1"
             && permissions == codex_protocol::models::PermissionProfile::default()

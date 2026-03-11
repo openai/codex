@@ -113,6 +113,18 @@ impl ApprovalRequest {
                 },
             ) => left_thread_id == right_thread_id && left_id == right_id,
             (
+                ApprovalRequest::Permissions {
+                    thread_id: left_thread_id,
+                    call_id: left_call_id,
+                    ..
+                },
+                ApprovalRequest::Permissions {
+                    thread_id: right_thread_id,
+                    call_id: right_call_id,
+                    ..
+                },
+            ) => left_thread_id == right_thread_id && left_call_id == right_call_id,
+            (
                 ApprovalRequest::ApplyPatch {
                     thread_id: left_thread_id,
                     id: left_id,
@@ -421,12 +433,6 @@ impl ApprovalOverlay {
     }
 
     fn try_handle_shortcut(&mut self, key_event: &KeyEvent) -> bool {
-        if matches!(
-            self.current_request.as_ref(),
-            Some(ApprovalRequest::Permissions { .. })
-        ) {
-            return false;
-        }
         match key_event {
             KeyEvent {
                 kind: KeyEventKind::Press,
@@ -447,6 +453,12 @@ impl ApprovalOverlay {
                 code: KeyCode::Char('o'),
                 ..
             } => {
+                if matches!(
+                    self.current_request.as_ref(),
+                    Some(ApprovalRequest::Permissions { .. })
+                ) {
+                    return false;
+                }
                 if let Some(request) = self.current_request.as_ref() {
                     if request.thread_label().is_some() {
                         self.app_event_tx
@@ -1098,6 +1110,34 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_permissions_request_is_not_queued_twice() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let request = make_permissions_request();
+        let mut view = ApprovalOverlay::new(request.clone(), tx, Features::with_defaults());
+
+        view.enqueue_request(request);
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        assert!(
+            view.is_complete(),
+            "expected duplicate permissions request to be ignored instead of remaining queued"
+        );
+
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        let submit_count = events
+            .iter()
+            .filter(|event| matches!(event, AppEvent::SubmitThreadOp { .. }))
+            .count();
+        let history_count = events
+            .iter()
+            .filter(|event| matches!(event, AppEvent::InsertHistoryCell(_)))
+            .count();
+        assert_eq!(submit_count, 1);
+        assert_eq!(history_count, 1);
+    }
+
+    #[test]
     fn o_opens_source_thread_for_cross_thread_approval() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
@@ -1127,14 +1167,14 @@ mod tests {
     }
 
     #[test]
-    fn permissions_picker_allows_o_key_for_search() {
+    fn permissions_prompt_does_not_treat_o_as_cross_thread_shortcut() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
         let mut view = ApprovalOverlay::new(
             ApprovalRequest::Permissions {
                 thread_id: ThreadId::new(),
                 thread_label: Some("Robie [explorer]".to_string()),
-                id: "permission-request".to_string(),
+                call_id: "permission-request".to_string(),
                 reason: Some("need permissions".to_string()),
                 permissions: PermissionProfile {
                     macos: Some(MacOsSeatbeltProfileExtensions {
@@ -1151,7 +1191,7 @@ mod tests {
         view.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
 
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
-        assert_eq!(view.list.search_query_for_test(), "o".to_string());
+        assert_eq!(view.list.search_query_for_test(), "");
     }
 
     #[test]
