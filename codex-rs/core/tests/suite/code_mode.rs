@@ -533,6 +533,80 @@ isError=false"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exports_all_tools_metadata_for_builtin_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+import { ALL_TOOLS } from "tools.js";
+
+const tool = ALL_TOOLS.find(({ module, name }) => module === "tools.js" && name === "exec_command");
+add_content(JSON.stringify(tool));
+"#;
+
+    let (_test, second_mock) =
+        run_code_mode_turn(&server, "use exec to inspect ALL_TOOLS", code, false).await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec ALL_TOOLS lookup failed unexpectedly: {output}"
+    );
+
+    let parsed: Value = serde_json::from_str(&output)?;
+    assert_eq!(
+        parsed,
+        serde_json::json!({
+            "module": "tools.js",
+            "name": "exec_command",
+            "description": "Runs a command in a PTY, returning output or a session ID for ongoing interaction.",
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exports_all_tools_metadata_for_namespaced_mcp_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+import { ALL_TOOLS } from "tools.js";
+
+const tool = ALL_TOOLS.find(
+  ({ module, name }) => module === "tools/mcp/rmcp.js" && name === "echo"
+);
+add_content(JSON.stringify(tool));
+"#;
+
+    let (_test, second_mock) =
+        run_code_mode_turn_with_rmcp(&server, "use exec to inspect ALL_TOOLS", code).await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec ALL_TOOLS MCP lookup failed unexpectedly: {output}"
+    );
+
+    let parsed: Value = serde_json::from_str(&output)?;
+    assert_eq!(
+        parsed,
+        serde_json::json!({
+            "module": "tools/mcp/rmcp.js",
+            "name": "echo",
+            "description": "Echo back the provided message and include environment data.",
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_print_content_only_mcp_tool_result_fields() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
