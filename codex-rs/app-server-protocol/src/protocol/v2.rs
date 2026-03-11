@@ -997,12 +997,16 @@ impl From<AdditionalMacOsPermissions> for CoreMacOsSeatbeltProfileExtensions {
 #[ts(export_to = "v2/")]
 pub struct AdditionalNetworkPermissions {
     pub enabled: Option<bool>,
+    pub allowed_domains: Option<Vec<String>>,
+    pub allow_local_binding: Option<bool>,
 }
 
 impl From<CoreNetworkPermissions> for AdditionalNetworkPermissions {
     fn from(value: CoreNetworkPermissions) -> Self {
         Self {
             enabled: value.enabled,
+            allowed_domains: value.allowed_domains,
+            allow_local_binding: value.allow_local_binding,
         }
     }
 }
@@ -1011,6 +1015,8 @@ impl From<AdditionalNetworkPermissions> for CoreNetworkPermissions {
     fn from(value: AdditionalNetworkPermissions) -> Self {
         Self {
             enabled: value.enabled,
+            allowed_domains: value.allowed_domains,
+            allow_local_binding: value.allow_local_binding,
         }
     }
 }

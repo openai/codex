@@ -1416,6 +1416,7 @@ permissions:
             Some(PermissionProfile {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
+                    ..Default::default()
                 }),
                 file_system: Some(FileSystemPermissions {
                     read: Some(vec![

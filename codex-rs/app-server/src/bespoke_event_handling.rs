@@ -2629,6 +2629,7 @@ mod tests {
     use codex_protocol::models::MacOsAutomationPermission;
     use codex_protocol::models::MacOsPreferencesPermission;
     use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+    use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
     use codex_protocol::protocol::CollabResumeBeginEvent;
@@ -2804,6 +2805,47 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn request_permissions_response_accepts_partial_network_grants() {
+        let requested_permissions = CorePermissionProfile {
+            network: Some(CoreNetworkPermissions {
+                enabled: Some(true),
+                allowed_domains: Some(vec!["api.openai.com".to_string(), "localhost".to_string()]),
+                allow_local_binding: Some(true),
+            }),
+            ..Default::default()
+        };
+
+        let response = request_permissions_response_from_client_result(
+            requested_permissions,
+            Ok(Ok(serde_json::json!({
+                "permissions": {
+                    "network": {
+                        "enabled": true,
+                        "allowedDomains": ["localhost"],
+                        "allowLocalBinding": true,
+                    },
+                },
+            }))),
+        )
+        .expect("response should be accepted");
+
+        assert_eq!(
+            response,
+            CoreRequestPermissionsResponse {
+                permissions: CorePermissionProfile {
+                    network: Some(CoreNetworkPermissions {
+                        enabled: Some(true),
+                        allowed_domains: Some(vec!["localhost".to_string()]),
+                        allow_local_binding: Some(true),
+                    }),
+                    ..Default::default()
+                },
+                scope: CorePermissionGrantScope::Turn,
+            }
+        );
     }
 
     #[test]

@@ -698,6 +698,7 @@ mod tests {
             permissions: PermissionProfile {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
+                    ..Default::default()
                 }),
                 ..PermissionProfile::default()
             },
@@ -723,6 +724,7 @@ mod tests {
                         permissions: PermissionProfile {
                             network: Some(NetworkPermissions {
                                 enabled: Some(true),
+                                ..Default::default()
                             }),
                             ..PermissionProfile::default()
                         },

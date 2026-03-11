@@ -18,6 +18,7 @@ use crate::shell::ShellType;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_command_spec;
+use crate::tools::runtimes::materialize_effective_network_proxy;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::runtimes::shell::zsh_fork_backend;
 use crate::tools::sandboxing::Approvable;
@@ -38,6 +39,7 @@ use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::NetworkProxyHandle;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
@@ -86,6 +88,38 @@ impl Sandboxable for UnifiedExecRuntime<'_> {
     fn escalate_on_failure(&self) -> bool {
         true
     }
+}
+
+struct CompositeSpawnLifecycle {
+    inner: crate::unified_exec::SpawnLifecycleHandle,
+    _network_proxy: Option<NetworkProxyHandle>,
+}
+
+impl crate::unified_exec::SpawnLifecycle for CompositeSpawnLifecycle {
+    fn after_spawn(&mut self) {
+        self.inner.after_spawn();
+    }
+}
+
+impl std::fmt::Debug for CompositeSpawnLifecycle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompositeSpawnLifecycle")
+            .finish_non_exhaustive()
+    }
+}
+
+fn compose_spawn_lifecycle(
+    inner: crate::unified_exec::SpawnLifecycleHandle,
+    network_proxy: Option<NetworkProxyHandle>,
+) -> crate::unified_exec::SpawnLifecycleHandle {
+    if network_proxy.is_none() {
+        return inner;
+    }
+
+    Box::new(CompositeSpawnLifecycle {
+        inner,
+        _network_proxy: network_proxy,
+    })
 }
 
 impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
@@ -186,6 +220,11 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<UnifiedExecProcess, ToolError> {
+        let effective_network = materialize_effective_network_proxy(
+            req.network.as_ref(),
+            req.additional_permissions.as_ref(),
+        )
+        .await?;
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
         let command = maybe_wrap_shell_lc_with_snapshot(
@@ -203,7 +242,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         };
 
         let mut env = req.env.clone();
-        if let Some(network) = req.network.as_ref() {
+        if let Some(network) = effective_network.network.as_ref() {
             network.apply_to_env(&mut env);
         }
         if self.backend == UnifiedExecBackendConfig::ZshFork {
@@ -218,16 +257,18 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             )
             .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
             let exec_env = attempt
-                .env_for(spec, req.network.as_ref())
+                .env_for(spec, effective_network.network.as_ref())
                 .map_err(|err| ToolError::Codex(err.into()))?;
             match zsh_fork_backend::maybe_prepare_unified_exec(req, attempt, ctx, exec_env).await? {
                 Some(prepared) => {
+                    let spawn_lifecycle =
+                        compose_spawn_lifecycle(prepared.spawn_lifecycle, effective_network.handle);
                     return self
                         .manager
                         .open_session_with_exec_env(
                             &prepared.exec_request,
                             req.tty,
-                            prepared.spawn_lifecycle,
+                            spawn_lifecycle,
                         )
                         .await
                         .map_err(|err| match err {
@@ -258,10 +299,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         )
         .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
         let exec_env = attempt
-            .env_for(spec, req.network.as_ref())
+            .env_for(spec, effective_network.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
+        let spawn_lifecycle =
+            compose_spawn_lifecycle(Box::new(NoopSpawnLifecycle), effective_network.handle);
         self.manager
-            .open_session_with_exec_env(&exec_env, req.tty, Box::new(NoopSpawnLifecycle))
+            .open_session_with_exec_env(&exec_env, req.tty, spawn_lifecycle)
             .await
             .map_err(|err| match err {
                 UnifiedExecError::SandboxDenied { output, .. } => {

@@ -7,7 +7,7 @@ expression: "normalize_snapshot_paths(render_overlay_lines(&view, 120))"
 
   Reason: need workspace access
 
-  Permission rule: network; read `/tmp/readme.txt`; write `/tmp/out.txt`
+  Permission rule: network; allow domains localhost; allow local binding; read `/tmp/readme.txt`; write `/tmp/out.txt`
 
 › 1. Yes, grant these permissions (y)
   2. Yes, grant these permissions for this session (a)

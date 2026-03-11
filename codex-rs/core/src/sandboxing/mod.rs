@@ -25,6 +25,7 @@ use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use crate::tools::sandboxing::SandboxablePreference;
 use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::normalize_host;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
@@ -150,6 +151,14 @@ pub(crate) fn normalize_additional_permissions(
 ) -> Result<PermissionProfile, String> {
     let network = additional_permissions
         .network
+        .map(|network| NetworkPermissions {
+            enabled: network.enabled.filter(|enabled| *enabled),
+            allowed_domains: network
+                .allowed_domains
+                .map(normalize_allowed_domains)
+                .filter(|allowed_domains| !allowed_domains.is_empty()),
+            allow_local_binding: network.allow_local_binding.filter(|allow| *allow),
+        })
         .filter(|network| !network.is_empty());
     let file_system = additional_permissions
         .file_system
@@ -183,21 +192,27 @@ pub(crate) fn merge_permission_profiles(
     match base {
         Some(base) => {
             let network = match (base.network.as_ref(), permissions.network.as_ref()) {
-                (
-                    Some(NetworkPermissions {
-                        enabled: Some(true),
-                    }),
-                    _,
-                )
-                | (
-                    _,
-                    Some(NetworkPermissions {
-                        enabled: Some(true),
-                    }),
-                ) => Some(NetworkPermissions {
-                    enabled: Some(true),
-                }),
-                _ => None,
+                (Some(base), Some(permissions)) => Some(NetworkPermissions {
+                    enabled: Some(
+                        base.enabled.unwrap_or(false) || permissions.enabled.unwrap_or(false),
+                    )
+                    .filter(|enabled| *enabled),
+                    allowed_domains: merge_allowed_domains(
+                        base.allowed_domains.as_ref(),
+                        permissions.allowed_domains.as_ref(),
+                    ),
+                    allow_local_binding: Some(
+                        base.allow_local_binding.unwrap_or(false)
+                            || permissions.allow_local_binding.unwrap_or(false),
+                    )
+                    .filter(|allow| *allow),
+                })
+                .filter(|network| !network.is_empty()),
+                (Some(base), None) => Some(base.clone()).filter(|network| !network.is_empty()),
+                (None, Some(permissions)) => {
+                    Some(permissions.clone()).filter(|network| !network.is_empty())
+                }
+                (None, None) => None,
             };
             let file_system = match (base.file_system.as_ref(), permissions.file_system.as_ref()) {
                 (Some(base), Some(permissions)) => Some(FileSystemPermissions {
@@ -257,16 +272,20 @@ pub fn intersect_permission_profiles(
         })
         .filter(|file_system| !file_system.is_empty());
     let network = match (requested.network, granted.network) {
-        (
-            Some(NetworkPermissions {
-                enabled: Some(true),
-            }),
-            Some(NetworkPermissions {
-                enabled: Some(true),
-            }),
-        ) => Some(NetworkPermissions {
-            enabled: Some(true),
-        }),
+        (Some(requested), Some(granted)) => Some(NetworkPermissions {
+            enabled: Some(requested.enabled.unwrap_or(false) && granted.enabled.unwrap_or(false))
+                .filter(|enabled| *enabled),
+            allowed_domains: intersect_allowed_domains(
+                requested.allowed_domains.as_ref(),
+                granted.allowed_domains.as_ref(),
+            ),
+            allow_local_binding: Some(
+                requested.allow_local_binding.unwrap_or(false)
+                    && granted.allow_local_binding.unwrap_or(false),
+            )
+            .filter(|allow| *allow),
+        })
+        .filter(|network| !network.is_empty()),
         _ => None,
     };
 
@@ -320,6 +339,73 @@ fn merge_permission_paths(
         (None, Some(permissions)) => Some(permissions.clone()),
         (None, None) => None,
     }
+}
+
+fn normalize_allowed_domains(allowed_domains: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::with_capacity(allowed_domains.len());
+    let mut seen = HashSet::with_capacity(allowed_domains.len());
+
+    for allowed_domain in allowed_domains {
+        let host = normalize_host(&allowed_domain);
+        if seen.insert(host.clone()) {
+            normalized.push(host);
+        }
+    }
+
+    normalized
+}
+
+fn merge_allowed_domains(
+    base: Option<&Vec<String>>,
+    permissions: Option<&Vec<String>>,
+) -> Option<Vec<String>> {
+    match (base, permissions) {
+        (Some(base), Some(permissions)) => {
+            let mut merged = Vec::with_capacity(base.len() + permissions.len());
+            let mut seen = HashSet::with_capacity(base.len() + permissions.len());
+
+            for allowed_domain in base.iter().chain(permissions.iter()) {
+                let host = normalize_host(allowed_domain);
+                if seen.insert(host.clone()) {
+                    merged.push(host);
+                }
+            }
+
+            Some(merged).filter(|allowed_domains| !allowed_domains.is_empty())
+        }
+        (Some(base), None) => {
+            Some(base.clone()).filter(|allowed_domains| !allowed_domains.is_empty())
+        }
+        (None, Some(permissions)) => {
+            Some(permissions.clone()).filter(|allowed_domains| !allowed_domains.is_empty())
+        }
+        (None, None) => None,
+    }
+}
+
+fn intersect_allowed_domains(
+    requested: Option<&Vec<String>>,
+    granted: Option<&Vec<String>>,
+) -> Option<Vec<String>> {
+    let (Some(requested), Some(granted)) = (requested, granted) else {
+        return None;
+    };
+
+    let granted = granted
+        .iter()
+        .map(|allowed_domain| normalize_host(allowed_domain))
+        .collect::<HashSet<_>>();
+    let mut intersected = Vec::new();
+    let mut seen = HashSet::new();
+
+    for allowed_domain in requested {
+        let host = normalize_host(allowed_domain);
+        if granted.contains(&host) && seen.insert(host.clone()) {
+            intersected.push(host);
+        }
+    }
+
+    Some(intersected).filter(|allowed_domains| !allowed_domains.is_empty())
 }
 
 fn dedup_absolute_paths(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
@@ -724,6 +810,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::intersect_permission_profiles;
     use super::merge_file_system_policy_with_additional_permissions;
+    use super::merge_permission_profiles;
     use super::normalize_additional_permissions;
     use super::sandbox_policy_with_additional_permissions;
     use super::should_require_platform_sandbox;
@@ -909,6 +996,7 @@ mod tests {
         let permissions = normalize_additional_permissions(PermissionProfile {
             network: Some(NetworkPermissions {
                 enabled: Some(true),
+                ..Default::default()
             }),
             file_system: Some(FileSystemPermissions {
                 read: Some(vec![path.clone()]),
@@ -922,6 +1010,7 @@ mod tests {
             permissions.network,
             Some(NetworkPermissions {
                 enabled: Some(true),
+                ..Default::default()
             })
         );
         assert_eq!(
@@ -934,9 +1023,38 @@ mod tests {
     }
 
     #[test]
+    fn normalize_additional_permissions_normalizes_network_domains() {
+        let permissions = normalize_additional_permissions(PermissionProfile {
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
+                allowed_domains: Some(vec![
+                    "ExAmPlE.com".to_string(),
+                    "example.com".to_string(),
+                    "*.OpenAI.com".to_string(),
+                ]),
+                allow_local_binding: Some(true),
+            }),
+            ..Default::default()
+        })
+        .expect("permissions");
+
+        assert_eq!(
+            permissions.network,
+            Some(NetworkPermissions {
+                enabled: Some(true),
+                allowed_domains: Some(vec!["example.com".to_string(), "*.openai.com".to_string(),]),
+                allow_local_binding: Some(true),
+            })
+        );
+    }
+
+    #[test]
     fn normalize_additional_permissions_drops_empty_nested_profiles() {
         let permissions = normalize_additional_permissions(PermissionProfile {
-            network: Some(NetworkPermissions { enabled: None }),
+            network: Some(NetworkPermissions {
+                enabled: None,
+                ..Default::default()
+            }),
             file_system: Some(FileSystemPermissions {
                 read: None,
                 write: None,
@@ -946,6 +1064,83 @@ mod tests {
         .expect("permissions");
 
         assert_eq!(permissions, PermissionProfile::default());
+    }
+
+    #[test]
+    fn merge_permission_profiles_unions_network_permissions() {
+        let merged = merge_permission_profiles(
+            Some(&PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                    allowed_domains: Some(vec!["api.openai.com".to_string()]),
+                    allow_local_binding: None,
+                }),
+                ..Default::default()
+            }),
+            Some(&PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: None,
+                    allowed_domains: Some(vec![
+                        "API.OpenAI.com".to_string(),
+                        "localhost".to_string(),
+                    ]),
+                    allow_local_binding: Some(true),
+                }),
+                ..Default::default()
+            }),
+        );
+
+        assert_eq!(
+            merged,
+            Some(PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                    allowed_domains: Some(vec![
+                        "api.openai.com".to_string(),
+                        "localhost".to_string(),
+                    ]),
+                    allow_local_binding: Some(true),
+                }),
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn intersect_permission_profiles_filters_network_domains_to_granted_subset() {
+        let intersected = intersect_permission_profiles(
+            PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                    allowed_domains: Some(vec![
+                        "api.openai.com".to_string(),
+                        "localhost".to_string(),
+                    ]),
+                    allow_local_binding: Some(true),
+                }),
+                ..Default::default()
+            },
+            PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                    allowed_domains: Some(vec!["LOCALHOST".to_string()]),
+                    allow_local_binding: Some(true),
+                }),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            intersected,
+            PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                    allowed_domains: Some(vec!["localhost".to_string()]),
+                    allow_local_binding: Some(true),
+                }),
+                ..Default::default()
+            }
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -1051,6 +1246,7 @@ mod tests {
             &PermissionProfile {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
+                    ..Default::default()
                 }),
                 file_system: Some(FileSystemPermissions {
                     read: Some(vec![path.clone()]),
@@ -1140,6 +1336,7 @@ mod tests {
             &PermissionProfile {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
+                    ..Default::default()
                 }),
                 file_system: Some(FileSystemPermissions {
                     read: Some(vec![path]),
@@ -1178,6 +1375,7 @@ mod tests {
                     additional_permissions: Some(PermissionProfile {
                         network: Some(NetworkPermissions {
                             enabled: Some(true),
+                            ..Default::default()
                         }),
                         file_system: Some(FileSystemPermissions {
                             read: Some(vec![path]),

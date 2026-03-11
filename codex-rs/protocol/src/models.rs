@@ -80,11 +80,18 @@ impl FileSystemPermissions {
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct NetworkPermissions {
     pub enabled: Option<bool>,
+    pub allowed_domains: Option<Vec<String>>,
+    pub allow_local_binding: Option<bool>,
 }
 
 impl NetworkPermissions {
     pub fn is_empty(&self) -> bool {
-        self.enabled.is_none()
+        self.enabled != Some(true)
+            && self
+                .allowed_domains
+                .as_ref()
+                .is_none_or(|allowed_domains| allowed_domains.is_empty())
+            && self.allow_local_binding != Some(true)
     }
 }
 
@@ -1453,7 +1460,10 @@ mod tests {
     #[test]
     fn permission_profile_is_not_empty_when_field_is_present_but_nested_empty() {
         let permission_profile = PermissionProfile {
-            network: Some(NetworkPermissions { enabled: None }),
+            network: Some(NetworkPermissions {
+                enabled: None,
+                ..Default::default()
+            }),
             file_system: None,
             macos: None,
         };

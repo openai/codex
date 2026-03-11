@@ -823,6 +823,7 @@ mod tests {
                     EscalationPermissions::PermissionProfile(PermissionProfile {
                         network: Some(NetworkPermissions {
                             enabled: Some(true),
+                            ..Default::default()
                         }),
                         ..Default::default()
                     }),
@@ -832,6 +833,7 @@ mod tests {
                 expected_permissions: EscalationPermissions::PermissionProfile(PermissionProfile {
                     network: Some(NetworkPermissions {
                         enabled: Some(true),
+                        ..Default::default()
                     }),
                     ..Default::default()
                 }),

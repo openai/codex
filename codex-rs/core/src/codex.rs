@@ -781,6 +781,13 @@ impl TurnContext {
             session_source: self.session_source.clone(),
         })
         .with_web_search_config(self.tools_config.web_search_config.clone())
+        .with_network_proxy_enabled(
+            self.config
+                .permissions
+                .network
+                .as_ref()
+                .is_some_and(|network| network.enabled()),
+        )
         .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_agent_roles(config.agent_roles.clone());
 
@@ -1189,6 +1196,13 @@ impl Session {
             session_source: session_source.clone(),
         })
         .with_web_search_config(per_turn_config.web_search_config.clone())
+        .with_network_proxy_enabled(
+            per_turn_config
+                .permissions
+                .network
+                .as_ref()
+                .is_some_and(|network| network.enabled()),
+        )
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_agent_roles(per_turn_config.agent_roles.clone());
 

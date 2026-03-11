@@ -4863,6 +4863,7 @@ exclude_slash_tmp = false
             }),
             network: Some(NetworkPermissions {
                 enabled: Some(true),
+                ..Default::default()
             }),
             macos: Some(MacOsSeatbeltProfileExtensions {
                 macos_preferences: MacOsPreferencesPermission::ReadWrite,

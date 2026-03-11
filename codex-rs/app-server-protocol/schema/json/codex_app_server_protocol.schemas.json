@@ -49,6 +49,21 @@
     },
     "AdditionalNetworkPermissions": {
       "properties": {
+        "allowLocalBinding": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allowedDomains": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "enabled": {
           "type": [
             "boolean",
@@ -6380,6 +6395,21 @@
     },
     "NetworkPermissions": {
       "properties": {
+        "allow_local_binding": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "enabled": {
           "type": [
             "boolean",

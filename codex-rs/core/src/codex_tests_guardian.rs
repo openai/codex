@@ -146,6 +146,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
                     "additional_permissions": PermissionProfile {
                         network: Some(NetworkPermissions {
                             enabled: Some(true),
+                            ..Default::default()
                         }),
                         file_system: None,
                         macos: None,

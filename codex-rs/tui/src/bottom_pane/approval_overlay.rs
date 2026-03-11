@@ -765,6 +765,22 @@ pub(crate) fn format_additional_permissions_rule(
     {
         parts.push("network".to_string());
     }
+    if let Some(allowed_domains) = additional_permissions
+        .network
+        .as_ref()
+        .and_then(|network| network.allowed_domains.as_ref())
+        && !allowed_domains.is_empty()
+    {
+        parts.push(format!("allow domains {}", allowed_domains.join(", ")));
+    }
+    if additional_permissions
+        .network
+        .as_ref()
+        .and_then(|network| network.allow_local_binding)
+        .unwrap_or(false)
+    {
+        parts.push("allow local binding".to_string());
+    }
     if let Some(file_system) = additional_permissions.file_system.as_ref() {
         if let Some(read) = file_system.read.as_ref() {
             let reads = read
@@ -966,6 +982,8 @@ mod tests {
             permissions: PermissionProfile {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
+                    allowed_domains: Some(vec!["localhost".to_string()]),
+                    allow_local_binding: Some(true),
                 }),
                 file_system: Some(FileSystemPermissions {
                     read: Some(vec![absolute_path("/tmp/readme.txt")]),
@@ -1353,6 +1371,8 @@ mod tests {
             additional_permissions: Some(PermissionProfile {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
+                    allowed_domains: Some(vec!["localhost".to_string()]),
+                    allow_local_binding: Some(true),
                 }),
                 file_system: Some(FileSystemPermissions {
                     read: Some(vec![absolute_path("/tmp/readme.txt")]),
@@ -1384,6 +1404,18 @@ mod tests {
             rendered.iter().any(|line| line.contains("network;")),
             "expected network permission text, got {rendered:?}"
         );
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("allow domains localhost")),
+            "expected allowed domains text, got {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("allow local binding")),
+            "expected local binding text, got {rendered:?}"
+        );
     }
 
     #[test]
@@ -1401,6 +1433,8 @@ mod tests {
             additional_permissions: Some(PermissionProfile {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
+                    allowed_domains: Some(vec!["localhost".to_string()]),
+                    allow_local_binding: Some(true),
                 }),
                 file_system: Some(FileSystemPermissions {
                     read: Some(vec![absolute_path("/tmp/readme.txt")]),

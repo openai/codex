@@ -2274,6 +2274,7 @@ async fn notify_request_permissions_response_ignores_unmatched_call_id() {
                 permissions: codex_protocol::models::PermissionProfile {
                     network: Some(codex_protocol::models::NetworkPermissions {
                         enabled: Some(true),
+                        ..Default::default()
                     }),
                     ..Default::default()
                 },
@@ -2309,6 +2310,7 @@ async fn request_permissions_emits_event_when_reject_policy_allows_requests() {
         permissions: codex_protocol::models::PermissionProfile {
             network: Some(codex_protocol::models::NetworkPermissions {
                 enabled: Some(true),
+                ..Default::default()
             }),
             ..Default::default()
         },
@@ -2329,6 +2331,7 @@ async fn request_permissions_emits_event_when_reject_policy_allows_requests() {
                         permissions: codex_protocol::models::PermissionProfile {
                             network: Some(codex_protocol::models::NetworkPermissions {
                                 enabled: Some(true),
+                                ..Default::default()
                             }),
                             ..Default::default()
                         },
@@ -2385,6 +2388,7 @@ async fn request_permissions_returns_empty_grant_when_reject_policy_blocks_reque
                 permissions: codex_protocol::models::PermissionProfile {
                     network: Some(codex_protocol::models::NetworkPermissions {
                         enabled: Some(true),
+                        ..Default::default()
                     }),
                     ..Default::default()
                 },
@@ -2424,6 +2428,7 @@ async fn notify_request_permissions_response_persists_always_allow_permissions()
     let permissions = PermissionProfile {
         network: Some(NetworkPermissions {
             enabled: Some(true),
+            ..Default::default()
         }),
         file_system: Some(FileSystemPermissions {
             read: None,

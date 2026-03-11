@@ -67,6 +67,7 @@ pub(crate) struct ToolsConfig {
     pub search_tool: bool,
     pub request_permission_enabled: bool,
     pub request_permissions_tool_enabled: bool,
+    pub network_proxy_enabled: bool,
     pub code_mode_enabled: bool,
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
@@ -172,6 +173,7 @@ impl ToolsConfig {
             search_tool: include_search_tool,
             request_permission_enabled,
             request_permissions_tool_enabled,
+            network_proxy_enabled: false,
             code_mode_enabled: include_code_mode,
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
@@ -197,6 +199,11 @@ impl ToolsConfig {
 
     pub fn with_web_search_config(mut self, web_search_config: Option<WebSearchConfig>) -> Self {
         self.web_search_config = web_search_config;
+        self
+    }
+
+    pub fn with_network_proxy_enabled(mut self, network_proxy_enabled: bool) -> Self {
+        self.network_proxy_enabled = network_proxy_enabled;
         self
     }
 
@@ -267,14 +274,37 @@ impl From<JsonSchema> for AdditionalProperties {
     }
 }
 
-fn create_network_permissions_schema() -> JsonSchema {
-    JsonSchema::Object {
-        properties: BTreeMap::from([(
-            "enabled".to_string(),
-            JsonSchema::Boolean {
-                description: Some("Set to true to request network access.".to_string()),
+fn create_network_permissions_schema(network_proxy_enabled: bool) -> JsonSchema {
+    let mut properties = BTreeMap::from([(
+        "enabled".to_string(),
+        JsonSchema::Boolean {
+            description: Some("Set to true to request network access.".to_string()),
+        },
+    )]);
+    if network_proxy_enabled {
+        properties.insert(
+            "allowed_domains".to_string(),
+            JsonSchema::Array {
+                items: Box::new(JsonSchema::String { description: None }),
+                description: Some(
+                    "Hostnames to add to the network proxy allowlist for this permission grant."
+                        .to_string(),
+                ),
             },
-        )]),
+        );
+        properties.insert(
+            "allow_local_binding".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "Set to true to allow requests to localhost and other local/private network addresses when network proxy is enabled."
+                        .to_string(),
+                ),
+            },
+        );
+    }
+
+    JsonSchema::Object {
+        properties,
         required: None,
         additional_properties: Some(false.into()),
     }
@@ -340,10 +370,13 @@ fn create_macos_permissions_schema() -> JsonSchema {
     }
 }
 
-fn create_permissions_schema() -> JsonSchema {
+fn create_permissions_schema(network_proxy_enabled: bool) -> JsonSchema {
     JsonSchema::Object {
         properties: BTreeMap::from([
-            ("network".to_string(), create_network_permissions_schema()),
+            (
+                "network".to_string(),
+                create_network_permissions_schema(network_proxy_enabled),
+            ),
             (
                 "file_system".to_string(),
                 create_file_system_permissions_schema(),
@@ -355,7 +388,10 @@ fn create_permissions_schema() -> JsonSchema {
     }
 }
 
-fn create_approval_parameters(request_permission_enabled: bool) -> BTreeMap<String, JsonSchema> {
+fn create_approval_parameters(
+    request_permission_enabled: bool,
+    network_proxy_enabled: bool,
+) -> BTreeMap<String, JsonSchema> {
     let mut properties = BTreeMap::from([
         (
             "sandbox_permissions".to_string(),
@@ -399,14 +435,18 @@ fn create_approval_parameters(request_permission_enabled: bool) -> BTreeMap<Stri
     if request_permission_enabled {
         properties.insert(
             "additional_permissions".to_string(),
-            create_permissions_schema(),
+            create_permissions_schema(network_proxy_enabled),
         );
     }
 
     properties
 }
 
-fn create_exec_command_tool(allow_login_shell: bool, request_permission_enabled: bool) -> ToolSpec {
+fn create_exec_command_tool(
+    allow_login_shell: bool,
+    request_permission_enabled: bool,
+    network_proxy_enabled: bool,
+) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "cmd".to_string(),
@@ -466,7 +506,10 @@ fn create_exec_command_tool(allow_login_shell: bool, request_permission_enabled:
             },
         );
     }
-    properties.extend(create_approval_parameters(request_permission_enabled));
+    properties.extend(create_approval_parameters(
+        request_permission_enabled,
+        network_proxy_enabled,
+    ));
 
     ToolSpec::Function(ResponsesApiTool {
         name: "exec_command".to_string(),
@@ -529,7 +572,7 @@ fn create_write_stdin_tool() -> ToolSpec {
     })
 }
 
-fn create_shell_tool(request_permission_enabled: bool) -> ToolSpec {
+fn create_shell_tool(request_permission_enabled: bool, network_proxy_enabled: bool) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "command".to_string(),
@@ -551,7 +594,10 @@ fn create_shell_tool(request_permission_enabled: bool) -> ToolSpec {
             },
         ),
     ]);
-    properties.extend(create_approval_parameters(request_permission_enabled));
+    properties.extend(create_approval_parameters(
+        request_permission_enabled,
+        network_proxy_enabled,
+    ));
 
     let description  = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
@@ -585,6 +631,7 @@ Examples of valid command strings:
 fn create_shell_command_tool(
     allow_login_shell: bool,
     request_permission_enabled: bool,
+    network_proxy_enabled: bool,
 ) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
@@ -619,7 +666,10 @@ fn create_shell_command_tool(
             },
         );
     }
-    properties.extend(create_approval_parameters(request_permission_enabled));
+    properties.extend(create_approval_parameters(
+        request_permission_enabled,
+        network_proxy_enabled,
+    ));
 
     let description = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output.
@@ -1105,7 +1155,7 @@ fn create_request_user_input_tool(
     })
 }
 
-fn create_request_permissions_tool() -> ToolSpec {
+fn create_request_permissions_tool(network_proxy_enabled: bool) -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
         "reason".to_string(),
@@ -1115,7 +1165,10 @@ fn create_request_permissions_tool() -> ToolSpec {
             ),
         },
     );
-    properties.insert("permissions".to_string(), create_permissions_schema());
+    properties.insert(
+        "permissions".to_string(),
+        create_permissions_schema(network_proxy_enabled),
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "request_permissions".to_string(),
@@ -1935,7 +1988,7 @@ pub(crate) fn build_specs(
     match &config.shell_type {
         ConfigShellToolType::Default => {
             builder.push_spec_with_parallel_support(
-                create_shell_tool(request_permission_enabled),
+                create_shell_tool(request_permission_enabled, config.network_proxy_enabled),
                 true,
             );
         }
@@ -1944,7 +1997,11 @@ pub(crate) fn build_specs(
         }
         ConfigShellToolType::UnifiedExec => {
             builder.push_spec_with_parallel_support(
-                create_exec_command_tool(config.allow_login_shell, request_permission_enabled),
+                create_exec_command_tool(
+                    config.allow_login_shell,
+                    request_permission_enabled,
+                    config.network_proxy_enabled,
+                ),
                 true,
             );
             builder.push_spec(create_write_stdin_tool());
@@ -1956,7 +2013,11 @@ pub(crate) fn build_specs(
         }
         ConfigShellToolType::ShellCommand => {
             builder.push_spec_with_parallel_support(
-                create_shell_command_tool(config.allow_login_shell, request_permission_enabled),
+                create_shell_command_tool(
+                    config.allow_login_shell,
+                    request_permission_enabled,
+                    config.network_proxy_enabled,
+                ),
                 true,
             );
         }
@@ -1997,7 +2058,9 @@ pub(crate) fn build_specs(
     }
 
     if config.request_permissions_tool_enabled {
-        builder.push_spec(create_request_permissions_tool());
+        builder.push_spec(create_request_permissions_tool(
+            config.network_proxy_enabled,
+        ));
         builder.register_handler("request_permissions", request_permissions_handler);
     }
 
@@ -2367,7 +2430,7 @@ mod tests {
         // Build expected from the same helpers used by the builder.
         let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
         for spec in [
-            create_exec_command_tool(true, false),
+            create_exec_command_tool(true, false, false),
             create_write_stdin_tool(),
             PLAN_TOOL.clone(),
             create_request_user_input_tool(CollaborationModesConfig::default()),
@@ -2385,7 +2448,7 @@ mod tests {
         }
 
         if config.request_permission_enabled {
-            let spec = create_request_permissions_tool();
+            let spec = create_request_permissions_tool(config.network_proxy_enabled);
             expected.insert(tool_name(&spec).to_string(), spec);
         }
 
@@ -2544,7 +2607,7 @@ mod tests {
         let request_permissions_tool = find_tool(&tools, "request_permissions");
         assert_eq!(
             request_permissions_tool.spec,
-            create_request_permissions_tool()
+            create_request_permissions_tool(false)
         );
     }
 
@@ -3681,7 +3744,7 @@ mod tests {
 
     #[test]
     fn test_shell_tool() {
-        let tool = super::create_shell_tool(false);
+        let tool = super::create_shell_tool(false, false);
         let ToolSpec::Function(ResponsesApiTool {
             description, name, ..
         }) = &tool
@@ -3711,7 +3774,7 @@ Examples of valid command strings:
 
     #[test]
     fn shell_tool_with_request_permission_includes_additional_permissions() {
-        let tool = super::create_shell_tool(true);
+        let tool = super::create_shell_tool(true, false);
         let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
             panic!("expected function tool");
         };
@@ -3744,7 +3807,7 @@ Examples of valid command strings:
 
     #[test]
     fn request_permissions_tool_includes_full_permission_schema() {
-        let tool = super::create_request_permissions_tool();
+        let tool = super::create_request_permissions_tool(true);
         let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
             panic!("expected function tool");
         };
@@ -3773,8 +3836,13 @@ Examples of valid command strings:
         else {
             panic!("expected network object");
         };
+
         assert_eq!(additional_properties, &Some(false.into()));
         assert!(network_properties.contains_key("enabled"));
+        assert_eq!(additional_properties, &Some(false.into()));
+        assert!(network_properties.contains_key("enabled"));
+        assert!(network_properties.contains_key("allowed_domains"));
+        assert!(network_properties.contains_key("allow_local_binding"));
 
         let Some(JsonSchema::Object {
             properties: file_system_properties,
@@ -3804,8 +3872,37 @@ Examples of valid command strings:
     }
 
     #[test]
+    fn request_permissions_tool_hides_proxy_only_network_permissions_without_network_proxy() {
+        let tool = super::create_request_permissions_tool(false);
+        let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
+            panic!("expected function tool");
+        };
+        let JsonSchema::Object { properties, .. } = parameters else {
+            panic!("expected object parameters");
+        };
+        let Some(JsonSchema::Object {
+            properties: permission_properties,
+            ..
+        }) = properties.get("permissions")
+        else {
+            panic!("expected permissions object");
+        };
+        let Some(JsonSchema::Object {
+            properties: network_properties,
+            ..
+        }) = permission_properties.get("network")
+        else {
+            panic!("expected network object");
+        };
+
+        assert!(network_properties.contains_key("enabled"));
+        assert!(!network_properties.contains_key("allowed_domains"));
+        assert!(!network_properties.contains_key("allow_local_binding"));
+    }
+
+    #[test]
     fn test_shell_command_tool() {
-        let tool = super::create_shell_command_tool(true, false);
+        let tool = super::create_shell_command_tool(true, false, false);
         let ToolSpec::Function(ResponsesApiTool {
             description, name, ..
         }) = &tool

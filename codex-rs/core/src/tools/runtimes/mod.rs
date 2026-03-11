@@ -11,13 +11,48 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::skills::SkillMetadata;
 use crate::tools::sandboxing::ToolError;
+use async_trait::async_trait;
+use codex_network_proxy::ConfigReloader;
+use codex_network_proxy::ConfigState;
+use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::NetworkProxyHandle;
+use codex_network_proxy::NetworkProxyState;
+use codex_network_proxy::build_config_state;
+use codex_network_proxy::normalize_host;
 use codex_protocol::models::PermissionProfile;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Arc;
 
 pub mod apply_patch;
 pub mod shell;
 pub mod unified_exec;
+
+pub(crate) struct EffectiveNetworkProxy {
+    pub(crate) network: Option<NetworkProxy>,
+    pub(crate) handle: Option<NetworkProxyHandle>,
+}
+
+#[derive(Clone)]
+struct StaticNetworkProxyReloader;
+
+#[async_trait]
+impl ConfigReloader for StaticNetworkProxyReloader {
+    async fn maybe_reload(&self) -> anyhow::Result<Option<ConfigState>> {
+        Ok(None)
+    }
+
+    async fn reload_now(&self) -> anyhow::Result<ConfigState> {
+        Err(anyhow::anyhow!(
+            "reload_now is unsupported for static network proxy state"
+        ))
+    }
+
+    fn source_label(&self) -> String {
+        "StaticNetworkProxyReloader".to_string()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ExecveSessionApproval {
@@ -51,6 +86,75 @@ pub(crate) fn build_command_spec(
         additional_permissions,
         justification,
     })
+}
+
+pub(crate) async fn materialize_effective_network_proxy(
+    network: Option<&NetworkProxy>,
+    additional_permissions: Option<&PermissionProfile>,
+) -> Result<EffectiveNetworkProxy, ToolError> {
+    let Some(base_network) = network else {
+        return Ok(EffectiveNetworkProxy {
+            network: None,
+            handle: None,
+        });
+    };
+    let Some(additional_network) = additional_permissions
+        .and_then(|permissions| permissions.network.as_ref())
+        .filter(|network| {
+            network
+                .allowed_domains
+                .as_ref()
+                .is_some_and(|allowed_domains| !allowed_domains.is_empty())
+                || network.allow_local_binding == Some(true)
+        })
+    else {
+        return Ok(EffectiveNetworkProxy {
+            network: Some(base_network.clone()),
+            handle: None,
+        });
+    };
+
+    let mut config = base_network.current_cfg().await.map_err(|err| {
+        ToolError::Rejected(format!("failed to read network proxy config: {err}"))
+    })?;
+    if let Some(allowed_domains) = additional_network.allowed_domains.as_ref() {
+        merge_allowed_domains(&mut config.network.allowed_domains, allowed_domains);
+    }
+    if additional_network.allow_local_binding == Some(true) {
+        config.network.allow_local_binding = true;
+    }
+
+    let state = build_config_state(config, Default::default()).map_err(|err| {
+        ToolError::Rejected(format!("failed to build network proxy state: {err}"))
+    })?;
+    let state = NetworkProxyState::with_reloader(state, Arc::new(StaticNetworkProxyReloader));
+    let proxy = NetworkProxy::builder()
+        .state(Arc::new(state))
+        .build()
+        .await
+        .map_err(|err| ToolError::Rejected(format!("failed to build network proxy: {err}")))?;
+    let handle = proxy
+        .run()
+        .await
+        .map_err(|err| ToolError::Rejected(format!("failed to run network proxy: {err}")))?;
+
+    Ok(EffectiveNetworkProxy {
+        network: Some(proxy),
+        handle: Some(handle),
+    })
+}
+
+fn merge_allowed_domains(target: &mut Vec<String>, additional_domains: &[String]) {
+    let mut seen = target
+        .iter()
+        .map(|allowed_domain| normalize_host(allowed_domain))
+        .collect::<HashSet<_>>();
+    for allowed_domain in additional_domains {
+        let host = normalize_host(allowed_domain);
+        if seen.insert(host.clone()) {
+            target.push(host);
+        }
+    }
 }
 
 /// POSIX-only helper: for commands produced by `Shell::derive_exec_args`

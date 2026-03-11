@@ -5,6 +5,7 @@ use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_core::features::Feature;
 use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -34,6 +35,9 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 
 fn absolute_path(path: &Path) -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(path).expect("absolute path")
@@ -59,6 +63,17 @@ fn exec_command_event(call_id: &str, command: &str) -> Result<Value> {
     });
     let args_str = serde_json::to_string(&args)?;
     Ok(ev_function_call(call_id, "exec_command", &args_str))
+}
+
+fn requested_network_permissions(allowed_domain: &str) -> PermissionProfile {
+    PermissionProfile {
+        network: Some(NetworkPermissions {
+            enabled: Some(true),
+            allowed_domains: Some(vec![allowed_domain.to_string()]),
+            allow_local_binding: Some(true),
+        }),
+        ..Default::default()
+    }
 }
 
 fn build_add_file_patch(patch_path: &Path, content: &str) -> String {
@@ -127,6 +142,25 @@ fn parse_result(item: &Value) -> (Option<i64>, String) {
             }
         }
     }
+}
+
+async fn spawn_loopback_http_server(response_body: &str) -> Result<u16> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let response_body = response_body.to_string();
+    tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            return;
+        };
+        let mut request_buf = [0_u8; 2048];
+        let _ = stream.read(&mut request_buf).await;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+            response_body.len()
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+    });
+    Ok(port)
 }
 
 async fn submit_turn(
@@ -415,6 +449,146 @@ async fn approved_folder_write_request_permissions_unblocks_later_apply_patch_wi
         fs::read_to_string(&requested_file)?,
         "patched-via-request-permissions\n"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(target_os = "macos")]
+async fn approved_network_request_permissions_unblock_later_exec_with_network_proxy() -> Result<()>
+{
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let home = Arc::new(tempfile::TempDir::new()?);
+    fs::write(
+        home.path().join("config.toml"),
+        r#"default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+":minimal" = "read"
+
+[permissions.workspace.network]
+enabled = true
+mode = "limited"
+allow_local_binding = false
+
+[features]
+request_permissions = true
+request_permissions_tool = true
+"#,
+    )?;
+
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = workspace_write_excluding_tmp();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let mut builder = test_codex().with_home(home).with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+
+    let proxy_addr = test
+        .session_configured
+        .network_proxy
+        .as_ref()
+        .expect("expected network proxy runtime")
+        .http_addr
+        .clone();
+    let port = spawn_loopback_http_server("network-grant-ok").await?;
+    let command = format!(
+        concat!(
+            "python3 -c \"import urllib.request; ",
+            "proxy = urllib.request.ProxyHandler({{'http': 'http://{}'}}); ",
+            "opener = urllib.request.build_opener(proxy); ",
+            "print(opener.open('http://localhost:{}', timeout=30).read().decode())\""
+        ),
+        proxy_addr, port
+    );
+    let requested_permissions = requested_network_permissions("localhost");
+
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-request-permissions-network-1"),
+                request_permissions_tool_event(
+                    "permissions-call",
+                    "Allow localhost through the network proxy",
+                    &requested_permissions,
+                )?,
+                ev_completed("resp-request-permissions-network-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-request-permissions-network-2"),
+                exec_command_event("exec-call", &command)?,
+                ev_completed("resp-request-permissions-network-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-request-permissions-network-3"),
+                ev_assistant_message("msg-request-permissions-network-1", "done"),
+                ev_completed("resp-request-permissions-network-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "fetch localhost through the network proxy",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+
+    let granted_permissions = expect_request_permissions_event(&test, "permissions-call").await;
+    assert_eq!(granted_permissions, requested_permissions.clone());
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: "permissions-call".to_string(),
+            response: RequestPermissionsResponse {
+                permissions: requested_permissions,
+                scope: PermissionGrantScope::Turn,
+            },
+        })
+        .await?;
+
+    let completion_event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    if let EventMsg::ExecApprovalRequest(approval) = completion_event {
+        test.codex
+            .submit(Op::ExecApproval {
+                id: approval.effective_approval_id(),
+                turn_id: None,
+                decision: ReviewDecision::Approved,
+            })
+            .await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
+
+    let exec_output = responses
+        .function_call_output_text("exec-call")
+        .map(|output| json!({ "output": output }))
+        .unwrap_or_else(|| panic!("expected exec-call output"));
+    let (exit_code, stdout) = parse_result(&exec_output);
+    assert!(exit_code.is_none() || exit_code == Some(0));
+    assert!(stdout.contains("network-grant-ok"));
 
     Ok(())
 }
