@@ -34,7 +34,11 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
+use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::review_approval_request;
+use crate::guardian::routes_approval_to_guardian;
 use crate::models_manager::manager::ModelsManager;
+use crate::sandboxing::SandboxPermissions;
 use codex_protocol::protocol::InitialHistory;
 
 #[cfg(test)]
@@ -361,6 +365,31 @@ async fn handle_exec_approval(
         available_decisions,
         ..
     } = event;
+    if routes_approval_to_guardian(parent_ctx) {
+        let decision = review_approval_request(
+            parent_session,
+            parent_ctx,
+            GuardianApprovalRequest::Shell {
+                id: approval_id_for_op.clone(),
+                command,
+                cwd,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                additional_permissions,
+                justification: None,
+            },
+            None,
+        )
+        .await;
+
+        let _ = codex
+            .submit(Op::ExecApproval {
+                id: approval_id_for_op,
+                turn_id: Some(turn_id),
+                decision,
+            })
+            .await;
+        return;
+    }
     // Race approval with cancellation and timeout to avoid hangs.
     let approval_fut = parent_session.request_command_approval(
         parent_ctx,
