@@ -2968,7 +2968,7 @@ async fn deferred_request_user_input_keeps_originating_thread_after_switch() {
     let original_thread_id = ThreadId::new();
     let switched_thread_id = ThreadId::new();
     chat.thread_id = Some(original_thread_id);
-    chat.stream_controller = Some(StreamController::new(None));
+    chat.stream_controller = Some(StreamController::new(None, &chat.config.cwd));
 
     chat.on_request_user_input(RequestUserInputEvent {
         call_id: "call-1".to_string(),
@@ -3002,7 +3002,7 @@ async fn deferred_request_permissions_keeps_originating_thread_after_switch() {
     let original_thread_id = ThreadId::new();
     let switched_thread_id = ThreadId::new();
     chat.thread_id = Some(original_thread_id);
-    chat.stream_controller = Some(StreamController::new(None));
+    chat.stream_controller = Some(StreamController::new(None, &chat.config.cwd));
 
     chat.on_request_permissions(
         codex_protocol::request_permissions::RequestPermissionsEvent {
