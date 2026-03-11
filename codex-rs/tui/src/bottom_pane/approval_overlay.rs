@@ -495,6 +495,28 @@ impl BottomPaneView for ApprovalOverlay {
             .or_else(|| self.queue.first().map(ApprovalRequest::thread_id))
     }
 
+    fn dismiss_on_turn_interrupt(&mut self, interrupted_thread_id: ThreadId) -> bool {
+        if self.preserve_on_turn_interrupt() {
+            return true;
+        }
+
+        self.queue
+            .retain(|request| request.thread_id() != interrupted_thread_id);
+
+        if self
+            .current_request
+            .as_ref()
+            .is_some_and(|request| request.thread_id() == interrupted_thread_id)
+        {
+            self.current_request = None;
+            self.current_complete = false;
+            self.options.clear();
+            self.advance_queue();
+        }
+
+        !self.done
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.try_handle_shortcut(&key_event) {
             return;

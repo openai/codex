@@ -82,6 +82,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
+use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
@@ -275,7 +276,7 @@ struct ThreadEventSnapshot {
 
 #[derive(Debug, Clone)]
 enum ThreadReplayItem {
-    Event(Event),
+    Event(Box<Event>),
     HistoryCell(Arc<dyn HistoryCell>),
 }
 
@@ -343,7 +344,7 @@ impl ThreadEventStore {
             return;
         }
         self.replay_timeline
-            .push_back(ThreadReplayItem::Event(event));
+            .push_back(ThreadReplayItem::Event(Box::new(event)));
         self.evict_oldest_replay_item();
     }
 
@@ -360,7 +361,7 @@ impl ThreadEventStore {
                     ThreadReplayItem::Event(event) => self
                         .pending_interactive_replay
                         .should_replay_snapshot_event(event)
-                        .then(|| ThreadReplayItem::Event(event.clone())),
+                        .then(|| ThreadReplayItem::Event(Box::new((**event).clone()))),
                     ThreadReplayItem::HistoryCell(cell) => {
                         Some(ThreadReplayItem::HistoryCell(cell.clone()))
                     }
@@ -713,6 +714,7 @@ pub(crate) struct App {
     pub(crate) overlay: Option<Overlay>,
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
     has_emitted_history_lines: bool,
+    pending_replay_rollbacks_to_ignore: u32,
 
     pub(crate) enhanced_keys_supported: bool,
 
@@ -1853,11 +1855,8 @@ impl App {
             .restore_thread_input_state(snapshot.input_state);
         for item in snapshot.replay_timeline {
             match item {
-                ThreadReplayItem::Event(event) => self.handle_codex_event_replay(event),
-                ThreadReplayItem::HistoryCell(cell) => {
-                    self.app_event_tx
-                        .send(AppEvent::InsertReplayHistoryCell(cell));
-                }
+                ThreadReplayItem::Event(event) => self.handle_codex_event_replay(*event),
+                ThreadReplayItem::HistoryCell(cell) => self.insert_replayed_history_cell(cell),
             }
         }
         self.chat_widget.set_queue_autosend_suppressed(false);
@@ -1887,6 +1886,24 @@ impl App {
             } else {
                 tui.insert_history_lines(display);
             }
+        }
+    }
+
+    fn insert_replayed_history_cell(&mut self, cell: Arc<dyn HistoryCell>) {
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            t.insert_cell(cell.clone());
+        }
+        self.transcript_cells.push(cell.clone());
+        let mut display = cell.display_lines(u16::MAX);
+        if !display.is_empty() {
+            if !cell.is_stream_continuation() {
+                if self.has_emitted_history_lines {
+                    display.insert(0, Line::from(""));
+                } else {
+                    self.has_emitted_history_lines = true;
+                }
+            }
+            self.deferred_history_lines.extend(display);
         }
     }
 
@@ -2167,6 +2184,7 @@ impl App {
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
+            pending_replay_rollbacks_to_ignore: 0,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
             backtrack: BacktrackState::default(),
@@ -2565,9 +2583,6 @@ impl App {
             AppEvent::InsertHistoryCell(cell) => {
                 self.insert_history_cell(tui, cell.into());
             }
-            AppEvent::InsertReplayHistoryCell(cell) => {
-                self.insert_history_cell(tui, cell);
-            }
             AppEvent::InsertThreadHistoryCell { thread_id, cell } => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
                 if let Some(channel) = self.thread_event_channels.get(&thread_id) {
@@ -2579,7 +2594,9 @@ impl App {
                 }
             }
             AppEvent::ApplyThreadRollback { num_turns } => {
-                if self.apply_non_pending_thread_rollback(num_turns) {
+                if self.pending_replay_rollbacks_to_ignore > 0 {
+                    self.pending_replay_rollbacks_to_ignore -= 1;
+                } else if self.apply_non_pending_thread_rollback(num_turns) {
                     tui.frame_requester().schedule_frame();
                 }
             }
@@ -3730,6 +3747,20 @@ impl App {
     }
 
     fn handle_codex_event_replay(&mut self, event: Event) {
+        if let EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns }) = &event.msg {
+            if self.transcript_cells.is_empty() {
+                self.app_event_tx.send(AppEvent::ApplyThreadRollback {
+                    num_turns: *num_turns,
+                });
+            } else {
+                self.pending_replay_rollbacks_to_ignore =
+                    self.pending_replay_rollbacks_to_ignore.saturating_add(1);
+                crate::app_backtrack::trim_transcript_cells_drop_last_n_user_turns(
+                    &mut self.transcript_cells,
+                    *num_turns,
+                );
+            }
+        }
         self.chat_widget.handle_codex_event_replay(event);
     }
 
@@ -4842,13 +4873,13 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                replay_timeline: vec![ThreadReplayItem::Event(Event {
+                replay_timeline: vec![ThreadReplayItem::Event(Box::new(Event {
                     id: "turn-complete".to_string(),
                     msg: EventMsg::TurnComplete(TurnCompleteEvent {
                         turn_id: "turn-1".to_string(),
                         last_agent_message: None,
                     }),
-                })],
+                }))],
                 input_state: Some(input_state),
             },
             true,
@@ -4924,13 +4955,13 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                replay_timeline: vec![ThreadReplayItem::Event(Event {
+                replay_timeline: vec![ThreadReplayItem::Event(Box::new(Event {
                     id: "turn-complete".to_string(),
                     msg: EventMsg::TurnComplete(TurnCompleteEvent {
                         turn_id: "turn-1".to_string(),
                         last_agent_message: None,
                     }),
-                })],
+                }))],
                 input_state: Some(input_state),
             },
             false,
@@ -5079,21 +5110,21 @@ mod tests {
             ThreadEventSnapshot {
                 session_configured: None,
                 replay_timeline: vec![
-                    ThreadReplayItem::Event(Event {
+                    ThreadReplayItem::Event(Box::new(Event {
                         id: "older-turn-complete".to_string(),
                         msg: EventMsg::TurnComplete(TurnCompleteEvent {
                             turn_id: "turn-0".to_string(),
                             last_agent_message: None,
                         }),
-                    }),
-                    ThreadReplayItem::Event(Event {
+                    })),
+                    ThreadReplayItem::Event(Box::new(Event {
                         id: "latest-turn-started".to_string(),
                         msg: EventMsg::TurnStarted(TurnStartedEvent {
                             turn_id: "turn-1".to_string(),
                             model_context_window: None,
                             collaboration_mode_kind: Default::default(),
                         }),
-                    }),
+                    })),
                 ],
                 input_state: Some(input_state),
             },
@@ -5439,13 +5470,13 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                replay_timeline: vec![ThreadReplayItem::Event(Event {
+                replay_timeline: vec![ThreadReplayItem::Event(Box::new(Event {
                     id: "turn-aborted".to_string(),
                     msg: EventMsg::TurnAborted(TurnAbortedEvent {
                         turn_id: Some("turn-1".to_string()),
                         reason: TurnAbortReason::ReviewEnded,
                     }),
-                })],
+                }))],
                 input_state: Some(input_state),
             },
             true,
@@ -5464,7 +5495,7 @@ mod tests {
 
     #[tokio::test]
     async fn replay_thread_snapshot_keeps_local_history_cells_in_rollback_order() {
-        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
 
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
@@ -5476,10 +5507,10 @@ mod tests {
                         local_image_paths: Vec::new(),
                         remote_image_urls: Vec::new(),
                     })),
-                    ThreadReplayItem::Event(Event {
+                    ThreadReplayItem::Event(Box::new(Event {
                         id: "rollback".to_string(),
                         msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
-                    }),
+                    })),
                     ThreadReplayItem::HistoryCell(Arc::new(UserHistoryCell {
                         message: "second local prompt".to_string(),
                         text_elements: Vec::new(),
@@ -5491,25 +5522,6 @@ mod tests {
             },
             false,
         );
-
-        assert!(
-            app.transcript_cells.is_empty(),
-            "snapshot replay should enqueue local cells instead of appending them directly"
-        );
-
-        while let Ok(event) = app_event_rx.try_recv() {
-            match event {
-                AppEvent::InsertReplayHistoryCell(cell) => app.transcript_cells.push(cell),
-                AppEvent::InsertHistoryCell(cell) => app.transcript_cells.push(cell.into()),
-                AppEvent::ApplyThreadRollback { num_turns } => {
-                    crate::app_backtrack::trim_transcript_cells_drop_last_n_user_turns(
-                        &mut app.transcript_cells,
-                        num_turns,
-                    );
-                }
-                _ => {}
-            }
-        }
 
         let user_messages: Vec<String> = app
             .transcript_cells
@@ -6547,6 +6559,7 @@ mod tests {
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
+            pending_replay_rollbacks_to_ignore: 0,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -6611,6 +6624,7 @@ mod tests {
                 overlay: None,
                 deferred_history_lines: Vec::new(),
                 has_emitted_history_lines: false,
+                pending_replay_rollbacks_to_ignore: 0,
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
                 status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -7436,7 +7450,6 @@ mod tests {
             }),
         });
 
-        let mut saw_rollback = false;
         while let Ok(event) = app_event_rx.try_recv() {
             match event {
                 AppEvent::InsertHistoryCell(cell) => {
@@ -7444,7 +7457,6 @@ mod tests {
                     app.transcript_cells.push(cell);
                 }
                 AppEvent::ApplyThreadRollback { num_turns } => {
-                    saw_rollback = true;
                     crate::app_backtrack::trim_transcript_cells_drop_last_n_user_turns(
                         &mut app.transcript_cells,
                         num_turns,
@@ -7454,7 +7466,6 @@ mod tests {
             }
         }
 
-        assert!(saw_rollback);
         let user_messages: Vec<String> = app
             .transcript_cells
             .iter()

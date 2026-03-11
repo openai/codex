@@ -846,12 +846,8 @@ impl BottomPane {
             return;
         }
 
-        self.view_stack.retain(|view| {
-            view.preserve_on_turn_interrupt()
-                || view
-                    .thread_id()
-                    .is_some_and(|thread_id| thread_id != interrupted_thread_id)
-        });
+        self.view_stack
+            .retain_mut(|view| view.dismiss_on_turn_interrupt(interrupted_thread_id));
         if self.view_stack.is_empty() {
             self.on_active_view_complete();
         }
@@ -1995,6 +1991,7 @@ mod tests {
             label: &'static str,
             thread_id: Option<ThreadId>,
             preserve_on_interrupt: bool,
+            keep_on_interrupt: bool,
             dropped: Rc<RefCell<Vec<&'static str>>>,
         }
 
@@ -2020,6 +2017,17 @@ mod tests {
             fn thread_id(&self) -> Option<ThreadId> {
                 self.thread_id
             }
+
+            fn dismiss_on_turn_interrupt(&mut self, interrupted_thread_id: ThreadId) -> bool {
+                if self.keep_on_interrupt && self.thread_id == Some(interrupted_thread_id) {
+                    self.thread_id = Some(ThreadId::new());
+                    return true;
+                }
+                self.preserve_on_turn_interrupt()
+                    || self
+                        .thread_id
+                        .is_some_and(|thread_id| thread_id != interrupted_thread_id)
+            }
         }
 
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -2042,24 +2050,35 @@ mod tests {
             label: "other-thread",
             thread_id: Some(other_thread_id),
             preserve_on_interrupt: false,
+            keep_on_interrupt: false,
             dropped: Rc::clone(&dropped),
         }));
         pane.push_view(Box::new(TestView {
             label: "preserved",
             thread_id: Some(interrupted_thread_id),
             preserve_on_interrupt: true,
+            keep_on_interrupt: false,
+            dropped: Rc::clone(&dropped),
+        }));
+        pane.push_view(Box::new(TestView {
+            label: "queued-other-thread",
+            thread_id: Some(interrupted_thread_id),
+            preserve_on_interrupt: false,
+            keep_on_interrupt: true,
             dropped: Rc::clone(&dropped),
         }));
         pane.push_view(Box::new(TestView {
             label: "interrupted-thread",
             thread_id: Some(interrupted_thread_id),
             preserve_on_interrupt: false,
+            keep_on_interrupt: false,
             dropped: Rc::clone(&dropped),
         }));
         pane.push_view(Box::new(TestView {
             label: "unscoped",
             thread_id: None,
             preserve_on_interrupt: false,
+            keep_on_interrupt: false,
             dropped: Rc::clone(&dropped),
         }));
 

@@ -29,7 +29,6 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
-use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RealtimeAudioDeviceKind {
@@ -168,9 +167,6 @@ pub(crate) enum AppEvent {
     },
 
     InsertHistoryCell(Box<dyn HistoryCell>),
-
-    /// Insert a replayed history cell whose ownership is already shared.
-    InsertReplayHistoryCell(Arc<dyn HistoryCell>),
 
     /// Apply rollback semantics to local transcript cells.
     ///

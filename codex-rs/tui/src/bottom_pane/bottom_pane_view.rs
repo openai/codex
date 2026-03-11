@@ -99,4 +99,13 @@ pub(crate) trait BottomPaneView: Renderable {
     fn thread_id(&self) -> Option<ThreadId> {
         None
     }
+
+    /// Drop interrupted-thread state while preserving queued work for other
+    /// threads when possible. Returns `true` if the view should remain visible.
+    fn dismiss_on_turn_interrupt(&mut self, interrupted_thread_id: ThreadId) -> bool {
+        self.preserve_on_turn_interrupt()
+            || self
+                .thread_id()
+                .is_some_and(|thread_id| thread_id != interrupted_thread_id)
+    }
 }

@@ -395,7 +395,7 @@ mod tests {
             .replay_timeline
             .iter()
             .filter_map(|item| match item {
-                ThreadReplayItem::Event(event) => Some(event),
+                ThreadReplayItem::Event(event) => Some(event.as_ref()),
                 ThreadReplayItem::HistoryCell(_) => None,
             })
             .collect()
