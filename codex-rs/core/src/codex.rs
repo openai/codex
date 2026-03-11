@@ -6229,7 +6229,7 @@ async fn run_sampling_request(
     }
 }
 
-pub(crate) async fn built_tools(
+async fn built_tools(
     sess: &Session,
     turn_context: &TurnContext,
     input: &[ResponseItem],
