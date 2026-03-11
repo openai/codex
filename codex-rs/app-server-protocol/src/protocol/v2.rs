@@ -2285,6 +2285,12 @@ pub struct ThreadStartParams {
     pub personality: Option<Personality>,
     #[ts(optional = nullable)]
     pub ephemeral: Option<bool>,
+    #[experimental("thread/start.builtinTools")]
+    #[ts(optional = nullable)]
+    pub builtin_tools: Option<Vec<String>>,
+    #[experimental("thread/start.manualToolExecution")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual_tool_execution: bool,
     #[experimental("thread/start.dynamicTools")]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,

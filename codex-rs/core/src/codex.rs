@@ -364,6 +364,8 @@ impl Codex {
         conversation_history: InitialHistory,
         session_source: SessionSource,
         agent_control: AgentControl,
+        builtin_tools: Option<Vec<String>>,
+        manual_tool_execution: bool,
         dynamic_tools: Vec<DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
@@ -492,7 +494,6 @@ impl Codex {
         } else {
             dynamic_tools
         };
-
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
         let collaboration_mode = CollaborationMode {
@@ -525,6 +526,8 @@ impl Codex {
             metrics_service_name,
             app_server_client_name: None,
             session_source,
+            builtin_tools,
+            manual_tool_execution,
             dynamic_tools,
             persist_extended_history,
             inherited_shell_snapshot,
@@ -786,6 +789,8 @@ impl TurnContext {
         })
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
+        .with_builtin_tools(self.tools_config.requested_builtin_tools.clone())
+        .with_manual_tool_execution(self.tools_config.manual_tool_execution)
         .with_agent_roles(config.agent_roles.clone());
 
         Self {
@@ -945,6 +950,8 @@ pub(crate) struct SessionConfiguration {
     app_server_client_name: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
+    builtin_tools: Option<Vec<String>>,
+    manual_tool_execution: bool,
     dynamic_tools: Vec<DynamicToolSpec>,
     persist_extended_history: bool,
     inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -1196,6 +1203,8 @@ impl Session {
         })
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
+        .with_builtin_tools(session_configuration.builtin_tools.clone())
+        .with_manual_tool_execution(session_configuration.manual_tool_execution)
         .with_agent_roles(per_turn_config.agent_roles.clone());
 
         let cwd = session_configuration.cwd.clone();
@@ -5153,6 +5162,13 @@ async fn spawn_review_thread(
     })
     .with_web_search_config(None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
+    .with_builtin_tools(
+        parent_turn_context
+            .tools_config
+            .requested_builtin_tools
+            .clone(),
+    )
+    .with_manual_tool_execution(parent_turn_context.tools_config.manual_tool_execution)
     .with_agent_roles(config.agent_roles.clone());
 
     let review_prompt = resolved.prompt.clone();

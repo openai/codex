@@ -50,9 +50,19 @@ pub(crate) async fn apply_patch(
         } => InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
             action,
             auto_approved: !user_explicitly_approved,
-            exec_approval_requirement: ExecApprovalRequirement::Skip {
-                bypass_sandbox: false,
-                proposed_execpolicy_amendment: None,
+            exec_approval_requirement: if turn_context
+                .tools_config
+                .should_force_manual_tool_execution()
+            {
+                ExecApprovalRequirement::NeedsApproval {
+                    reason: None,
+                    proposed_execpolicy_amendment: None,
+                }
+            } else {
+                ExecApprovalRequirement::Skip {
+                    bypass_sandbox: false,
+                    proposed_execpolicy_amendment: None,
+                }
             },
         }),
         SafetyCheck::AskUser => {

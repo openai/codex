@@ -66,6 +66,8 @@ pub(crate) async fn run_codex_thread_interactive(
         initial_history.unwrap_or(InitialHistory::New),
         SessionSource::SubAgent(subagent_source),
         parent_session.services.agent_control.clone(),
+        None,
+        false,
         Vec::new(),
         false,
         None,

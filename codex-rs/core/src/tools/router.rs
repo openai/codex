@@ -46,6 +46,10 @@ impl ToolRouter {
     ) -> Self {
         let builder = build_specs(config, mcp_tools, app_tools, dynamic_tools);
         let (specs, registry) = builder.build();
+        let specs = specs
+            .into_iter()
+            .filter(|spec| !spec.builtin || config.builtin_tool_enabled(spec.spec.name()))
+            .collect();
 
         Self { registry, specs }
     }
@@ -340,6 +344,59 @@ mod tests {
                 assert!(
                     !content.contains("direct tool calls are disabled"),
                     "js_repl source should bypass direct-call policy gate"
+                );
+            }
+            other => panic!("expected function call output, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn builtin_tool_allowlist_blocks_dispatch_for_hidden_builtin() -> anyhow::Result<()> {
+        let (session, mut turn) = make_session_and_context().await;
+        turn.tools_config.requested_builtin_tools = Some(vec!["apply_patch".to_string()]);
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let mcp_tools = session
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .list_all_tools()
+            .await;
+        let app_tools = Some(mcp_tools.clone());
+        let router = ToolRouter::from_config(
+            &turn.tools_config,
+            Some(
+                mcp_tools
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect(),
+            ),
+            app_tools,
+            turn.dynamic_tools.as_slice(),
+        );
+
+        let call = ToolCall {
+            tool_name: "shell".to_string(),
+            call_id: "call-3".to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+        };
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let response = router
+            .dispatch_tool_call(session, turn, tracker, call, ToolCallSource::Direct)
+            .await?;
+
+        match response {
+            ResponseInputItem::FunctionCallOutput { output, .. } => {
+                let content = output.text_content().unwrap_or_default();
+                assert!(
+                    content.contains("unsupported call: shell"),
+                    "unexpected tool call message: {content}",
                 );
             }
             other => panic!("expected function call output, got {other:?}"),

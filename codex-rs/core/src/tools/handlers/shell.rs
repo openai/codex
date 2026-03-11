@@ -411,6 +411,14 @@ impl ShellHandler {
                 prefix_rule,
             })
             .await;
+        let exec_approval_requirement = if turn.tools_config.should_force_manual_tool_execution() {
+            crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            }
+        } else {
+            exec_approval_requirement
+        };
 
         let req = ShellRequest {
             command: exec_params.command.clone(),

@@ -298,6 +298,8 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         InitialHistory::New,
         SessionSource::SubAgent(SubAgentSource::Other(GUARDIAN_SUBAGENT_NAME.to_string())),
         AgentControl::default(),
+        None,
+        false,
         Vec::new(),
         false,
         None,

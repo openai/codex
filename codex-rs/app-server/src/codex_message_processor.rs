@@ -1818,6 +1818,8 @@ impl CodexMessageProcessor {
             service_name,
             base_instructions,
             developer_instructions,
+            builtin_tools,
+            manual_tool_execution,
             dynamic_tools,
             mock_experimental_field: _mock_experimental_field,
             experimental_raw_events,
@@ -1856,6 +1858,8 @@ impl CodexMessageProcessor {
                 request_id,
                 config,
                 typesafe_overrides,
+                builtin_tools,
+                manual_tool_execution,
                 dynamic_tools,
                 persist_extended_history,
                 service_name,
@@ -1873,6 +1877,8 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
+        builtin_tools: Option<Vec<String>>,
+        manual_tool_execution: bool,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         persist_extended_history: bool,
         service_name: Option<String>,
@@ -1902,6 +1908,20 @@ impl CodexMessageProcessor {
         };
 
         let dynamic_tools = dynamic_tools.unwrap_or_default();
+        if let Some(ref builtin_tools) = builtin_tools
+            && let Err(message) = codex_core::validate_builtin_tools_request(builtin_tools)
+        {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message,
+                data: None,
+            };
+            listener_task_context
+                .outgoing
+                .send_error(request_id, error)
+                .await;
+            return;
+        }
         let core_dynamic_tools = if dynamic_tools.is_empty() {
             Vec::new()
         } else {
@@ -1931,6 +1951,8 @@ impl CodexMessageProcessor {
             .thread_manager
             .start_thread_with_tools_and_service_name(
                 config,
+                builtin_tools,
+                manual_tool_execution,
                 core_dynamic_tools,
                 persist_extended_history,
                 service_name,

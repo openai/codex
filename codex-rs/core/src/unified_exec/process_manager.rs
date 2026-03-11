@@ -26,6 +26,7 @@ use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::ToolCtx;
 use crate::truncate::approx_token_count;
 use crate::unified_exec::ExecCommandRequest;
@@ -593,6 +594,18 @@ impl UnifiedExecProcessManager {
                 prefix_rule: request.prefix_rule.clone(),
             })
             .await;
+        let exec_approval_requirement = if context
+            .turn
+            .tools_config
+            .should_force_manual_tool_execution()
+        {
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            }
+        } else {
+            exec_approval_requirement
+        };
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
             cwd,

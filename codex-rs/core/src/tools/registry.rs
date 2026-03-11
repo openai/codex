@@ -9,9 +9,11 @@ use crate::function_tool::FunctionCallError;
 use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::SandboxPolicy;
 use crate::sandbox_tags::sandbox_tag;
+use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
 use async_trait::async_trait;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterToolUse;
@@ -21,8 +23,92 @@ use codex_hooks::HookToolInput;
 use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_utils_readiness::Readiness;
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 use tracing::warn;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumIter)]
+pub(crate) enum BuiltinToolKey {
+    CodeMode,
+    ExecCommand,
+    WriteStdin,
+    ListMcpResources,
+    ListMcpResourceTemplates,
+    ReadMcpResource,
+    UpdatePlan,
+    JsRepl,
+    JsReplReset,
+    RequestUserInput,
+    RequestPermissions,
+    SearchToolBm25,
+    ApplyPatch,
+    GrepFiles,
+    ReadFile,
+    ListDir,
+    TestSyncTool,
+    WebSearch,
+    ImageGeneration,
+    ViewImage,
+    Artifacts,
+    SpawnAgent,
+    SendInput,
+    ResumeAgent,
+    Wait,
+    CloseAgent,
+    SpawnAgentsOnCsv,
+    ReportAgentJobResult,
+}
+
+impl BuiltinToolKey {
+    pub(crate) const fn invocation_names(self) -> &'static [&'static str] {
+        match self {
+            Self::CodeMode => &[PUBLIC_TOOL_NAME],
+            Self::ExecCommand => &[
+                "exec_command",
+                "shell",
+                "container.exec",
+                "local_shell",
+                "shell_command",
+            ],
+            Self::WriteStdin => &["write_stdin"],
+            Self::ListMcpResources => &["list_mcp_resources"],
+            Self::ListMcpResourceTemplates => &["list_mcp_resource_templates"],
+            Self::ReadMcpResource => &["read_mcp_resource"],
+            Self::UpdatePlan => &["update_plan"],
+            Self::JsRepl => &["js_repl"],
+            Self::JsReplReset => &["js_repl_reset"],
+            Self::RequestUserInput => &["request_user_input"],
+            Self::RequestPermissions => &["request_permissions"],
+            Self::SearchToolBm25 => &[SEARCH_TOOL_BM25_TOOL_NAME],
+            Self::ApplyPatch => &["apply_patch"],
+            Self::GrepFiles => &["grep_files"],
+            Self::ReadFile => &["read_file"],
+            Self::ListDir => &["list_dir"],
+            Self::TestSyncTool => &["test_sync_tool"],
+            Self::WebSearch => &["web_search"],
+            Self::ImageGeneration => &["image_generation"],
+            Self::ViewImage => &[VIEW_IMAGE_TOOL_NAME],
+            Self::Artifacts => &["artifacts"],
+            Self::SpawnAgent => &["spawn_agent"],
+            Self::SendInput => &["send_input"],
+            Self::ResumeAgent => &["resume_agent"],
+            Self::Wait => &["wait"],
+            Self::CloseAgent => &["close_agent"],
+            Self::SpawnAgentsOnCsv => &["spawn_agents_on_csv"],
+            Self::ReportAgentJobResult => &["report_agent_job_result"],
+        }
+    }
+}
+
+pub(crate) fn builtin_tool_key(name: &str) -> Option<BuiltinToolKey> {
+    BuiltinToolKey::iter().find(|key| key.invocation_names().contains(&name))
+}
+
+pub(crate) fn builtin_tool_invocation_names() -> impl Iterator<Item = &'static str> {
+    BuiltinToolKey::iter().flat_map(|key| key.invocation_names().iter().copied())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ToolKind {
@@ -123,11 +209,18 @@ where
 
 pub struct ToolRegistry {
     handlers: HashMap<String, Arc<dyn AnyToolHandler>>,
+    builtin_handler_names: std::collections::HashSet<String>,
 }
 
 impl ToolRegistry {
-    fn new(handlers: HashMap<String, Arc<dyn AnyToolHandler>>) -> Self {
-        Self { handlers }
+    fn new(
+        handlers: HashMap<String, Arc<dyn AnyToolHandler>>,
+        builtin_handler_names: std::collections::HashSet<String>,
+    ) -> Self {
+        Self {
+            handlers,
+            builtin_handler_names,
+        }
     }
 
     fn handler(&self, name: &str) -> Option<Arc<dyn AnyToolHandler>> {
@@ -147,6 +240,16 @@ impl ToolRegistry {
         invocation: ToolInvocation,
     ) -> Result<AnyToolResult, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
+        if self.builtin_handler_names.contains(tool_name.as_str())
+            && !invocation
+                .turn
+                .tools_config
+                .builtin_tool_enabled(tool_name.as_str())
+        {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "unsupported call: {tool_name}"
+            )));
+        }
         let call_id_owned = invocation.call_id.clone();
         let otel = invocation.turn.session_telemetry.clone();
         let payload_for_response = invocation.payload.clone();
@@ -301,19 +404,22 @@ impl ToolRegistry {
 pub struct ConfiguredToolSpec {
     pub spec: ToolSpec,
     pub supports_parallel_tool_calls: bool,
+    pub builtin: bool,
 }
 
 impl ConfiguredToolSpec {
-    pub fn new(spec: ToolSpec, supports_parallel_tool_calls: bool) -> Self {
+    pub fn new(spec: ToolSpec, supports_parallel_tool_calls: bool, builtin: bool) -> Self {
         Self {
             spec,
             supports_parallel_tool_calls,
+            builtin,
         }
     }
 }
 
 pub struct ToolRegistryBuilder {
     handlers: HashMap<String, Arc<dyn AnyToolHandler>>,
+    builtin_handler_names: std::collections::HashSet<String>,
     specs: Vec<ConfiguredToolSpec>,
 }
 
@@ -321,24 +427,68 @@ impl ToolRegistryBuilder {
     pub fn new() -> Self {
         Self {
             handlers: HashMap::new(),
+            builtin_handler_names: std::collections::HashSet::new(),
             specs: Vec::new(),
         }
     }
 
-    pub fn push_spec(&mut self, spec: ToolSpec) {
-        self.push_spec_with_parallel_support(spec, false);
+    pub fn push_spec(&mut self, key: BuiltinToolKey, spec: ToolSpec) {
+        self.push_spec_with_parallel_support(key, spec, false);
     }
 
     pub fn push_spec_with_parallel_support(
         &mut self,
+        key: BuiltinToolKey,
         spec: ToolSpec,
         supports_parallel_tool_calls: bool,
     ) {
-        self.specs
-            .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
+        debug_assert_eq!(builtin_tool_key(spec.name()), Some(key));
+        self.specs.push(ConfiguredToolSpec::new(
+            spec,
+            supports_parallel_tool_calls,
+            true,
+        ));
     }
 
-    pub fn register_handler<H>(&mut self, name: impl Into<String>, handler: Arc<H>)
+    pub fn push_external_spec(&mut self, spec: ToolSpec) {
+        self.push_external_spec_with_parallel_support(spec, false);
+    }
+
+    pub fn push_external_spec_with_parallel_support(
+        &mut self,
+        spec: ToolSpec,
+        supports_parallel_tool_calls: bool,
+    ) {
+        self.specs.push(ConfiguredToolSpec::new(
+            spec,
+            supports_parallel_tool_calls,
+            false,
+        ));
+    }
+
+    pub fn register_builtin_handler<H>(&mut self, key: BuiltinToolKey, handler: Arc<H>)
+    where
+        H: ToolHandler + 'static,
+    {
+        self.register_builtin_handler_for_names(key, key.invocation_names(), handler);
+    }
+
+    pub fn register_builtin_handler_for_names<H>(
+        &mut self,
+        key: BuiltinToolKey,
+        names: &[&str],
+        handler: Arc<H>,
+    ) where
+        H: ToolHandler + 'static,
+    {
+        for name in names {
+            debug_assert_eq!(builtin_tool_key(name), Some(key));
+            self.builtin_handler_names.insert((*name).to_string());
+            self.register_external_handler(*name, handler.clone());
+        }
+    }
+
+    pub fn register_external_handler<H>(&mut self, name: impl Into<String>, handler: Arc<H>)
     where
         H: ToolHandler + 'static,
     {
@@ -372,7 +522,7 @@ impl ToolRegistryBuilder {
     // }
 
     pub fn build(self) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
-        let registry = ToolRegistry::new(self.handlers);
+        let registry = ToolRegistry::new(self.handlers, self.builtin_handler_names);
         (self.specs, registry)
     }
 }

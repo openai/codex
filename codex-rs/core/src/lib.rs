@@ -139,6 +139,7 @@ pub use rollout::list::read_session_meta_line;
 pub use rollout::policy::EventPersistenceMode;
 pub use rollout::rollout_date_parts;
 pub use rollout::session_index::find_thread_names_by_ids;
+pub use tools::spec::validate_builtin_tools_request;
 mod function_tool;
 mod state;
 mod tasks;
