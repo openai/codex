@@ -126,6 +126,13 @@ jobs:
             grep -nE -C 3 "$failure_pattern" "$test_log" | tail -n 120
           }
 
+          print_interesting_console_failure_lines() {
+            local console_log="$1"
+            local failure_pattern='^ERROR: |^FAILED:|^FAIL: |^error: |^Caused by:|panicked at|assertion .* failed|^failures:$|^failures:|^test result: FAILED|^  --> |^   \||^ *[0-9]+ \|'
+
+            grep -nE -C 2 "$failure_pattern" "$console_log" | tail -n 160
+          }
+
           print_failed_bazel_test_logs() {
             local console_log="$1"
             local testlogs_dir
@@ -142,7 +149,12 @@ jobs:
             )
 
             if [[ ${#failed_targets[@]} -eq 0 ]]; then
-              echo "No failed Bazel test targets were found in console output."
+              echo "::group::Bazel failure summary"
+              if ! print_interesting_console_failure_lines "$console_log"; then
+                echo "No focused failure lines matched; showing console tail instead."
+                tail -n 120 "$console_log"
+              fi
+              echo "::endgroup::"
               return
             fi
 
