@@ -216,6 +216,7 @@ fn queued_message_edit_binding_for_terminal(terminal_name: TerminalName) -> KeyB
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
+use crate::app_event::ModelSelectionScope;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -238,6 +239,7 @@ use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
+use crate::bottom_pane::parse_slash_name;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::clipboard_text;
@@ -915,10 +917,18 @@ impl QueuedSlashCommand {
 enum QueuedSlashCommandAction {
     Command(SlashCommand),
     Fast(QueuedFastCommandAction),
+    ModelSelection(QueuedModelSelection),
     Plan(UserMessage),
     Rename(String),
     Review(ReviewRequest),
     SandboxReadRoot(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct QueuedModelSelection {
+    model: String,
+    effort: Option<ReasoningEffortConfig>,
+    scope: ModelSelectionScope,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4218,11 +4228,17 @@ impl ChatWidget {
 
         if matches!(key_event.code, KeyCode::Esc)
             && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-            && !self.pending_steers.is_empty()
             && self.bottom_pane.is_task_running()
-            && self.bottom_pane.no_modal_or_popup_active()
+            && (self
+                .bottom_pane
+                .composer_text()
+                .lines()
+                .next()
+                .and_then(parse_slash_name)
+                .is_none_or(|(name, _, _)| name != "agent")
+                || !self.pending_steers.is_empty())
         {
-            self.submit_pending_steers_after_interrupt = true;
+            self.submit_pending_steers_after_interrupt = !self.pending_steers.is_empty();
             if !self.submit_op(Op::Interrupt) {
                 self.submit_pending_steers_after_interrupt = false;
             }
@@ -4383,6 +4399,17 @@ impl ChatWidget {
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if self.bottom_pane.is_task_running() && !cmd.available_during_task() {
+            match cmd {
+                SlashCommand::Model => {
+                    self.open_model_popup();
+                    return;
+                }
+                SlashCommand::Review => {
+                    self.open_review_popup();
+                    return;
+                }
+                _ => {}
+            }
             self.queue_slash_command(QueuedSlashCommand {
                 draft: format!("/{}", cmd.command()).into(),
                 action: QueuedSlashCommandAction::Command(cmd),
@@ -4961,6 +4988,107 @@ impl ChatWidget {
         self.refresh_pending_input_preview();
     }
 
+    fn queued_model_selection_draft(
+        model: &str,
+        effort: Option<ReasoningEffortConfig>,
+    ) -> UserMessage {
+        let mut text = format!("/model {model}");
+        if let Some(effort) = effort {
+            text.push(' ');
+            text.push_str(Self::status_line_reasoning_effort_label(Some(effort)));
+        }
+        text.into()
+    }
+
+    fn queue_model_selection_if_task_running(
+        &mut self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+        scope: ModelSelectionScope,
+    ) -> bool {
+        if !self.bottom_pane.is_task_running() {
+            return false;
+        }
+        let draft = Self::queued_model_selection_draft(&model, effort);
+        self.queue_slash_command(QueuedSlashCommand {
+            draft,
+            action: QueuedSlashCommandAction::ModelSelection(QueuedModelSelection {
+                model,
+                effort,
+                scope,
+            }),
+        });
+        true
+    }
+
+    pub(crate) fn apply_or_queue_model_selection(
+        &mut self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+        scope: ModelSelectionScope,
+    ) {
+        if self.queue_model_selection_if_task_running(model.clone(), effort, scope) {
+            return;
+        }
+        match scope {
+            ModelSelectionScope::Global => {
+                self.set_model(&model);
+                self.set_reasoning_effort(effort);
+                self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
+                self.app_event_tx
+                    .send(AppEvent::UpdateReasoningEffort(effort));
+                self.app_event_tx
+                    .send(AppEvent::PersistModelSelection { model, effort });
+            }
+            ModelSelectionScope::PlanOnly => {
+                self.set_model(&model);
+                self.set_plan_mode_reasoning_effort(effort);
+                self.app_event_tx.send(AppEvent::UpdateModel(model));
+                self.app_event_tx
+                    .send(AppEvent::UpdatePlanModeReasoningEffort(effort));
+                self.app_event_tx
+                    .send(AppEvent::PersistPlanModeReasoningEffort(effort));
+            }
+            ModelSelectionScope::AllModes => {
+                self.set_model(&model);
+                self.set_reasoning_effort(effort);
+                self.set_plan_mode_reasoning_effort(effort);
+                self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
+                self.app_event_tx
+                    .send(AppEvent::UpdateReasoningEffort(effort));
+                self.app_event_tx
+                    .send(AppEvent::UpdatePlanModeReasoningEffort(effort));
+                self.app_event_tx
+                    .send(AppEvent::PersistPlanModeReasoningEffort(effort));
+                self.app_event_tx
+                    .send(AppEvent::PersistModelSelection { model, effort });
+            }
+        }
+    }
+
+    fn queued_review_draft(review_request: &ReviewRequest) -> UserMessage {
+        match &review_request.target {
+            ReviewTarget::UncommittedChanges => "/review current changes".into(),
+            ReviewTarget::BaseBranch { branch } => format!("/review {branch}").into(),
+            ReviewTarget::Commit { sha, title } => {
+                let subject = title.clone().unwrap_or_else(|| sha.clone());
+                format!("/review {subject}").into()
+            }
+            ReviewTarget::Custom { instructions } => format!("/review {instructions}").into(),
+        }
+    }
+
+    pub(crate) fn apply_or_queue_review(&mut self, review_request: ReviewRequest) {
+        if self.bottom_pane.is_task_running() {
+            self.queue_slash_command(QueuedSlashCommand {
+                draft: Self::queued_review_draft(&review_request),
+                action: QueuedSlashCommandAction::Review(review_request),
+            });
+            return;
+        }
+        self.submit_op(Op::Review { review_request });
+    }
+
     fn submit_plan_user_message(&mut self, user_message: UserMessage) {
         if self.is_session_configured() {
             self.reasoning_buffer.clear();
@@ -4989,6 +5117,13 @@ impl ChatWidget {
                     self.add_info_message(format!("Fast mode is {status}."), None);
                 }
             },
+            QueuedSlashCommandAction::ModelSelection(selection) => {
+                self.apply_or_queue_model_selection(
+                    selection.model,
+                    selection.effort,
+                    selection.scope,
+                );
+            }
             QueuedSlashCommandAction::Plan(user_message) => {
                 self.dispatch_command(SlashCommand::Plan);
                 if self.active_mode_kind() == ModeKind::Plan {
@@ -6981,11 +7116,10 @@ impl ChatWidget {
                 return;
             }
 
-            tx.send(AppEvent::UpdateModel(model_for_action.clone()));
-            tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
-            tx.send(AppEvent::PersistModelSelection {
+            tx.send(AppEvent::ApplyOrQueueModelSelection {
                 model: model_for_action.clone(),
                 effort: effort_for_action,
+                scope: ModelSelectionScope::Global,
             });
         })]
     }
@@ -7053,19 +7187,18 @@ impl ChatWidget {
         let plan_only_actions: Vec<SelectionAction> = vec![Box::new({
             let model = model.clone();
             move |tx| {
-                tx.send(AppEvent::UpdateModel(model.clone()));
-                tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
-                tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
+                tx.send(AppEvent::ApplyOrQueueModelSelection {
+                    model: model.clone(),
+                    effort,
+                    scope: ModelSelectionScope::PlanOnly,
+                });
             }
         })];
         let all_modes_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-            tx.send(AppEvent::UpdateModel(model.clone()));
-            tx.send(AppEvent::UpdateReasoningEffort(effort));
-            tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort));
-            tx.send(AppEvent::PersistPlanModeReasoningEffort(effort));
-            tx.send(AppEvent::PersistModelSelection {
+            tx.send(AppEvent::ApplyOrQueueModelSelection {
                 model: model.clone(),
                 effort,
+                scope: ModelSelectionScope::AllModes,
             });
         })];
 
@@ -7154,7 +7287,11 @@ impl ChatWidget {
                         effort: selected_effort,
                     });
             } else {
-                self.apply_model_and_effort(selected_model, selected_effort);
+                self.apply_or_queue_model_selection(
+                    selected_model,
+                    selected_effort,
+                    ModelSelectionScope::Global,
+                );
             }
             return;
         }
@@ -7229,11 +7366,10 @@ impl ChatWidget {
                         effort: choice_effort,
                     });
                 } else {
-                    tx.send(AppEvent::UpdateModel(model_for_action.clone()));
-                    tx.send(AppEvent::UpdateReasoningEffort(choice_effort));
-                    tx.send(AppEvent::PersistModelSelection {
+                    tx.send(AppEvent::ApplyOrQueueModelSelection {
                         model: model_for_action.clone(),
                         effort: choice_effort,
+                        scope: ModelSelectionScope::Global,
                     });
                 }
             })];
@@ -7272,22 +7408,6 @@ impl ChatWidget {
             ReasoningEffortConfig::High => "High",
             ReasoningEffortConfig::XHigh => "Extra high",
         }
-    }
-
-    fn apply_model_and_effort_without_persist(
-        &self,
-        model: String,
-        effort: Option<ReasoningEffortConfig>,
-    ) {
-        self.app_event_tx.send(AppEvent::UpdateModel(model));
-        self.app_event_tx
-            .send(AppEvent::UpdateReasoningEffort(effort));
-    }
-
-    fn apply_model_and_effort(&self, model: String, effort: Option<ReasoningEffortConfig>) {
-        self.apply_model_and_effort_without_persist(model.clone(), effort);
-        self.app_event_tx
-            .send(AppEvent::PersistModelSelection { model, effort });
     }
 
     /// Open the permissions popup (alias for /permissions).
@@ -9243,12 +9363,12 @@ impl ChatWidget {
         items.push(SelectionItem {
             name: "Review uncommitted changes".to_string(),
             actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::CodexOp(Op::Review {
+                tx.send(AppEvent::ApplyOrQueueReview {
                     review_request: ReviewRequest {
                         target: ReviewTarget::UncommittedChanges,
                         user_facing_hint: None,
                     },
-                }));
+                });
             })],
             dismiss_on_select: true,
             ..Default::default()
@@ -9296,14 +9416,14 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: format!("{current_branch} -> {branch}"),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    tx3.send(AppEvent::CodexOp(Op::Review {
+                    tx3.send(AppEvent::ApplyOrQueueReview {
                         review_request: ReviewRequest {
                             target: ReviewTarget::BaseBranch {
                                 branch: branch.clone(),
                             },
                             user_facing_hint: None,
                         },
-                    }));
+                    });
                 })],
                 dismiss_on_select: true,
                 search_value: Some(option),
@@ -9333,7 +9453,7 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: subject.clone(),
                 actions: vec![Box::new(move |tx3: &AppEventSender| {
-                    tx3.send(AppEvent::CodexOp(Op::Review {
+                    tx3.send(AppEvent::ApplyOrQueueReview {
                         review_request: ReviewRequest {
                             target: ReviewTarget::Commit {
                                 sha: sha.clone(),
@@ -9341,7 +9461,7 @@ impl ChatWidget {
                             },
                             user_facing_hint: None,
                         },
-                    }));
+                    });
                 })],
                 dismiss_on_select: true,
                 search_value: Some(search_val),
@@ -9370,14 +9490,14 @@ impl ChatWidget {
                 if trimmed.is_empty() {
                     return;
                 }
-                tx.send(AppEvent::CodexOp(Op::Review {
+                tx.send(AppEvent::ApplyOrQueueReview {
                     review_request: ReviewRequest {
                         target: ReviewTarget::Custom {
                             instructions: trimmed,
                         },
                         user_facing_hint: None,
                     },
-                }));
+                });
             }),
         );
         self.bottom_pane.show_view(Box::new(view));
@@ -9726,7 +9846,7 @@ pub(crate) fn show_review_commit_picker_with_entries(
         items.push(SelectionItem {
             name: subject.clone(),
             actions: vec![Box::new(move |tx3: &AppEventSender| {
-                tx3.send(AppEvent::CodexOp(Op::Review {
+                tx3.send(AppEvent::ApplyOrQueueReview {
                     review_request: ReviewRequest {
                         target: ReviewTarget::Commit {
                             sha: sha.clone(),
@@ -9734,7 +9854,7 @@ pub(crate) fn show_review_commit_picker_with_entries(
                         },
                         user_facing_hint: None,
                     },
-                }));
+                });
             })],
             dismiss_on_select: true,
             search_value: Some(search_val),

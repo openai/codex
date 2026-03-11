@@ -2558,15 +2558,19 @@ async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_sc
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::UpdateModel(model) if model == "gpt-5.1-codex-max"
+            AppEvent::ApplyOrQueueModelSelection {
+                model,
+                effort: Some(ReasoningEffortConfig::Medium),
+                scope: ModelSelectionScope::Global,
+            } if model == "gpt-5.1-codex-max"
         )),
-        "expected model update event; events: {events:?}"
+        "expected model selection event; events: {events:?}"
     );
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
-        "expected reasoning update event; events: {events:?}"
+            .all(|event| !matches!(event, AppEvent::OpenPlanReasoningScopePrompt { .. })),
+        "did not expect plan reasoning scope prompt event; events: {events:?}"
     );
 }
 
@@ -2643,15 +2647,19 @@ async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_promp
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::UpdateModel(model) if model == "gpt-5"
+            AppEvent::ApplyOrQueueModelSelection {
+                model,
+                effort: Some(ReasoningEffortConfig::Medium),
+                scope: ModelSelectionScope::Global,
+            } if model == "gpt-5"
         )),
-        "expected model update event; events: {events:?}"
+        "expected model selection event; events: {events:?}"
     );
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
-        "expected reasoning update event; events: {events:?}"
+            .all(|event| !matches!(event, AppEvent::OpenPlanReasoningScopePrompt { .. })),
+        "did not expect plan reasoning scope prompt event; events: {events:?}"
     );
 }
 
@@ -2670,24 +2678,19 @@ async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override(
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::UpdatePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+            AppEvent::ApplyOrQueueModelSelection {
+                model,
+                effort: Some(ReasoningEffortConfig::High),
+                scope: ModelSelectionScope::AllModes,
+            } if model == "gpt-5.1-codex-max"
         )),
-        "expected plan override to be updated; events: {events:?}"
+        "expected all-modes model selection event; events: {events:?}"
     );
     assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::PersistPlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
-        )),
-        "expected updated plan override to be persisted; events: {events:?}"
-    );
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::PersistModelSelection { model, effort: Some(ReasoningEffortConfig::High) }
-                if model == "gpt-5.1-codex-max"
-        )),
-        "expected global model reasoning selection persistence; events: {events:?}"
+        events
+            .iter()
+            .all(|event| !matches!(event, AppEvent::PersistPlanModeReasoningEffort(_))),
+        "did not expect persistence events before app handling; events: {events:?}"
     );
 }
 
@@ -2877,9 +2880,13 @@ async fn plan_reasoning_scope_popup_plan_only_does_not_update_all_modes_reasonin
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::UpdatePlanModeReasoningEffort(Some(ReasoningEffortConfig::High))
+            AppEvent::ApplyOrQueueModelSelection {
+                model,
+                effort: Some(ReasoningEffortConfig::High),
+                scope: ModelSelectionScope::PlanOnly,
+            } if model == "gpt-5.1-codex-max"
         )),
-        "expected plan-only reasoning update; events: {events:?}"
+        "expected plan-only model selection event; events: {events:?}"
     );
     assert!(
         events
@@ -6318,7 +6325,7 @@ async fn custom_prompt_submit_sends_review_op() {
     // Expect AppEvent::CodexOp(Op::Review { .. }) with trimmed prompt
     let evt = rx.try_recv().expect("expected one app event");
     match evt {
-        AppEvent::CodexOp(Op::Review { review_request }) => {
+        AppEvent::ApplyOrQueueReview { review_request } => {
             assert_eq!(
                 review_request,
                 ReviewRequest {
@@ -8119,13 +8126,15 @@ async fn user_shell_command_renders_output_not_exploring() {
 }
 
 #[tokio::test]
-async fn queued_slash_command_while_task_running_snapshot() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+async fn model_slash_command_while_task_running_popup_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
 
     chat.dispatch_command(SlashCommand::Model);
 
-    assert_eq!(chat.queued_user_message_texts(), vec!["/model".to_string()]);
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.has_active_view(), "expected /model popup to open");
     assert!(drain_insert_history(&mut rx).is_empty());
 
     let width: u16 = 80;
@@ -8138,7 +8147,66 @@ async fn queued_slash_command_while_task_running_snapshot() {
         chat.render(f.area(), f.buffer_mut());
     })
     .unwrap();
-    assert_snapshot!(term.backend().vt100().screen().contents());
+    assert_snapshot!(
+        "model_slash_command_while_task_running_popup",
+        term.backend().vt100().screen().contents()
+    );
+}
+
+#[tokio::test]
+async fn model_selection_queues_selected_action_while_task_running() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
+    chat.on_task_started();
+
+    chat.apply_or_queue_model_selection(
+        "gpt-5.1-codex-max".to_string(),
+        Some(ReasoningEffortConfig::High),
+        ModelSelectionScope::Global,
+    );
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["/model gpt-5.1-codex-max high".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn esc_interrupts_running_task_even_with_model_popup_active() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.dispatch_command(SlashCommand::Model);
+
+    assert!(chat.has_active_view(), "expected /model popup to open");
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    next_interrupt_op(&mut op_rx);
+    assert!(
+        chat.has_active_view(),
+        "expected popup to remain open during interrupt"
+    );
+}
+
+#[tokio::test]
+async fn interrupt_with_popup_active_restores_queued_drafts_into_composer() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+    chat.queue_user_message("queued draft".into());
+    chat.dispatch_command(SlashCommand::Model);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    next_interrupt_op(&mut op_rx);
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    assert!(
+        chat.has_active_view(),
+        "expected popup to remain open after interrupt"
+    );
+    assert_eq!(chat.bottom_pane.composer_text(), "queued draft");
+    assert!(chat.queued_user_messages.is_empty());
+    let _ = drain_insert_history(&mut rx);
 }
 
 #[tokio::test]
@@ -11101,23 +11169,15 @@ async fn enter_queues_user_messages_while_review_is_running() {
 }
 
 #[tokio::test]
-async fn review_slash_command_queues_while_task_running_and_opens_popup_after_turn_complete() {
+async fn review_slash_command_opens_popup_while_task_running() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
 
     chat.dispatch_command(SlashCommand::Review);
 
-    assert_eq!(
-        chat.queued_user_message_texts(),
-        vec!["/review".to_string()]
-    );
-    assert!(!chat.has_active_view());
-    assert!(drain_insert_history(&mut rx).is_empty());
-
-    chat.on_task_complete(None, false);
-
     assert!(chat.queued_user_messages.is_empty());
     assert!(chat.has_active_view(), "expected /review popup to open");
+    assert!(drain_insert_history(&mut rx).is_empty());
 }
 
 #[tokio::test]

@@ -2712,6 +2712,15 @@ impl App {
                 self.chat_widget.set_model(&model);
                 self.refresh_status_line();
             }
+            AppEvent::ApplyOrQueueModelSelection {
+                model,
+                effort,
+                scope,
+            } => {
+                self.chat_widget
+                    .apply_or_queue_model_selection(model, effort, scope);
+                self.refresh_status_line();
+            }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
                 self.refresh_status_line();
@@ -2731,6 +2740,9 @@ impl App {
             }
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
+            }
+            AppEvent::ApplyOrQueueReview { review_request } => {
+                self.chat_widget.apply_or_queue_review(review_request);
             }
             AppEvent::OpenFullAccessConfirmation {
                 preset,
