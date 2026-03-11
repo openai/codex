@@ -158,7 +158,7 @@ mod spawn {
                     sender_thread_id: session.conversation_id,
                     prompt: prompt.clone(),
                     model: args.model.clone().unwrap_or_default(),
-                    reasoning_effort: args.reasoning_effort.clone().unwrap_or_default(),
+                    reasoning_effort: args.reasoning_effort.unwrap_or_default(),
                 }
                 .into(),
             )
