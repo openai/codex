@@ -215,16 +215,29 @@ fn guardian_assessment_uses_completed_notification(
     status: codex_protocol::protocol::GuardianAssessmentStatus,
     item: &ThreadItem,
 ) -> bool {
-    matches!(
-        status,
-        codex_protocol::protocol::GuardianAssessmentStatus::Approved
-    ) && matches!(
-        item,
-        ThreadItem::CommandExecution {
-            status: CommandExecutionStatus::Completed,
-            ..
-        }
-    )
+    match status {
+        codex_protocol::protocol::GuardianAssessmentStatus::InProgress => false,
+        codex_protocol::protocol::GuardianAssessmentStatus::Approved => matches!(
+            item,
+            ThreadItem::CommandExecution {
+                status: CommandExecutionStatus::Completed,
+                ..
+            }
+        ),
+        codex_protocol::protocol::GuardianAssessmentStatus::Denied => matches!(
+            item,
+            ThreadItem::CommandExecution {
+                status: CommandExecutionStatus::Declined,
+                ..
+            } | ThreadItem::FileChange {
+                status: PatchApplyStatus::Declined,
+                ..
+            } | ThreadItem::McpToolCall {
+                status: McpToolCallStatus::Declined,
+                ..
+            }
+        ),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3480,6 +3493,130 @@ mod tests {
             other => bail!("unexpected notification: {other:?}"),
         }
         assert!(rx.try_recv().is_err(), "no extra messages expected");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn guardian_assessment_denied_command_emits_item_completed() -> Result<()> {
+        let conversation_id = ThreadId::new();
+        let event_turn_id = "turn-command-denied".to_string();
+        let thread_state = Arc::new(tokio::sync::Mutex::new(ThreadState::default()));
+        let thread_watch_manager = ThreadWatchManager::default();
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            ThreadId::new(),
+        );
+        let codex_home = tempfile::tempdir()?;
+        let mut config = codex_core::config::ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await?;
+        config.model_provider_id = "openai".to_string();
+        let thread_manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider(
+                codex_core::CodexAuth::from_api_key("dummy"),
+                codex_core::built_in_model_providers()["openai"].clone(),
+            ),
+        );
+        let conversation = thread_manager.start_thread(config).await?.thread;
+        let in_progress_assessment = codex_protocol::protocol::GuardianAssessmentEvent {
+            id: "guardian-command-1".to_string(),
+            turn_id: event_turn_id.clone(),
+            status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
+            risk_score: None,
+            risk_level: None,
+            rationale: None,
+            action: Some(serde_json::json!({
+                "tool": "shell",
+                "command": "rm -rf /tmp/important",
+                "cwd": "/repo/codex-rs/core",
+            })),
+        };
+        let denied_assessment = codex_protocol::protocol::GuardianAssessmentEvent {
+            id: "guardian-command-1".to_string(),
+            turn_id: event_turn_id.clone(),
+            status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
+            risk_score: Some(99),
+            risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
+            rationale: Some("Unsafe destructive command.".to_string()),
+            action: None,
+        };
+        {
+            let mut state = thread_state.lock().await;
+            state.track_current_turn_event(&EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: event_turn_id.clone(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }));
+            state.track_current_turn_event(&EventMsg::GuardianAssessment(
+                in_progress_assessment.clone(),
+            ));
+            state.track_current_turn_event(&EventMsg::GuardianAssessment(
+                denied_assessment.clone(),
+            ));
+        }
+
+        apply_bespoke_event_handling(
+            Event {
+                id: event_turn_id.clone(),
+                msg: EventMsg::GuardianAssessment(denied_assessment),
+            },
+            conversation_id,
+            conversation,
+            thread_manager,
+            outgoing,
+            thread_state,
+            thread_watch_manager,
+            ApiVersion::V2,
+            "test-provider".to_string(),
+            codex_home.path(),
+        )
+        .await;
+
+        let msg = recv_broadcast_message(&mut rx).await?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::ItemCompleted(
+                notification,
+            )) => {
+                assert_eq!(notification.thread_id, conversation_id.to_string());
+                assert_eq!(notification.turn_id, event_turn_id);
+                assert_eq!(
+                    notification.item,
+                    ThreadItem::CommandExecution {
+                        id: "guardian-command-1".to_string(),
+                        command: "rm -rf /tmp/important".to_string(),
+                        cwd: PathBuf::from("/repo/codex-rs/core"),
+                        process_id: None,
+                        status: CommandExecutionStatus::Declined,
+                        command_actions: Vec::new(),
+                        aggregated_output: None,
+                        exit_code: None,
+                        duration_ms: None,
+                        approval: Some(codex_app_server_protocol::ItemApprovalState {
+                            status: codex_app_server_protocol::ItemApprovalStatus::Declined,
+                            pending_kind: None,
+                            resolved_by: Some(
+                                codex_app_server_protocol::ItemApprovalResolvedBy::Automatic,
+                            ),
+                            automatic_review: Some(
+                                codex_app_server_protocol::AutomaticApprovalReview {
+                                    status:
+                                        codex_app_server_protocol::AutomaticApprovalReviewStatus::Denied,
+                                    risk_score: Some(99),
+                                    risk_level: Some(codex_app_server_protocol::RiskLevel::High),
+                                    rationale: Some("Unsafe destructive command.".to_string()),
+                                },
+                            ),
+                        }),
+                    }
+                );
+            }
+            other => bail!("unexpected notification: {other:?}"),
+        }
 
         Ok(())
     }
