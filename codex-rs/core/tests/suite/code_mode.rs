@@ -176,7 +176,10 @@ add_content(JSON.stringify(await exec_command({ cmd: "printf code_mode_exec_mark
     let items = custom_tool_output_items(&req, "call-1");
     assert_eq!(items.len(), 2);
     assert_regex_match(
-        r"(?s)\AScript completed\nWall time \d+\.\d seconds\nOutput:\n\z",
+        concat!(
+            r"(?s)\A",
+            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
         text_item(&items, 0),
     );
     let parsed: Value = serde_json::from_str(text_item(&items, 1))?;
@@ -225,7 +228,10 @@ add_content(JSON.stringify(await exec_command({
     let items = custom_tool_output_items(&req, "call-1");
     assert_eq!(items.len(), 2);
     assert_regex_match(
-        r"(?s)\AScript completed\nWall time \d+\.\d seconds\nOutput:\n\z",
+        concat!(
+            r"(?s)\A",
+            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
         text_item(&items, 0),
     );
     let expected_pattern = r#"(?sx)
@@ -261,7 +267,10 @@ throw new Error("boom");
     let items = custom_tool_output_items(&req, "call-1");
     assert_eq!(items.len(), 4);
     assert_regex_match(
-        r"(?s)\AScript failed\nWall time \d+\.\d seconds\nOutput:\n\z",
+        concat!(
+            r"(?s)\A",
+            r"Script failed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
         text_item(&items, 0),
     );
     assert_eq!(text_item(&items, 1), "before crash");
@@ -340,7 +349,10 @@ output_text(circular);
     );
     assert_eq!(items.len(), 2);
     assert_regex_match(
-        r"(?s)\AScript failed\nWall time \d+\.\d seconds\nOutput:\n\z",
+        concat!(
+            r"(?s)\A",
+            r"Script failed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
         text_item(&items, 0),
     );
     assert!(text_item(&items, 1).contains("Script error:"));
@@ -377,7 +389,10 @@ output_image("data:image/png;base64,AAA");
     );
     assert_eq!(items.len(), 3);
     assert_regex_match(
-        r"(?s)\AScript completed\nWall time \d+\.\d seconds\nOutput:\n\z",
+        concat!(
+            r"(?s)\A",
+            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
         text_item(&items, 0),
     );
     assert_eq!(
@@ -426,7 +441,10 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
     );
     assert_eq!(items.len(), 2);
     assert_regex_match(
-        r"(?s)\AScript completed\nWall time \d+\.\d seconds\nOutput:\n\z",
+        concat!(
+            r"(?s)\A",
+            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
         text_item(&items, 0),
     );
 
