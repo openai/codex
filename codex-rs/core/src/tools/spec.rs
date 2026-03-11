@@ -3016,28 +3016,6 @@ mod tests {
         let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
         assert_contains_tool_names(
             &tools,
-            &["spawn_agent", "send_input", "wait", "close_agent"],
-        );
-        assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
-    }
-
-    #[test]
-    fn test_build_specs_spawn_csv_enables_agent_jobs_and_collab_tools() {
-        let config = test_config();
-        let model_info =
-            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-        let mut features = Features::with_defaults();
-        features.enable(Feature::SpawnCsv);
-        features.normalize_dependencies();
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
-            model_info: &model_info,
-            features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
-            session_source: SessionSource::Cli,
-        });
-        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-        assert_contains_tool_names(
-            &tools,
             &[
                 "spawn_agent",
                 "send_input",
@@ -4183,8 +4161,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::Apps);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -4257,8 +4237,10 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::Apps);
         features.enable(Feature::ToolSuggest);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
