@@ -133,6 +133,24 @@ jobs:
             grep -nE -C 2 "$failure_pattern" "$console_log" | tail -n 160
           }
 
+          print_buildbuddy_link() {
+            local console_log="$1"
+
+            grep -m 1 'Streaming build results to:' "$console_log"
+          }
+
+          run_bazel_and_capture() {
+            "$@" >"$bazel_console_log" 2>&1 &
+            local bazel_pid=$!
+
+            while kill -0 "$bazel_pid" 2>/dev/null; do
+              echo "Bazel still running; raw output is being captured for focused summarization..."
+              sleep 60
+            done
+
+            wait "$bazel_pid"
+          }
+
           print_failed_bazel_test_logs() {
             local console_log="$1"
             local testlogs_dir
@@ -202,13 +220,12 @@ jobs:
             # materializing external repos such as rules_perl). We still use BuildBuddy for
             # remote execution/cache; this only disables the startup-level repo contents cache.
             set +e
-            bazel $BAZEL_STARTUP_ARGS \
+            run_bazel_and_capture bazel $BAZEL_STARTUP_ARGS \
               --noexperimental_remote_repo_contents_cache \
               --bazelrc=.github/workflows/ci.bazelrc \
               "${bazel_args[@]}" \
-              "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" \
-              2>&1 | tee "$bazel_console_log"
-            bazel_status=${PIPESTATUS[0]}
+              "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY"
+            bazel_status=$?
             set -e
           else
             echo "BuildBuddy API key is not available; using local Bazel configuration."
@@ -229,14 +246,17 @@ jobs:
             #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_cache
             #   https://bazel.build/reference/command-line-reference#common_options-flag--remote_executor
             set +e
-            bazel $BAZEL_STARTUP_ARGS \
+            run_bazel_and_capture bazel $BAZEL_STARTUP_ARGS \
               --noexperimental_remote_repo_contents_cache \
               "${bazel_args[@]}" \
               --remote_cache= \
-              --remote_executor= \
-              2>&1 | tee "$bazel_console_log"
-            bazel_status=${PIPESTATUS[0]}
+              --remote_executor=
+            bazel_status=$?
             set -e
+          fi
+
+          if ! print_buildbuddy_link "$bazel_console_log"; then
+            echo "BuildBuddy invocation link was not found in Bazel output."
           fi
 
           if [[ ${bazel_status:-0} -ne 0 ]]; then
