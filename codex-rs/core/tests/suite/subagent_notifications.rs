@@ -498,13 +498,16 @@ async fn spawn_agent_tool_description_mentions_role_locked_settings() -> Result<
     let request = resp_mock.single_request();
     let spawn_description =
         tool_description(&request, "spawn_agent").expect("spawn_agent description");
-    assert!(
-        spawn_description.contains(
-            &format!(
-                "Custom role\n- This role's model is set to `{ROLE_MODEL}` and its reasoning effort is set to `{ROLE_REASONING_EFFORT}`. These settings cannot be changed."
-            )
-        ),
-        "expected locked-setting note in spawn_agent tool description: {spawn_description}"
+    let custom_role_entry = spawn_description
+        .split("\n}\n")
+        .find(|entry| entry.starts_with("custom: {\n"))
+        .map(|entry| format!("{entry}\n}}"))
+        .expect("custom role entry");
+    assert_eq!(
+        custom_role_entry,
+        format!(
+            "custom: {{\nCustom role\n- This role's model is set to `{ROLE_MODEL}` and its reasoning effort is set to `{ROLE_REASONING_EFFORT}`. These settings cannot be changed.\n}}"
+        )
     );
 
     Ok(())
