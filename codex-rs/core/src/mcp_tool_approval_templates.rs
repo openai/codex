@@ -112,7 +112,7 @@ fn render_mcp_tool_approval_template_from_templates(
         return None;
     }
 
-    let elicitation_message = format!("Allow {connector_name} to {action}");
+    let elicitation_message = format!("Allow {connector_name} to {action}?");
     let (tool_params, tool_params_display) = match tool_params {
         Some(Value::Object(tool_params)) => {
             render_tool_params(tool_params, &template.template_params)?

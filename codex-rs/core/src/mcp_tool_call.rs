@@ -821,7 +821,7 @@ fn build_mcp_tool_approval_fallback_message(
                 format!("the {server} MCP server")
             }
         });
-    format!("Allow {actor} to run tool {tool_name}")
+    format!("Allow {actor} to run tool {tool_name}?")
 }
 
 fn mcp_tool_approval_question_text(question: String, monitor_reason: Option<&str>) -> String {
