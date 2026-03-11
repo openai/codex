@@ -180,10 +180,7 @@ pub(crate) mod spawn_tool_spec {
         }
 
         format!(
-            r#"Optional type name for the new agent. If omitted, `{DEFAULT_ROLE_NAME}` is used.
-Available roles:
-{}
-            "#,
+            "Optional type name for the new agent. If omitted, `{DEFAULT_ROLE_NAME}` is used.\nAvailable roles:\n{}",
             formatted_roles.join("\n"),
         )
     }
