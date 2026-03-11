@@ -548,7 +548,9 @@ pub struct ProfileV2 {
     pub model_provider: Option<String>,
     #[experimental(nested)]
     pub approval_policy: Option<AskForApproval>,
-    /// Optional approval review mode override for this profile.
+    /// Optional override for how approval requests are reviewed in this
+    /// profile. Use `manual-only` for user approval prompts or `auto-only` for
+    /// automatic approval review.
     pub approval_review_policy: Option<ApprovalReviewPolicy>,
     pub service_tier: Option<ServiceTier>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
@@ -649,7 +651,9 @@ pub struct Config {
     pub model_provider: Option<String>,
     #[experimental(nested)]
     pub approval_policy: Option<AskForApproval>,
-    /// Optional default approval review mode.
+    /// Optional default for how approval requests are reviewed. Use
+    /// `manual-only` for user approval prompts or `auto-only` for automatic
+    /// approval review.
     pub approval_review_policy: Option<ApprovalReviewPolicy>,
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,

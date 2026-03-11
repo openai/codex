@@ -17,6 +17,8 @@ import type { SandboxWorkspaceWrite } from "./SandboxWorkspaceWrite";
 import type { ToolsV2 } from "./ToolsV2";
 
 export type Config = {model: string | null, review_model: string | null, model_context_window: bigint | null, model_auto_compact_token_limit: bigint | null, model_provider: string | null, approval_policy: AskForApproval | null, /**
- * Optional default approval review mode.
+ * Optional default for how approval requests are reviewed. Use
+ * `manual-only` for user approval prompts or `auto-only` for automatic
+ * approval review.
  */
 approval_review_policy: ApprovalReviewPolicy | null, sandbox_mode: SandboxMode | null, sandbox_workspace_write: SandboxWorkspaceWrite | null, forced_chatgpt_workspace_id: string | null, forced_login_method: ForcedLoginMethod | null, web_search: WebSearchMode | null, tools: ToolsV2 | null, profile: string | null, profiles: { [key in string]?: ProfileV2 }, instructions: string | null, developer_instructions: string | null, compact_prompt: string | null, model_reasoning_effort: ReasoningEffort | null, model_reasoning_summary: ReasoningSummary | null, model_verbosity: Verbosity | null, service_tier: ServiceTier | null, analytics: AnalyticsConfig | null} & ({ [key in string]?: number | string | boolean | Array<JsonValue> | { [key in string]?: JsonValue } | null });

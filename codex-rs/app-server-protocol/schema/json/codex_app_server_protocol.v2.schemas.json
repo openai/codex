@@ -3062,7 +3062,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional default approval review mode."
+          "description": "Optional default for how approval requests are reviewed. Use `manual-only` for user approval prompts or `auto-only` for automatic approval review."
         },
         "compact_prompt": {
           "type": [
@@ -10232,7 +10232,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional approval review mode override for this profile."
+          "description": "Optional override for how approval requests are reviewed in this profile. Use `manual-only` for user approval prompts or `auto-only` for automatic approval review."
         },
         "chatgpt_base_url": {
           "type": [
