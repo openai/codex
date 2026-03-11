@@ -42,7 +42,15 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 
-/// Request coming from the agent that needs user approval.
+/// An interactive approval request from an agent thread awaiting user decision.
+///
+/// Each variant carries a `thread_id` and optional `thread_label` so the UI
+/// can display which thread originated the request and route the user's
+/// response back to the correct thread via [`ThreadScopedOp`].
+///
+/// Approval requests arrive both from the active thread (shown inline) and
+/// from inactive background threads (bubbled up via the pending-approval
+/// queue in `App`).
 #[derive(Clone, Debug)]
 pub(crate) enum ApprovalRequest {
     Exec {

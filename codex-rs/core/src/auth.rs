@@ -835,9 +835,18 @@ impl Debug for CachedAuth {
 }
 
 #[derive(Clone)]
+/// One entry in the auth override stack managed by [`AuthManager`].
+///
+/// Each in-process app-server session pushes an entry when it starts and
+/// removes it (via [`ExternalAuthOverrideGuard`]) when it shuts down. The
+/// most recent entry wins: its `refresher` is used for token refresh and its
+/// `forced_workspace_id` constrains workspace selection. A `None` workspace
+/// means "inherit from the next entry down the stack (or the base setting)."
 struct ExternalAuthOverrideEntry {
+    /// Unique identifier used by the guard to remove this specific entry.
     id: u64,
     refresher: Arc<dyn ExternalAuthRefresher>,
+    /// Workspace restriction for this override scope, or `None` to inherit.
     forced_workspace_id: Option<String>,
 }
 
@@ -987,16 +996,40 @@ impl UnauthorizedRecovery {
 /// `reload()` is called explicitly. This matches the design goal of avoiding
 /// different parts of the program seeing inconsistent auth data mid‑run.
 #[derive(Debug)]
+/// Central authority for authentication credentials and token lifecycle.
+///
+/// `AuthManager` loads, caches, and refreshes auth credentials (API key or
+/// ChatGPT OAuth tokens) and distributes them to threads and app-server
+/// sessions. It is shared via `Arc` and is safe to call from any thread.
+///
+/// In-process app-server sessions may temporarily redirect token refresh by
+/// pushing an [`ExternalAuthOverrideEntry`] onto the override stack. The
+/// stack uses RAII guards ([`ExternalAuthOverrideGuard`]) so cleanup is
+/// automatic. See [`push_external_auth_override`](Self::push_external_auth_override)
+/// for the nesting contract.
 pub struct AuthManager {
     codex_home: PathBuf,
+    /// Cached auth credentials; refreshed lazily on access.
     inner: RwLock<CachedAuth>,
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
+    /// Base workspace restriction, independent of any override.
     forced_chatgpt_workspace_id: RwLock<Option<String>>,
+    /// Stack of active auth overrides, most recent last.
     external_auth_overrides: RwLock<Vec<ExternalAuthOverrideEntry>>,
     next_external_auth_override_id: AtomicU64,
 }
 
+/// RAII guard that removes an auth override from the [`AuthManager`] stack on drop.
+///
+/// Returned by [`AuthManager::push_external_auth_override`]. The guard holds
+/// an `Arc<AuthManager>` reference, so the manager stays alive at least as
+/// long as the guard. Dropping the guard removes exactly the entry with the
+/// matching `id`, even if other entries were pushed or removed in the interim.
+///
+/// Callers that need nested auth scopes (e.g. a child agent spawned inside an
+/// in-process session) simply hold multiple guards; the stack unwinds in drop
+/// order.
 pub struct ExternalAuthOverrideGuard {
     auth_manager: Arc<AuthManager>,
     id: u64,
@@ -1104,6 +1137,17 @@ impl AuthManager {
         }
     }
 
+    /// Pushes an auth override onto the stack and returns an RAII guard.
+    ///
+    /// While the guard is alive, `refresh_external_auth` and
+    /// `forced_chatgpt_workspace_id` consult this entry (if it is still the
+    /// topmost). Dropping the guard removes the entry regardless of stack
+    /// position.
+    ///
+    /// Pass `forced_workspace_id: None` to inherit the workspace restriction
+    /// from the next entry down the stack (or the base setting). This is the
+    /// common case for child agents that should run in the same workspace as
+    /// their parent session.
     pub fn push_external_auth_override(
         self: &Arc<Self>,
         refresher: Arc<dyn ExternalAuthRefresher>,

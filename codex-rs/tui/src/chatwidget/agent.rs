@@ -339,6 +339,21 @@ enum PendingPatchApprovalRequest {
 /// All fields except `mcp_elicitations` are turn-scoped and cleared on turn
 /// completion or abort via [`clear_turn_scoped`](Self::clear_turn_scoped).
 #[derive(Default)]
+/// Bookkeeping for outstanding interactive server requests awaiting user response.
+///
+/// The app-server sends typed `ServerRequest` variants when it needs a human
+/// decision (tool approval, patch review, elicitation, etc.). Each request is
+/// registered here with a `RequestId` so that when the user responds (via
+/// `Op`), the agent can look up the correct request and send the resolution
+/// back to the app-server.
+///
+/// Keys are `(thread_id, item_id)` tuples so requests from different threads
+/// never collide. Turn-scoped entries are bulk-cleared on `TurnComplete` /
+/// `TurnAborted` via [`clear_turn_scoped`](Self::clear_turn_scoped).
+///
+/// `request_user_input` uses a `VecDeque<RequestId>` per `(thread_id,
+/// turn_id)` because multiple user-input prompts can be queued for the same
+/// turn and must be answered in FIFO order.
 struct PendingServerRequests {
     exec_approvals: HashMap<(String, String), PendingExecApprovalRequest>,
     patch_approvals: HashMap<(String, String), PendingPatchApprovalRequest>,
@@ -346,6 +361,9 @@ struct PendingServerRequests {
     request_permissions: HashMap<(String, String), RequestId>,
     request_user_input: HashMap<(String, String), VecDeque<RequestId>>,
     dynamic_tool_calls: HashMap<(String, String), RequestId>,
+    /// File changes accumulated from `ItemStarted` notifications, keyed by
+    /// `(thread_id, item_id)`. Retrieved when the corresponding patch-approval
+    /// `ServerRequest` arrives and needs file-change context for the UI.
     pending_file_changes: HashMap<(String, String), HashMap<PathBuf, FileChange>>,
 }
 
@@ -355,10 +373,19 @@ struct PendingMcpElicitationRequest {
     request_id: codex_protocol::mcp::RequestId,
 }
 
+/// An `Op` tagged with the thread it should be routed to.
+///
+/// The `ChatWidget` sends `ThreadScopedOp` values through the
+/// `thread_scoped_op_tx` channel when an operation targets a thread other
+/// than the one the widget is currently displaying (e.g. approving a request
+/// from an inactive background thread). The agent loop receives these and
+/// routes them to the correct in-process session or direct `CodexThread`.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ThreadScopedOp {
     pub(crate) thread_id: ThreadId,
     pub(crate) op: Op,
+    /// The active turn ID at the time the op was created, used for interrupt
+    /// requests that need to identify which turn to cancel.
     pub(crate) interrupt_turn_id: Option<String>,
 }
 

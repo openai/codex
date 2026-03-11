@@ -20,19 +20,25 @@ impl ElicitationRequestKey {
 }
 
 #[derive(Debug, Default)]
-// Tracks which interactive prompts are still unresolved in the thread-event buffer.
-//
-// Thread snapshots are replayed when switching threads/agents. Most events should replay
-// verbatim, but interactive prompts (approvals, request_user_input, MCP elicitations) must
-// only replay if they are still pending. This state is updated from:
-// - inbound events (`note_event`)
-// - outbound ops that resolve a prompt (`note_outbound_op`)
-// - buffer eviction (`note_evicted_event`)
-//
-// We keep both fast lookup sets (for snapshot filtering by call_id/request key) and
-// turn-indexed queues/vectors so `TurnComplete`/`TurnAborted` can clear stale prompts tied
-// to a turn. `request_user_input` removal is FIFO because the overlay answers queued prompts
-// in FIFO order for a shared `turn_id`.
+/// Tracks which interactive prompts are still unresolved in the thread-event buffer.
+///
+/// Thread snapshots are replayed when switching threads/agents. Most events
+/// replay verbatim, but interactive prompts (approvals, user-input requests,
+/// MCP elicitations) must only replay if they are still pending — otherwise
+/// the user would see already-answered approval dialogs reappear on every
+/// thread switch.
+///
+/// State is updated from three sources:
+/// - inbound events ([`note_event`](Self::note_event)) — registers new prompts
+/// - outbound ops ([`note_outbound_op`](Self::note_outbound_op)) — marks prompts resolved
+/// - buffer eviction ([`note_evicted_event`](Self::note_evicted_event)) — cleans up when
+///   the replay timeline exceeds capacity
+///
+/// We maintain both fast-lookup `HashSet`s (keyed by `call_id` or
+/// `ElicitationRequestKey` for snapshot filtering) and turn-indexed `HashMap`s
+/// so that `TurnComplete`/`TurnAborted` can bulk-clear all prompts tied to a
+/// turn. `request_user_input` removal is FIFO because the overlay answers
+/// queued prompts in arrival order for a shared `turn_id`.
 pub(super) struct PendingInteractiveReplayState {
     exec_approval_call_ids: HashSet<String>,
     exec_approval_call_ids_by_turn_id: HashMap<String, Vec<String>>,

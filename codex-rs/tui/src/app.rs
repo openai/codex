@@ -127,6 +127,12 @@ use crate::bottom_pane::ThreadUserInputRequest;
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 
+/// An interactive prompt extracted from an inactive thread's event stream.
+///
+/// When a background thread emits an approval, elicitation, or user-input
+/// request while it is not the active thread, `App` wraps the event in this
+/// enum and pushes it to the `ChatWidget` so the user can respond without
+/// switching threads.
 enum ThreadInteractiveRequest {
     Approval(ApprovalRequest),
     McpServerElicitation(McpServerElicitationFormRequest),
@@ -280,14 +286,28 @@ enum ThreadReplayItem {
     HistoryCell(Arc<dyn HistoryCell>),
 }
 
+/// Per-thread event buffer that records the replay timeline for thread switching.
+///
+/// Each thread gets its own store. When the user switches to a thread, the
+/// store's [`snapshot`](Self::snapshot) is replayed into a fresh `ChatWidget`
+/// to reconstruct the conversation view. Interactive prompts that have already
+/// been resolved are filtered out by [`PendingInteractiveReplayState`] so
+/// answered approvals do not reappear.
+///
+/// The `active` flag tracks whether this store's channel receiver is currently
+/// owned by the `App`'s `select!` loop. Only active stores forward events
+/// through the channel; inactive stores buffer silently.
 #[derive(Debug)]
 struct ThreadEventStore {
     session_configured: Option<Event>,
     replay_timeline: VecDeque<ThreadReplayItem>,
+    /// Deduplication set for `UserMessage` events by event ID.
     user_message_ids: HashSet<String>,
     pending_interactive_replay: PendingInteractiveReplayState,
     input_state: Option<ThreadInputState>,
+    /// Maximum number of replay items before oldest are evicted.
     capacity: usize,
+    /// Whether this thread's channel receiver is currently in the active select loop.
     active: bool,
 }
 
@@ -425,6 +445,13 @@ impl ThreadEventStore {
     }
 }
 
+/// Channel triple (sender, receiver, store) for one thread's event stream.
+///
+/// The receiver is `Option` because it is *taken* when the thread becomes
+/// active (moved into `App::active_thread_rx` for the `select!` loop) and
+/// *returned* when the thread becomes inactive. While the receiver is taken,
+/// the store's `active` flag is `true` and events flow through the channel.
+/// While inactive, events are buffered in the store only.
 #[derive(Debug)]
 struct ThreadEventChannel {
     sender: mpsc::Sender<Event>,
