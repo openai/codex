@@ -119,6 +119,13 @@ jobs:
 
           bazel_console_log="$(mktemp)"
 
+          print_interesting_test_log_lines() {
+            local test_log="$1"
+            local failure_pattern='panicked at|assertion .* failed|snapshot assertion|^failures:$|^failures:|^---- .* stdout ----$|^thread '\''.*'\'' panicked|^Error: |^Caused by:|^test result: FAILED'
+
+            grep -nE -C 3 "$failure_pattern" "$test_log" | tail -n 120
+          }
+
           print_failed_bazel_test_logs() {
             local console_log="$1"
             local testlogs_dir
@@ -144,9 +151,12 @@ jobs:
               rel_path="${rel_path/:/\/}"
               local test_log="${testlogs_dir}/${rel_path}/test.log"
 
-              echo "::group::Bazel test log tail for ${target}"
+              echo "::group::Bazel test summary for ${target}"
               if [[ -f "$test_log" ]]; then
-                tail -n 200 "$test_log"
+                if ! print_interesting_test_log_lines "$test_log"; then
+                  echo "No focused failure lines matched; showing tail instead."
+                  tail -n 120 "$test_log"
+                fi
               else
                 echo "Missing test log: $test_log"
               fi
@@ -157,6 +167,8 @@ jobs:
           bazel_args=(
             test
             //...
+            --test_summary=terse
+            --noverbose_test_summary
             --test_verbose_timeout_warnings
             --build_metadata=REPO_URL=https://github.com/openai/codex.git
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
