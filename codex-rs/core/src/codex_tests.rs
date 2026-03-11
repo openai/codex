@@ -809,6 +809,18 @@ async fn record_initial_history_reconstructs_resumed_transcript() {
 }
 
 #[tokio::test]
+async fn record_initial_history_new_defers_initial_context_until_first_turn() {
+    let (session, _turn_context) = make_session_and_context().await;
+
+    session.record_initial_history(InitialHistory::New).await;
+
+    let history = session.clone_history().await;
+    assert_eq!(history.raw_items().to_vec(), Vec::<ResponseItem>::new());
+    assert!(session.reference_context_item().await.is_none());
+    assert_eq!(session.previous_turn_settings().await, None);
+}
+
+#[tokio::test]
 async fn resumed_history_injects_initial_context_on_first_context_update_only() {
     let (session, turn_context) = make_session_and_context().await;
     let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;

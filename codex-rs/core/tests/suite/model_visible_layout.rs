@@ -53,6 +53,10 @@ fn agents_message_count(request: &ResponsesRequest) -> usize {
         .count()
 }
 
+fn developer_message_count(request: &ResponsesRequest) -> usize {
+    request.message_input_text_groups("developer").len()
+}
+
 fn format_environment_context_subagents_snapshot(subagents: &[&str]) -> String {
     let subagents_block = if subagents.is_empty() {
         String::new()
@@ -160,6 +164,16 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2, "expected two requests");
+    assert_eq!(
+        developer_message_count(&requests[0]),
+        1,
+        "expected the first request to inject initial context once"
+    );
+    assert_eq!(
+        developer_message_count(&requests[1]),
+        2,
+        "expected one baseline developer message plus one turn-diff developer message"
+    );
     insta::assert_snapshot!(
         "model_visible_layout_turn_overrides",
         format_labeled_requests_snapshot(
