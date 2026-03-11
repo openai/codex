@@ -1686,6 +1686,10 @@
       "properties": {
         "sandbox": {
           "$ref": "#/definitions/WindowsSandboxModeToml"
+        },
+        "sandbox_private_desktop": {
+          "description": "Defaults to `true`. Set to `false` to launch the final sandboxed child process on `Winsta0\\\\Default` instead of a private desktop.",
+          "type": "boolean"
         }
       },
       "type": "object"

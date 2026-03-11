@@ -73,6 +73,10 @@ impl ShellHandler {
             network: turn_context.network.clone(),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
+            windows_sandbox_private_desktop: turn_context
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
             justification: params.justification.clone(),
             arg0: None,
         }
@@ -123,6 +127,10 @@ impl ShellCommandHandler {
             network: turn_context.network.clone(),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
+            windows_sandbox_private_desktop: turn_context
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
             justification: params.justification.clone(),
             arg0: None,
         })

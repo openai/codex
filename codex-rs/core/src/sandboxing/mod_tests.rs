@@ -169,6 +169,7 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
             codex_linux_sandbox_exe: None,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
         })
         .expect("transform");
 
@@ -502,6 +503,7 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
             codex_linux_sandbox_exe: None,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
         })
         .expect("transform");
 
@@ -574,6 +576,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
             codex_linux_sandbox_exe: None,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
         })
         .expect("transform");
 

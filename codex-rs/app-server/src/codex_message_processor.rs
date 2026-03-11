@@ -1684,6 +1684,10 @@ impl CodexMessageProcessor {
                 .map(codex_core::config::StartedNetworkProxy::proxy),
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level,
+            windows_sandbox_private_desktop: self
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
             justification: None,
             arg0: None,
         };

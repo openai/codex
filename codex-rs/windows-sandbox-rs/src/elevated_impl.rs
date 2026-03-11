@@ -196,6 +196,7 @@ mod windows_impl {
         cwd: PathBuf,
         env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
+        use_private_desktop: bool,
         stdin_pipe: String,
         stdout_pipe: String,
         stderr_pipe: String,
@@ -210,6 +211,7 @@ mod windows_impl {
         cwd: &Path,
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
+        use_private_desktop: bool,
     ) -> Result<CaptureResult> {
         let policy = parse_policy(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
@@ -302,6 +304,7 @@ mod windows_impl {
             cwd: cwd.to_path_buf(),
             env_map: env_map.clone(),
             timeout_ms,
+            use_private_desktop,
             stdin_pipe: stdin_name.clone(),
             stdout_pipe: stdout_name.clone(),
             stderr_pipe: stderr_name.clone(),
@@ -538,6 +541,7 @@ mod stub {
         _cwd: &Path,
         _env_map: HashMap<String, String>,
         _timeout_ms: Option<u64>,
+        _use_private_desktop: bool,
     ) -> Result<CaptureResult> {
         bail!("Windows sandbox is only available on Windows")
     }

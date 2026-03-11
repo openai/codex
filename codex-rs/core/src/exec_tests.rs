@@ -319,6 +319,7 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
         network: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+        windows_sandbox_private_desktop: false,
         justification: None,
         arg0: None,
     };
@@ -375,6 +376,7 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
         network: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+        windows_sandbox_private_desktop: false,
         justification: None,
         arg0: None,
     };
