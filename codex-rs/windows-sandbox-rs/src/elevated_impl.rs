@@ -1,4 +1,19 @@
+use std::collections::HashMap;
+use std::path::Path;
+
+pub struct ElevatedSandboxCaptureRequest<'a> {
+    pub policy_json_or_preset: &'a str,
+    pub sandbox_policy_cwd: &'a Path,
+    pub codex_home: &'a Path,
+    pub command: Vec<String>,
+    pub cwd: &'a Path,
+    pub env_map: HashMap<String, String>,
+    pub timeout_ms: Option<u64>,
+    pub proxy_enforced: bool,
+}
+
 mod windows_impl {
+    use super::ElevatedSandboxCaptureRequest;
     use crate::acl::allow_null_device;
     use crate::allow::compute_allow_paths;
     use crate::allow::AllowDenyPaths;
@@ -203,14 +218,18 @@ mod windows_impl {
 
     /// Launches the command runner under the sandbox user and captures its output.
     pub fn run_windows_sandbox_capture(
-        policy_json_or_preset: &str,
-        sandbox_policy_cwd: &Path,
-        codex_home: &Path,
-        command: Vec<String>,
-        cwd: &Path,
-        mut env_map: HashMap<String, String>,
-        timeout_ms: Option<u64>,
+        request: ElevatedSandboxCaptureRequest<'_>,
     ) -> Result<CaptureResult> {
+        let ElevatedSandboxCaptureRequest {
+            policy_json_or_preset,
+            sandbox_policy_cwd,
+            codex_home,
+            command,
+            cwd,
+            mut env_map,
+            timeout_ms,
+            proxy_enforced,
+        } = request;
         let policy = parse_policy(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
@@ -223,8 +242,14 @@ mod windows_impl {
 
         let logs_base_dir: Option<&Path> = Some(sandbox_base.as_path());
         log_start(&command, logs_base_dir);
-        let sandbox_creds =
-            require_logon_sandbox_creds(&policy, sandbox_policy_cwd, cwd, &env_map, codex_home)?;
+        let sandbox_creds = require_logon_sandbox_creds(
+            &policy,
+            sandbox_policy_cwd,
+            cwd,
+            &env_map,
+            codex_home,
+            proxy_enforced,
+        )?;
         // Build capability SID for ACL grants.
         if matches!(
             &policy,
@@ -515,11 +540,9 @@ pub use windows_impl::run_windows_sandbox_capture;
 
 #[cfg(not(target_os = "windows"))]
 mod stub {
+    use super::ElevatedSandboxCaptureRequest;
     use anyhow::bail;
     use anyhow::Result;
-    use codex_protocol::protocol::SandboxPolicy;
-    use std::collections::HashMap;
-    use std::path::Path;
 
     #[derive(Debug, Default)]
     pub struct CaptureResult {
@@ -531,13 +554,7 @@ mod stub {
 
     /// Stub implementation for non-Windows targets; sandboxing only works on Windows.
     pub fn run_windows_sandbox_capture(
-        _policy_json_or_preset: &str,
-        _sandbox_policy_cwd: &Path,
-        _codex_home: &Path,
-        _command: Vec<String>,
-        _cwd: &Path,
-        _env_map: HashMap<String, String>,
-        _timeout_ms: Option<u64>,
+        _request: ElevatedSandboxCaptureRequest<'_>,
     ) -> Result<CaptureResult> {
         bail!("Windows sandbox is only available on Windows")
     }

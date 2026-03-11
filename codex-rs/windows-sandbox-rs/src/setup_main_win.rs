@@ -84,6 +84,10 @@ struct Payload {
     command_cwd: PathBuf,
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
+    #[serde(default)]
+    proxy_ports: Vec<u16>,
+    #[serde(default)]
+    allow_local_binding: bool,
     real_user: String,
     #[serde(default)]
     mode: SetupMode,
@@ -510,6 +514,8 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             &payload.codex_home,
             &payload.offline_username,
             &payload.online_username,
+            &payload.proxy_ports,
+            payload.allow_local_binding,
             log,
         );
         if let Err(err) = provision_result {
@@ -572,6 +578,21 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     };
     let mut refresh_errors: Vec<String> = Vec::new();
     if !refresh_only {
+        let proxy_allowlist_result = firewall::ensure_offline_proxy_allowlist(
+            &offline_sid_str,
+            &payload.proxy_ports,
+            payload.allow_local_binding,
+            log,
+        );
+        if let Err(err) = proxy_allowlist_result {
+            if extract_setup_failure(&err).is_some() {
+                return Err(err);
+            }
+            return Err(anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("ensure offline proxy allowlist failed: {err}"),
+            )));
+        }
         let firewall_result = firewall::ensure_offline_outbound_block(&offline_sid_str, log);
         if let Err(err) = firewall_result {
             if extract_setup_failure(&err).is_some() {
