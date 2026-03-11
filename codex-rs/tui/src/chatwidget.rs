@@ -4334,6 +4334,9 @@ impl ChatWidget {
             && !matches!(cmd, SlashCommand::Model | SlashCommand::Review)
         {
             self.queue_user_message(format!("/{}", cmd.command()).into());
+            // This busy-path queueing only happens for live command dispatch. Queued replay
+            // executes slash drafts only while idle, and handle_serialized_slash_command() queues
+            // instead of dispatching when a task is already running.
             return QueueReplayControl::Stop;
         }
         match cmd {
