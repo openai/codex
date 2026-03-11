@@ -10,6 +10,7 @@ use crate::exec_env::create_env;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::ToolRouter;
+use crate::tools::code_mode_description::code_mode_tool_reference;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
 use crate::tools::js_repl::resolve_compatible_node;
@@ -324,25 +325,6 @@ fn truncate_code_mode_result(
 
 async fn build_enabled_tools(exec: &ExecContext) -> Vec<EnabledTool> {
     let router = build_nested_router(exec).await;
-    let mcp_tool_names = exec
-        .session
-        .services
-        .mcp_connection_manager
-        .read()
-        .await
-        .list_all_tools()
-        .await
-        .into_iter()
-        .map(|(qualified_name, tool_info)| {
-            (
-                qualified_name,
-                (
-                    vec!["mcp".to_string(), tool_info.server_name],
-                    tool_info.tool_name,
-                ),
-            )
-        })
-        .collect::<std::collections::HashMap<_, _>>();
     let mut out = Vec::new();
     for spec in router.specs() {
         let tool_name = spec.name().to_string();
@@ -350,16 +332,12 @@ async fn build_enabled_tools(exec: &ExecContext) -> Vec<EnabledTool> {
             continue;
         }
 
-        let (namespace, name) = if let Some((namespace, name)) = mcp_tool_names.get(&tool_name) {
-            (namespace.clone(), name.clone())
-        } else {
-            (Vec::new(), tool_name.clone())
-        };
+        let reference = code_mode_tool_reference(&tool_name);
 
         out.push(EnabledTool {
             tool_name,
-            namespace,
-            name,
+            namespace: reference.namespace,
+            name: reference.tool_key,
             kind: tool_kind_for_spec(&spec),
         });
     }

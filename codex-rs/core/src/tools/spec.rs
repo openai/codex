@@ -8,6 +8,7 @@ use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
+use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
 use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
@@ -1764,6 +1765,20 @@ pub fn create_tools_json_for_responses_api(
     Ok(tools_json)
 }
 
+fn push_tool_spec(
+    builder: &mut ToolRegistryBuilder,
+    spec: ToolSpec,
+    supports_parallel_tool_calls: bool,
+    code_mode_enabled: bool,
+) {
+    let spec = augment_tool_spec_for_code_mode(spec, code_mode_enabled);
+    if supports_parallel_tool_calls {
+        builder.push_spec_with_parallel_support(spec, true);
+    } else {
+        builder.push_spec(spec);
+    }
+}
+
 pub(crate) fn mcp_tool_to_openai_tool(
     fully_qualified_name: String,
     tool: rmcp::model::Tool,
@@ -2031,26 +2046,45 @@ pub(crate) fn build_specs(
             .collect::<Vec<_>>();
         enabled_tool_names.sort();
         enabled_tool_names.dedup();
-        builder.push_spec(create_code_mode_tool(&enabled_tool_names));
+        push_tool_spec(
+            &mut builder,
+            create_code_mode_tool(&enabled_tool_names),
+            false,
+            config.code_mode_enabled,
+        );
         builder.register_handler(PUBLIC_TOOL_NAME, code_mode_handler);
     }
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
-            builder.push_spec_with_parallel_support(
+            push_tool_spec(
+                &mut builder,
                 create_shell_tool(request_permission_enabled),
                 true,
+                config.code_mode_enabled,
             );
         }
         ConfigShellToolType::Local => {
-            builder.push_spec_with_parallel_support(ToolSpec::LocalShell {}, true);
+            push_tool_spec(
+                &mut builder,
+                ToolSpec::LocalShell {},
+                true,
+                config.code_mode_enabled,
+            );
         }
         ConfigShellToolType::UnifiedExec => {
-            builder.push_spec_with_parallel_support(
+            push_tool_spec(
+                &mut builder,
                 create_exec_command_tool(config.allow_login_shell, request_permission_enabled),
                 true,
+                config.code_mode_enabled,
             );
-            builder.push_spec(create_write_stdin_tool());
+            push_tool_spec(
+                &mut builder,
+                create_write_stdin_tool(),
+                false,
+                config.code_mode_enabled,
+            );
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
         }
@@ -2058,9 +2092,11 @@ pub(crate) fn build_specs(
             // Do nothing.
         }
         ConfigShellToolType::ShellCommand => {
-            builder.push_spec_with_parallel_support(
+            push_tool_spec(
+                &mut builder,
                 create_shell_command_tool(config.allow_login_shell, request_permission_enabled),
                 true,
+                config.code_mode_enabled,
             );
         }
     }
@@ -2074,49 +2110,104 @@ pub(crate) fn build_specs(
     }
 
     if mcp_tools.is_some() {
-        builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
-        builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
-        builder.push_spec_with_parallel_support(create_read_mcp_resource_tool(), true);
+        push_tool_spec(
+            &mut builder,
+            create_list_mcp_resources_tool(),
+            true,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_list_mcp_resource_templates_tool(),
+            true,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_read_mcp_resource_tool(),
+            true,
+            config.code_mode_enabled,
+        );
         builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
         builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
         builder.register_handler("read_mcp_resource", mcp_resource_handler);
     }
 
-    builder.push_spec(PLAN_TOOL.clone());
+    push_tool_spec(
+        &mut builder,
+        PLAN_TOOL.clone(),
+        false,
+        config.code_mode_enabled,
+    );
     builder.register_handler("update_plan", plan_handler);
 
     if config.js_repl_enabled {
-        builder.push_spec(create_js_repl_tool());
-        builder.push_spec(create_js_repl_reset_tool());
+        push_tool_spec(
+            &mut builder,
+            create_js_repl_tool(),
+            false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_js_repl_reset_tool(),
+            false,
+            config.code_mode_enabled,
+        );
         builder.register_handler("js_repl", js_repl_handler);
         builder.register_handler("js_repl_reset", js_repl_reset_handler);
     }
 
     if config.request_user_input {
-        builder.push_spec(create_request_user_input_tool(CollaborationModesConfig {
-            default_mode_request_user_input: config.default_mode_request_user_input,
-        }));
+        push_tool_spec(
+            &mut builder,
+            create_request_user_input_tool(CollaborationModesConfig {
+                default_mode_request_user_input: config.default_mode_request_user_input,
+            }),
+            false,
+            config.code_mode_enabled,
+        );
         builder.register_handler("request_user_input", request_user_input_handler);
     }
 
     if config.request_permissions_tool_enabled {
-        builder.push_spec(create_request_permissions_tool());
+        push_tool_spec(
+            &mut builder,
+            create_request_permissions_tool(),
+            false,
+            config.code_mode_enabled,
+        );
         builder.register_handler("request_permissions", request_permissions_handler);
     }
 
     if config.search_tool {
         let app_tools = app_tools.unwrap_or_default();
-        builder.push_spec_with_parallel_support(create_search_tool_bm25_tool(&app_tools), true);
+        push_tool_spec(
+            &mut builder,
+            create_search_tool_bm25_tool(&app_tools),
+            true,
+            config.code_mode_enabled,
+        );
         builder.register_handler(SEARCH_TOOL_BM25_TOOL_NAME, search_tool_handler);
     }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
             ApplyPatchToolType::Freeform => {
-                builder.push_spec(create_apply_patch_freeform_tool());
+                push_tool_spec(
+                    &mut builder,
+                    create_apply_patch_freeform_tool(),
+                    false,
+                    config.code_mode_enabled,
+                );
             }
             ApplyPatchToolType::Function => {
-                builder.push_spec(create_apply_patch_json_tool());
+                push_tool_spec(
+                    &mut builder,
+                    create_apply_patch_json_tool(),
+                    false,
+                    config.code_mode_enabled,
+                );
             }
         }
         builder.register_handler("apply_patch", apply_patch_handler);
@@ -2127,7 +2218,12 @@ pub(crate) fn build_specs(
         .contains(&"grep_files".to_string())
     {
         let grep_files_handler = Arc::new(GrepFilesHandler);
-        builder.push_spec_with_parallel_support(create_grep_files_tool(), true);
+        push_tool_spec(
+            &mut builder,
+            create_grep_files_tool(),
+            true,
+            config.code_mode_enabled,
+        );
         builder.register_handler("grep_files", grep_files_handler);
     }
 
@@ -2136,7 +2232,12 @@ pub(crate) fn build_specs(
         .contains(&"read_file".to_string())
     {
         let read_file_handler = Arc::new(ReadFileHandler);
-        builder.push_spec_with_parallel_support(create_read_file_tool(), true);
+        push_tool_spec(
+            &mut builder,
+            create_read_file_tool(),
+            true,
+            config.code_mode_enabled,
+        );
         builder.register_handler("read_file", read_file_handler);
     }
 
@@ -2146,7 +2247,12 @@ pub(crate) fn build_specs(
         .any(|tool| tool == "list_dir")
     {
         let list_dir_handler = Arc::new(ListDirHandler);
-        builder.push_spec_with_parallel_support(create_list_dir_tool(), true);
+        push_tool_spec(
+            &mut builder,
+            create_list_dir_tool(),
+            true,
+            config.code_mode_enabled,
+        );
         builder.register_handler("list_dir", list_dir_handler);
     }
 
@@ -2155,7 +2261,12 @@ pub(crate) fn build_specs(
         .contains(&"test_sync_tool".to_string())
     {
         let test_sync_handler = Arc::new(TestSyncHandler);
-        builder.push_spec_with_parallel_support(create_test_sync_tool(), true);
+        push_tool_spec(
+            &mut builder,
+            create_test_sync_tool(),
+            true,
+            config.code_mode_enabled,
+        );
         builder.register_handler("test_sync_tool", test_sync_handler);
     }
 
@@ -2176,45 +2287,90 @@ pub(crate) fn build_specs(
             ),
         };
 
-        builder.push_spec(ToolSpec::WebSearch {
-            external_web_access: Some(external_web_access),
-            filters: config
-                .web_search_config
-                .as_ref()
-                .and_then(|cfg| cfg.filters.clone().map(Into::into)),
-            user_location: config
-                .web_search_config
-                .as_ref()
-                .and_then(|cfg| cfg.user_location.clone().map(Into::into)),
-            search_context_size: config
-                .web_search_config
-                .as_ref()
-                .and_then(|cfg| cfg.search_context_size),
-            search_content_types,
-        });
+        push_tool_spec(
+            &mut builder,
+            ToolSpec::WebSearch {
+                external_web_access: Some(external_web_access),
+                filters: config
+                    .web_search_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.filters.clone().map(Into::into)),
+                user_location: config
+                    .web_search_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.user_location.clone().map(Into::into)),
+                search_context_size: config
+                    .web_search_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.search_context_size),
+                search_content_types,
+            },
+            false,
+            config.code_mode_enabled,
+        );
     }
 
     if config.image_gen_tool {
-        builder.push_spec(ToolSpec::ImageGeneration {
-            output_format: "png".to_string(),
-        });
+        push_tool_spec(
+            &mut builder,
+            ToolSpec::ImageGeneration {
+                output_format: "png".to_string(),
+            },
+            false,
+            config.code_mode_enabled,
+        );
     }
 
-    builder.push_spec_with_parallel_support(create_view_image_tool(), true);
+    push_tool_spec(
+        &mut builder,
+        create_view_image_tool(),
+        true,
+        config.code_mode_enabled,
+    );
     builder.register_handler("view_image", view_image_handler);
 
     if config.artifact_tools {
-        builder.push_spec(create_artifacts_tool());
+        push_tool_spec(
+            &mut builder,
+            create_artifacts_tool(),
+            false,
+            config.code_mode_enabled,
+        );
         builder.register_handler("artifacts", artifacts_handler);
     }
 
     if config.collab_tools {
         let multi_agent_handler = Arc::new(MultiAgentHandler);
-        builder.push_spec(create_spawn_agent_tool(config));
-        builder.push_spec(create_send_input_tool());
-        builder.push_spec(create_resume_agent_tool());
-        builder.push_spec(create_wait_tool());
-        builder.push_spec(create_close_agent_tool());
+        push_tool_spec(
+            &mut builder,
+            create_spawn_agent_tool(config),
+            false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_send_input_tool(),
+            false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_resume_agent_tool(),
+            false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_wait_tool(),
+            false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_close_agent_tool(),
+            false,
+            config.code_mode_enabled,
+        );
         builder.register_handler("spawn_agent", multi_agent_handler.clone());
         builder.register_handler("send_input", multi_agent_handler.clone());
         builder.register_handler("resume_agent", multi_agent_handler.clone());
@@ -2224,10 +2380,20 @@ pub(crate) fn build_specs(
 
     if config.agent_jobs_tools {
         let agent_jobs_handler = Arc::new(BatchJobHandler);
-        builder.push_spec(create_spawn_agents_on_csv_tool());
+        push_tool_spec(
+            &mut builder,
+            create_spawn_agents_on_csv_tool(),
+            false,
+            config.code_mode_enabled,
+        );
         builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
         if config.agent_jobs_worker_tools {
-            builder.push_spec(create_report_agent_job_result_tool());
+            push_tool_spec(
+                &mut builder,
+                create_report_agent_job_result_tool(),
+                false,
+                config.code_mode_enabled,
+            );
             builder.register_handler("report_agent_job_result", agent_jobs_handler);
         }
     }
@@ -2239,7 +2405,12 @@ pub(crate) fn build_specs(
         for (name, tool) in entries.into_iter() {
             match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
                 Ok(converted_tool) => {
-                    builder.push_spec(ToolSpec::Function(converted_tool));
+                    push_tool_spec(
+                        &mut builder,
+                        ToolSpec::Function(converted_tool),
+                        false,
+                        config.code_mode_enabled,
+                    );
                     builder.register_handler(name, mcp_handler.clone());
                 }
                 Err(e) => {
@@ -2253,7 +2424,12 @@ pub(crate) fn build_specs(
         for tool in dynamic_tools {
             match dynamic_tool_to_openai_tool(tool) {
                 Ok(converted_tool) => {
-                    builder.push_spec(ToolSpec::Function(converted_tool));
+                    push_tool_spec(
+                        &mut builder,
+                        ToolSpec::Function(converted_tool),
+                        false,
+                        config.code_mode_enabled,
+                    );
                     builder.register_handler(tool.name.clone(), dynamic_tool_handler.clone());
                 }
                 Err(e) => {
@@ -4153,6 +4329,83 @@ Examples of valid command strings:
                 strict: false,
                 output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             })
+        );
+    }
+
+    #[test]
+    fn code_mode_augments_builtin_tool_descriptions_with_typed_sample() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CodeMode);
+        features.enable(Feature::UnifiedExec);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        let ToolSpec::Function(ResponsesApiTool { description, .. }) =
+            &find_tool(&tools, "view_image").spec
+        else {
+            panic!("expected function tool");
+        };
+
+        assert_eq!(
+            description,
+            "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nCode mode declaration:\n```ts\nimport { tools } from \"tools.js\";\nfunction view_image(args: {\n  path: string;\n}): Promise<unknown> {\n  return tools.view_image(args);\n}\n```"
+        );
+    }
+
+    #[test]
+    fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CodeMode);
+        features.enable(Feature::UnifiedExec);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+
+        let (tools, _) = build_specs(
+            &tools_config,
+            Some(HashMap::from([(
+                "mcp__sample__echo".to_string(),
+                mcp_tool(
+                    "echo",
+                    "Echo text",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "message": {"type": "string"}
+                        },
+                        "required": ["message"],
+                        "additionalProperties": false
+                    }),
+                ),
+            )])),
+            None,
+            &[],
+        )
+        .build();
+
+        let ToolSpec::Function(ResponsesApiTool { description, .. }) =
+            &find_tool(&tools, "mcp__sample__echo").spec
+        else {
+            panic!("expected function tool");
+        };
+
+        assert_eq!(
+            description,
+            "Echo text\n\nCode mode declaration:\n```ts\nimport { tools } from \"tools/mcp/sample.js\";\nfunction echo(args: {\n  message: string;\n}): Promise<{\n  _meta?: unknown;\n  content: Array<unknown>;\n  isError?: boolean;\n  structuredContent?: unknown;\n}> {\n  return tools.echo(args);\n}\n```"
         );
     }
 
