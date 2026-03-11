@@ -245,6 +245,23 @@ impl FeatureRequirementsToml {
     }
 }
 
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppRequirementToml {
+    pub enabled: Option<bool>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppsRequirementsToml {
+    #[serde(default, flatten)]
+    pub apps: BTreeMap<String, AppRequirementToml>,
+}
+
+impl AppsRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.apps.values().all(|app| app.enabled.is_none())
+    }
+}
+
 /// Base config deserialized from system `requirements.toml` or MDM.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
@@ -254,6 +271,7 @@ pub struct ConfigRequirementsToml {
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
+    pub apps: Option<AppsRequirementsToml>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
     #[serde(rename = "experimental_network")]
@@ -289,6 +307,7 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
+    pub apps: Option<Sourced<AppsRequirementsToml>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
     pub network: Option<Sourced<NetworkRequirementsToml>>,
@@ -325,6 +344,7 @@ impl ConfigRequirementsWithSources {
                 allowed_web_search_modes,
                 feature_requirements,
                 mcp_servers,
+                apps,
                 rules,
                 enforce_residency,
                 network,
@@ -339,6 +359,7 @@ impl ConfigRequirementsWithSources {
             allowed_web_search_modes,
             feature_requirements,
             mcp_servers,
+            apps,
             rules,
             enforce_residency,
             network,
@@ -349,6 +370,7 @@ impl ConfigRequirementsWithSources {
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
+            apps: apps.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
             network: network.map(|sourced| sourced.value),
@@ -399,6 +421,10 @@ impl ConfigRequirementsToml {
                 .as_ref()
                 .is_none_or(FeatureRequirementsToml::is_empty)
             && self.mcp_servers.is_none()
+            && self
+                .apps
+                .as_ref()
+                .is_none_or(AppsRequirementsToml::is_empty)
             && self.rules.is_none()
             && self.enforce_residency.is_none()
             && self.network.is_none()
@@ -415,6 +441,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_web_search_modes,
             feature_requirements,
             mcp_servers,
+            apps: _apps,
             rules,
             enforce_residency,
             network,
@@ -622,6 +649,7 @@ mod tests {
             allowed_web_search_modes,
             feature_requirements,
             mcp_servers,
+            apps,
             rules,
             enforce_residency,
             network,
@@ -636,6 +664,7 @@ mod tests {
             feature_requirements: feature_requirements
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            apps: apps.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             enforce_residency: enforce_residency
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -671,6 +700,7 @@ mod tests {
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
             feature_requirements: Some(feature_requirements.clone()),
             mcp_servers: None,
+            apps: None,
             rules: None,
             enforce_residency: Some(enforce_residency),
             network: None,
@@ -695,6 +725,7 @@ mod tests {
                     enforce_source.clone(),
                 )),
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
                 network: None,
@@ -728,6 +759,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -769,6 +801,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1207,6 +1240,28 @@ mod tests {
                 ]),
                 RequirementSource::Unknown,
             ))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_apps_requirements() -> Result<()> {
+        let toml_str = r#"
+            [apps.connector_123123]
+            enabled = false
+        "#;
+        let requirements: ConfigRequirementsToml = from_str(toml_str)?;
+
+        assert_eq!(
+            requirements.apps,
+            Some(AppsRequirementsToml {
+                apps: BTreeMap::from([(
+                    "connector_123123".to_string(),
+                    AppRequirementToml {
+                        enabled: Some(false),
+                    },
+                )]),
+            })
         );
         Ok(())
     }

@@ -28,6 +28,7 @@ use crate::SandboxState;
 use crate::config::Config;
 use crate::config::types::AppToolApproval;
 use crate::config::types::AppsConfigToml;
+use crate::config_loader::AppsRequirementsToml;
 use crate::default_client::create_client;
 use crate::default_client::is_first_party_chat_originator;
 use crate::default_client::originator;
@@ -693,7 +694,32 @@ fn is_connector_id_allowed_for_originator(connector_id: &str, originator_value: 
 fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {
     let effective_config = config.config_layer_stack.effective_config();
     let apps_config = effective_config.as_table()?.get("apps")?.clone();
-    AppsConfigToml::deserialize(apps_config).ok()
+    let mut apps_config = AppsConfigToml::deserialize(apps_config).ok()?;
+    apply_requirements_apps_constraints(
+        &mut apps_config,
+        config.config_layer_stack.requirements_toml().apps.as_ref(),
+    );
+    Some(apps_config)
+}
+
+fn apply_requirements_apps_constraints(
+    apps_config: &mut AppsConfigToml,
+    requirements_apps_config: Option<&AppsRequirementsToml>,
+) {
+    let Some(requirements_apps_config) = requirements_apps_config else {
+        return;
+    };
+
+    for (app_id, requirement) in &requirements_apps_config.apps {
+        if !app_id.starts_with("connector_") {
+            continue;
+        }
+        if requirement.enabled != Some(false) {
+            continue;
+        }
+        let app = apps_config.apps.entry(app_id.clone()).or_default();
+        app.enabled = false;
+    }
 }
 
 fn app_is_enabled(apps_config: &AppsConfigToml, connector_id: Option<&str>) -> bool {
@@ -892,4 +918,668 @@ fn format_connector_label(name: &str, _id: &str) -> String {
 
 #[cfg(test)]
 #[path = "connectors_tests.rs"]
-mod tests;
+mod tests {
+    use super::*;
+    use crate::config::types::AppConfig;
+    use crate::config::types::AppToolConfig;
+    use crate::config::types::AppToolsConfig;
+    use crate::config::types::AppsDefaultConfig;
+    use crate::config_loader::AppRequirementToml;
+    use crate::mcp_connection_manager::ToolInfo;
+    use pretty_assertions::assert_eq;
+    use rmcp::model::JsonObject;
+    use rmcp::model::Tool;
+    use std::sync::Arc;
+
+    fn annotations(
+        destructive_hint: Option<bool>,
+        open_world_hint: Option<bool>,
+    ) -> ToolAnnotations {
+        ToolAnnotations {
+            destructive_hint,
+            idempotent_hint: None,
+            open_world_hint,
+            read_only_hint: None,
+            title: None,
+        }
+    }
+
+    fn app(id: &str) -> AppInfo {
+        AppInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            is_accessible: false,
+            is_enabled: true,
+            plugin_display_names: Vec::new(),
+        }
+    }
+
+    fn plugin_names(names: &[&str]) -> Vec<String> {
+        names.iter().map(ToString::to_string).collect()
+    }
+
+    fn test_tool_definition(tool_name: &str) -> Tool {
+        Tool {
+            name: tool_name.to_string().into(),
+            title: None,
+            description: None,
+            input_schema: Arc::new(JsonObject::default()),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        }
+    }
+
+    fn google_calendar_accessible_connector(plugin_display_names: &[&str]) -> AppInfo {
+        AppInfo {
+            id: "calendar".to_string(),
+            name: "Google Calendar".to_string(),
+            description: Some("Plan events".to_string()),
+            logo_url: Some("https://example.com/logo.png".to_string()),
+            logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
+            distribution_channel: Some("workspace".to_string()),
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: None,
+            is_accessible: true,
+            is_enabled: true,
+            plugin_display_names: plugin_names(plugin_display_names),
+        }
+    }
+
+    fn codex_app_tool(
+        tool_name: &str,
+        connector_id: &str,
+        connector_name: Option<&str>,
+        plugin_display_names: &[&str],
+    ) -> ToolInfo {
+        ToolInfo {
+            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            tool_name: tool_name.to_string(),
+            tool: test_tool_definition(tool_name),
+            connector_id: Some(connector_id.to_string()),
+            connector_name: connector_name.map(ToOwned::to_owned),
+            plugin_display_names: plugin_names(plugin_display_names),
+        }
+    }
+
+    #[test]
+    fn merge_connectors_replaces_plugin_placeholder_name_with_accessible_name() {
+        let plugin = plugin_app_to_app_info(AppConnectorId("calendar".to_string()));
+        let accessible = google_calendar_accessible_connector(&[]);
+
+        let merged = merge_connectors(vec![plugin], vec![accessible]);
+
+        assert_eq!(
+            merged,
+            vec![AppInfo {
+                id: "calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: Some("Plan events".to_string()),
+                logo_url: Some("https://example.com/logo.png".to_string()),
+                logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
+                distribution_channel: Some("workspace".to_string()),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some(connector_install_url("calendar", "calendar")),
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: Vec::new(),
+            }]
+        );
+        assert_eq!(connector_mention_slug(&merged[0]), "google-calendar");
+    }
+
+    #[test]
+    fn accessible_connectors_from_mcp_tools_carries_plugin_display_names() {
+        let tools = HashMap::from([
+            (
+                "mcp__codex_apps__calendar_list_events".to_string(),
+                codex_app_tool(
+                    "calendar_list_events",
+                    "calendar",
+                    None,
+                    &["sample", "sample"],
+                ),
+            ),
+            (
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                codex_app_tool(
+                    "calendar_create_event",
+                    "calendar",
+                    Some("Google Calendar"),
+                    &["beta", "sample"],
+                ),
+            ),
+            (
+                "mcp__sample__echo".to_string(),
+                ToolInfo {
+                    server_name: "sample".to_string(),
+                    tool_name: "echo".to_string(),
+                    tool: test_tool_definition("echo"),
+                    connector_id: None,
+                    connector_name: None,
+                    plugin_display_names: plugin_names(&["ignored"]),
+                },
+            ),
+        ]);
+
+        let connectors = accessible_connectors_from_mcp_tools(&tools);
+
+        assert_eq!(
+            connectors,
+            vec![AppInfo {
+                id: "calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some(connector_install_url("Google Calendar", "calendar")),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: plugin_names(&["beta", "sample"]),
+            }]
+        );
+    }
+
+    #[test]
+    fn merge_connectors_unions_and_dedupes_plugin_display_names() {
+        let mut plugin = plugin_app_to_app_info(AppConnectorId("calendar".to_string()));
+        plugin.plugin_display_names = plugin_names(&["sample", "alpha", "sample"]);
+
+        let accessible = google_calendar_accessible_connector(&["beta", "alpha"]);
+
+        let merged = merge_connectors(vec![plugin], vec![accessible]);
+
+        assert_eq!(
+            merged,
+            vec![AppInfo {
+                id: "calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: Some("Plan events".to_string()),
+                logo_url: Some("https://example.com/logo.png".to_string()),
+                logo_url_dark: Some("https://example.com/logo-dark.png".to_string()),
+                distribution_channel: Some("workspace".to_string()),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some(connector_install_url("calendar", "calendar")),
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: plugin_names(&["alpha", "beta", "sample"]),
+            }]
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_uses_global_defaults_for_destructive_hints() {
+        let apps_config = AppsConfigToml {
+            default: Some(AppsDefaultConfig {
+                enabled: true,
+                destructive_enabled: false,
+                open_world_enabled: true,
+            }),
+            apps: HashMap::new(),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/create",
+            None,
+            Some(&annotations(Some(true), None)),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: false,
+                approval: AppToolApproval::Auto,
+            }
+        );
+    }
+
+    #[test]
+    fn app_is_enabled_uses_default_for_unconfigured_apps() {
+        let apps_config = AppsConfigToml {
+            default: Some(AppsDefaultConfig {
+                enabled: false,
+                destructive_enabled: true,
+                open_world_enabled: true,
+            }),
+            apps: HashMap::new(),
+        };
+
+        assert!(!app_is_enabled(&apps_config, Some("calendar")));
+        assert!(!app_is_enabled(&apps_config, None));
+    }
+
+    #[test]
+    fn app_is_enabled_prefers_per_app_override_over_default() {
+        let apps_config = AppsConfigToml {
+            default: Some(AppsDefaultConfig {
+                enabled: false,
+                destructive_enabled: true,
+                open_world_enabled: true,
+            }),
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    destructive_enabled: None,
+                    open_world_enabled: None,
+                    default_tools_approval_mode: None,
+                    default_tools_enabled: None,
+                    tools: None,
+                },
+            )]),
+        };
+
+        assert!(app_is_enabled(&apps_config, Some("calendar")));
+        assert!(!app_is_enabled(&apps_config, Some("drive")));
+    }
+
+    #[test]
+    fn requirements_disabled_connector_overrides_enabled_connector() {
+        let mut effective_apps = AppsConfigToml {
+            default: None,
+            apps: HashMap::from([(
+                "connector_123123".to_string(),
+                AppConfig {
+                    enabled: true,
+                    ..Default::default()
+                },
+            )]),
+        };
+        let requirements_apps = AppsRequirementsToml {
+            apps: std::collections::BTreeMap::from([(
+                "connector_123123".to_string(),
+                AppRequirementToml {
+                    enabled: Some(false),
+                },
+            )]),
+        };
+
+        apply_requirements_apps_constraints(&mut effective_apps, Some(&requirements_apps));
+
+        assert_eq!(
+            effective_apps
+                .apps
+                .get("connector_123123")
+                .map(|app| app.enabled),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn requirements_enabled_does_not_override_disabled_connector() {
+        let mut effective_apps = AppsConfigToml {
+            default: None,
+            apps: HashMap::from([(
+                "connector_123123".to_string(),
+                AppConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+            )]),
+        };
+        let requirements_apps = AppsRequirementsToml {
+            apps: std::collections::BTreeMap::from([(
+                "connector_123123".to_string(),
+                AppRequirementToml {
+                    enabled: Some(true),
+                },
+            )]),
+        };
+
+        apply_requirements_apps_constraints(&mut effective_apps, Some(&requirements_apps));
+
+        assert_eq!(
+            effective_apps
+                .apps
+                .get("connector_123123")
+                .map(|app| app.enabled),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn requirements_disabled_non_connector_does_not_override_enabled_app() {
+        let mut effective_apps = AppsConfigToml {
+            default: None,
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    ..Default::default()
+                },
+            )]),
+        };
+        let requirements_apps = AppsRequirementsToml {
+            apps: std::collections::BTreeMap::from([(
+                "calendar".to_string(),
+                AppRequirementToml {
+                    enabled: Some(false),
+                },
+            )]),
+        };
+
+        apply_requirements_apps_constraints(&mut effective_apps, Some(&requirements_apps));
+
+        assert_eq!(
+            effective_apps.apps.get("calendar").map(|app| app.enabled),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_honors_default_app_enabled_false() {
+        let apps_config = AppsConfigToml {
+            default: Some(AppsDefaultConfig {
+                enabled: false,
+                destructive_enabled: true,
+                open_world_enabled: true,
+            }),
+            apps: HashMap::new(),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/list",
+            None,
+            Some(&annotations(None, None)),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: false,
+                approval: AppToolApproval::Auto,
+            }
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_allows_per_app_enable_when_default_is_disabled() {
+        let apps_config = AppsConfigToml {
+            default: Some(AppsDefaultConfig {
+                enabled: false,
+                destructive_enabled: true,
+                open_world_enabled: true,
+            }),
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    destructive_enabled: None,
+                    open_world_enabled: None,
+                    default_tools_approval_mode: None,
+                    default_tools_enabled: None,
+                    tools: None,
+                },
+            )]),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/list",
+            None,
+            Some(&annotations(None, None)),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: true,
+                approval: AppToolApproval::Auto,
+            }
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_per_tool_enabled_true_overrides_app_level_disable_flags() {
+        let apps_config = AppsConfigToml {
+            default: None,
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    destructive_enabled: Some(false),
+                    open_world_enabled: Some(false),
+                    default_tools_approval_mode: None,
+                    default_tools_enabled: None,
+                    tools: Some(AppToolsConfig {
+                        tools: HashMap::from([(
+                            "events/create".to_string(),
+                            AppToolConfig {
+                                enabled: Some(true),
+                                approval_mode: None,
+                            },
+                        )]),
+                    }),
+                },
+            )]),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/create",
+            None,
+            Some(&annotations(Some(true), Some(true))),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: true,
+                approval: AppToolApproval::Auto,
+            }
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_default_tools_enabled_true_overrides_app_level_tool_hints() {
+        let apps_config = AppsConfigToml {
+            default: None,
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    destructive_enabled: Some(false),
+                    open_world_enabled: Some(false),
+                    default_tools_approval_mode: None,
+                    default_tools_enabled: Some(true),
+                    tools: None,
+                },
+            )]),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/create",
+            None,
+            Some(&annotations(Some(true), Some(true))),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: true,
+                approval: AppToolApproval::Auto,
+            }
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_default_tools_enabled_false_overrides_app_level_tool_hints() {
+        let apps_config = AppsConfigToml {
+            default: None,
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    destructive_enabled: Some(true),
+                    open_world_enabled: Some(true),
+                    default_tools_approval_mode: Some(AppToolApproval::Approve),
+                    default_tools_enabled: Some(false),
+                    tools: None,
+                },
+            )]),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/list",
+            None,
+            Some(&annotations(None, None)),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: false,
+                approval: AppToolApproval::Approve,
+            }
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_uses_default_tools_approval_mode() {
+        let apps_config = AppsConfigToml {
+            default: None,
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    destructive_enabled: None,
+                    open_world_enabled: None,
+                    default_tools_approval_mode: Some(AppToolApproval::Prompt),
+                    default_tools_enabled: None,
+                    tools: Some(AppToolsConfig {
+                        tools: HashMap::new(),
+                    }),
+                },
+            )]),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/list",
+            None,
+            Some(&annotations(None, None)),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: true,
+                approval: AppToolApproval::Prompt,
+            }
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_matches_prefix_stripped_tool_name_for_tool_config() {
+        let apps_config = AppsConfigToml {
+            default: None,
+            apps: HashMap::from([(
+                "calendar".to_string(),
+                AppConfig {
+                    enabled: true,
+                    destructive_enabled: Some(false),
+                    open_world_enabled: Some(false),
+                    default_tools_approval_mode: Some(AppToolApproval::Auto),
+                    default_tools_enabled: Some(false),
+                    tools: Some(AppToolsConfig {
+                        tools: HashMap::from([(
+                            "events/create".to_string(),
+                            AppToolConfig {
+                                enabled: Some(true),
+                                approval_mode: Some(AppToolApproval::Approve),
+                            },
+                        )]),
+                    }),
+                },
+            )]),
+        };
+
+        let policy = app_tool_policy_from_apps_config(
+            Some(&apps_config),
+            Some("calendar"),
+            "calendar_events/create",
+            Some("events/create"),
+            Some(&annotations(Some(true), Some(true))),
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: true,
+                approval: AppToolApproval::Approve,
+            }
+        );
+    }
+
+    #[test]
+    fn filter_disallowed_connectors_allows_non_disallowed_connectors() {
+        let filtered = filter_disallowed_connectors(vec![app("asdk_app_hidden"), app("alpha")]);
+        assert_eq!(filtered, vec![app("asdk_app_hidden"), app("alpha")]);
+    }
+
+    #[test]
+    fn filter_disallowed_connectors_filters_openai_prefix() {
+        let filtered = filter_disallowed_connectors(vec![
+            app("connector_openai_foo"),
+            app("connector_openai_bar"),
+            app("gamma"),
+        ]);
+        assert_eq!(filtered, vec![app("gamma")]);
+    }
+
+    #[test]
+    fn filter_disallowed_connectors_filters_disallowed_connector_ids() {
+        let filtered = filter_disallowed_connectors(vec![
+            app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
+            app("delta"),
+        ]);
+        assert_eq!(filtered, vec![app("delta")]);
+    }
+
+    #[test]
+    fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
+        let filtered = filter_disallowed_connectors_for_originator(
+            vec![
+                app("connector_openai_foo"),
+                app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
+                app("connector_0f9c9d4592e54d0a9a12b3f44a1e2010"),
+            ],
+            "codex_atlas",
+        );
+        assert_eq!(
+            filtered,
+            vec![app("asdk_app_6938a94a61d881918ef32cb999ff937c")]
+        );
+    }
+}
