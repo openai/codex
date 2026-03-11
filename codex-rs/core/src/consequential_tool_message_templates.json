@@ -1,0 +1,963 @@
+{
+  "schema_version": 3,
+  "generated_from_path": "codex-rs/core/src/consequential_tools.json",
+  "templates": [
+    {
+      "source_tool_index": 0,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "add_comment_to_issue",
+      "action": "add a comment to a pull request",
+      "template_params": [
+        {
+          "name": "pr_number",
+          "label": "Pull request"
+        },
+        {
+          "name": "repo_full_name",
+          "label": "Repository"
+        },
+        {
+          "name": "comment",
+          "label": "Comment"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 1,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "add_reaction_to_issue_comment",
+      "action": "add a reaction to an issue comment",
+      "template_params": [
+        {
+          "name": "reaction",
+          "label": "Reaction"
+        },
+        {
+          "name": "comment_id",
+          "label": "Comment"
+        },
+        {
+          "name": "repo_full_name",
+          "label": "Repository"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 2,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "add_reaction_to_pr",
+      "action": "add a reaction to a pull request",
+      "template_params": [
+        {
+          "name": "reaction",
+          "label": "Reaction"
+        },
+        {
+          "name": "pr_number",
+          "label": "Pull request"
+        },
+        {
+          "name": "repo_full_name",
+          "label": "Repository"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 3,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "add_reaction_to_pr_review_comment",
+      "action": "add a reaction to a pull request review comment",
+      "template_params": [
+        {
+          "name": "reaction",
+          "label": "Reaction"
+        },
+        {
+          "name": "comment_id",
+          "label": "Comment"
+        },
+        {
+          "name": "repo_full_name",
+          "label": "Repository"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 4,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "add_review_to_pr",
+      "action": "submit a pull request review",
+      "template_params": [
+        {
+          "name": "action",
+          "label": "Action"
+        },
+        {
+          "name": "pr_number",
+          "label": "Pull request"
+        },
+        {
+          "name": "review",
+          "label": "Review"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 5,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "create_blob",
+      "action": "create a Git blob",
+      "template_params": [
+        {
+          "name": "repository_full_name",
+          "label": "Repository"
+        },
+        {
+          "name": "content",
+          "label": "Content"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 6,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "create_branch",
+      "action": "create a branch",
+      "template_params": [
+        {
+          "name": "branch_name",
+          "label": "Branch"
+        },
+        {
+          "name": "repository_full_name",
+          "label": "Repository"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 7,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "create_commit",
+      "action": "create a commit",
+      "template_params": [
+        {
+          "name": "repository_full_name",
+          "label": "Repository"
+        },
+        {
+          "name": "message",
+          "label": "Message"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 8,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "create_pull_request",
+      "action": "create a pull request",
+      "template_params": [
+        {
+          "name": "title",
+          "label": "Title"
+        },
+        {
+          "name": "head_branch",
+          "label": "Head branch"
+        },
+        {
+          "name": "base_branch",
+          "label": "Base branch"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 9,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "create_tree",
+      "action": "create a Git tree",
+      "template_params": [
+        {
+          "name": "repository_full_name",
+          "label": "Repository"
+        },
+        {
+          "name": "tree_elements",
+          "label": "Changes"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 10,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "enable_auto_merge",
+      "action": "enable pull request auto-merge",
+      "template_params": [
+        {
+          "name": "pr_number",
+          "label": "Pull request"
+        },
+        {
+          "name": "repository_full_name",
+          "label": "Repository"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 11,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "label_pr",
+      "action": "add a label to a pull request",
+      "template_params": [
+        {
+          "name": "label",
+          "label": "Label"
+        },
+        {
+          "name": "pr_number",
+          "label": "Pull request"
+        },
+        {
+          "name": "repository_full_name",
+          "label": "Repository"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 12,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "remove_reaction_from_issue_comment",
+      "action": "remove a reaction from an issue comment",
+      "template_params": [
+        {
+          "name": "reaction_id",
+          "label": "Reaction"
+        },
+        {
+          "name": "comment_id",
+          "label": "Comment"
+        },
+        {
+          "name": "repo_full_name",
+          "label": "Repository"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 13,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "remove_reaction_from_pr",
+      "action": "remove a reaction from a pull request",
+      "template_params": [
+        {
+          "name": "reaction_id",
+          "label": "Reaction"
+        },
+        {
+          "name": "pr_number",
+          "label": "Pull request"
+        },
+        {
+          "name": "repo_full_name",
+          "label": "Repository"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 14,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "remove_reaction_from_pr_review_comment",
+      "action": "remove a reaction from a pull request review comment",
+      "template_params": [
+        {
+          "name": "reaction_id",
+          "label": "Reaction"
+        },
+        {
+          "name": "comment_id",
+          "label": "Comment"
+        },
+        {
+          "name": "repo_full_name",
+          "label": "Repository"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 15,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "reply_to_review_comment",
+      "action": "reply to a pull request review comment",
+      "template_params": [
+        {
+          "name": "pr_number",
+          "label": "Pull request"
+        },
+        {
+          "name": "repo_full_name",
+          "label": "Repository"
+        },
+        {
+          "name": "comment",
+          "label": "Comment"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 16,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "update_issue_comment",
+      "action": "update an issue comment",
+      "template_params": [
+        {
+          "name": "comment_id",
+          "label": "Comment"
+        },
+        {
+          "name": "repo_full_name",
+          "label": "Repository"
+        },
+        {
+          "name": "comment",
+          "label": "Comment"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 17,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "update_ref",
+      "action": "update a branch reference",
+      "template_params": [
+        {
+          "name": "branch_name",
+          "label": "Branch"
+        },
+        {
+          "name": "repository_full_name",
+          "label": "Repository"
+        },
+        {
+          "name": "sha",
+          "label": "Commit"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 18,
+      "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
+      "server_name": "codex_apps",
+      "tool_title": "update_review_comment",
+      "action": "update a pull request review comment",
+      "template_params": [
+        {
+          "name": "comment_id",
+          "label": "Comment"
+        },
+        {
+          "name": "repo_full_name",
+          "label": "Repository"
+        },
+        {
+          "name": "comment",
+          "label": "Comment"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 19,
+      "connector_id": "connector_947e0d954944416db111db556030eea6",
+      "server_name": "codex_apps",
+      "tool_title": "create_event",
+      "action": "create a calendar event",
+      "template_params": [
+        {
+          "name": "title",
+          "label": "Title"
+        },
+        {
+          "name": "start_time",
+          "label": "Start"
+        },
+        {
+          "name": "attendees",
+          "label": "Attendees"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 20,
+      "connector_id": "connector_947e0d954944416db111db556030eea6",
+      "server_name": "codex_apps",
+      "tool_title": "delete_event",
+      "action": "delete a calendar event",
+      "template_params": [
+        {
+          "name": "event_id",
+          "label": "Event"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 21,
+      "connector_id": "connector_947e0d954944416db111db556030eea6",
+      "server_name": "codex_apps",
+      "tool_title": "respond_event",
+      "action": "respond to a calendar event",
+      "template_params": [
+        {
+          "name": "response_status",
+          "label": "Response Status"
+        },
+        {
+          "name": "event_id",
+          "label": "Event"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 22,
+      "connector_id": "connector_947e0d954944416db111db556030eea6",
+      "server_name": "codex_apps",
+      "tool_title": "update_event",
+      "action": "update a calendar event",
+      "template_params": [
+        {
+          "name": "event_id",
+          "label": "Event"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 23,
+      "connector_id": "connector_9d7cfa34e6654a5f98d3387af34b2e1c",
+      "server_name": "codex_apps",
+      "tool_title": "batch_update",
+      "action": "apply spreadsheet updates",
+      "template_params": [
+        {
+          "name": "spreadsheet_url",
+          "label": "Spreadsheet"
+        },
+        {
+          "name": "requests",
+          "label": "Changes"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 24,
+      "connector_id": "connector_9d7cfa34e6654a5f98d3387af34b2e1c",
+      "server_name": "codex_apps",
+      "tool_title": "create_spreadsheet",
+      "action": "create a spreadsheet",
+      "template_params": [
+        {
+          "name": "title",
+          "label": "Title"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 25,
+      "connector_id": "connector_9d7cfa34e6654a5f98d3387af34b2e1c",
+      "server_name": "codex_apps",
+      "tool_title": "duplicate_sheet_in_new_file",
+      "action": "copy a sheet into a new spreadsheet",
+      "template_params": [
+        {
+          "name": "source_sheet_name",
+          "label": "Source Sheet Name"
+        },
+        {
+          "name": "spreadsheet_url",
+          "label": "Spreadsheet"
+        },
+        {
+          "name": "new_file_name",
+          "label": "New File Name"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 26,
+      "connector_id": "connector_6f1ec045b8fa4ced8738e32c7f74514b",
+      "server_name": "codex_apps",
+      "tool_title": "batch_update",
+      "action": "apply presentation updates",
+      "template_params": [
+        {
+          "name": "presentation_url",
+          "label": "Presentation"
+        },
+        {
+          "name": "requests",
+          "label": "Changes"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 27,
+      "connector_id": "connector_6f1ec045b8fa4ced8738e32c7f74514b",
+      "server_name": "codex_apps",
+      "tool_title": "create_presentation",
+      "action": "create a presentation",
+      "template_params": [
+        {
+          "name": "title",
+          "label": "Title"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 28,
+      "connector_id": "connector_4964e3b22e3e427e9b4ae1acf2c1fa34",
+      "server_name": "codex_apps",
+      "tool_title": "batch_update",
+      "action": "apply document updates",
+      "template_params": [
+        {
+          "name": "document_url",
+          "label": "Document"
+        },
+        {
+          "name": "requests",
+          "label": "Changes"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 29,
+      "connector_id": "connector_4964e3b22e3e427e9b4ae1acf2c1fa34",
+      "server_name": "codex_apps",
+      "tool_title": "create_document",
+      "action": "create a document",
+      "template_params": [
+        {
+          "name": "title",
+          "label": "Title"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 30,
+      "connector_id": "connector_5f3c8c41a1e54ad7a76272c89e2554fa",
+      "server_name": "codex_apps",
+      "tool_title": "copy_document",
+      "action": "copy a Google Drive file",
+      "template_params": [
+        {
+          "name": "url",
+          "label": "URL"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 31,
+      "connector_id": "connector_5f3c8c41a1e54ad7a76272c89e2554fa",
+      "server_name": "codex_apps",
+      "tool_title": "share_document",
+      "action": "change file sharing",
+      "template_params": [
+        {
+          "name": "url",
+          "label": "URL"
+        },
+        {
+          "name": "permission",
+          "label": "Permission"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 32,
+      "connector_id": "asdk_app_69a1d78e929881919bba0dbda1f6436d",
+      "server_name": "codex_apps",
+      "tool_title": "slack_send_message",
+      "action": "send a message",
+      "template_params": [
+        {
+          "name": "channel_id",
+          "label": "Conversation"
+        },
+        {
+          "name": "message",
+          "label": "Message"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 33,
+      "connector_id": "asdk_app_69a1d78e929881919bba0dbda1f6436d",
+      "server_name": "codex_apps",
+      "tool_title": "slack_schedule_message",
+      "action": "schedule a message",
+      "template_params": [
+        {
+          "name": "channel_id",
+          "label": "Conversation"
+        },
+        {
+          "name": "post_at",
+          "label": "Send at"
+        },
+        {
+          "name": "message",
+          "label": "Message"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 34,
+      "connector_id": "asdk_app_69a1d78e929881919bba0dbda1f6436d",
+      "server_name": "codex_apps",
+      "tool_title": "slack_create_canvas",
+      "action": "create a canvas",
+      "template_params": [
+        {
+          "name": "title",
+          "label": "Title"
+        },
+        {
+          "name": "content",
+          "label": "Content"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 35,
+      "connector_id": "asdk_app_69a1d78e929881919bba0dbda1f6436d",
+      "server_name": "codex_apps",
+      "tool_title": "slack_send_message_draft",
+      "action": "create a message draft",
+      "template_params": [
+        {
+          "name": "channel_id",
+          "label": "Conversation"
+        },
+        {
+          "name": "message",
+          "label": "Message"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 36,
+      "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
+      "server_name": "codex_apps",
+      "tool_title": "add_comment_to_issue",
+      "action": "add a comment to a Linear issue",
+      "template_params": [
+        {
+          "name": "issue_id",
+          "label": "Issue"
+        },
+        {
+          "name": "body",
+          "label": "Body"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 37,
+      "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
+      "server_name": "codex_apps",
+      "tool_title": "add_label_to_issue",
+      "action": "add a label to a Linear issue",
+      "template_params": [
+        {
+          "name": "label_id",
+          "label": "Label"
+        },
+        {
+          "name": "issue_id",
+          "label": "Issue"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 38,
+      "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
+      "server_name": "codex_apps",
+      "tool_title": "add_url_attachment_to_issue",
+      "action": "attach a link to a Linear issue",
+      "template_params": [
+        {
+          "name": "url",
+          "label": "URL"
+        },
+        {
+          "name": "issue_id",
+          "label": "Issue"
+        },
+        {
+          "name": "title",
+          "label": "Title"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 39,
+      "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
+      "server_name": "codex_apps",
+      "tool_title": "assign_issue",
+      "action": "assign a Linear issue",
+      "template_params": [
+        {
+          "name": "issue_id",
+          "label": "Issue"
+        },
+        {
+          "name": "user_id",
+          "label": "User"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 40,
+      "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
+      "server_name": "codex_apps",
+      "tool_title": "create_issue",
+      "action": "create a Linear issue",
+      "template_params": [
+        {
+          "name": "title",
+          "label": "Title"
+        },
+        {
+          "name": "team_id",
+          "label": "Team"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 41,
+      "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
+      "server_name": "codex_apps",
+      "tool_title": "create_label",
+      "action": "create a Linear label",
+      "template_params": [
+        {
+          "name": "label_name",
+          "label": "Label Name"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 42,
+      "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
+      "server_name": "codex_apps",
+      "tool_title": "create_project",
+      "action": "create a Linear project",
+      "template_params": [
+        {
+          "name": "name",
+          "label": "Name"
+        },
+        {
+          "name": "team_id",
+          "label": "Team"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 43,
+      "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
+      "server_name": "codex_apps",
+      "tool_title": "remove_label_from_issue",
+      "action": "remove a label from a Linear issue",
+      "template_params": [
+        {
+          "name": "label_id",
+          "label": "Label"
+        },
+        {
+          "name": "issue_id",
+          "label": "Issue"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 44,
+      "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
+      "server_name": "codex_apps",
+      "tool_title": "resolve_comment",
+      "action": "resolve a Linear comment",
+      "template_params": [
+        {
+          "name": "comment_id",
+          "label": "Comment"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 45,
+      "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
+      "server_name": "codex_apps",
+      "tool_title": "set_issue_state",
+      "action": "change a Linear issue state",
+      "template_params": [
+        {
+          "name": "issue_id",
+          "label": "Issue"
+        },
+        {
+          "name": "state_id",
+          "label": "State"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 46,
+      "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
+      "server_name": "codex_apps",
+      "tool_title": "unassign_issue",
+      "action": "unassign a Linear issue",
+      "template_params": [
+        {
+          "name": "issue_id",
+          "label": "Issue"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 47,
+      "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
+      "server_name": "codex_apps",
+      "tool_title": "update_issue",
+      "action": "update a Linear issue",
+      "template_params": [
+        {
+          "name": "issue_id",
+          "label": "Issue"
+        },
+        {
+          "name": "issue_update",
+          "label": "Changes"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 48,
+      "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
+      "server_name": "codex_apps",
+      "tool_title": "update_project",
+      "action": "update a Linear project",
+      "template_params": [
+        {
+          "name": "project_id",
+          "label": "Project"
+        },
+        {
+          "name": "update_fields",
+          "label": "Changes"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 49,
+      "connector_id": "connector_2128aebfecb84f64a069897515042a44",
+      "server_name": "codex_apps",
+      "tool_title": "apply_labels_to_emails",
+      "action": "apply label changes to Gmail messages",
+      "template_params": []
+    },
+    {
+      "source_tool_index": 50,
+      "connector_id": "connector_2128aebfecb84f64a069897515042a44",
+      "server_name": "codex_apps",
+      "tool_title": "batch_modify_email",
+      "action": "update Gmail message labels",
+      "template_params": []
+    },
+    {
+      "source_tool_index": 51,
+      "connector_id": "connector_2128aebfecb84f64a069897515042a44",
+      "server_name": "codex_apps",
+      "tool_title": "bulk_label_matching_emails",
+      "action": "label matching Gmail messages",
+      "template_params": [
+        {
+          "name": "label_name",
+          "label": "Label Name"
+        },
+        {
+          "name": "query",
+          "label": "Query"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 52,
+      "connector_id": "connector_2128aebfecb84f64a069897515042a44",
+      "server_name": "codex_apps",
+      "tool_title": "create_draft",
+      "action": "create an email draft",
+      "template_params": [
+        {
+          "name": "to",
+          "label": "To"
+        },
+        {
+          "name": "subject",
+          "label": "Subject"
+        },
+        {
+          "name": "body",
+          "label": "Body"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 53,
+      "connector_id": "connector_2128aebfecb84f64a069897515042a44",
+      "server_name": "codex_apps",
+      "tool_title": "create_label",
+      "action": "create a Gmail label",
+      "template_params": [
+        {
+          "name": "name",
+          "label": "Name"
+        }
+      ]
+    },
+    {
+      "source_tool_index": 54,
+      "connector_id": "connector_2128aebfecb84f64a069897515042a44",
+      "server_name": "codex_apps",
+      "tool_title": "send_email",
+      "action": "send an email",
+      "template_params": [
+        {
+          "name": "to",
+          "label": "To"
+        },
+        {
+          "name": "subject",
+          "label": "Subject"
+        },
+        {
+          "name": "body",
+          "label": "Body"
+        }
+      ]
+    }
+  ]
+}
