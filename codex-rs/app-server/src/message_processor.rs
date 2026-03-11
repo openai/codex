@@ -61,7 +61,6 @@ use tokio::time::timeout;
 use toml::Value as TomlValue;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
-const INITIALIZE_RESPONSE_DELAY_MS_ENV_VAR: &str = "CODEX_APP_SERVER_INITIALIZE_RESPONSE_DELAY_MS";
 
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
@@ -331,26 +330,6 @@ impl MessageProcessor {
 
                     let user_agent = get_codex_user_agent();
                     let response = InitializeResponse { user_agent };
-                    if let Ok(raw_delay_ms) = std::env::var(INITIALIZE_RESPONSE_DELAY_MS_ENV_VAR) {
-                        match raw_delay_ms.parse::<u64>() {
-                            Ok(delay_ms) => {
-                                tracing::info!(
-                                    "delaying initialize response by {}ms because {} is set",
-                                    delay_ms,
-                                    INITIALIZE_RESPONSE_DELAY_MS_ENV_VAR
-                                );
-                                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                            }
-                            Err(err) => {
-                                tracing::warn!(
-                                    "ignoring invalid {} value `{}`: {}",
-                                    INITIALIZE_RESPONSE_DELAY_MS_ENV_VAR,
-                                    raw_delay_ms,
-                                    err
-                                );
-                            }
-                        }
-                    }
                     self.outgoing.send_response(request_id, response).await;
 
                     session.initialized = true;

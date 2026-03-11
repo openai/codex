@@ -75,8 +75,6 @@ Clients must send a single `initialize` request per transport connection before 
 
 `initialize.params.capabilities` also supports per-connection notification opt-out via `optOutNotificationMethods`, which is a list of exact method names to suppress for that connection. Matching is exact (no wildcards/prefixes). Unknown method names are accepted and ignored.
 
-For handshake timing tests, set `CODEX_APP_SERVER_INITIALIZE_RESPONSE_DELAY_MS=<milliseconds>` before launching the server. When set to a valid integer, `codex app-server` and `codexd` will wait that long before sending the `initialize` response.
-
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 
 **Important**: `clientInfo.name` is used to identify the client for the OpenAI Compliance Logs Platform. If

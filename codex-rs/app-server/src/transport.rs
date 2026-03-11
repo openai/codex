@@ -1418,8 +1418,7 @@ async fn connect_remote_control_websocket(
         Err(err) => {
             if matches!(
                 &err,
-                tungstenite::Error::Http(response)
-                    if matches!(response.status().as_u16(), 404 | 409)
+                tungstenite::Error::Http(response) if response.status().as_u16() == 404
             ) {
                 if let Err(clear_err) = update_persisted_remote_control_enrollment(
                     remote_control_state_path,
@@ -1435,40 +1434,6 @@ async fn connect_remote_control_websocket(
                     );
                 }
                 *enrollment = None;
-
-                let new_enrollment =
-                    enroll_remote_control_server(remote_control_target, &auth).await?;
-                if let Err(persist_err) = update_persisted_remote_control_enrollment(
-                    remote_control_state_path,
-                    remote_control_target,
-                    auth.account_id.as_deref(),
-                    Some(&new_enrollment),
-                )
-                .await
-                {
-                    warn!(
-                        "failed to persist refreshed remote control enrollment in `{}`: {persist_err}",
-                        remote_control_state_path.display()
-                    );
-                }
-                *enrollment = Some(new_enrollment);
-
-                let retry_request = build_remote_control_websocket_request(
-                    &remote_control_target.websocket_url,
-                    enrollment
-                        .as_ref()
-                        .expect("refreshed enrollment should exist after re-enroll"),
-                    &auth,
-                )?;
-                return connect_async(retry_request)
-                    .await
-                    .map(|(websocket_stream, _response)| websocket_stream)
-                    .map_err(|retry_err| {
-                        std::io::Error::other(format!(
-                            "failed to connect app-server remote control websocket `{}` after refreshing enrollment: {retry_err}",
-                            remote_control_target.websocket_url
-                        ))
-                    });
             }
             Err(std::io::Error::other(format!(
                 "failed to connect app-server remote control websocket `{}`: {err}",
@@ -1547,7 +1512,6 @@ async fn run_remote_control_websocket_loop(
                     Ok(websocket_stream) => {
                         reconnect_backoff = REMOTE_CONTROL_RECONNECT_INITIAL_BACKOFF;
                         reconnect_attempt = 0;
-                        reconnect_reason = None;
                         info!(
                             "connected to app-server remote control websocket: {}",
                             remote_control_target.websocket_url
@@ -2985,9 +2949,8 @@ mod tests {
         let _ = remote_handle.await;
     }
 
-    async fn assert_remote_control_http_mode_refreshes_stale_persisted_enrollment(
-        handshake_status: &str,
-    ) {
+    #[tokio::test]
+    async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("listener should bind");
@@ -3040,7 +3003,7 @@ mod tests {
             websocket_request.headers.get("x-codex-server-id"),
             Some(&stale_enrollment.server_id)
         );
-        respond_with_status(websocket_request.stream, handshake_status, "").await;
+        respond_with_status(websocket_request.stream, "404 Not Found", "").await;
 
         let enroll_request = accept_http_request(&listener).await;
         assert_eq!(
@@ -3071,16 +3034,6 @@ mod tests {
 
         shutdown_token.cancel();
         let _ = remote_handle.await;
-    }
-
-    #[tokio::test]
-    async fn remote_control_http_mode_refreshes_stale_persisted_enrollment_after_404() {
-        assert_remote_control_http_mode_refreshes_stale_persisted_enrollment("404 Not Found").await;
-    }
-
-    #[tokio::test]
-    async fn remote_control_http_mode_refreshes_stale_persisted_enrollment_after_409() {
-        assert_remote_control_http_mode_refreshes_stale_persisted_enrollment("409 Conflict").await;
     }
 
     #[derive(Debug)]
