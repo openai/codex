@@ -100,7 +100,6 @@ use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
-use codex_core::features::Feature;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 
@@ -950,10 +949,7 @@ fn config_request_overrides_from_config(config: &Config) -> Option<HashMap<Strin
 fn approval_review_policy_override_from_config(
     config: &Config,
 ) -> Option<codex_app_server_protocol::ApprovalReviewPolicy> {
-    config
-        .features
-        .enabled(Feature::GuardianApproval)
-        .then_some(config.approval_review_policy.into())
+    Some(config.approval_review_policy.into())
 }
 
 async fn send_request_with_response<T>(
