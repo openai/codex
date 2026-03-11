@@ -696,6 +696,10 @@ pub(crate) struct App {
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_picker_threads: HashMap<ThreadId, AgentPickerThreadEntry>,
+    /// Stable display order for picker rows and keyboard cycling.
+    ///
+    /// This is append-only for the lifetime of the session so "next" and "previous" follow agent
+    /// spawn order instead of thread-id sort order, even after some agents close.
     agent_picker_thread_order: Vec<ThreadId>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<Event>>,
@@ -1010,10 +1014,22 @@ impl App {
         }
     }
 
+    /// Returns the thread whose transcript is currently on screen.
+    ///
+    /// `active_thread_id` is the source of truth during steady state, but the widget can briefly
+    /// lag behind thread bookkeeping during transitions. The footer label and adjacent-thread
+    /// navigation both follow what the user is actually looking at, not whichever thread most
+    /// recently began switching.
     fn current_displayed_thread_id(&self) -> Option<ThreadId> {
         self.active_thread_id.or(self.chat_widget.thread_id())
     }
 
+    /// Mirrors the visible thread into the contextual footer row.
+    ///
+    /// The footer sometimes shows ambient context instead of an instructional hint. In multi-agent
+    /// sessions, that contextual row includes the currently viewed agent label. The label is
+    /// intentionally hidden until there is more than one known thread so single-thread sessions do
+    /// not spend footer space restating that the user is already on the main conversation.
     fn sync_active_agent_label(&mut self) {
         let label = if self.agent_picker_threads.len() > 1 {
             self.current_displayed_thread_id().map(|thread_id| {
@@ -1035,6 +1051,11 @@ impl App {
         self.chat_widget.set_active_agent_label(label);
     }
 
+    /// Returns live picker entries in the same order users cycle through them.
+    ///
+    /// The backing order vector may contain stale thread ids after teardown, so
+    /// this filters missing entries instead of assuming the caches stay perfectly
+    /// synchronized during shutdown races.
     fn ordered_agent_picker_threads(&self) -> Vec<(ThreadId, &AgentPickerThreadEntry)> {
         self.agent_picker_thread_order
             .iter()
@@ -1046,6 +1067,11 @@ impl App {
             .collect()
     }
 
+    /// Finds the adjacent thread in stable spawn order, wrapping at the ends.
+    ///
+    /// Returning `None` means fast switching should be a no-op, either because
+    /// there is only one live thread or because the currently displayed thread
+    /// is not yet represented in the picker cache.
     fn adjacent_agent_picker_thread_id(
         &self,
         direction: AgentNavigationDirection,
@@ -1072,6 +1098,8 @@ impl App {
         Some(agent_threads[next_idx].0)
     }
 
+    /// Builds picker copy from the same bindings used by key handling so the
+    /// prompt stays accurate across platforms.
     fn agent_picker_subtitle() -> String {
         let previous: Span<'static> = previous_agent_shortcut().into();
         let next: Span<'static> = next_agent_shortcut().into();

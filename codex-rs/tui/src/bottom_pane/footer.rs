@@ -9,6 +9,15 @@
 //! hint. The owning widgets schedule redraws so time-based hints can expire even if the UI is
 //! otherwise idle.
 //!
+//! Terminology used in this module:
+//! - "status line" means the configurable contextual row built from `/statusline` items such as
+//!   model, git branch, and context usage.
+//! - "instructional footer" means a row that tells the user what to do next, such as quit
+//!   confirmation, shortcut help, or queue hints.
+//! - "contextual footer" means the footer is free to show ambient context instead of an
+//!   instruction. In that state, the footer may render the configured status line, the active
+//!   agent label, or both combined.
+//!
 //! Single-line collapse overview:
 //! 1. The composer decides the current `FooterMode` and hint flags, then calls
 //!    `single_line_footer_layout` for the base single-line modes.
@@ -69,6 +78,11 @@ pub(crate) struct FooterProps {
     pub(crate) context_window_used_tokens: Option<i64>,
     pub(crate) status_line_value: Option<Line<'static>>,
     pub(crate) status_line_enabled: bool,
+    /// Active thread label shown when the footer is rendering contextual information instead of an
+    /// instructional hint.
+    ///
+    /// When both this label and the configured status line are available, they are rendered on the
+    /// same row separated by ` · `.
     pub(crate) active_agent_label: Option<String>,
 }
 
@@ -609,6 +623,11 @@ fn footer_from_props_lines(
     }
 }
 
+/// Returns the contextual footer row when the footer is not busy showing an instructional hint.
+///
+/// The returned line may contain the configured status line, the currently viewed agent label, or
+/// both combined. Active instructional states such as quit reminders, shortcut overlays, and queue
+/// prompts deliberately return `None` so those call-to-action hints stay visible.
 pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<Line<'static>> {
     if !shows_passive_footer_line(props) {
         return None;
@@ -632,6 +651,10 @@ pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<Line<'st
     line
 }
 
+/// Whether the current footer mode allows contextual information to replace instructional hints.
+///
+/// In practice this means the composer is idle, or it has a draft but is not currently running a
+/// task, so the footer can spend the row on ambient context instead of "what to do next" text.
 pub(crate) fn shows_passive_footer_line(props: &FooterProps) -> bool {
     match props.mode {
         FooterMode::ComposerEmpty => true,
@@ -642,6 +665,11 @@ pub(crate) fn shows_passive_footer_line(props: &FooterProps) -> bool {
     }
 }
 
+/// Whether callers should reserve the dedicated status-line layout for a contextual footer row.
+///
+/// The dedicated layout exists for the configurable `/statusline` row. An agent label by itself
+/// can be rendered by the standard footer flow, so this only becomes `true` when the status line
+/// feature is enabled and the current mode allows contextual footer content.
 pub(crate) fn uses_passive_footer_status_layout(props: &FooterProps) -> bool {
     props.status_line_enabled && shows_passive_footer_line(props)
 }
