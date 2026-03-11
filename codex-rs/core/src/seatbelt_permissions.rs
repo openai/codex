@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 pub use codex_protocol::models::MacOsAutomationPermission;
+pub use codex_protocol::models::MacOsContactsPermission;
 pub use codex_protocol::models::MacOsPreferencesPermission;
 pub use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 
@@ -74,7 +75,7 @@ pub(crate) fn build_seatbelt_extensions(
         MacOsAutomationPermission::None => {}
         MacOsAutomationPermission::All => {
             clauses.push(
-                "(allow mach-lookup\n  (global-name \"com.apple.coreservices.launchservicesd\")\n  (global-name \"com.apple.coreservices.appleevents\"))"
+                "(allow mach-lookup\n  (global-name \"com.apple.coreservices.appleevents\"))"
                     .to_string(),
             );
             clauses.push("(allow appleevent-send)".to_string());
@@ -82,7 +83,7 @@ pub(crate) fn build_seatbelt_extensions(
         MacOsAutomationPermission::BundleIds(bundle_ids) => {
             if !bundle_ids.is_empty() {
                 clauses.push(
-                    "(allow mach-lookup\n  (global-name \"com.apple.coreservices.launchservicesd\")\n  (global-name \"com.apple.coreservices.appleevents\"))"
+                    "(allow mach-lookup\n  (global-name \"com.apple.coreservices.appleevents\"))"
                         .to_string(),
                 );
                 let destinations = bundle_ids
@@ -95,12 +96,58 @@ pub(crate) fn build_seatbelt_extensions(
         }
     }
 
+    if extensions.macos_launch_services {
+        clauses.push(
+            "(allow mach-lookup\n  (global-name \"com.apple.coreservices.launchservicesd\")\n  (global-name \"com.apple.lsd.mapdb\")\n  (global-name \"com.apple.coreservices.quarantine-resolver\")\n  (global-name \"com.apple.lsd.modifydb\"))"
+                .to_string(),
+        );
+        clauses.push("(allow lsopen)".to_string());
+    }
+
     if extensions.macos_accessibility {
         clauses.push("(allow mach-lookup (local-name \"com.apple.axserver\"))".to_string());
     }
 
     if extensions.macos_calendar {
         clauses.push("(allow mach-lookup (global-name \"com.apple.CalendarAgent\"))".to_string());
+    }
+
+    if extensions.macos_reminders {
+        clauses.push(
+            "(allow mach-lookup\n  (global-name \"com.apple.CalendarAgent\")\n  (global-name \"com.apple.remindd\"))"
+                .to_string(),
+        );
+    }
+
+    let mut dir_params = Vec::new();
+    match extensions.macos_contacts {
+        MacOsContactsPermission::None => {}
+        MacOsContactsPermission::ReadOnly => {
+            clauses.push(
+                "(allow file-read* file-test-existence\n  (subpath \"/System/Library/Address Book Plug-Ins\")\n  (subpath (param \"ADDRESSBOOK_DIR\")))"
+                    .to_string(),
+            );
+            clauses.push(
+                "(allow mach-lookup\n  (global-name \"com.apple.tccd\")\n  (global-name \"com.apple.tccd.system\")\n  (global-name \"com.apple.contactsd.persistence\")\n  (global-name \"com.apple.AddressBook.ContactsAccountsService\")\n  (global-name \"com.apple.contacts.account-caching\")\n  (global-name \"com.apple.accountsd.accountmanager\"))"
+                    .to_string(),
+            );
+            if let Some(addressbook_dir) = addressbook_dir() {
+                dir_params.push(("ADDRESSBOOK_DIR".to_string(), addressbook_dir));
+            }
+        }
+        MacOsContactsPermission::ReadWrite => {
+            clauses.push(
+                "(allow file-read* file-write*\n  (subpath \"/System/Library/Address Book Plug-Ins\")\n  (subpath (param \"ADDRESSBOOK_DIR\"))\n  (subpath \"/var/folders\")\n  (subpath \"/private/var/folders\"))"
+                    .to_string(),
+            );
+            clauses.push(
+                "(allow mach-lookup\n  (global-name \"com.apple.tccd\")\n  (global-name \"com.apple.tccd.system\")\n  (global-name \"com.apple.contactsd.persistence\")\n  (global-name \"com.apple.AddressBook.ContactsAccountsService\")\n  (global-name \"com.apple.contacts.account-caching\")\n  (global-name \"com.apple.accountsd.accountmanager\")\n  (global-name \"com.apple.securityd.xpc\"))"
+                    .to_string(),
+            );
+            if let Some(addressbook_dir) = addressbook_dir() {
+                dir_params.push(("ADDRESSBOOK_DIR".to_string(), addressbook_dir));
+            }
+        }
     }
 
     if clauses.is_empty() {
@@ -111,9 +158,13 @@ pub(crate) fn build_seatbelt_extensions(
                 "; macOS permission profile extensions\n{}\n",
                 clauses.join("\n")
             ),
-            dir_params: Vec::new(),
+            dir_params,
         }
     }
+}
+
+fn addressbook_dir() -> Option<PathBuf> {
+    Some(dirs::home_dir()?.join("Library/Application Support/AddressBook"))
 }
 
 fn normalize_bundle_ids(bundle_ids: &[String]) -> Vec<String> {
@@ -139,6 +190,7 @@ fn is_valid_bundle_id(bundle_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::MacOsAutomationPermission;
+    use super::MacOsContactsPermission;
     use super::MacOsPreferencesPermission;
     use super::MacOsSeatbeltProfileExtensions;
     use super::build_seatbelt_extensions;
@@ -173,11 +225,7 @@ mod tests {
             ..Default::default()
         });
         assert!(policy.policy.contains("(allow appleevent-send)"));
-        assert!(
-            policy
-                .policy
-                .contains("com.apple.coreservices.launchservicesd")
-        );
+        assert!(policy.policy.contains("com.apple.coreservices.appleevents"));
     }
 
     #[test]
@@ -202,6 +250,28 @@ mod tests {
                 .contains("(appleevent-destination \"com.apple.Notes\")")
         );
         assert!(!policy.policy.contains("bad bundle"));
+        assert!(policy.policy.contains("com.apple.coreservices.appleevents"));
+    }
+
+    #[test]
+    fn launch_services_emit_launch_clauses() {
+        let policy = build_seatbelt_extensions(&MacOsSeatbeltProfileExtensions {
+            macos_launch_services: true,
+            ..Default::default()
+        });
+        assert!(
+            policy
+                .policy
+                .contains("com.apple.coreservices.launchservicesd")
+        );
+        assert!(policy.policy.contains("com.apple.lsd.mapdb"));
+        assert!(
+            policy
+                .policy
+                .contains("com.apple.coreservices.quarantine-resolver")
+        );
+        assert!(policy.policy.contains("com.apple.lsd.modifydb"));
+        assert!(policy.policy.contains("(allow lsopen)"));
     }
 
     #[test]
@@ -213,6 +283,56 @@ mod tests {
         });
         assert!(policy.policy.contains("com.apple.axserver"));
         assert!(policy.policy.contains("com.apple.CalendarAgent"));
+    }
+
+    #[test]
+    fn reminders_emit_calendar_agent_and_remindd_lookups() {
+        let policy = build_seatbelt_extensions(&MacOsSeatbeltProfileExtensions {
+            macos_reminders: true,
+            ..Default::default()
+        });
+        assert!(policy.policy.contains("com.apple.CalendarAgent"));
+        assert!(policy.policy.contains("com.apple.remindd"));
+    }
+
+    #[test]
+    fn contacts_read_only_emit_contacts_read_clauses() {
+        let policy = build_seatbelt_extensions(&MacOsSeatbeltProfileExtensions {
+            macos_contacts: MacOsContactsPermission::ReadOnly,
+            ..Default::default()
+        });
+
+        assert!(
+            policy
+                .policy
+                .contains("(subpath \"/System/Library/Address Book Plug-Ins\")")
+        );
+        assert!(
+            policy
+                .policy
+                .contains("(subpath (param \"ADDRESSBOOK_DIR\"))")
+        );
+        assert!(policy.policy.contains("com.apple.contactsd.persistence"));
+        assert!(policy.policy.contains("com.apple.accountsd.accountmanager"));
+        assert!(!policy.policy.contains("com.apple.securityd.xpc"));
+        assert!(
+            policy
+                .dir_params
+                .iter()
+                .any(|(key, _)| key == "ADDRESSBOOK_DIR")
+        );
+    }
+
+    #[test]
+    fn contacts_read_write_emit_write_clauses() {
+        let policy = build_seatbelt_extensions(&MacOsSeatbeltProfileExtensions {
+            macos_contacts: MacOsContactsPermission::ReadWrite,
+            ..Default::default()
+        });
+
+        assert!(policy.policy.contains("(subpath \"/var/folders\")"));
+        assert!(policy.policy.contains("(subpath \"/private/var/folders\")"));
+        assert!(policy.policy.contains("com.apple.securityd.xpc"));
     }
 
     #[test]

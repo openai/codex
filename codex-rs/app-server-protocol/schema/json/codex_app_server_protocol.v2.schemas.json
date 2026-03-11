@@ -740,6 +740,10 @@
                 },
                 "sandbox_approval": {
                   "type": "boolean"
+                },
+                "skill_approval": {
+                  "default": false,
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -8070,6 +8074,14 @@
         }
       ]
     },
+    "MacOsContactsPermission": {
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ],
+      "type": "string"
+    },
     "MacOsPreferencesPermission": {
       "enum": [
         "none",
@@ -8096,6 +8108,18 @@
           "default": false,
           "type": "boolean"
         },
+        "macos_contacts": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MacOsContactsPermission"
+            }
+          ],
+          "default": "none"
+        },
+        "macos_launch_services": {
+          "default": false,
+          "type": "boolean"
+        },
         "macos_preferences": {
           "allOf": [
             {
@@ -8103,6 +8127,10 @@
             }
           ],
           "default": "read_only"
+        },
+        "macos_reminders": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -9207,6 +9235,10 @@
             "array",
             "null"
           ]
+        },
+        "forceRemoteSync": {
+          "description": "When true, reconcile the official curated marketplace against the remote plugin state before listing marketplaces.",
+          "type": "boolean"
         }
       },
       "title": "PluginListParams",
@@ -9220,6 +9252,12 @@
             "$ref": "#/definitions/PluginMarketplaceEntry"
           },
           "type": "array"
+        },
+        "remoteSyncError": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -12932,6 +12970,9 @@
             "string",
             "null"
           ]
+        },
+        "ephemeral": {
+          "type": "boolean"
         },
         "model": {
           "description": "Configuration overrides for the forked thread, if any.",

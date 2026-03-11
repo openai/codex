@@ -13,6 +13,7 @@ use crate::config::Config;
 use crate::error::CodexErr;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
+use crate::models_manager::manager::RefreshStrategy;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -22,6 +23,8 @@ use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentRef;
@@ -113,6 +116,8 @@ mod spawn {
         message: Option<String>,
         items: Option<Vec<UserInput>>,
         agent_type: Option<String>,
+        model: Option<String>,
+        reasoning_effort: Option<ReasoningEffort>,
         #[serde(default)]
         fork_context: bool,
     }
@@ -158,6 +163,14 @@ mod spawn {
             .await;
         let mut config =
             build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+        apply_requested_spawn_agent_model_overrides(
+            &session,
+            turn.as_ref(),
+            &mut config,
+            args.model.as_deref(),
+            args.reasoning_effort,
+        )
+        .await?;
         apply_role_to_config(&mut config, role_name)
             .await
             .map_err(FunctionCallError::RespondToModel)?;
@@ -961,6 +974,99 @@ fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
     if child_depth >= config.agent_max_depth {
         let _ = config.features.disable(Feature::Collab);
     }
+}
+
+async fn apply_requested_spawn_agent_model_overrides(
+    session: &Session,
+    turn: &TurnContext,
+    config: &mut Config,
+    requested_model: Option<&str>,
+    requested_reasoning_effort: Option<ReasoningEffort>,
+) -> Result<(), FunctionCallError> {
+    if requested_model.is_none() && requested_reasoning_effort.is_none() {
+        return Ok(());
+    }
+
+    if let Some(requested_model) = requested_model {
+        let available_models = session
+            .services
+            .models_manager
+            .list_models(RefreshStrategy::Offline)
+            .await;
+        let selected_model_name = find_spawn_agent_model_name(&available_models, requested_model)?;
+        let selected_model_info = session
+            .services
+            .models_manager
+            .get_model_info(&selected_model_name, config)
+            .await;
+
+        config.model = Some(selected_model_name.clone());
+        if let Some(reasoning_effort) = requested_reasoning_effort {
+            validate_spawn_agent_reasoning_effort(
+                &selected_model_name,
+                &selected_model_info.supported_reasoning_levels,
+                reasoning_effort,
+            )?;
+            config.model_reasoning_effort = Some(reasoning_effort);
+        } else {
+            config.model_reasoning_effort = selected_model_info.default_reasoning_level;
+        }
+
+        return Ok(());
+    }
+
+    if let Some(reasoning_effort) = requested_reasoning_effort {
+        validate_spawn_agent_reasoning_effort(
+            &turn.model_info.slug,
+            &turn.model_info.supported_reasoning_levels,
+            reasoning_effort,
+        )?;
+        config.model_reasoning_effort = Some(reasoning_effort);
+    }
+
+    Ok(())
+}
+
+fn find_spawn_agent_model_name(
+    available_models: &[codex_protocol::openai_models::ModelPreset],
+    requested_model: &str,
+) -> Result<String, FunctionCallError> {
+    available_models
+        .iter()
+        .find(|model| model.model == requested_model)
+        .map(|model| model.model.clone())
+        .ok_or_else(|| {
+            let available = available_models
+                .iter()
+                .map(|model| model.model.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            FunctionCallError::RespondToModel(format!(
+                "Unknown model `{requested_model}` for spawn_agent. Available models: {available}"
+            ))
+        })
+}
+
+fn validate_spawn_agent_reasoning_effort(
+    model: &str,
+    supported_reasoning_levels: &[ReasoningEffortPreset],
+    requested_reasoning_effort: ReasoningEffort,
+) -> Result<(), FunctionCallError> {
+    if supported_reasoning_levels
+        .iter()
+        .any(|preset| preset.effort == requested_reasoning_effort)
+    {
+        return Ok(());
+    }
+
+    let supported = supported_reasoning_levels
+        .iter()
+        .map(|preset| preset.effort.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(FunctionCallError::RespondToModel(format!(
+        "Reasoning effort `{requested_reasoning_effort}` is not supported for model `{model}`. Supported reasoning efforts: {supported}"
+    )))
 }
 
 #[cfg(test)]

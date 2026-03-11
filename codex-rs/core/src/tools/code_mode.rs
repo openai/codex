@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
@@ -22,7 +24,6 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -47,6 +48,8 @@ enum CodeModeToolKind {
 
 #[derive(Clone, Debug, Serialize)]
 struct EnabledTool {
+    tool_name: String,
+    namespace: Vec<String>,
     name: String,
     kind: CodeModeToolKind,
 }
@@ -56,6 +59,7 @@ struct EnabledTool {
 enum HostToNodeMessage {
     Init {
         enabled_tools: Vec<EnabledTool>,
+        stored_values: HashMap<String, JsonValue>,
         source: String,
     },
     Response {
@@ -75,6 +79,7 @@ enum NodeToHostMessage {
     },
     Result {
         content_items: Vec<JsonValue>,
+        stored_values: HashMap<String, JsonValue>,
         #[serde(default)]
         error_text: Option<String>,
         #[serde(default)]
@@ -94,14 +99,14 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
     section.push_str("- `code_mode` is a freeform/custom tool. Direct `code_mode` calls must send raw JavaScript tool input. Do not wrap code in JSON, quotes, or markdown code fences.\n");
     section.push_str("- Direct tool calls remain available while `code_mode` is enabled.\n");
     section.push_str("- `code_mode` uses the same Node runtime resolution as `js_repl`. If needed, point `js_repl_node_path` at the Node binary you want Codex to use.\n");
-    section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to their code-mode result values.\n");
-    section.push_str("- Import `set_max_output_tokens_per_exec_call` from `@openai/code_mode` to set the token budget used to truncate the final Rust-side result of the current `code_mode` execution. The default is `10000`. This guards the overall `code_mode` output, not individual nested tool invocations. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker.\n");
+    section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to their code-mode result values.\n");
+    section.push_str("- Import `{ output_text, output_image, set_max_output_tokens_per_exec_call, store, load }` from `@openai/code_mode` (or `\"openai/code_mode\"`). `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs. `store(key, value)` persists JSON-serializable values across `code_mode` calls in the current session, and `load(key)` returns a cloned stored value or `undefined`. `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `code_mode` execution; the default is `10000`. This guards the overall `code_mode` output, not individual nested tool invocations. The returned content starts with a separate `Script completed` or `Script failed` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker.\n");
     section.push_str(
         "- Function tools require JSON object arguments. Freeform tools require raw strings.\n",
     );
-    section.push_str("- `add_content(value)` is synchronous. It accepts a content item, an array of content items, or a string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`.\n");
+    section.push_str("- `add_content(value)` remains available for compatibility. It is synchronous and accepts a content item, an array of content items, or a string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`.\n");
     section
-        .push_str("- Only content passed to `add_content(value)` is surfaced back to the model.");
+        .push_str("- Only content passed to `output_text(...)`, `output_image(...)`, or `add_content(value)` is surfaced back to the model.");
     Some(section)
 }
 
@@ -116,9 +121,10 @@ pub(crate) async fn execute(
         turn,
         tracker,
     };
-    let enabled_tools = build_enabled_tools(&exec);
+    let enabled_tools = build_enabled_tools(&exec).await;
+    let stored_values = exec.session.services.code_mode_store.stored_values().await;
     let source = build_source(&code, &enabled_tools).map_err(FunctionCallError::RespondToModel)?;
-    execute_node(exec, source, enabled_tools)
+    execute_node(exec, source, enabled_tools, stored_values)
         .await
         .map_err(FunctionCallError::RespondToModel)
 }
@@ -127,6 +133,7 @@ async fn execute_node(
     exec: ExecContext,
     source: String,
     enabled_tools: Vec<EnabledTool>,
+    stored_values: HashMap<String, JsonValue>,
 ) -> Result<FunctionToolOutput, String> {
     let node_path = resolve_compatible_node(exec.turn.config.js_repl_node_path.as_deref()).await?;
     let started_at = std::time::Instant::now();
@@ -171,6 +178,7 @@ async fn execute_node(
         &mut stdin,
         &HostToNodeMessage::Init {
             enabled_tools: enabled_tools.clone(),
+            stored_values,
             source,
         },
     )
@@ -198,9 +206,15 @@ async fn execute_node(
             }
             NodeToHostMessage::Result {
                 content_items,
+                stored_values,
                 error_text,
                 max_output_tokens_per_exec_call,
             } => {
+                exec.session
+                    .services
+                    .code_mode_store
+                    .replace_stored_values(stored_values)
+                    .await;
                 pending_result = Some((
                     output_content_items_from_json_values(content_items)?,
                     error_text,
@@ -221,7 +235,6 @@ async fn execute_node(
         .await
         .map_err(|err| format!("failed to collect code_mode stderr: {err}"))?;
     let wall_time = started_at.elapsed();
-
     let success = status.success();
 
     let Some((mut content_items, error_text, max_output_tokens_per_exec_call)) = pending_result
@@ -322,26 +335,72 @@ fn truncate_code_mode_result(
     truncate_function_output_items_with_policy(&items, policy)
 }
 
-fn build_enabled_tools(exec: &ExecContext) -> Vec<EnabledTool> {
+async fn build_enabled_tools(exec: &ExecContext) -> Vec<EnabledTool> {
+    let router = build_nested_router(exec).await;
+    let mcp_tool_names = exec
+        .session
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .list_all_tools()
+        .await
+        .into_iter()
+        .map(|(qualified_name, tool_info)| {
+            (
+                qualified_name,
+                (
+                    vec!["mcp".to_string(), tool_info.server_name],
+                    tool_info.tool_name,
+                ),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut out = Vec::new();
+    for spec in router.specs() {
+        let tool_name = spec.name().to_string();
+        if tool_name == "code_mode" {
+            continue;
+        }
+
+        let (namespace, name) = if let Some((namespace, name)) = mcp_tool_names.get(&tool_name) {
+            (namespace.clone(), name.clone())
+        } else {
+            (Vec::new(), tool_name.clone())
+        };
+
+        out.push(EnabledTool {
+            tool_name,
+            namespace,
+            name,
+            kind: tool_kind_for_spec(&spec),
+        });
+    }
+    out.sort_by(|left, right| left.tool_name.cmp(&right.tool_name));
+    out.dedup_by(|left, right| left.tool_name == right.tool_name);
+    out
+}
+
+async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
     let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
-    let router = ToolRouter::from_config(
+    let mcp_tools = exec
+        .session
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .list_all_tools()
+        .await
+        .into_iter()
+        .map(|(name, tool_info)| (name, tool_info.tool))
+        .collect();
+
+    ToolRouter::from_config(
         &nested_tools_config,
-        None,
+        Some(mcp_tools),
         None,
         exec.turn.dynamic_tools.as_slice(),
-    );
-    let mut out = router
-        .specs()
-        .into_iter()
-        .map(|spec| EnabledTool {
-            name: spec.name().to_string(),
-            kind: tool_kind_for_spec(&spec),
-        })
-        .filter(|tool| tool.name != "code_mode")
-        .collect::<Vec<_>>();
-    out.sort_by(|left, right| left.name.cmp(&right.name));
-    out.dedup_by(|left, right| left.name == right.name);
-    out
+    )
 }
 
 async fn call_nested_tool(
@@ -353,18 +412,23 @@ async fn call_nested_tool(
         return JsonValue::String("code_mode cannot invoke itself".to_string());
     }
 
-    let nested_config = exec.turn.tools_config.for_code_mode_nested_tools();
-    let router = ToolRouter::from_config(
-        &nested_config,
-        None,
-        None,
-        exec.turn.dynamic_tools.as_slice(),
-    );
+    let router = build_nested_router(&exec).await;
 
     let specs = router.specs();
-    let payload = match build_nested_tool_payload(&specs, &tool_name, input) {
-        Ok(payload) => payload,
-        Err(error) => return JsonValue::String(error),
+    let payload = if let Some((server, tool)) = exec.session.parse_mcp_tool_name(&tool_name).await {
+        match serialize_function_tool_arguments(&tool_name, input) {
+            Ok(raw_arguments) => ToolPayload::Mcp {
+                server,
+                tool,
+                raw_arguments,
+            },
+            Err(error) => return JsonValue::String(error),
+        }
+    } else {
+        match build_nested_tool_payload(&specs, &tool_name, input) {
+            Ok(payload) => payload,
+            Err(error) => return JsonValue::String(error),
+        }
     };
 
     let call = ToolCall {
@@ -420,17 +484,22 @@ fn build_function_tool_payload(
     tool_name: &str,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
-    let arguments = match input {
-        None => "{}".to_string(),
-        Some(JsonValue::Object(map)) => serde_json::to_string(&JsonValue::Object(map))
-            .map_err(|err| format!("failed to serialize tool `{tool_name}` arguments: {err}"))?,
-        Some(_) => {
-            return Err(format!(
-                "tool `{tool_name}` expects a JSON object for arguments"
-            ));
-        }
-    };
+    let arguments = serialize_function_tool_arguments(tool_name, input)?;
     Ok(ToolPayload::Function { arguments })
+}
+
+fn serialize_function_tool_arguments(
+    tool_name: &str,
+    input: Option<JsonValue>,
+) -> Result<String, String> {
+    match input {
+        None => Ok("{}".to_string()),
+        Some(JsonValue::Object(map)) => serde_json::to_string(&JsonValue::Object(map))
+            .map_err(|err| format!("failed to serialize tool `{tool_name}` arguments: {err}")),
+        Some(_) => Err(format!(
+            "tool `{tool_name}` expects a JSON object for arguments"
+        )),
+    }
 }
 
 fn build_freeform_tool_payload(

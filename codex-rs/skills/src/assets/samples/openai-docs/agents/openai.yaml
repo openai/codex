@@ -1,0 +1,14 @@
+interface:
+  display_name: "OpenAI Docs"
+  short_description: "Reference official OpenAI docs, including upgrade guidance"
+  icon_small: "./assets/openai-small.svg"
+  icon_large: "./assets/openai.png"
+  default_prompt: "Look up official OpenAI docs, load relevant GPT-5.4 upgrade references when applicable, and answer with concise, cited guidance."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "openaiDeveloperDocs"
+      description: "OpenAI Developer Docs MCP server"
+      transport: "streamable_http"
+      url: "https://developers.openai.com/mcp"

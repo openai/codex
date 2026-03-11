@@ -7,7 +7,9 @@ on:
 
 jobs:
   sdks:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: codex-runners
+      labels: codex-linux-x64
     timeout-minutes: 10
     steps:
       - name: Checkout repository

@@ -11,6 +11,10 @@ cd sdk/python
 python -m pip install -e .
 ```
 
+Published SDK builds pin an exact `codex-cli-bin` runtime dependency. For local
+repo development, pass `AppServerConfig(codex_bin=...)` to point at a local
+build explicitly.
+
 ## Quickstart
 
 ```python
@@ -40,33 +44,45 @@ python examples/01_quickstart_constructor/sync.py
 python examples/01_quickstart_constructor/async.py
 ```
 
-## Bundled runtime binaries (out of the box)
+## Runtime packaging
 
-The SDK ships with platform-specific bundled binaries, so end users do not need updater scripts.
+The repo no longer checks `codex` binaries into `sdk/python`.
 
-Runtime binary source (single source, no fallback):
+Published SDK builds are pinned to an exact `codex-cli-bin` package version,
+and that runtime package carries the platform-specific binary for the target
+wheel.
 
-- `src/codex_app_server/bin/darwin-arm64/codex`
-- `src/codex_app_server/bin/darwin-x64/codex`
-- `src/codex_app_server/bin/linux-arm64/codex`
-- `src/codex_app_server/bin/linux-x64/codex`
-- `src/codex_app_server/bin/windows-arm64/codex.exe`
-- `src/codex_app_server/bin/windows-x64/codex.exe`
+For local repo development, the checked-in `sdk/python-runtime` package is only
+a template for staged release artifacts. Editable installs should use an
+explicit `codex_bin` override instead.
 
-## Maintainer workflow (refresh binaries/types)
+## Maintainer workflow
 
 ```bash
 cd sdk/python
-python scripts/update_sdk_artifacts.py --channel stable --bundle-all-platforms
-# or
-python scripts/update_sdk_artifacts.py --channel alpha --bundle-all-platforms
+python scripts/update_sdk_artifacts.py generate-types
+python scripts/update_sdk_artifacts.py \
+  stage-sdk \
+  /tmp/codex-python-release/codex-app-server-sdk \
+  --runtime-version 1.2.3
+python scripts/update_sdk_artifacts.py \
+  stage-runtime \
+  /tmp/codex-python-release/codex-cli-bin \
+  /path/to/codex \
+  --runtime-version 1.2.3
 ```
 
-This refreshes all bundled OS/arch binaries and regenerates protocol-derived Python types.
+This supports the CI release flow:
+
+- run `generate-types` before packaging
+- stage `codex-app-server-sdk` once with an exact `codex-cli-bin==...` dependency
+- stage `codex-cli-bin` on each supported platform runner with the same pinned runtime version
+- build and publish `codex-cli-bin` as platform wheels only; do not publish an sdist
 
 ## Compatibility and versioning
 
 - Package: `codex-app-server-sdk`
+- Runtime package: `codex-cli-bin`
 - Current SDK version in this repo: `0.2.0`
 - Python: `>=3.10`
 - Target protocol: Codex `app-server` JSON-RPC v2
