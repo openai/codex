@@ -878,10 +878,9 @@ mod tests {
         );
         auth_manager.set_forced_chatgpt_workspace_id(Some("workspace-before".to_string()));
         let thread_manager = Arc::new(ThreadManager::new(
-            config.codex_home.clone(),
+            &config,
             auth_manager.clone(),
             SessionSource::Cli,
-            config.model_catalog.clone(),
             CollaborationModesConfig {
                 default_mode_request_user_input: false,
             },
@@ -944,10 +943,9 @@ mod tests {
         );
         auth_manager.set_forced_chatgpt_workspace_id(Some("workspace-before".to_string()));
         let thread_manager = Arc::new(ThreadManager::new(
-            config_a.codex_home.clone(),
+            &config_a,
             auth_manager.clone(),
             SessionSource::Cli,
-            config_a.model_catalog.clone(),
             CollaborationModesConfig {
                 default_mode_request_user_input: false,
             },
@@ -1047,10 +1045,9 @@ mod tests {
             config.cli_auth_credentials_store_mode,
         );
         let thread_manager = Arc::new(ThreadManager::new(
-            config.codex_home.clone(),
+            &config,
             auth_manager,
             SessionSource::Cli,
-            config.model_catalog.clone(),
             CollaborationModesConfig {
                 default_mode_request_user_input: false,
             },
