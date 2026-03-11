@@ -666,11 +666,8 @@ impl Codex {
         let session_loop_termination = self.session_loop_termination.clone();
         match self.submit(Op::Shutdown).await {
             Ok(_) => {}
-            Err(err) => {
-                if session_loop_termination.clone().now_or_never().is_none() {
-                    return Err(err);
-                }
-            }
+            Err(CodexErr::InternalAgentDied) => {}
+            Err(err) => return Err(err),
         }
         session_loop_termination.await;
         Ok(())

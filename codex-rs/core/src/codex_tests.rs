@@ -2628,6 +2628,43 @@ async fn shutdown_and_wait_allows_multiple_waiters() {
         .expect("second shutdown waiter");
 }
 
+#[tokio::test]
+async fn shutdown_and_wait_waits_when_shutdown_is_already_in_progress() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let (tx_sub, rx_sub) = async_channel::bounded(4);
+    drop(rx_sub);
+    let (_tx_event, rx_event) = async_channel::unbounded();
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (shutdown_complete_tx, shutdown_complete_rx) = tokio::sync::oneshot::channel();
+    let session_loop_handle = tokio::spawn(async move {
+        let _ = shutdown_complete_rx.await;
+    });
+    let codex = Arc::new(Codex {
+        tx_sub,
+        rx_event,
+        agent_status,
+        session: Arc::new(session),
+        session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
+    });
+
+    let waiter = {
+        let codex = Arc::clone(&codex);
+        tokio::spawn(async move { codex.shutdown_and_wait().await })
+    };
+
+    tokio::time::sleep(StdDuration::from_millis(10)).await;
+    assert!(!waiter.is_finished());
+
+    shutdown_complete_tx
+        .send(())
+        .expect("session loop should still be waiting to terminate");
+
+    waiter
+        .await
+        .expect("shutdown waiter join")
+        .expect("shutdown waiter");
+}
+
 pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     dynamic_tools: Vec<DynamicToolSpec>,
 ) -> (
