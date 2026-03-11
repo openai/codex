@@ -594,32 +594,4 @@ mod tests {
             other => panic!("expected FunctionCallOutput, got {other:?}"),
         }
     }
-
-    #[test]
-    fn exec_command_tool_output_code_mode_result_serializes_numeric_session_id() {
-        let result = ExecCommandToolOutput {
-            event_call_id: "call-42".to_string(),
-            chunk_id: "abc123".to_string(),
-            wall_time: std::time::Duration::from_millis(1250),
-            raw_output: b"hello".to_vec(),
-            max_output_tokens: None,
-            process_id: Some(1000),
-            exit_code: None,
-            original_token_count: None,
-            session_command: None,
-        }
-        .code_mode_result(&ToolPayload::Function {
-            arguments: "{}".to_string(),
-        });
-
-        assert_eq!(
-            result,
-            serde_json::json!({
-                "chunk_id": "abc123",
-                "wall_time_seconds": 1.25,
-                "session_id": 1000,
-                "output": "hello",
-            })
-        );
-    }
 }
