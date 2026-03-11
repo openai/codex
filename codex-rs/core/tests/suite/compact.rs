@@ -3297,16 +3297,11 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
     skip_if_no_network!();
 
     let server = start_mock_server().await;
-
-    let compact_turn = sse(vec![
-        ev_assistant_message("m1", "MANUAL_EMPTY_SUMMARY"),
-        ev_completed_with_tokens("r1", 90),
-    ]);
     let follow_up_turn = sse(vec![
         ev_assistant_message("m2", FINAL_REPLY),
         ev_completed_with_tokens("r2", 80),
     ]);
-    let request_log = mount_sse_sequence(&server, vec![compact_turn, follow_up_turn]).await;
+    let request_log = mount_sse_once(&server, follow_up_turn).await;
 
     let model_provider = non_openai_model_provider(&server);
     let codex = test_codex()
@@ -3337,18 +3332,15 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
     let requests = request_log.requests();
     assert_eq!(
         requests.len(),
-        2,
-        "expected manual /compact request and follow-up turn request"
+        1,
+        "expected follow-up turn request only after no-op manual /compact"
     );
 
     insta::assert_snapshot!(
         "manual_compact_without_prev_user_shapes",
         format_labeled_requests_snapshot(
-            "Manual /compact with no prior user turn currently still issues a compaction request; follow-up turn carries canonical context and the new user message.",
-            &[
-                ("Local Compaction Request", &requests[0]),
-                ("Local Post-Compaction History Layout", &requests[1]),
-            ]
+            "Manual /compact with no prior user turn is a no-op; the follow-up turn carries canonical context and the new user message.",
+            &[("Local Post-Compaction History Layout", &requests[0])]
         )
     );
 }
