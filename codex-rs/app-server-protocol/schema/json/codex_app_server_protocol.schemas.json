@@ -7830,9 +7830,9 @@
           "properties": {
             "method": {
               "enum": [
-                "item/commandExecution/autoApprovalReviewStarted"
+                "item/commandExecution/autoApprovalReview/started"
               ],
-              "title": "Item/commandExecution/autoApprovalReviewStartedNotificationMethod",
+              "title": "Item/commandExecution/autoApprovalReview/startedNotificationMethod",
               "type": "string"
             },
             "params": {
@@ -7843,16 +7843,16 @@
             "method",
             "params"
           ],
-          "title": "Item/commandExecution/autoApprovalReviewStartedNotification",
+          "title": "Item/commandExecution/autoApprovalReview/startedNotification",
           "type": "object"
         },
         {
           "properties": {
             "method": {
               "enum": [
-                "item/commandExecution/autoApprovalReviewCompleted"
+                "item/commandExecution/autoApprovalReview/completed"
               ],
-              "title": "Item/commandExecution/autoApprovalReviewCompletedNotificationMethod",
+              "title": "Item/commandExecution/autoApprovalReview/completedNotificationMethod",
               "type": "string"
             },
             "params": {
@@ -7863,16 +7863,16 @@
             "method",
             "params"
           ],
-          "title": "Item/commandExecution/autoApprovalReviewCompletedNotification",
+          "title": "Item/commandExecution/autoApprovalReview/completedNotification",
           "type": "object"
         },
         {
           "properties": {
             "method": {
               "enum": [
-                "item/fileChange/autoApprovalReviewStarted"
+                "item/fileChange/autoApprovalReview/started"
               ],
-              "title": "Item/fileChange/autoApprovalReviewStartedNotificationMethod",
+              "title": "Item/fileChange/autoApprovalReview/startedNotificationMethod",
               "type": "string"
             },
             "params": {
@@ -7883,16 +7883,16 @@
             "method",
             "params"
           ],
-          "title": "Item/fileChange/autoApprovalReviewStartedNotification",
+          "title": "Item/fileChange/autoApprovalReview/startedNotification",
           "type": "object"
         },
         {
           "properties": {
             "method": {
               "enum": [
-                "item/fileChange/autoApprovalReviewCompleted"
+                "item/fileChange/autoApprovalReview/completed"
               ],
-              "title": "Item/fileChange/autoApprovalReviewCompletedNotificationMethod",
+              "title": "Item/fileChange/autoApprovalReview/completedNotificationMethod",
               "type": "string"
             },
             "params": {
@@ -7903,16 +7903,16 @@
             "method",
             "params"
           ],
-          "title": "Item/fileChange/autoApprovalReviewCompletedNotification",
+          "title": "Item/fileChange/autoApprovalReview/completedNotification",
           "type": "object"
         },
         {
           "properties": {
             "method": {
               "enum": [
-                "item/mcpToolCall/autoApprovalReviewStarted"
+                "item/mcpToolCall/autoApprovalReview/started"
               ],
-              "title": "Item/mcpToolCall/autoApprovalReviewStartedNotificationMethod",
+              "title": "Item/mcpToolCall/autoApprovalReview/startedNotificationMethod",
               "type": "string"
             },
             "params": {
@@ -7923,16 +7923,16 @@
             "method",
             "params"
           ],
-          "title": "Item/mcpToolCall/autoApprovalReviewStartedNotification",
+          "title": "Item/mcpToolCall/autoApprovalReview/startedNotification",
           "type": "object"
         },
         {
           "properties": {
             "method": {
               "enum": [
-                "item/mcpToolCall/autoApprovalReviewCompleted"
+                "item/mcpToolCall/autoApprovalReview/completed"
               ],
-              "title": "Item/mcpToolCall/autoApprovalReviewCompletedNotificationMethod",
+              "title": "Item/mcpToolCall/autoApprovalReview/completedNotificationMethod",
               "type": "string"
             },
             "params": {
@@ -7943,7 +7943,7 @@
             "method",
             "params"
           ],
-          "title": "Item/mcpToolCall/autoApprovalReviewCompletedNotification",
+          "title": "Item/mcpToolCall/autoApprovalReview/completedNotification",
           "type": "object"
         },
         {
