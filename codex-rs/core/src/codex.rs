@@ -293,6 +293,7 @@ use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::network_approval::build_blocked_request_observer;
 use crate::tools::network_approval::build_network_policy_decider;
 use crate::tools::parallel::ToolCallRuntime;
+use crate::tools::router::ToolRouterParams;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::ToolsConfigParams;
@@ -6040,10 +6041,14 @@ async fn built_tools(
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
     effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
 
+    let accessible_connectors = turn_context
+        .features
+        .enabled(Feature::Apps)
+        .then(|| connectors::accessible_connectors_from_mcp_tools(&mcp_tools));
     let connectors = if turn_context.features.enabled(Feature::Apps) {
         let connectors = connectors::merge_plugin_apps_with_accessible(
             loaded_plugins.effective_apps(),
-            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+            accessible_connectors.clone().unwrap_or_default(),
         );
         Some(connectors::with_app_enabled_state(
             connectors,
@@ -6052,6 +6057,30 @@ async fn built_tools(
     } else {
         None
     };
+    let auth = sess.services.auth_manager.auth().await;
+    let discoverable_connectors =
+        if turn_context.features.enabled(Feature::Apps) && turn_context.tools_config.search_tool {
+            if let Some(accessible_connectors) = accessible_connectors.as_ref() {
+                match connectors::list_tool_suggest_discoverable_connectors_with_auth(
+                    &turn_context.config,
+                    auth.as_ref(),
+                    accessible_connectors.as_slice(),
+                )
+                .await
+                {
+                    Ok(connectors) if connectors.is_empty() => None,
+                    Ok(connectors) => Some(connectors),
+                    Err(err) => {
+                        warn!("failed to load discoverable tool suggestions: {err:#}");
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
     // Keep the connector-grouped app view around for the router even though
     // app tools only become prompt-visible after explicit selection/discovery.
@@ -6088,14 +6117,17 @@ async fn built_tools(
 
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
-        has_mcp_servers.then(|| {
-            mcp_tools
-                .into_iter()
-                .map(|(name, tool)| (name, tool.tool))
-                .collect()
-        }),
-        app_tools,
-        turn_context.dynamic_tools.as_slice(),
+        ToolRouterParams {
+            mcp_tools: has_mcp_servers.then(|| {
+                mcp_tools
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect()
+            }),
+            app_tools,
+            discoverable_connectors,
+            dynamic_tools: turn_context.dynamic_tools.as_slice(),
+        },
     )))
 }
 

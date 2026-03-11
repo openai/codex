@@ -3579,14 +3579,17 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
     let app_tools = Some(tools.clone());
     let router = ToolRouter::from_config(
         &turn_context.tools_config,
-        Some(
-            tools
-                .into_iter()
-                .map(|(name, tool)| (name, tool.tool))
-                .collect(),
-        ),
-        app_tools,
-        turn_context.dynamic_tools.as_slice(),
+        crate::tools::router::ToolRouterParams {
+            mcp_tools: Some(
+                tools
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect(),
+            ),
+            app_tools,
+            discoverable_connectors: None,
+            dynamic_tools: turn_context.dynamic_tools.as_slice(),
+        },
     );
     let item = ResponseItem::CustomToolCall {
         id: None,

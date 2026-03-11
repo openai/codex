@@ -15,6 +15,7 @@ mod request_user_input;
 mod search_tool_bm25;
 mod shell;
 mod test_sync;
+mod tool_suggest;
 pub(crate) mod unified_exec;
 mod view_image;
 
@@ -54,6 +55,8 @@ pub use search_tool_bm25::SearchToolBm25Handler;
 pub use shell::ShellCommandHandler;
 pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;
+pub(crate) use tool_suggest::TOOL_SUGGEST_TOOL_NAME;
+pub use tool_suggest::ToolSuggestHandler;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;
 

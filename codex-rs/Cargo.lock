@@ -1612,6 +1612,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "codex-connectors",
  "codex-core",
  "codex-git",
  "codex-utils-cargo-bin",
@@ -1784,6 +1785,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-connectors"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-app-server-protocol",
+ "pretty_assertions",
+ "serde",
+ "tokio",
+ "urlencoding",
+]
+
+[[package]]
 name = "codex-core"
 version = "0.0.0"
 dependencies = [
@@ -1807,6 +1820,7 @@ dependencies = [
  "codex-async-utils",
  "codex-client",
  "codex-config",
+ "codex-connectors",
  "codex-execpolicy",
  "codex-file-search",
  "codex-git",

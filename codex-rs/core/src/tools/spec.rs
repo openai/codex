@@ -10,6 +10,7 @@ use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
 use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
+use crate::tools::handlers::TOOL_SUGGEST_TOOL_NAME;
 use crate::tools::handlers::agent_jobs::BatchJobHandler;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
@@ -19,6 +20,7 @@ use crate::tools::handlers::multi_agents::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolRegistryBuilder;
+use codex_app_server_protocol::AppInfo;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -39,6 +41,8 @@ use std::collections::HashMap;
 
 const SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
+const TOOL_SUGGEST_DESCRIPTION_TEMPLATE: &str =
+    include_str!("../../templates/search_tool/tool_suggest_description.md");
 const WEB_SEARCH_CONTENT_TYPES: [&str; 2] = ["text", "image"];
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ShellCommandBackendConfig {
@@ -65,6 +69,7 @@ pub(crate) struct ToolsConfig {
     pub image_gen_tool: bool,
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
+    pub tool_suggest: bool,
     pub request_permission_enabled: bool,
     pub request_permissions_tool_enabled: bool,
     pub js_repl_enabled: bool,
@@ -102,6 +107,7 @@ impl ToolsConfig {
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool = features.enabled(Feature::Apps);
+        let include_tool_suggest = include_search_tool && features.enabled(Feature::ToolSuggest);
         let include_artifact_tools =
             features.enabled(Feature::Artifact) && codex_artifacts::can_manage_artifact_runtime();
         let include_image_gen_tool =
@@ -168,6 +174,7 @@ impl ToolsConfig {
             image_gen_tool: include_image_gen_tool,
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
+            tool_suggest: include_tool_suggest,
             request_permission_enabled,
             request_permissions_tool_enabled,
             js_repl_enabled: include_js_repl,
@@ -1300,6 +1307,94 @@ fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSp
     })
 }
 
+fn create_tool_suggest_tool(discoverable_connectors: &[AppInfo]) -> ToolSpec {
+    let discoverable_tool_ids = discoverable_connectors
+        .iter()
+        .map(|connector| connector.id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let properties = BTreeMap::from([
+        (
+            "tool_type".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Type of discoverable tool to suggest. Use \"connector\" or \"plugin\"."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "action_type".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Suggested action for the tool. Use \"install\" or \"enable\".".to_string(),
+                ),
+            },
+        ),
+        (
+            "tool_id".to_string(),
+            JsonSchema::String {
+                description: Some(format!(
+                    "Connector or plugin id to suggest. Must be one of: {discoverable_tool_ids}."
+                )),
+            },
+        ),
+        (
+            "suggest_reason".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Concise one-line user-facing reason why this tool can help with the current request."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+    let discoverable_tools = format_discoverable_tools(discoverable_connectors);
+    let description = TOOL_SUGGEST_DESCRIPTION_TEMPLATE
+        .replace("{{discoverable_tools}}", discoverable_tools.as_str());
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: TOOL_SUGGEST_TOOL_NAME.to_string(),
+        description,
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![
+                "tool_type".to_string(),
+                "action_type".to_string(),
+                "tool_id".to_string(),
+                "suggest_reason".to_string(),
+            ]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn format_discoverable_tools(discoverable_connectors: &[AppInfo]) -> String {
+    let mut connectors = discoverable_connectors.to_vec();
+    connectors.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    connectors
+        .into_iter()
+        .map(|connector| {
+            let description = connector
+                .description
+                .as_deref()
+                .filter(|description| !description.trim().is_empty())
+                .unwrap_or("No description provided.");
+            format!(
+                "- {} (`{}`, connector, install): {}",
+                connector.name, connector.id, description
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn create_read_file_tool() -> ToolSpec {
     let indentation_properties = BTreeMap::from([
         (
@@ -1821,10 +1916,21 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 }
 
 /// Builds the tool registry builder while collecting tool specs for later serialization.
+#[cfg(test)]
 pub(crate) fn build_specs(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
     app_tools: Option<HashMap<String, ToolInfo>>,
+    dynamic_tools: &[DynamicToolSpec],
+) -> ToolRegistryBuilder {
+    build_specs_with_discoverable_connectors(config, mcp_tools, app_tools, None, dynamic_tools)
+}
+
+pub(crate) fn build_specs_with_discoverable_connectors(
+    config: &ToolsConfig,
+    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    app_tools: Option<HashMap<String, ToolInfo>>,
+    discoverable_connectors: Option<Vec<AppInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
@@ -1845,6 +1951,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::TestSyncHandler;
+    use crate::tools::handlers::ToolSuggestHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
     use std::sync::Arc;
@@ -1865,6 +1972,7 @@ pub(crate) fn build_specs(
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
     let search_tool_handler = Arc::new(SearchToolBm25Handler);
+    let tool_suggest_handler = Arc::new(ToolSuggestHandler);
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
     let artifacts_handler = Arc::new(ArtifactsHandler);
@@ -1944,6 +2052,18 @@ pub(crate) fn build_specs(
     {
         builder.push_spec_with_parallel_support(create_search_tool_bm25_tool(&app_tools), true);
         builder.register_handler(SEARCH_TOOL_BM25_TOOL_NAME, search_tool_handler);
+    }
+
+    if config.tool_suggest
+        && let Some(discoverable_connectors) = discoverable_connectors
+            .as_ref()
+            .filter(|connectors| !connectors.is_empty())
+    {
+        builder.push_spec_with_parallel_support(
+            create_tool_suggest_tool(discoverable_connectors),
+            true,
+        );
+        builder.register_handler(TOOL_SUGGEST_TOOL_NAME, tool_suggest_handler);
     }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
@@ -3334,6 +3454,146 @@ mod tests {
         };
         assert!(description.contains("Calendar"));
         assert!(!description.contains("mcp__rmcp__echo"));
+    }
+
+    #[test]
+    fn tool_suggest_is_not_registered_without_feature_flag() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Apps);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+
+        let (tools, _) = build_specs_with_discoverable_connectors(
+            &tools_config,
+            None,
+            None,
+            Some(vec![AppInfo {
+                id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
+                name: "Google Calendar".to_string(),
+                description: Some("Plan events and schedules.".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some(
+                    "https://chatgpt.com/apps/google-calendar/connector_2128aebfecb84f64a069897515042a44"
+                        .to_string(),
+                ),
+                is_accessible: false,
+                is_enabled: true,
+                plugin_display_names: Vec::new(),
+            }]),
+            &[],
+        )
+        .build();
+
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == TOOL_SUGGEST_TOOL_NAME)
+        );
+    }
+
+    #[test]
+    fn tool_suggest_description_lists_discoverable_connectors() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Apps);
+        features.enable(Feature::ToolSuggest);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+
+        let discoverable_connectors = vec![
+            AppInfo {
+                id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
+                name: "Google Calendar".to_string(),
+                description: Some("Plan events and schedules.".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some(
+                    "https://chatgpt.com/apps/google-calendar/connector_2128aebfecb84f64a069897515042a44"
+                        .to_string(),
+                ),
+                is_accessible: false,
+                is_enabled: true,
+                plugin_display_names: Vec::new(),
+            },
+            AppInfo {
+                id: "connector_68df038e0ba48191908c8434991bbac2".to_string(),
+                name: "Gmail".to_string(),
+                description: Some("Find and summarize email threads.".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some(
+                    "https://chatgpt.com/apps/gmail/connector_68df038e0ba48191908c8434991bbac2"
+                        .to_string(),
+                ),
+                is_accessible: false,
+                is_enabled: true,
+                plugin_display_names: Vec::new(),
+            },
+        ];
+
+        let (tools, _) = build_specs_with_discoverable_connectors(
+            &tools_config,
+            None,
+            None,
+            Some(discoverable_connectors),
+            &[],
+        )
+        .build();
+
+        let tool_suggest = find_tool(&tools, TOOL_SUGGEST_TOOL_NAME);
+        let ToolSpec::Function(ResponsesApiTool {
+            description,
+            parameters,
+            ..
+        }) = &tool_suggest.spec
+        else {
+            panic!("expected function tool");
+        };
+        assert!(description.contains("Google Calendar"));
+        assert!(description.contains("Gmail"));
+        assert!(description.contains("Plan events and schedules."));
+        assert!(description.contains("Find and summarize email threads."));
+        assert!(
+            description.contains("DO NOT explore or recommend tools that are not on this list.")
+        );
+        let JsonSchema::Object { required, .. } = parameters else {
+            panic!("expected object parameters");
+        };
+        assert_eq!(
+            required.as_ref(),
+            Some(&vec![
+                "tool_type".to_string(),
+                "action_type".to_string(),
+                "tool_id".to_string(),
+                "suggest_reason".to_string(),
+            ])
+        );
     }
 
     #[test]

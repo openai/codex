@@ -452,6 +452,9 @@
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
+            "tool_suggest": {
+              "type": "boolean"
+            },
             "undo": {
               "type": "boolean"
             },
@@ -1925,6 +1928,9 @@
           "type": "boolean"
         },
         "tool_call_mcp_elicitation": {
+          "type": "boolean"
+        },
+        "tool_suggest": {
           "type": "boolean"
         },
         "undo": {

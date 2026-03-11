@@ -9,12 +9,16 @@ use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use std::time::Instant;
 
+use anyhow::Context;
 use async_channel::unbounded;
+use codex_connectors::AllConnectorsCacheKey;
+use codex_connectors::DirectoryListResponse;
 pub use codex_app_server_protocol::AppBranding;
 pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
 use codex_protocol::protocol::SandboxPolicy;
 use rmcp::model::ToolAnnotations;
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use tracing::warn;
 
@@ -24,6 +28,7 @@ use crate::SandboxState;
 use crate::config::Config;
 use crate::config::types::AppToolApproval;
 use crate::config::types::AppsConfigToml;
+use crate::default_client::create_client;
 use crate::default_client::is_first_party_chat_originator;
 use crate::default_client::originator;
 use crate::features::Feature;
@@ -38,8 +43,13 @@ use crate::plugins::AppConnectorId;
 use crate::plugins::PluginsManager;
 use crate::token_data::TokenData;
 
-pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
+pub use codex_connectors::CONNECTORS_CACHE_TTL;
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
+const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
+const TOOL_SUGGEST_DISCOVERABLE_CONNECTOR_IDS: &[&str] = &[
+    "connector_2128aebfecb84f64a069897515042a44",
+    "connector_68df038e0ba48191908c8434991bbac2",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AppToolPolicy {
@@ -88,6 +98,19 @@ pub async fn list_accessible_connectors_from_mcp_tools(
             .await?
             .connectors,
     )
+}
+
+pub(crate) async fn list_tool_suggest_discoverable_connectors_with_auth(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    accessible_connectors: &[AppInfo],
+) -> anyhow::Result<Vec<AppInfo>> {
+    let directory_connectors =
+        list_directory_connectors_for_tool_suggest_with_auth(config, auth).await?;
+    Ok(filter_tool_suggest_discoverable_connectors(
+        directory_connectors,
+        accessible_connectors,
+    ))
 }
 
 pub async fn list_cached_accessible_connectors_from_mcp_tools(
@@ -281,6 +304,118 @@ fn write_cached_accessible_connectors(
         expires_at: Instant::now() + CONNECTORS_CACHE_TTL,
         connectors: connectors.to_vec(),
     });
+}
+
+fn filter_tool_suggest_discoverable_connectors(
+    directory_connectors: Vec<AppInfo>,
+    accessible_connectors: &[AppInfo],
+) -> Vec<AppInfo> {
+    let accessible_connector_ids: HashSet<&str> = accessible_connectors
+        .iter()
+        .map(|connector| connector.id.as_str())
+        .collect();
+    let allowed_connector_ids: HashSet<&str> = TOOL_SUGGEST_DISCOVERABLE_CONNECTOR_IDS
+        .iter()
+        .copied()
+        .collect();
+
+    let mut connectors = filter_disallowed_connectors(directory_connectors)
+        .into_iter()
+        .filter(|connector| !accessible_connector_ids.contains(connector.id.as_str()))
+        .filter(|connector| allowed_connector_ids.contains(connector.id.as_str()))
+        .collect::<Vec<_>>();
+    connectors.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    connectors
+}
+
+async fn list_directory_connectors_for_tool_suggest_with_auth(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+) -> anyhow::Result<Vec<AppInfo>> {
+    if !config.features.enabled(Feature::Apps) {
+        return Ok(Vec::new());
+    }
+
+    let token_data = if let Some(auth) = auth {
+        auth.get_token_data().ok()
+    } else {
+        let auth_manager = auth_manager_from_config(config);
+        auth_manager
+            .auth()
+            .await
+            .and_then(|auth| auth.get_token_data().ok())
+    };
+    let Some(token_data) = token_data else {
+        return Ok(Vec::new());
+    };
+
+    let account_id = match token_data.account_id.as_deref() {
+        Some(account_id) if !account_id.is_empty() => account_id,
+        _ => return Ok(Vec::new()),
+    };
+    let access_token = token_data.access_token.clone();
+    let account_id = account_id.to_string();
+    let is_workspace_account = token_data.id_token.is_workspace_account();
+    let cache_key = AllConnectorsCacheKey::new(
+        config.chatgpt_base_url.clone(),
+        Some(account_id.clone()),
+        token_data.id_token.chatgpt_user_id.clone(),
+        is_workspace_account,
+    );
+
+    codex_connectors::list_all_connectors_with_options(
+        cache_key,
+        is_workspace_account,
+        false,
+        |path| {
+            let access_token = access_token.clone();
+            let account_id = account_id.clone();
+            async move {
+                chatgpt_get_request_with_token::<DirectoryListResponse>(
+                    config,
+                    path,
+                    access_token.as_str(),
+                    account_id.as_str(),
+                )
+                .await
+            }
+        },
+    )
+    .await
+}
+
+async fn chatgpt_get_request_with_token<T: DeserializeOwned>(
+    config: &Config,
+    path: String,
+    access_token: &str,
+    account_id: &str,
+) -> anyhow::Result<T> {
+    let client = create_client();
+    let url = format!("{}{}", config.chatgpt_base_url, path);
+    let response = client
+        .get(&url)
+        .bearer_auth(access_token)
+        .header("chatgpt-account-id", account_id)
+        .header("Content-Type", "application/json")
+        .timeout(DIRECTORY_CONNECTORS_TIMEOUT)
+        .send()
+        .await
+        .context("failed to send request")?;
+
+    if response.status().is_success() {
+        response
+            .json()
+            .await
+            .context("failed to parse JSON response")
+    } else {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("request failed with status {status}: {body}");
+    }
 }
 
 fn auth_manager_from_config(config: &Config) -> std::sync::Arc<AuthManager> {
@@ -764,6 +899,15 @@ mod tests {
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+        }
+    }
+
+    fn named_app(id: &str, name: &str) -> AppInfo {
+        AppInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            install_url: Some(connector_install_url(name, id)),
+            ..app(id)
         }
     }
 
@@ -1292,6 +1436,32 @@ mod tests {
         assert_eq!(
             filtered,
             vec![app("asdk_app_6938a94a61d881918ef32cb999ff937c")]
+        );
+    }
+
+    #[test]
+    fn filter_tool_suggest_discoverable_connectors_keeps_only_allowlisted_uninstalled_apps() {
+        let filtered = filter_tool_suggest_discoverable_connectors(
+            vec![
+                named_app(
+                    "connector_2128aebfecb84f64a069897515042a44",
+                    "Google Calendar",
+                ),
+                named_app("connector_68df038e0ba48191908c8434991bbac2", "Gmail"),
+                named_app("connector_other", "Other"),
+            ],
+            &[named_app(
+                "connector_2128aebfecb84f64a069897515042a44",
+                "Google Calendar",
+            )],
+        );
+
+        assert_eq!(
+            filtered,
+            vec![named_app(
+                "connector_68df038e0ba48191908c8434991bbac2",
+                "Gmail",
+            )]
         );
     }
 }

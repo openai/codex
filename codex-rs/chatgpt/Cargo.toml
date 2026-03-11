@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+codex-connectors = { workspace = true }
 codex-core = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }

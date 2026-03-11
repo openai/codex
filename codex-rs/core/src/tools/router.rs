@@ -10,7 +10,8 @@ use crate::tools::context::ToolPayload;
 use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::ToolsConfig;
-use crate::tools::spec::build_specs;
+use crate::tools::spec::build_specs_with_discoverable_connectors;
+use codex_app_server_protocol::AppInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::LocalShellAction;
@@ -36,14 +37,28 @@ pub struct ToolRouter {
     specs: Vec<ConfiguredToolSpec>,
 }
 
+pub(crate) struct ToolRouterParams<'a> {
+    pub(crate) mcp_tools: Option<HashMap<String, Tool>>,
+    pub(crate) app_tools: Option<HashMap<String, ToolInfo>>,
+    pub(crate) discoverable_connectors: Option<Vec<AppInfo>>,
+    pub(crate) dynamic_tools: &'a [DynamicToolSpec],
+}
+
 impl ToolRouter {
-    pub fn from_config(
-        config: &ToolsConfig,
-        mcp_tools: Option<HashMap<String, Tool>>,
-        app_tools: Option<HashMap<String, ToolInfo>>,
-        dynamic_tools: &[DynamicToolSpec],
-    ) -> Self {
-        let builder = build_specs(config, mcp_tools, app_tools, dynamic_tools);
+    pub fn from_config(config: &ToolsConfig, params: ToolRouterParams<'_>) -> Self {
+        let ToolRouterParams {
+            mcp_tools,
+            app_tools,
+            discoverable_connectors,
+            dynamic_tools,
+        } = params;
+        let builder = build_specs_with_discoverable_connectors(
+            config,
+            mcp_tools,
+            app_tools,
+            discoverable_connectors,
+            dynamic_tools,
+        );
         let (specs, registry) = builder.build();
 
         Self { registry, specs }
@@ -225,6 +240,7 @@ mod tests {
     use super::ToolCall;
     use super::ToolCallSource;
     use super::ToolRouter;
+    use super::ToolRouterParams;
 
     #[tokio::test]
     async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
@@ -243,14 +259,17 @@ mod tests {
         let app_tools = Some(mcp_tools.clone());
         let router = ToolRouter::from_config(
             &turn.tools_config,
-            Some(
-                mcp_tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect(),
-            ),
-            app_tools,
-            turn.dynamic_tools.as_slice(),
+            ToolRouterParams {
+                mcp_tools: Some(
+                    mcp_tools
+                        .into_iter()
+                        .map(|(name, tool)| (name, tool.tool))
+                        .collect(),
+                ),
+                app_tools,
+                discoverable_connectors: None,
+                dynamic_tools: turn.dynamic_tools.as_slice(),
+            },
         );
 
         let call = ToolCall {
@@ -296,14 +315,17 @@ mod tests {
         let app_tools = Some(mcp_tools.clone());
         let router = ToolRouter::from_config(
             &turn.tools_config,
-            Some(
-                mcp_tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect(),
-            ),
-            app_tools,
-            turn.dynamic_tools.as_slice(),
+            ToolRouterParams {
+                mcp_tools: Some(
+                    mcp_tools
+                        .into_iter()
+                        .map(|(name, tool)| (name, tool.tool))
+                        .collect(),
+                ),
+                app_tools,
+                discoverable_connectors: None,
+                dynamic_tools: turn.dynamic_tools.as_slice(),
+            },
         );
 
         let call = ToolCall {
