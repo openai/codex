@@ -238,7 +238,7 @@ impl UnifiedExecProcessManager {
                 context.call_id.clone(),
                 request.command.clone(),
                 cwd.clone(),
-                Some(process_id),
+                Some(process_id.to_string()),
                 Arc::clone(&transcript),
                 text.clone(),
                 exit,
@@ -427,13 +427,10 @@ impl UnifiedExecProcessManager {
         process_id: i32,
     ) -> Result<PreparedProcessHandles, UnifiedExecError> {
         let mut store = self.process_store.lock().await;
-        let entry =
-            store
-                .processes
-                .get_mut(&process_id)
-                .ok_or(UnifiedExecError::UnknownProcessId {
-                    process_id,
-                })?;
+        let entry = store
+            .processes
+            .get_mut(&process_id)
+            .ok_or(UnifiedExecError::UnknownProcessId { process_id })?;
         entry.last_used = Instant::now();
         let OutputHandles {
             output_buffer,
@@ -771,9 +768,7 @@ impl UnifiedExecProcessManager {
     }
 
     // Centralized pruning policy so we can easily swap strategies later.
-    fn process_id_to_prune_from_meta(
-        meta: &[(i32, Instant, bool)],
-    ) -> Option<i32> {
+    fn process_id_to_prune_from_meta(meta: &[(i32, Instant, bool)]) -> Option<i32> {
         if meta.is_empty() {
             return None;
         }
