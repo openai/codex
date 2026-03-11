@@ -2097,7 +2097,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         Arc::clone(&config),
         auth_manager,
         models_manager,
-        ExecPolicyManager::default(),
+        Arc::new(ExecPolicyManager::default()),
         tx_event,
         agent_status_tx,
         InitialHistory::New,
@@ -2133,7 +2133,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         CollaborationModesConfig::default(),
     ));
     let agent_control = AgentControl::default();
-    let exec_policy = ExecPolicyManager::default();
+    let exec_policy = Arc::new(ExecPolicyManager::default());
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
     let model_info = ModelsManager::construct_model_info_offline_for_tests(model.as_str(), &config);
@@ -2694,7 +2694,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         CollaborationModesConfig::default(),
     ));
     let agent_control = AgentControl::default();
-    let exec_policy = ExecPolicyManager::default();
+    let exec_policy = Arc::new(ExecPolicyManager::default());
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
     let model_info = ModelsManager::construct_model_info_offline_for_tests(model.as_str(), &config);

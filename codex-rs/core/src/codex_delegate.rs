@@ -70,6 +70,7 @@ pub(crate) async fn run_codex_thread_interactive(
         false,
         None,
         None,
+        Some(Arc::clone(&parent_session.services.exec_policy)),
     )
     .await?;
     let codex = Arc::new(codex);
