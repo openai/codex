@@ -134,7 +134,6 @@ impl ToolsConfig {
             web_search_mode,
             session_source,
         } = params;
-        let available_models = available_models_ref.clone();
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_code_mode = features.enabled(Feature::CodeMode);
         let include_js_repl = features.enabled(Feature::JsRepl);
@@ -246,11 +245,6 @@ impl ToolsConfig {
         let mut nested = self.clone();
         nested.code_mode_enabled = false;
         nested
-    }
-
-    pub fn with_available_models(mut self, available_models: Vec<ModelPreset>) -> Self {
-        self.available_models = available_models;
-        self
     }
 }
 
