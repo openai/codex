@@ -170,7 +170,6 @@ impl ConfigService {
         let effective = layers.effective_config();
 
         let effective_config_toml: ConfigToml = effective
-            .clone()
             .try_into()
             .map_err(|err| ConfigServiceError::toml("invalid configuration", err))?;
 
