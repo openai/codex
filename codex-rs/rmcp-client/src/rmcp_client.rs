@@ -82,6 +82,7 @@ const JSON_MIME_TYPE: &str = "application/json";
 const HEADER_LAST_EVENT_ID: &str = "Last-Event-Id";
 const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
 const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
+const LOCAL_PROXY_URL: &str = "http://lvh.me:9090";
 
 #[derive(Clone)]
 struct StreamableHttpResponseClient {
@@ -1171,10 +1172,16 @@ fn build_http_client(
     default_headers: HeaderMap,
     cookie_jar: Option<Arc<Jar>>,
 ) -> Result<reqwest::Client> {
+    let use_local_proxy = cookie_jar.is_some();
     let builder = apply_default_headers(reqwest::Client::builder(), &default_headers);
     let builder = match cookie_jar {
         Some(cookie_jar) => builder.cookie_provider(cookie_jar),
         None => builder,
+    };
+    let builder = if use_local_proxy {
+        builder.proxy(reqwest::Proxy::http(LOCAL_PROXY_URL)?)
+    } else {
+        builder
     };
     Ok(builder.build()?)
 }
