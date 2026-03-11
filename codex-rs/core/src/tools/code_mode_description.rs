@@ -76,16 +76,9 @@ fn append_code_mode_sample(
 ) -> String {
     let reference = code_mode_tool_reference(tool_name);
     let local_name = code_mode_local_name(&reference.tool_key);
-    let tool_access = if code_mode_local_name(&reference.tool_key) == reference.tool_key {
-        format!("tools.{}", reference.tool_key)
-    } else {
-        let property = serde_json::to_string(&reference.tool_key)
-            .unwrap_or_else(|_| format!("\"{}\"", reference.tool_key.replace('"', "\\\"")));
-        format!("tools[{property}]")
-    };
 
     format!(
-        "{description}\n\nCode mode declaration:\n```ts\nimport {{ tools }} from \"{}\";\nfunction {local_name}({input_name}: {input_type}): Promise<{output_type}> {{\n  return {tool_access}({input_name});\n}}\n```",
+        "{description}\n\nCode mode declaration:\n```ts\nimport {{ tools }} from \"{}\";\ndeclare function {local_name}({input_name}: {input_type}): Promise<{output_type}>;\n```",
         reference.module_path
     )
 }
