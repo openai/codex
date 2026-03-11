@@ -58,6 +58,7 @@ use codex_protocol::protocol::ViewImageToolCallEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use tracing::warn;
 use uuid::Uuid;
@@ -83,6 +84,7 @@ pub struct ThreadHistoryBuilder {
     turns: Vec<Turn>,
     current_turn: Option<PendingTurn>,
     next_item_index: i64,
+    guardian_network_access_item_ids: HashSet<(Option<String>, String)>,
 }
 
 impl Default for ThreadHistoryBuilder {
@@ -97,6 +99,7 @@ impl ThreadHistoryBuilder {
             turns: Vec::new(),
             current_turn: None,
             next_item_index: 1,
+            guardian_network_access_item_ids: HashSet::new(),
         }
     }
 
@@ -651,6 +654,14 @@ impl ThreadHistoryBuilder {
             && let Some(item) =
                 thread_item_from_guardian_assessment_action(&payload.id, action, approval.clone())
         {
+            if action
+                .get("tool")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|tool| tool == "network_access")
+            {
+                self.guardian_network_access_item_ids
+                    .insert((turn_id.map(str::to_owned), payload.id.clone()));
+            }
             if let Some(turn_id) = turn_id {
                 self.upsert_item_in_turn_id(turn_id, item);
             } else {
@@ -1151,16 +1162,18 @@ impl ThreadHistoryBuilder {
         mark_declined: bool,
     ) {
         let approved = approval.status == ItemApprovalStatus::Approved;
+        let synthetic_network_access = self
+            .guardian_network_access_item_ids
+            .contains(&(turn_id.map(str::to_owned), item_id.to_string()));
         let update = |item: &mut ThreadItem| match item {
             ThreadItem::CommandExecution {
-                command,
                 status,
                 approval: existing_approval,
                 ..
             } => {
                 if mark_declined {
                     *status = CommandExecutionStatus::Declined;
-                } else if approved && command.starts_with("network access ") {
+                } else if approved && synthetic_network_access {
                     *status = CommandExecutionStatus::Completed;
                 }
                 *existing_approval = Some(approval);
@@ -2791,6 +2804,78 @@ mod tests {
                         risk_score: Some(18),
                         risk_level: Some(RiskLevel::Low),
                         rationale: Some("Allowed outbound request.".into()),
+                    }),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn does_not_complete_non_network_command_that_shares_prefix() {
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-guardian".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "run the command".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::GuardianAssessment(codex_protocol::protocol::GuardianAssessmentEvent {
+                id: "guardian-shell-prefix".into(),
+                turn_id: "turn-guardian".into(),
+                status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
+                risk_score: None,
+                risk_level: None,
+                rationale: None,
+                action: Some(serde_json::json!({
+                    "tool": "shell",
+                    "command": "network access https://example.com",
+                    "cwd": "/repo",
+                })),
+            }),
+            EventMsg::GuardianAssessment(codex_protocol::protocol::GuardianAssessmentEvent {
+                id: "guardian-shell-prefix".into(),
+                turn_id: "turn-guardian".into(),
+                status: codex_protocol::protocol::GuardianAssessmentStatus::Approved,
+                risk_score: Some(14),
+                risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::Low),
+                rationale: Some("Allowed command.".into()),
+                action: None,
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].items[1],
+            ThreadItem::CommandExecution {
+                id: "guardian-shell-prefix".into(),
+                command: "network access https://example.com".into(),
+                cwd: PathBuf::from("/repo"),
+                process_id: None,
+                status: CommandExecutionStatus::InProgress,
+                command_actions: Vec::new(),
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+                approval: Some(ItemApprovalState {
+                    status: ItemApprovalStatus::Approved,
+                    pending_kind: None,
+                    resolved_by: Some(ItemApprovalResolvedBy::Automatic),
+                    automatic_review: Some(AutomaticApprovalReview {
+                        status: AutomaticApprovalReviewStatus::Approved,
+                        risk_score: Some(14),
+                        risk_level: Some(RiskLevel::Low),
+                        rationale: Some("Allowed command.".into()),
                     }),
                 }),
             }
