@@ -687,7 +687,7 @@ async fn resume_conversation(
     let auth_manager = codex_core::test_support::auth_manager_from_auth(
         codex_core::CodexAuth::from_api_key("dummy"),
     );
-    Box::pin(manager.resume_thread_from_rollout(config.clone(), path, auth_manager))
+    Box::pin(manager.resume_thread_from_rollout(config.clone(), path, auth_manager, None))
         .await
         .expect("resume conversation")
         .thread
@@ -700,7 +700,7 @@ async fn fork_thread(
     path: std::path::PathBuf,
     nth_user_message: usize,
 ) -> Arc<CodexThread> {
-    Box::pin(manager.fork_thread(nth_user_message, config.clone(), path, false))
+    Box::pin(manager.fork_thread(nth_user_message, config.clone(), path, false, None))
         .await
         .expect("fork conversation")
         .thread

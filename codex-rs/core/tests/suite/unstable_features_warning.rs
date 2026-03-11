@@ -42,7 +42,7 @@ async fn emits_warning_when_unstable_features_enabled_via_config() {
         thread: conversation,
         ..
     } = thread_manager
-        .resume_thread_with_history(config, InitialHistory::New, auth_manager, false)
+        .resume_thread_with_history(config, InitialHistory::New, auth_manager, false, None)
         .await
         .expect("spawn conversation");
 
@@ -83,7 +83,7 @@ async fn suppresses_warning_when_configured() {
         thread: conversation,
         ..
     } = thread_manager
-        .resume_thread_with_history(config, InitialHistory::New, auth_manager, false)
+        .resume_thread_with_history(config, InitialHistory::New, auth_manager, false, None)
         .await
         .expect("spawn conversation");
 

@@ -474,6 +474,8 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 }
             }
 
+            processor.drain_background_tasks().await;
+            processor.shutdown_threads().await;
             processor.connection_closed(IN_PROCESS_CONNECTION_ID).await;
         });
         let mut pending_request_responses =

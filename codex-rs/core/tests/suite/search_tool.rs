@@ -1096,7 +1096,7 @@ async fn search_tool_selection_restores_when_forked_with_full_history() -> Resul
         .expect("rollout path should exist for fork");
     let NewThread { thread: forked, .. } = test
         .thread_manager
-        .fork_thread(usize::MAX, test.config.clone(), rollout_path, false)
+        .fork_thread(usize::MAX, test.config.clone(), rollout_path, false, None)
         .await?;
     submit_user_input(&forked, "hello after fork").await?;
 
@@ -1190,7 +1190,7 @@ async fn search_tool_selection_drops_when_fork_excludes_search_turn() -> Result<
         .expect("rollout path should exist for fork");
     let NewThread { thread: forked, .. } = test
         .thread_manager
-        .fork_thread(0, test.config.clone(), rollout_path, false)
+        .fork_thread(0, test.config.clone(), rollout_path, false, None)
         .await?;
     submit_user_input(&forked, "hello after fork").await?;
 

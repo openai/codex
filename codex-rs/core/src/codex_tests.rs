@@ -2434,6 +2434,7 @@ async fn submit_with_id_captures_current_span_trace_context() {
         rx_event,
         agent_status,
         session: Arc::new(session),
+        session_loop_handle: Arc::new(tokio::sync::Mutex::new(None)),
     };
 
     init_test_tracing();
