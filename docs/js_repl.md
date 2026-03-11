@@ -74,6 +74,8 @@ imported local file. They are not resolved relative to the imported file's locat
 
 `js_repl` exposes these globals:
 
+- `codex.cwd`: REPL working directory path.
+- `codex.homeDir`: effective home directory path from the kernel environment.
 - `codex.tmpDir`: per-session scratch directory path.
 - `codex.tool(name, args?)`: executes a normal Codex tool call from inside `js_repl` (including shell tools like `shell` / `shell_command` when available).
 - `codex.emitImage(imageLike)`: explicitly adds one image to the outer `js_repl` function output each time you call it.

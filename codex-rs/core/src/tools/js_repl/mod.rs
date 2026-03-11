@@ -678,8 +678,13 @@ impl JsReplManager {
         let (stdin, pending_execs, exec_contexts, child, recent_stderr) = {
             let mut kernel = self.kernel.lock().await;
             if kernel.is_none() {
+                let dependency_env = session.dependency_env().await;
                 let state = self
-                    .start_kernel(Arc::clone(&turn), Some(session.conversation_id))
+                    .start_kernel(
+                        Arc::clone(&turn),
+                        &dependency_env,
+                        Some(session.conversation_id),
+                    )
                     .await
                     .map_err(FunctionCallError::RespondToModel)?;
                 *kernel = Some(state);
@@ -800,6 +805,7 @@ impl JsReplManager {
     async fn start_kernel(
         &self,
         turn: Arc<TurnContext>,
+        dependency_env: &HashMap<String, String>,
         thread_id: Option<ThreadId>,
     ) -> Result<KernelState, String> {
         let node_path = resolve_compatible_node(self.node_path.as_deref()).await?;
@@ -810,6 +816,9 @@ impl JsReplManager {
             .map_err(|err| err.to_string())?;
 
         let mut env = create_env(&turn.shell_environment_policy, thread_id);
+        if !dependency_env.is_empty() {
+            env.extend(dependency_env.clone());
+        }
         env.insert(
             "CODEX_JS_TMP_DIR".to_string(),
             self.tmp_dir.path().to_string_lossy().to_string(),
@@ -3446,13 +3455,22 @@ await codex.emitImage(out);
         }
 
         let cwd_dir = tempdir()?;
+        let expected_home_dir = serde_json::to_string("/tmp/codex-home")?;
         write_js_repl_test_module(
             cwd_dir.path(),
             "globals.js",
-            "console.log(codex.tmpDir === tmpDir);\nconsole.log(typeof codex.tool);\nconsole.log(\"local-file-console-ok\");\n",
+            &format!(
+                "const expectedHomeDir = {expected_home_dir};\nconsole.log(`tmp:${{codex.tmpDir === tmpDir}}`);\nconsole.log(`cwd:${{typeof codex.cwd}}:${{codex.cwd.length > 0}}`);\nconsole.log(`home:${{codex.homeDir === expectedHomeDir}}`);\nconsole.log(`tool:${{typeof codex.tool}}`);\nconsole.log(\"local-file-console-ok\");\n"
+            ),
         )?;
 
         let (session, mut turn) = make_session_and_context().await;
+        session
+            .set_dependency_env(HashMap::from([(
+                "HOME".to_string(),
+                "/tmp/codex-home".to_string(),
+            )]))
+            .await;
         turn.shell_environment_policy
             .r#set
             .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
@@ -3478,8 +3496,10 @@ await codex.emitImage(out);
                 },
             )
             .await?;
-        assert!(result.output.contains("true"));
-        assert!(result.output.contains("function"));
+        assert!(result.output.contains("tmp:true"));
+        assert!(result.output.contains("cwd:string:true"));
+        assert!(result.output.contains("home:true"));
+        assert!(result.output.contains("tool:function"));
         assert!(result.output.contains("local-file-console-ok"));
         Ok(())
     }
