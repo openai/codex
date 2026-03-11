@@ -2539,7 +2539,7 @@
               "description": "The effort the model is putting into reasoning about the user's request."
             },
             "rollout_path": {
-              "description": "Path in which the rollout is stored. Can be `None` for ephemeral threads",
+              "description": "Path where the rollout will be stored. Can be `None` for ephemeral threads. For fresh persistent threads, this path may be reported before the rollout file has been materialized on disk.",
               "type": [
                 "string",
                 "null"

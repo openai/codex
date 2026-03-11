@@ -1382,7 +1382,7 @@ async fn resolve_resume_path(
         } else {
             Some(config.cwd.as_path())
         };
-        match codex_core::RolloutRecorder::find_latest_thread_path(
+        match codex_core::RolloutStore::find_latest_thread_path(
             config,
             1,
             None,

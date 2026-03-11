@@ -11,7 +11,7 @@ use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
-use codex_core::RolloutRecorder;
+use codex_core::RolloutStore;
 use codex_core::ThreadSortKey;
 use codex_core::auth::AuthMode;
 use codex_core::auth::enforce_login_restrictions;
@@ -687,7 +687,7 @@ async fn run_ratatui_app(
             }
         } else if cli.fork_last {
             let provider_filter = vec![config.model_provider_id.clone()];
-            match RolloutRecorder::list_threads(
+            match RolloutStore::list_threads(
                 &config,
                 1,
                 None,
@@ -782,7 +782,7 @@ async fn run_ratatui_app(
         } else {
             Some(config.cwd.as_path())
         };
-        match RolloutRecorder::find_latest_thread_path(
+        match RolloutStore::find_latest_thread_path(
             &config,
             1,
             None,

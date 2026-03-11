@@ -1,4 +1,5 @@
 use super::*;
+use crate::rollout::recorder::InMemoryRolloutSource;
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
 // the resume/fork hydration metadata derived from the same replay.
@@ -83,10 +84,10 @@ fn finalize_active_segment<'a>(
 }
 
 impl Session {
-    pub(super) async fn reconstruct_history_from_rollout(
+    pub(super) fn reconstruct_history_from_rollout(
         &self,
         turn_context: &TurnContext,
-        rollout_items: &[RolloutItem],
+        source: &InMemoryRolloutSource,
     ) -> RolloutReconstruction {
         // Replay metadata should already match the shape of the future lazy reverse loader, even
         // while history materialization still uses an eager bridge. Scan newest-to-oldest,
@@ -99,14 +100,15 @@ impl Session {
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
         // "skip the next N user-turn segments we finalize".
         let mut pending_rollback_turns = 0usize;
-        // Borrowed suffix of rollout items newer than the newest surviving replacement-history
-        // checkpoint. If no such checkpoint exists, this remains the full rollout.
-        let mut rollout_suffix = rollout_items;
+        // Default to replaying from the beginning of the rollout. If reverse replay later finds a
+        // surviving compaction with `replacement_history`, it advances this start index to the
+        // first rollout row after that compaction checkpoint.
+        let mut rollout_suffix_start = source.inclusive_start_of_rollout_index();
         // Reverse replay accumulates rollout items into the newest in-progress turn segment until
         // we hit its matching `TurnStarted`, at which point the segment can be finalized.
         let mut active_segment: Option<ActiveReplaySegment<'_>> = None;
 
-        for (index, item) in rollout_items.iter().enumerate().rev() {
+        for (index, item) in source.iter_reverse_from(source.exclusive_end_of_rollout_index()) {
             match item {
                 RolloutItem::Compacted(compacted) => {
                     let active_segment =
@@ -123,7 +125,7 @@ impl Session {
                         && let Some(replacement_history) = &compacted.replacement_history
                     {
                         active_segment.base_replacement_history = Some(replacement_history);
-                        rollout_suffix = &rollout_items[index + 1..];
+                        rollout_suffix_start = index.next_newer();
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
@@ -235,7 +237,7 @@ impl Session {
         // Materialize exact history semantics from the replay-derived suffix. The eventual lazy
         // design should keep this same replay shape, but drive it from a resumable reverse source
         // instead of an eagerly loaded `&[RolloutItem]`.
-        for item in rollout_suffix {
+        for (_, item) in source.iter_forward_from(rollout_suffix_start) {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
                     history.record_items(
@@ -256,8 +258,9 @@ impl Session {
                         // `reference_context_item`, reinject canonical context at the end of the
                         // resumed conversation, and accept the temporary out-of-distribution
                         // prompt shape.
-                        // TODO(ccunningham): if we drop support for None replacement_history compaction items,
-                        // we can get rid of this second loop entirely and just build `history` directly in the first loop.
+                        // If we eventually drop support for legacy compaction items without
+                        // `replacement_history`, this second pass can go away and the first replay
+                        // loop can materialize history directly.
                         let user_messages = collect_user_messages(history.raw_items());
                         let rebuilt = compact::build_compacted_history(
                             Vec::new(),

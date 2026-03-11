@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::rollout;
+use crate::rollout::RolloutStore;
 use crate::rollout::list::parse_timestamp_uuid_from_filename;
-use crate::rollout::recorder::RolloutRecorder;
 use crate::state_db::normalize_cwd_for_state_db;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
@@ -61,57 +61,102 @@ pub(crate) fn builder_from_session_meta(
     Some(builder)
 }
 
-pub(crate) fn builder_from_items(
-    items: &[RolloutItem],
+pub(crate) fn builder_from_items<'a>(
+    items: impl IntoIterator<Item = &'a RolloutItem>,
     rollout_path: &Path,
 ) -> Option<ThreadMetadataBuilder> {
-    if let Some(session_meta) = items.iter().find_map(|item| match item {
-        RolloutItem::SessionMeta(meta_line) => Some(meta_line),
-        RolloutItem::ResponseItem(_)
-        | RolloutItem::Compacted(_)
-        | RolloutItem::TurnContext(_)
-        | RolloutItem::EventMsg(_) => None,
-    }) && let Some(builder) = builder_from_session_meta(session_meta, rollout_path)
-    {
-        return Some(builder);
+    scan_builder_from_items(items, rollout_path).builder
+}
+
+// Metadata extraction needs two facts from the same forward scan:
+// whether the rollout yielded any readable items at all, and whether those
+// items contained enough information to seed a `ThreadMetadataBuilder`.
+// Keeping them together avoids an extra eager collection just to drive the
+// unreadable-rollout guard.
+struct BuilderScan {
+    saw_any_items: bool,
+    builder: Option<ThreadMetadataBuilder>,
+}
+
+fn scan_builder_from_items<'a>(
+    items: impl IntoIterator<Item = &'a RolloutItem>,
+    rollout_path: &Path,
+) -> BuilderScan {
+    let mut saw_any_items = false;
+    let mut session_meta = None;
+    for item in items {
+        saw_any_items = true;
+        if let RolloutItem::SessionMeta(meta_line) = item {
+            session_meta = Some(meta_line);
+            break;
+        }
     }
 
-    let file_name = rollout_path.file_name()?.to_str()?;
-    if !file_name.starts_with(ROLLOUT_PREFIX) || !file_name.ends_with(ROLLOUT_SUFFIX) {
-        return None;
+    if let Some(session_meta) = session_meta
+        && let Some(builder) = builder_from_session_meta(session_meta, rollout_path)
+    {
+        return BuilderScan {
+            saw_any_items,
+            builder: Some(builder),
+        };
     }
-    let (created_ts, uuid) = parse_timestamp_uuid_from_filename(file_name)?;
-    let created_at =
-        DateTime::<Utc>::from_timestamp(created_ts.unix_timestamp(), 0)?.with_nanosecond(0)?;
-    let id = ThreadId::from_string(&uuid.to_string()).ok()?;
-    Some(ThreadMetadataBuilder::new(
-        id,
-        rollout_path.to_path_buf(),
-        created_at,
-        SessionSource::default(),
-    ))
+
+    let builder = {
+        let file_name = rollout_path.file_name().and_then(|name| name.to_str());
+        if let Some(file_name) = file_name
+            && file_name.starts_with(ROLLOUT_PREFIX)
+            && file_name.ends_with(ROLLOUT_SUFFIX)
+            && let Some((created_ts, uuid)) = parse_timestamp_uuid_from_filename(file_name)
+            && let Some(created_at) =
+                DateTime::<Utc>::from_timestamp(created_ts.unix_timestamp(), 0)
+                    .and_then(|timestamp| timestamp.with_nanosecond(0))
+            && let Ok(id) = ThreadId::from_string(&uuid.to_string())
+        {
+            Some(ThreadMetadataBuilder::new(
+                id,
+                rollout_path.to_path_buf(),
+                created_at,
+                SessionSource::default(),
+            ))
+        } else {
+            None
+        }
+    };
+
+    BuilderScan {
+        saw_any_items,
+        builder,
+    }
 }
 
 pub(crate) async fn extract_metadata_from_rollout(
     rollout_path: &Path,
     default_provider: &str,
 ) -> anyhow::Result<ExtractionOutcome> {
-    let (items, _thread_id, parse_errors) =
-        RolloutRecorder::load_rollout_items(rollout_path).await?;
-    if items.is_empty() {
-        return Err(anyhow::anyhow!(
-            "empty session file: {}",
+    let loaded_rollout = RolloutStore::load_source(rollout_path).await?;
+    let parse_errors = loaded_rollout.parse_errors;
+    let source = loaded_rollout.source;
+    let rollout_start = source.inclusive_start_of_rollout_index();
+    let builder_scan = scan_builder_from_items(
+        source
+            .iter_forward_from(rollout_start)
+            .map(|(_, item)| item),
+        rollout_path,
+    );
+    if parse_errors > 0 && !builder_scan.saw_any_items {
+        anyhow::bail!(
+            "rollout contains parse errors and no readable items: {}",
             rollout_path.display()
-        ));
+        );
     }
-    let builder = builder_from_items(items.as_slice(), rollout_path).ok_or_else(|| {
+    let builder = builder_scan.builder.ok_or_else(|| {
         anyhow::anyhow!(
             "rollout missing metadata builder: {}",
             rollout_path.display()
         )
     })?;
     let mut metadata = builder.build(default_provider);
-    for item in &items {
+    for (_, item) in source.iter_forward_from(rollout_start) {
         apply_rollout_item(&mut metadata, item, default_provider);
     }
     if let Some(updated_at) = file_modified_time_utc(rollout_path).await {
@@ -119,13 +164,15 @@ pub(crate) async fn extract_metadata_from_rollout(
     }
     Ok(ExtractionOutcome {
         metadata,
-        memory_mode: items.iter().rev().find_map(|item| match item {
-            RolloutItem::SessionMeta(meta_line) => meta_line.meta.memory_mode.clone(),
-            RolloutItem::ResponseItem(_)
-            | RolloutItem::Compacted(_)
-            | RolloutItem::TurnContext(_)
-            | RolloutItem::EventMsg(_) => None,
-        }),
+        memory_mode: source
+            .iter_reverse_from(source.exclusive_end_of_rollout_index())
+            .find_map(|(_, item)| match item {
+                RolloutItem::SessionMeta(meta_line) => meta_line.meta.memory_mode.clone(),
+                RolloutItem::ResponseItem(_)
+                | RolloutItem::Compacted(_)
+                | RolloutItem::TurnContext(_)
+                | RolloutItem::EventMsg(_) => None,
+            }),
         parse_errors,
     })
 }
@@ -571,6 +618,29 @@ mod tests {
             .expect("extract");
 
         assert_eq!(outcome.memory_mode.as_deref(), Some("polluted"));
+    }
+
+    #[tokio::test]
+    async fn extract_metadata_from_rollout_rejects_unparsable_rollout_with_no_items() {
+        let dir = tempdir().expect("tempdir");
+        let uuid = Uuid::new_v4();
+        let path = dir
+            .path()
+            .join(format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl"));
+
+        let mut file = File::create(&path).expect("create rollout");
+        writeln!(file, "{{").expect("write invalid rollout");
+
+        let err = extract_metadata_from_rollout(&path, "openai")
+            .await
+            .expect_err("unparsable rollout should fail metadata extraction");
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "rollout contains parse errors and no readable items: {}",
+                path.display()
+            )
+        );
     }
 
     #[test]

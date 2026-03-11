@@ -257,11 +257,12 @@ use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WarningEvent;
-use crate::rollout::RolloutRecorder;
-use crate::rollout::RolloutRecorderParams;
+use crate::rollout::RolloutStore;
+use crate::rollout::RolloutStoreParams;
 use crate::rollout::map_session_init_error;
 use crate::rollout::metadata;
 use crate::rollout::policy::EventPersistenceMode;
+use crate::rollout::recorder::InMemoryRolloutSource;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
@@ -1261,7 +1262,7 @@ impl Session {
         exec_policy: ExecPolicyManager,
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
-        initial_history: InitialHistory,
+        mut initial_history: InitialHistory,
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
         plugins_manager: Arc<PluginsManager>,
@@ -1282,40 +1283,12 @@ impl Session {
         }
 
         let forked_from_id = initial_history.forked_from_id();
-
-        let (conversation_id, rollout_params) = match &initial_history {
-            InitialHistory::New | InitialHistory::Forked(_) => {
-                let conversation_id = ThreadId::default();
-                (
-                    conversation_id,
-                    RolloutRecorderParams::new(
-                        conversation_id,
-                        forked_from_id,
-                        session_source,
-                        BaseInstructions {
-                            text: session_configuration.base_instructions.clone(),
-                        },
-                        session_configuration.dynamic_tools.clone(),
-                        if session_configuration.persist_extended_history {
-                            EventPersistenceMode::Extended
-                        } else {
-                            EventPersistenceMode::Limited
-                        },
-                    ),
-                )
-            }
-            InitialHistory::Resumed(resumed_history) => (
-                resumed_history.conversation_id,
-                RolloutRecorderParams::resume(
-                    resumed_history.rollout_path.clone(),
-                    if session_configuration.persist_extended_history {
-                        EventPersistenceMode::Extended
-                    } else {
-                        EventPersistenceMode::Limited
-                    },
-                ),
-            ),
+        let event_persistence_mode = if session_configuration.persist_extended_history {
+            EventPersistenceMode::Extended
+        } else {
+            EventPersistenceMode::Limited
         };
+        let initial_messages = initial_history.get_event_msgs();
         let state_builder = match &initial_history {
             InitialHistory::Resumed(resumed) => metadata::builder_from_items(
                 resumed.history.as_slice(),
@@ -1324,9 +1297,45 @@ impl Session {
             InitialHistory::New | InitialHistory::Forked(_) => None,
         };
 
+        let (conversation_id, rollout_params) = match &mut initial_history {
+            InitialHistory::New | InitialHistory::Forked(_) => {
+                let conversation_id = ThreadId::default();
+                (
+                    conversation_id,
+                    RolloutStoreParams::new(
+                        conversation_id,
+                        forked_from_id,
+                        session_source,
+                        BaseInstructions {
+                            text: session_configuration.base_instructions.clone(),
+                        },
+                        session_configuration.dynamic_tools.clone(),
+                        event_persistence_mode,
+                    ),
+                )
+            }
+            InitialHistory::Resumed(resumed_history) => (
+                resumed_history.conversation_id,
+                if config.ephemeral {
+                    RolloutStoreParams::resume(
+                        resumed_history.rollout_path.clone(),
+                        event_persistence_mode,
+                    )
+                } else {
+                    let resumed_source =
+                        InMemoryRolloutSource::new(std::mem::take(&mut resumed_history.history));
+                    RolloutStoreParams::resume_with_source(
+                        resumed_history.rollout_path.clone(),
+                        event_persistence_mode,
+                        resumed_source,
+                    )
+                },
+            ),
+        };
+
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
-        // - initialize RolloutRecorder with new or resumed session info
+        // - initialize RolloutStore with new or resumed session info
         // - perform default shell discovery
         // - load history metadata (skipped for subagents)
         let rollout_fut = async {
@@ -1334,14 +1343,14 @@ impl Session {
                 Ok::<_, anyhow::Error>((None, None))
             } else {
                 let state_db_ctx = state_db::init(&config).await;
-                let rollout_recorder = RolloutRecorder::new(
+                let rollout_store = RolloutStore::new(
                     &config,
                     rollout_params,
                     state_db_ctx.clone(),
                     state_builder.clone(),
                 )
                 .await?;
-                Ok((Some(rollout_recorder), state_db_ctx))
+                Ok((Some(rollout_store), state_db_ctx))
             }
         };
 
@@ -1371,18 +1380,16 @@ impl Session {
 
         // Join all independent futures.
         let (
-            rollout_recorder_and_state_db,
+            rollout_store_and_state_db,
             (history_log_id, history_entry_count),
             (auth, mcp_servers, auth_statuses),
         ) = tokio::join!(rollout_fut, history_meta_fut, auth_and_mcp_fut);
 
-        let (rollout_recorder, state_db_ctx) = rollout_recorder_and_state_db.map_err(|e| {
-            error!("failed to initialize rollout recorder: {e:#}");
+        let (rollout_store, state_db_ctx) = rollout_store_and_state_db.map_err(|e| {
+            error!("failed to initialize rollout store: {e:#}");
             e
         })?;
-        let rollout_path = rollout_recorder
-            .as_ref()
-            .map(|rec| rec.rollout_path.clone());
+        let rollout_path = rollout_store.as_ref().map(|rec| rec.rollout_path.clone());
 
         let mut post_session_configured_events = Vec::<Event>::new();
 
@@ -1622,7 +1629,7 @@ impl Session {
                 Arc::clone(&auth_manager),
             ),
             hooks,
-            rollout: Mutex::new(rollout_recorder),
+            rollout: Mutex::new(rollout_store),
             user_shell: Arc::new(default_shell),
             shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -1680,7 +1687,6 @@ impl Session {
         }
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
-        let initial_messages = initial_history.get_event_msgs();
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -1938,13 +1944,27 @@ impl Session {
                 self.set_previous_turn_settings(None).await;
             }
             InitialHistory::Resumed(resumed_history) => {
-                let rollout_items = resumed_history.history;
-                let restored_tool_selection =
-                    Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
-
-                let reconstructed_rollout = self
-                    .reconstruct_history_from_rollout(&turn_context, &rollout_items)
-                    .await;
+                let derive_from_rollout_source = |rollout_source: &InMemoryRolloutSource| {
+                    (
+                        self.reconstruct_history_from_rollout(&turn_context, rollout_source),
+                        Self::extract_mcp_tool_selection_from_rollout_source(rollout_source),
+                        Self::last_token_info_from_rollout_source(rollout_source),
+                    )
+                };
+                let (reconstructed_rollout, restored_tool_selection, token_info) =
+                    if resumed_history.history.is_empty() {
+                        let rollout = self.services.rollout.lock().await;
+                        if let Some(rollout) = rollout.as_ref() {
+                            let rollout_source = rollout.source.lock().await;
+                            derive_from_rollout_source(&rollout_source)
+                        } else {
+                            derive_from_rollout_source(&InMemoryRolloutSource::new(Vec::new()))
+                        }
+                    } else {
+                        derive_from_rollout_source(&InMemoryRolloutSource::new(
+                            resumed_history.history,
+                        ))
+                    };
                 let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
                 self.set_previous_turn_settings(previous_turn_settings.clone())
                     .await;
@@ -1982,7 +2002,7 @@ impl Session {
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
-                if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
+                if let Some(info) = token_info {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }
@@ -1997,12 +2017,12 @@ impl Session {
                 }
             }
             InitialHistory::Forked(rollout_items) => {
+                let rollout_source = InMemoryRolloutSource::new(rollout_items.clone());
                 let restored_tool_selection =
-                    Self::extract_mcp_tool_selection_from_rollout(&rollout_items);
+                    Self::extract_mcp_tool_selection_from_rollout_source(&rollout_source);
 
-                let reconstructed_rollout = self
-                    .reconstruct_history_from_rollout(&turn_context, &rollout_items)
-                    .await;
+                let reconstructed_rollout =
+                    self.reconstruct_history_from_rollout(&turn_context, &rollout_source);
                 self.set_previous_turn_settings(
                     reconstructed_rollout.previous_turn_settings.clone(),
                 )
@@ -2023,7 +2043,7 @@ impl Session {
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
-                if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
+                if let Some(info) = Self::last_token_info_from_rollout_source(&rollout_source) {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }
@@ -2056,20 +2076,26 @@ impl Session {
         }
     }
 
-    fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
-        rollout_items.iter().rev().find_map(|item| match item {
-            RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
-            _ => None,
-        })
+    fn last_token_info_from_rollout_source(
+        rollout_source: &InMemoryRolloutSource,
+    ) -> Option<TokenUsageInfo> {
+        rollout_source
+            .iter_reverse_from(rollout_source.exclusive_end_of_rollout_index())
+            .find_map(|(_, item)| match item {
+                RolloutItem::EventMsg(EventMsg::TokenCount(ev)) => ev.info.clone(),
+                _ => None,
+            })
     }
 
-    fn extract_mcp_tool_selection_from_rollout(
-        rollout_items: &[RolloutItem],
+    fn extract_mcp_tool_selection_from_rollout_source(
+        rollout_source: &InMemoryRolloutSource,
     ) -> Option<Vec<String>> {
         let mut search_call_ids = HashSet::new();
         let mut active_selected_tools: Option<Vec<String>> = None;
 
-        for item in rollout_items {
+        for (_, item) in
+            rollout_source.iter_forward_from(rollout_source.inclusive_start_of_rollout_index())
+        {
             let RolloutItem::ResponseItem(response_item) = item else {
                 continue;
             };
@@ -4272,7 +4298,7 @@ mod handlers {
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::review_prompts::resolve_review_request;
-    use crate::rollout::RolloutRecorder;
+    use crate::rollout::RolloutStore;
     use crate::rollout::session_index;
     use crate::tasks::CompactTask;
     use crate::tasks::UndoTask;
@@ -4922,24 +4948,24 @@ mod handlers {
             return;
         }
 
-        let initial_history =
-            match RolloutRecorder::get_rollout_history(rollout_path.as_path()).await {
-                Ok(history) => history,
-                Err(err) => {
-                    sess.send_event_raw(Event {
-                        id: turn_context.sub_id.clone(),
-                        msg: EventMsg::Error(ErrorEvent {
-                            message: format!(
-                                "failed to load rollout `{}` for rollback replay: {err}",
-                                rollout_path.display()
-                            ),
-                            codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
-                        }),
-                    })
-                    .await;
-                    return;
-                }
-            };
+        let initial_history = match RolloutStore::get_rollout_history(rollout_path.as_path()).await
+        {
+            Ok(history) => history,
+            Err(err) => {
+                sess.send_event_raw(Event {
+                    id: turn_context.sub_id.clone(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!(
+                            "failed to load rollout `{}` for rollback replay: {err}",
+                            rollout_path.display()
+                        ),
+                        codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+                    }),
+                })
+                .await;
+                return;
+            }
+        };
 
         let rollback_event = ThreadRolledBackEvent { num_turns };
         let replay_items = initial_history
@@ -4949,10 +4975,10 @@ mod handlers {
                 EventMsg::ThreadRolledBack(rollback_event.clone()),
             )))
             .collect::<Vec<_>>();
+        let replay_source = crate::rollout::recorder::InMemoryRolloutSource::new(replay_items);
 
-        let reconstructed = sess
-            .reconstruct_history_from_rollout(turn_context.as_ref(), replay_items.as_slice())
-            .await;
+        let reconstructed =
+            sess.reconstruct_history_from_rollout(turn_context.as_ref(), &replay_source);
         sess.replace_history(
             reconstructed.history,
             reconstructed.reference_context_item.clone(),

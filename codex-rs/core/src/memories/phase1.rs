@@ -1,5 +1,5 @@
 use crate::Prompt;
-use crate::RolloutRecorder;
+use crate::RolloutStore;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
@@ -315,8 +315,17 @@ mod job {
         rollout_cwd: &Path,
         stage_one_context: &RequestContext,
     ) -> anyhow::Result<(StageOneOutput, Option<TokenUsage>)> {
-        let (rollout_items, _, _) = RolloutRecorder::load_rollout_items(rollout_path).await?;
-        let rollout_contents = serialize_filtered_rollout_response_items(&rollout_items)?;
+        let loaded_rollout = RolloutStore::load_source(rollout_path).await?;
+        let source = loaded_rollout.source;
+        // TODO(ccunningham): avoid serializing the whole rollout here; once this path has a
+        // token-budget-aware head/tail collector, it should use `RolloutSource` forward/reverse
+        // iteration to build only the sections that will survive into the stage-1 sampling
+        // request.
+        let rollout_contents = serialize_filtered_rollout_response_items(
+            source
+                .iter_forward_from(source.inclusive_start_of_rollout_index())
+                .map(|(_, item)| item),
+        )?;
 
         let prompt = Prompt {
             input: vec![ResponseItem::Message {
@@ -463,11 +472,11 @@ mod job {
     }
 
     /// Serializes filtered stage-1 memory items for prompt inclusion.
-    fn serialize_filtered_rollout_response_items(
-        items: &[RolloutItem],
+    fn serialize_filtered_rollout_response_items<'a>(
+        items: impl IntoIterator<Item = &'a RolloutItem>,
     ) -> crate::error::Result<String> {
         let filtered = items
-            .iter()
+            .into_iter()
             .filter_map(|item| {
                 if let RolloutItem::ResponseItem(item) = item
                     && should_persist_response_item_for_memories(item)
