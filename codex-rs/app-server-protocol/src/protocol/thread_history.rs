@@ -2508,7 +2508,7 @@ mod tests {
             }),
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id: "mcp-1".into(),
-                invocation: invocation.clone(),
+                invocation,
             }),
             EventMsg::RequestUserInput(RequestUserInputEvent {
                 call_id: "mcp-1".into(),
