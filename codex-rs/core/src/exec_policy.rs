@@ -26,6 +26,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use thiserror::Error;
 use tokio::fs;
 use tokio::task::spawn_blocking;
+use tracing::instrument;
 
 use crate::bash::parse_shell_lc_plain_commands;
 use crate::bash::parse_shell_lc_single_command_prefix;
@@ -184,6 +185,7 @@ impl ExecPolicyManager {
         }
     }
 
+    #[instrument(level = "info", skip_all)]
     pub(crate) async fn load(config_stack: &ConfigLayerStack) -> Result<Self, ExecPolicyError> {
         let (policy, warning) = load_exec_policy_with_warning(config_stack).await?;
         if let Some(err) = warning.as_ref() {

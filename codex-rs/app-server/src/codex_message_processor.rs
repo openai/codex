@@ -1942,12 +1942,18 @@ impl CodexMessageProcessor {
         experimental_raw_events: bool,
         request_trace: Option<W3cTraceContext>,
     ) {
+        let request_config_override_count = config_overrides.as_ref().map_or(0, HashMap::len);
         let config = match derive_config_from_params(
             &cli_overrides,
             config_overrides,
             typesafe_overrides,
             &cloud_requirements,
         )
+        .instrument(tracing::info_span!(
+            "app_server.thread_start.derive_config",
+            otel.name = "app_server.thread_start.derive_config",
+            thread_start.request_config_override_count = request_config_override_count,
+        ))
         .await
         {
             Ok(config) => config,
@@ -1965,11 +1971,32 @@ impl CodexMessageProcessor {
             }
         };
 
-        let dynamic_tools = dynamic_tools.unwrap_or_default();
-        let core_dynamic_tools = if dynamic_tools.is_empty() {
-            Vec::new()
-        } else {
-            if let Err(message) = validate_dynamic_tools(&dynamic_tools) {
+        let dynamic_tool_count = dynamic_tools.as_ref().map_or(0, Vec::len);
+        let core_dynamic_tools = match async {
+            let dynamic_tools = dynamic_tools.unwrap_or_default();
+            if dynamic_tools.is_empty() {
+                Ok(Vec::new())
+            } else {
+                validate_dynamic_tools(&dynamic_tools)?;
+                Ok(dynamic_tools
+                    .into_iter()
+                    .map(|tool| CoreDynamicToolSpec {
+                        name: tool.name,
+                        description: tool.description,
+                        input_schema: tool.input_schema,
+                    })
+                    .collect())
+            }
+        }
+        .instrument(tracing::info_span!(
+            "app_server.thread_start.dynamic_tools",
+            otel.name = "app_server.thread_start.dynamic_tools",
+            thread_start.dynamic_tool_count = dynamic_tool_count,
+        ))
+        .await
+        {
+            Ok(core_dynamic_tools) => core_dynamic_tools,
+            Err(message) => {
                 let error = JSONRPCErrorError {
                     code: INVALID_REQUEST_ERROR_CODE,
                     message,
@@ -1981,15 +2008,8 @@ impl CodexMessageProcessor {
                     .await;
                 return;
             }
-            dynamic_tools
-                .into_iter()
-                .map(|tool| CoreDynamicToolSpec {
-                    name: tool.name,
-                    description: tool.description,
-                    input_schema: tool.input_schema,
-                })
-                .collect()
         };
+        let core_dynamic_tool_count = core_dynamic_tools.len();
 
         match listener_task_context
             .thread_manager
@@ -2000,6 +2020,12 @@ impl CodexMessageProcessor {
                 service_name,
                 request_trace,
             )
+            .instrument(tracing::info_span!(
+                "app_server.thread_start.create_thread",
+                otel.name = "app_server.thread_start.create_thread",
+                thread_start.dynamic_tool_count = core_dynamic_tool_count,
+                thread_start.persist_extended_history = persist_extended_history,
+            ))
             .await
         {
             Ok(new_conv) => {
@@ -2009,7 +2035,13 @@ impl CodexMessageProcessor {
                     session_configured,
                     ..
                 } = new_conv;
-                let config_snapshot = thread.config_snapshot().await;
+                let config_snapshot = thread
+                    .config_snapshot()
+                    .instrument(tracing::info_span!(
+                        "app_server.thread_start.config_snapshot",
+                        otel.name = "app_server.thread_start.config_snapshot",
+                    ))
+                    .await;
                 let mut thread = build_thread_from_snapshot(
                     thread_id,
                     &config_snapshot,
@@ -2025,6 +2057,11 @@ impl CodexMessageProcessor {
                         experimental_raw_events,
                         ApiVersion::V2,
                     )
+                    .instrument(tracing::info_span!(
+                        "app_server.thread_start.attach_listener",
+                        otel.name = "app_server.thread_start.attach_listener",
+                        thread_start.experimental_raw_events = experimental_raw_events,
+                    ))
                     .await,
                     thread_id,
                     request_id.connection_id,
@@ -2034,12 +2071,20 @@ impl CodexMessageProcessor {
                 listener_task_context
                     .thread_watch_manager
                     .upsert_thread_silently(thread.clone())
+                    .instrument(tracing::info_span!(
+                        "app_server.thread_start.upsert_thread",
+                        otel.name = "app_server.thread_start.upsert_thread",
+                    ))
                     .await;
 
                 thread.status = resolve_thread_status(
                     listener_task_context
                         .thread_watch_manager
                         .loaded_status_for_thread(&thread.id)
+                        .instrument(tracing::info_span!(
+                            "app_server.thread_start.resolve_status",
+                            otel.name = "app_server.thread_start.resolve_status",
+                        ))
                         .await,
                     false,
                 );
@@ -2058,12 +2103,20 @@ impl CodexMessageProcessor {
                 listener_task_context
                     .outgoing
                     .send_response(request_id, response)
+                    .instrument(tracing::info_span!(
+                        "app_server.thread_start.send_response",
+                        otel.name = "app_server.thread_start.send_response",
+                    ))
                     .await;
 
                 let notif = ThreadStartedNotification { thread };
                 listener_task_context
                     .outgoing
                     .send_server_notification(ServerNotification::ThreadStarted(notif))
+                    .instrument(tracing::info_span!(
+                        "app_server.thread_start.notify_started",
+                        otel.name = "app_server.thread_start.notify_started",
+                    ))
                     .await;
             }
             Err(err) => {

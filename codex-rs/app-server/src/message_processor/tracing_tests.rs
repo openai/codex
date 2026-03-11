@@ -437,7 +437,20 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
         tracestate: Some("vendor=value".to_string()),
     };
 
-    let _: ThreadStartResponse = harness.start_thread(2, Some(remote_trace)).await;
+    let _: ThreadStartResponse = harness.start_thread(2, None).await;
+    let untraced_spans = wait_for_exported_spans(harness.tracing, |spans| {
+        spans
+            .iter()
+            .any(|span| span.name.as_ref() == "app_server.thread_start.derive_config")
+    })
+    .await;
+    let untraced_derive_config_span =
+        find_span_by_name(&untraced_spans, "app_server.thread_start.derive_config");
+    assert_ne!(untraced_derive_config_span.parent_span_id, SpanId::INVALID);
+
+    harness.reset_tracing();
+
+    let _: ThreadStartResponse = harness.start_thread(3, Some(remote_trace)).await;
     drop(harness.processor);
     let spans = wait_for_exported_spans(harness.tracing, |spans| {
         spans.iter().any(|span| {
@@ -446,19 +459,27 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
                 && span.span_context.trace_id() == remote_trace_id
         }) && spans
             .iter()
-            .any(|span| span.name.as_ref() == "thread_spawn")
+            .any(|span| span.name.as_ref() == "app_server.thread_start.notify_started")
     })
     .await;
 
+    let derive_config_span = find_span_by_name(&spans, "app_server.thread_start.derive_config");
     let server_request_span =
         find_rpc_span_with_trace(&spans, SpanKind::Server, "thread/start", remote_trace_id);
-    let thread_spawn_span = find_span_by_name(&spans, "thread_spawn");
-    let session_init_span = find_span_by_name(&spans, "session_init");
     assert_eq!(server_request_span.name.as_ref(), "thread/start");
     assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
     assert_ne!(server_request_span.span_context.span_id(), SpanId::INVALID);
-    assert_span_descends_from(&spans, thread_spawn_span, server_request_span);
-    assert_span_descends_from(&spans, session_init_span, server_request_span);
+    assert_eq!(
+        derive_config_span.span_context.trace_id(),
+        remote_trace_id,
+        "thread/start startup spans did not inherit the inbound request trace"
+    );
+    assert_span_descends_from(&spans, derive_config_span, server_request_span);
+
+    let default_model_span = find_span_by_name(&spans, "get_default_model");
+    let session_init_rollout_span = find_span_by_name(&spans, "session_init.rollout");
+    assert_span_descends_from(&spans, default_model_span, server_request_span);
+    assert_span_descends_from(&spans, session_init_rollout_span, server_request_span);
 
     Ok(())
 }
