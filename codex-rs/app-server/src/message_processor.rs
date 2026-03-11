@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
@@ -12,6 +13,7 @@ use crate::external_agent_config_api::ExternalAgentConfigApi;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::RequestContext;
 use crate::transport::AppServerTransport;
 use async_trait::async_trait;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
@@ -55,6 +57,7 @@ use codex_core::models_manager::collaboration_mode_presets::CollaborationModesCo
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::W3cTraceContext;
 use codex_state::log_db::LogDbLayer;
 use futures::FutureExt;
 use tokio::sync::broadcast;
@@ -63,6 +66,7 @@ use tokio::time::Duration;
 use tokio::time::timeout;
 use toml::Value as TomlValue;
 use tracing::Instrument;
+use tracing::Span;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -240,53 +244,81 @@ impl MessageProcessor {
         transport: AppServerTransport,
         session: &mut ConnectionSessionState,
     ) {
-        let request_span =
-            crate::app_server_tracing::request_span(&request, transport, connection_id, session);
-        async {
-            let request_method = request.method.as_str();
-            tracing::trace!(
-                ?connection_id,
-                request_id = ?request.id,
-                "app-server request: {request_method}"
-            );
-            let request_id = ConnectionRequestId {
+        let request_method = request.method.as_str();
+        let detached_thread_start = request_method == "thread/start";
+        tracing::trace!(
+            ?connection_id,
+            request_id = ?request.id,
+            "app-server request: {request_method}"
+        );
+        let request_id = ConnectionRequestId {
+            connection_id,
+            request_id: request.id.clone(),
+        };
+        let request_span = if detached_thread_start {
+            crate::app_server_tracing::thread_start_request_span(
+                &request,
+                transport,
                 connection_id,
-                request_id: request.id.clone(),
-            };
-            let request_json = match serde_json::to_value(&request) {
-                Ok(request_json) => request_json,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("Invalid request: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            };
+                session,
+            )
+        } else {
+            crate::app_server_tracing::request_span(&request, transport, connection_id, session)
+        };
+        let request_trace = request.trace.as_ref().map(|trace| W3cTraceContext {
+            traceparent: trace.traceparent.clone(),
+            tracestate: trace.tracestate.clone(),
+        });
+        let request_context = RequestContext::new(request_id.clone(), request_span, request_trace);
+        let request_trace_override = detached_thread_start
+            .then(|| request_context.request_trace())
+            .flatten();
+        let request_span_override = detached_thread_start.then(|| request_context.span());
+        Self::run_request_with_context(
+            Arc::clone(&self.outgoing),
+            &request_context,
+            detached_thread_start,
+            async {
+                let request_json = match serde_json::to_value(&request) {
+                    Ok(request_json) => request_json,
+                    Err(err) => {
+                        let error = JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("Invalid request: {err}"),
+                            data: None,
+                        };
+                        self.outgoing.send_error(request_id.clone(), error).await;
+                        return;
+                    }
+                };
 
-            let codex_request = match serde_json::from_value::<ClientRequest>(request_json) {
-                Ok(codex_request) => codex_request,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("Invalid request: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            };
-
-            // Websocket callers finalize outbound readiness in lib.rs after mirroring
-            // session state into outbound state and sending initialize notifications to
-            // this specific connection. Passing `None` avoids marking the connection
-            // ready too early from inside the shared request handler.
-            self.handle_client_request(connection_id, request_id, codex_request, session, None)
+                let codex_request = match serde_json::from_value::<ClientRequest>(request_json) {
+                    Ok(codex_request) => codex_request,
+                    Err(err) => {
+                        let error = JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("Invalid request: {err}"),
+                            data: None,
+                        };
+                        self.outgoing.send_error(request_id.clone(), error).await;
+                        return;
+                    }
+                };
+                // Websocket callers finalize outbound readiness in lib.rs after mirroring
+                // session state into outbound state and sending initialize notifications to
+                // this specific connection. Passing `None` avoids marking the connection
+                // ready too early from inside the shared request handler.
+                self.handle_client_request(
+                    request_id.clone(),
+                    codex_request,
+                    session,
+                    None,
+                    request_trace_override,
+                    request_span_override,
+                )
                 .await;
-        }
-        .instrument(request_span)
+            },
+        )
         .await;
     }
 
@@ -301,31 +333,46 @@ impl MessageProcessor {
         session: &mut ConnectionSessionState,
         outbound_initialized: &AtomicBool,
     ) {
-        let request_span =
-            crate::app_server_tracing::typed_request_span(&request, connection_id, session);
-        async {
-            let request_id = ConnectionRequestId {
+        let detached_thread_start = matches!(&request, ClientRequest::ThreadStart { .. });
+        let request_id = ConnectionRequestId {
+            connection_id,
+            request_id: request.id().clone(),
+        };
+        let request_span = if detached_thread_start {
+            crate::app_server_tracing::typed_thread_start_request_span(
+                &request,
                 connection_id,
-                request_id: request.id().clone(),
-            };
-            tracing::trace!(
-                ?connection_id,
-                request_id = ?request_id.request_id,
-                "app-server typed request"
-            );
-            // In-process clients do not have the websocket transport loop that performs
-            // post-initialize bookkeeping, so they still finalize outbound readiness in
-            // the shared request handler.
-            self.handle_client_request(
-                connection_id,
-                request_id,
-                request,
                 session,
-                Some(outbound_initialized),
             )
-            .await;
-        }
-        .instrument(request_span)
+        } else {
+            crate::app_server_tracing::typed_request_span(&request, connection_id, session)
+        };
+        let request_context = RequestContext::new(request_id.clone(), request_span, None);
+        let request_span_override = detached_thread_start.then(|| request_context.span());
+        tracing::trace!(
+            ?connection_id,
+            request_id = ?request_id.request_id,
+            "app-server typed request"
+        );
+        Self::run_request_with_context(
+            Arc::clone(&self.outgoing),
+            &request_context,
+            detached_thread_start,
+            async {
+                // In-process clients do not have the websocket transport loop that performs
+                // post-initialize bookkeeping, so they still finalize outbound readiness in
+                // the shared request handler.
+                self.handle_client_request(
+                    request_id.clone(),
+                    request,
+                    session,
+                    Some(outbound_initialized),
+                    None,
+                    request_span_override,
+                )
+                .await;
+            },
+        )
         .await;
     }
 
@@ -340,6 +387,24 @@ impl MessageProcessor {
         // Currently, we do not expect to receive any typed notifications from
         // in-process clients, so we just log them.
         tracing::info!("<- typed notification: {:?}", notification);
+    }
+
+    async fn run_request_with_context<F>(
+        outgoing: Arc<OutgoingMessageSender>,
+        request_context: &RequestContext,
+        detached: bool,
+        request_fut: F,
+    ) where
+        F: Future<Output = ()>,
+    {
+        outgoing
+            .register_request_context(request_context.clone())
+            .await;
+        if detached {
+            request_fut.await;
+        } else {
+            request_fut.instrument(request_context.span()).await;
+        }
     }
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
@@ -384,7 +449,16 @@ impl MessageProcessor {
             .await;
     }
 
+    pub(crate) async fn drain_background_tasks(&self) {
+        self.codex_message_processor.drain_background_tasks().await;
+    }
+
+    pub(crate) async fn shutdown_threads(&self) {
+        self.codex_message_processor.shutdown_threads().await;
+    }
+
     pub(crate) async fn connection_closed(&mut self, connection_id: ConnectionId) {
+        self.outgoing.connection_closed(connection_id).await;
         self.codex_message_processor
             .connection_closed(connection_id)
             .await;
@@ -410,20 +484,22 @@ impl MessageProcessor {
 
     async fn handle_client_request(
         &mut self,
-        connection_id: ConnectionId,
-        request_id: ConnectionRequestId,
+        connection_request_id: ConnectionRequestId,
         codex_request: ClientRequest,
         session: &mut ConnectionSessionState,
         // `Some(...)` means the caller wants initialize to immediately mark the
         // connection outbound-ready. Websocket JSON-RPC calls pass `None` so
         // lib.rs can deliver connection-scoped initialize notifications first.
         outbound_initialized: Option<&AtomicBool>,
+        request_trace_override: Option<W3cTraceContext>,
+        request_span_override: Option<Span>,
     ) {
+        let connection_id = connection_request_id.connection_id;
         match codex_request {
             // Handle Initialize internally so CodexMessageProcessor does not have to concern
             // itself with the `initialized` bool.
             ClientRequest::Initialize { request_id, params } => {
-                let request_id = ConnectionRequestId {
+                let connection_request_id = ConnectionRequestId {
                     connection_id,
                     request_id,
                 };
@@ -433,7 +509,7 @@ impl MessageProcessor {
                         message: "Already initialized".to_string(),
                         data: None,
                     };
-                    self.outgoing.send_error(request_id, error).await;
+                    self.outgoing.send_error(connection_request_id, error).await;
                     return;
                 }
 
@@ -473,7 +549,9 @@ impl MessageProcessor {
                                 ),
                                 data: None,
                             };
-                            self.outgoing.send_error(request_id.clone(), error).await;
+                            self.outgoing
+                                .send_error(connection_request_id.clone(), error)
+                                .await;
                             return;
                         }
                         SetOriginatorError::AlreadyInitialized => {
@@ -492,7 +570,9 @@ impl MessageProcessor {
 
                 let user_agent = get_codex_user_agent();
                 let response = InitializeResponse { user_agent };
-                self.outgoing.send_response(request_id, response).await;
+                self.outgoing
+                    .send_response(connection_request_id, response)
+                    .await;
 
                 session.initialized = true;
                 if let Some(outbound_initialized) = outbound_initialized {
@@ -513,7 +593,7 @@ impl MessageProcessor {
                         message: "Not initialized".to_string(),
                         data: None,
                     };
-                    self.outgoing.send_error(request_id, error).await;
+                    self.outgoing.send_error(connection_request_id, error).await;
                     return;
                 }
             }
@@ -526,7 +606,7 @@ impl MessageProcessor {
                 message: experimental_required_message(reason),
                 data: None,
             };
-            self.outgoing.send_error(request_id, error).await;
+            self.outgoing.send_error(connection_request_id, error).await;
             return;
         }
 
@@ -596,7 +676,13 @@ impl MessageProcessor {
                 // inline the full `CodexMessageProcessor::process_request` future, which
                 // can otherwise push worker-thread stack usage over the edge.
                 self.codex_message_processor
-                    .process_request(connection_id, other, session.app_server_client_name.clone())
+                    .process_request(
+                        connection_id,
+                        other,
+                        session.app_server_client_name.clone(),
+                        request_trace_override,
+                        request_span_override,
+                    )
                     .boxed()
                     .await;
             }
@@ -673,3 +759,6 @@ impl MessageProcessor {
         }
     }
 }
+
+#[cfg(test)]
+mod tracing_tests;
