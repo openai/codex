@@ -5421,7 +5421,7 @@ async fn queued_init_replay_stops_after_submitting_user_turn() {
     chat.queued_user_messages.push_back("/init".into());
     chat.queued_user_messages.push_back("after init".into());
 
-    chat.maybe_send_next_queued_input();
+    chat.drain_queued_inputs_until_blocked();
 
     let items = match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => items,
@@ -5674,7 +5674,7 @@ async fn queued_plan_replay_stops_after_submitting_user_turn() {
     chat.queued_user_messages
         .push_back("after plan replay".into());
 
-    chat.maybe_send_next_queued_input();
+    chat.drain_queued_inputs_until_blocked();
 
     let items = match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => items,
@@ -6407,7 +6407,7 @@ async fn custom_prompt_submit_serializes_review_draft() {
     let evt = rx.try_recv().expect("expected one app event");
     match evt {
         AppEvent::HandleSlashCommandDraft(UserMessage { text, .. }) => {
-            assert_eq!(text, "/review please audit dependencies");
+            assert_eq!(text, "/review -- please audit dependencies");
         }
         other => panic!("unexpected app event: {other:?}"),
     }
@@ -11561,6 +11561,46 @@ async fn queued_review_selection_replays_after_turn_complete() {
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected queued /review branch op"),
             Err(TryRecvError::Disconnected) => panic!("expected queued /review branch op"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn queued_custom_review_selection_preserves_branch_like_instructions_after_turn_complete() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    chat.handle_serialized_slash_command(ChatWidget::review_request_draft(&ReviewRequest {
+        target: ReviewTarget::Custom {
+            instructions: "branch main but focus on risky migrations".to_string(),
+        },
+        user_facing_hint: None,
+    }));
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["/review -- branch main but focus on risky migrations".to_string()]
+    );
+
+    chat.on_task_complete(None, false);
+
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::Review { review_request }) => {
+                assert_eq!(
+                    review_request,
+                    ReviewRequest {
+                        target: ReviewTarget::Custom {
+                            instructions: "branch main but focus on risky migrations".to_string(),
+                        },
+                        user_facing_hint: None,
+                    }
+                );
+                break;
+            }
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected queued custom /review op"),
+            Err(TryRecvError::Disconnected) => panic!("expected queued custom /review op"),
         }
     }
 }

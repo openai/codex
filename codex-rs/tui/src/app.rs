@@ -1907,7 +1907,7 @@ impl App {
         }
         self.chat_widget.set_queue_autosend_suppressed(false);
         if resume_restored_queue {
-            self.chat_widget.maybe_send_next_queued_input();
+            self.chat_widget.drain_queued_inputs_until_blocked();
         }
         self.refresh_status_line();
     }

@@ -1796,7 +1796,7 @@ impl ChatWidget {
             self.saw_plan_item_this_turn = false;
         }
         // If there is a queued user message, send exactly one now to begin the next turn.
-        self.maybe_send_next_queued_input();
+        self.drain_queued_inputs_until_blocked();
         // Emit a notification when the turn completes (suppressed if focused).
         self.notify(Notification::AgentTurnComplete {
             response: last_agent_message.unwrap_or_default(),
@@ -2100,7 +2100,7 @@ impl ChatWidget {
 
         self.add_to_history(history_cell::new_warning_event(message));
         self.request_redraw();
-        self.maybe_send_next_queued_input();
+        self.drain_queued_inputs_until_blocked();
     }
 
     fn on_error(&mut self, message: String) {
@@ -2110,7 +2110,7 @@ impl ChatWidget {
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.
-        self.maybe_send_next_queued_input();
+        self.drain_queued_inputs_until_blocked();
     }
 
     fn on_warning(&mut self, message: impl Into<String>) {
@@ -2182,7 +2182,7 @@ impl ChatWidget {
 
         self.mcp_startup_status = None;
         self.update_task_running_state();
-        self.maybe_send_next_queued_input();
+        self.drain_queued_inputs_until_blocked();
         self.request_redraw();
     }
 
@@ -2230,7 +2230,7 @@ impl ChatWidget {
         }
         self.refresh_pending_input_preview();
         if !started_turn_after_interrupt {
-            self.maybe_send_next_queued_input();
+            self.drain_queued_inputs_until_blocked();
         }
 
         self.request_redraw();
@@ -4997,7 +4997,7 @@ impl ChatWidget {
                 Some("") | None => format!("/review commit {sha}").into(),
                 Some(title) => format!("/review commit {sha} {title}").into(),
             },
-            ReviewTarget::Custom { instructions } => format!("/review {instructions}").into(),
+            ReviewTarget::Custom { instructions } => format!("/review -- {instructions}").into(),
         }
     }
 
@@ -5138,9 +5138,20 @@ impl ChatWidget {
     }
 
     fn parse_review_request(args: &str) -> Result<ReviewRequest, String> {
-        const REVIEW_USAGE: &str =
-            "Usage: /review [uncommitted|branch <name>|commit <sha> [title]|<instructions>]";
+        const REVIEW_USAGE: &str = "Usage: /review [uncommitted|branch <name>|commit <sha> [title]|-- <instructions>|<instructions>]";
         let trimmed = args.trim();
+        if let Some(instructions) = trimmed.strip_prefix("--") {
+            let instructions = instructions.trim_start();
+            if instructions.is_empty() {
+                return Err(REVIEW_USAGE.to_string());
+            }
+            return Ok(ReviewRequest {
+                target: ReviewTarget::Custom {
+                    instructions: instructions.to_string(),
+                },
+                user_facing_hint: None,
+            });
+        }
         let lowered = trimmed.to_ascii_lowercase();
         let target = if matches!(
             lowered.as_str(),
@@ -6147,7 +6158,7 @@ impl ChatWidget {
 
     // If idle and there are queued inputs, dispatch queued work in order until a turn starts or
     // a popup takes focus.
-    pub(crate) fn maybe_send_next_queued_input(&mut self) {
+    pub(crate) fn drain_queued_inputs_until_blocked(&mut self) {
         if self.suppress_queue_autosend {
             return;
         }
