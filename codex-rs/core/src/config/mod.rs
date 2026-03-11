@@ -1393,10 +1393,6 @@ pub struct RealtimeAudioToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ToolsToml {
-    /// Additional parameters for the web search tool when it is enabled.
-    ///
-    /// Accepts either a nested table/object or a bare boolean. Boolean values
-    /// are accepted for compatibility but otherwise ignored.
     #[serde(
         default,
         deserialize_with = "deserialize_optional_web_search_tool_config"
@@ -1424,7 +1420,11 @@ where
     let value = Option::<WebSearchToolConfigInput>::deserialize(deserializer)?;
 
     Ok(match value {
-        None | Some(WebSearchToolConfigInput::Enabled(_)) => None,
+        None => None,
+        Some(WebSearchToolConfigInput::Enabled(enabled)) => {
+            let _ = enabled;
+            None
+        }
         Some(WebSearchToolConfigInput::Config(config)) => Some(config),
     })
 }
