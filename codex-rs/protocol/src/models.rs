@@ -1028,6 +1028,13 @@ impl From<Vec<UserInput>> for ResponseInputItem {
         }
     }
 }
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+pub struct SearchToolCallParams {
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub limit: Option<usize>,
+}
 
 /// If the `name` of a `ResponseItem::FunctionCall` is either `container.exec`
 /// or `shell`, the `arguments` field should deserialize to this struct.

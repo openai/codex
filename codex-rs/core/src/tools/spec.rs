@@ -2291,7 +2291,7 @@ pub(crate) fn build_specs(
     if config.search_tool
         && let Some(app_tools) = app_tools
     {
-        let search_tool_handler = Arc::new(ToolSearchHandler::from(app_tools.clone()));
+        let search_tool_handler = Arc::new(ToolSearchHandler::new(app_tools.clone()));
         push_tool_spec(
             &mut builder,
             create_tool_search_tool(&app_tools),
@@ -4074,12 +4074,12 @@ mod tests {
             ])),
             Some(HashMap::from([
                 (
-                    "mcp__codex_apps__calendar_create_event".to_string(),
+                    "mcp__codex_apps__calendar-create-event".to_string(),
                     ToolInfo {
                         server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                        tool_name: "calendar_create_event".to_string(),
+                        tool_name: "calendar-create-event".to_string(),
                         tool: mcp_tool(
-                            "calendar_create_event",
+                            "calendar-create-event",
                             "Create calendar event",
                             serde_json::json!({"type": "object"}),
                         ),
@@ -4196,8 +4196,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::Apps);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -4208,12 +4210,12 @@ mod tests {
             None,
             Some(HashMap::from([
                 (
-                    "mcp__codex_apps__calendar_create_event".to_string(),
+                    "mcp__codex_apps__calendar-create-event".to_string(),
                     ToolInfo {
                         server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                        tool_name: "calendar_create_event".to_string(),
+                        tool_name: "calendar-create-event".to_string(),
                         tool: mcp_tool(
-                            "calendar_create_event",
+                            "calendar-create-event",
                             "Create calendar event",
                             serde_json::json!({"type": "object"}),
                         ),
@@ -4224,12 +4226,12 @@ mod tests {
                     },
                 ),
                 (
-                    "mcp__codex_apps__calendar_list_events".to_string(),
+                    "mcp__codex_apps__calendar-list-events".to_string(),
                     ToolInfo {
                         server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                        tool_name: "calendar_list_events".to_string(),
+                        tool_name: "calendar-list-events".to_string(),
                         tool: mcp_tool(
-                            "calendar_list_events",
+                            "calendar-list-events",
                             "List calendar events",
                             serde_json::json!({"type": "object"}),
                         ),
@@ -4244,7 +4246,7 @@ mod tests {
         )
         .build();
 
-        let alias = namespaced_tool_handler_name("mcp__codex_apps__calendar", "create_event");
+        let alias = namespaced_tool_handler_name("mcp__codex_apps__calendar", "-create-event");
 
         assert!(registry.has_handler(TOOL_SEARCH_TOOL_NAME, None));
         assert!(registry.has_handler(alias.as_str(), None));

@@ -425,7 +425,11 @@ impl From<&ToolPayload> for HookToolInput {
                 arguments: arguments.clone(),
             },
             ToolPayload::ToolSearch { arguments } => HookToolInput::Function {
-                arguments: arguments.to_string(),
+                arguments: serde_json::json!({
+                    "query": arguments.query,
+                    "limit": arguments.limit,
+                })
+                .to_string(),
             },
             ToolPayload::Custom { input } => HookToolInput::Custom {
                 input: input.clone(),

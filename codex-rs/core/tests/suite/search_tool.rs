@@ -33,10 +33,10 @@ const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 1] = [
     "Tools of the apps (Calendar) are hidden until you search for them with this tool (`tool_search`).",
 ];
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
-const CALENDAR_CREATE_TOOL: &str = "mcp__codex_apps__calendar_create_event";
-const CALENDAR_LIST_TOOL: &str = "mcp__codex_apps__calendar_list_events";
+const CALENDAR_CREATE_TOOL: &str = "mcp__codex_apps__calendar-create-event";
+const CALENDAR_LIST_TOOL: &str = "mcp__codex_apps__calendar-list-events";
 const SEARCH_CALENDAR_NAMESPACE: &str = "mcp__codex_apps__calendar";
-const SEARCH_CALENDAR_CREATE_TOOL: &str = "create_event";
+const SEARCH_CALENDAR_CREATE_TOOL: &str = "-create-event";
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -302,8 +302,14 @@ async fn explicit_app_mentions_expose_apps_tools_without_search() -> Result<()> 
 
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
-    assert!(tools.iter().any(|name| name == CALENDAR_CREATE_TOOL));
-    assert!(tools.iter().any(|name| name == CALENDAR_LIST_TOOL));
+    assert!(
+        tools.iter().any(|name| name == CALENDAR_CREATE_TOOL),
+        "expected explicit app mention to expose create tool, got tools: {tools:?}"
+    );
+    assert!(
+        tools.iter().any(|name| name == CALENDAR_LIST_TOOL),
+        "expected explicit app mention to expose list tool, got tools: {tools:?}"
+    );
 
     Ok(())
 }

@@ -18,6 +18,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use rmcp::model::Tool;
 use std::collections::HashMap;
@@ -104,12 +105,20 @@ impl ToolRouter {
                 execution,
                 arguments,
                 ..
-            } if execution == "client" => Ok(Some(ToolCall {
-                tool_name: "tool_search".to_string(),
-                tool_namespace: None,
-                call_id,
-                payload: ToolPayload::ToolSearch { arguments },
-            })),
+            } if execution == "client" => {
+                let arguments: SearchToolCallParams =
+                    serde_json::from_value(arguments).map_err(|err| {
+                        FunctionCallError::RespondToModel(format!(
+                            "failed to parse tool_search arguments: {err}"
+                        ))
+                    })?;
+                Ok(Some(ToolCall {
+                    tool_name: "tool_search".to_string(),
+                    tool_namespace: None,
+                    call_id,
+                    payload: ToolPayload::ToolSearch { arguments },
+                }))
+            }
             ResponseItem::ToolSearchCall { .. } => Ok(None),
             ResponseItem::CustomToolCall {
                 name,
@@ -239,7 +248,10 @@ impl ToolRouter {
             AnyToolResult {
                 call_id,
                 payload: ToolPayload::ToolSearch {
-                    arguments: serde_json::Value::Object(serde_json::Map::new()),
+                    arguments: SearchToolCallParams {
+                        query: String::new(),
+                        limit: None,
+                    },
                 },
                 result: Box::new(ToolSearchOutput { tools: Vec::new() }),
             }

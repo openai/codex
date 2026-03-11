@@ -1542,7 +1542,7 @@ async fn list_tools_for_client_uncached(
             }
             ToolInfo {
                 server_name: server_name.to_owned(),
-                tool_name: tool_name.to_owned(),
+                tool_name,
                 tool: tool_def,
                 connector_id: tool.connector_id,
                 connector_name,

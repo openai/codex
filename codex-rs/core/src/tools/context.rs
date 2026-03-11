@@ -1,3 +1,4 @@
+use crate::client_common::tools::ToolSearchOutputTool;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
@@ -12,6 +13,7 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_utils_string::take_bytes_at_char_boundary;
@@ -48,7 +50,7 @@ pub enum ToolPayload {
         arguments: String,
     },
     ToolSearch {
-        arguments: serde_json::Value,
+        arguments: SearchToolCallParams,
     },
     Custom {
         input: String,
@@ -67,7 +69,7 @@ impl ToolPayload {
     pub fn log_payload(&self) -> Cow<'_, str> {
         match self {
             ToolPayload::Function { arguments } => Cow::Borrowed(arguments),
-            ToolPayload::ToolSearch { arguments } => Cow::Owned(arguments.to_string()),
+            ToolPayload::ToolSearch { arguments } => Cow::Owned(arguments.query.clone()),
             ToolPayload::Custom { input } => Cow::Borrowed(input),
             ToolPayload::LocalShell { params } => Cow::Owned(params.command.join(" ")),
             ToolPayload::Mcp { raw_arguments, .. } => Cow::Borrowed(raw_arguments),
@@ -114,12 +116,21 @@ impl ToolOutput for CallToolResult {
 
 #[derive(Clone)]
 pub struct ToolSearchOutput {
-    pub tools: Vec<JsonValue>,
+    pub tools: Vec<ToolSearchOutputTool>,
 }
 
 impl ToolOutput for ToolSearchOutput {
     fn log_preview(&self) -> String {
-        telemetry_preview(&JsonValue::Array(self.tools.clone()).to_string())
+        let tools = self
+            .tools
+            .iter()
+            .map(|tool| {
+                serde_json::to_value(tool).unwrap_or_else(|err| {
+                    JsonValue::String(format!("failed to serialize tool_search output: {err}"))
+                })
+            })
+            .collect();
+        telemetry_preview(&JsonValue::Array(tools).to_string())
     }
 
     fn success_for_logging(&self) -> bool {
@@ -131,7 +142,15 @@ impl ToolOutput for ToolSearchOutput {
             call_id: call_id.to_string(),
             status: "completed".to_string(),
             execution: "client".to_string(),
-            tools: self.tools.clone(),
+            tools: self
+                .tools
+                .iter()
+                .map(|tool| {
+                    serde_json::to_value(tool).unwrap_or_else(|err| {
+                        JsonValue::String(format!("failed to serialize tool_search output: {err}"))
+                    })
+                })
+                .collect(),
         }
     }
 }
@@ -539,13 +558,26 @@ mod tests {
     #[test]
     fn tool_search_payloads_roundtrip_as_tool_search_outputs() {
         let payload = ToolPayload::ToolSearch {
-            arguments: json!({"query": "calendar"}),
+            arguments: SearchToolCallParams {
+                query: "calendar".to_string(),
+                limit: None,
+            },
         };
         let response = ToolSearchOutput {
-            tools: vec![json!({
-                "type": "function",
-                "name": "create_event",
-            })],
+            tools: vec![ToolSearchOutputTool::Function(
+                crate::client_common::tools::ResponsesApiTool {
+                    name: "create_event".to_string(),
+                    description: String::new(),
+                    strict: false,
+                    defer_loading: Some(true),
+                    parameters: crate::tools::spec::JsonSchema::Object {
+                        properties: Default::default(),
+                        required: None,
+                        additional_properties: None,
+                    },
+                    output_schema: None,
+                },
+            )],
         }
         .to_response_item("search-1", &payload);
 
@@ -564,6 +596,13 @@ mod tests {
                     vec![json!({
                         "type": "function",
                         "name": "create_event",
+                        "description": "",
+                        "strict": false,
+                        "defer_loading": true,
+                        "parameters": {
+                            "type": "object",
+                            "properties": {}
+                        }
                     })]
                 );
             }

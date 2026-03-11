@@ -374,7 +374,10 @@ fn enabled_tool_from_spec(spec: ToolSpec) -> Option<EnabledTool> {
     let (description, kind) = match spec {
         ToolSpec::Function(tool) => (tool.description, CodeModeToolKind::Function),
         ToolSpec::Freeform(tool) => (tool.description, CodeModeToolKind::Freeform),
-        ToolSpec::LocalShell {} | ToolSpec::ImageGeneration { .. } | ToolSpec::WebSearch { .. } => {
+        ToolSpec::LocalShell {}
+        | ToolSpec::ImageGeneration { .. }
+        | ToolSpec::ToolSearch { .. }
+        | ToolSpec::WebSearch { .. } => {
             return None;
         }
     };
