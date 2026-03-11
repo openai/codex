@@ -176,6 +176,44 @@ enabled = false
 }
 
 #[test]
+fn tools_web_search_true_deserializes_to_none() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tools]
+web_search = true
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.tools,
+        Some(ToolsToml {
+            web_search: None,
+            view_image: None,
+        })
+    );
+}
+
+#[test]
+fn tools_web_search_false_deserializes_to_none() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tools]
+web_search = false
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.tools,
+        Some(ToolsToml {
+            web_search: None,
+            view_image: None,
+        })
+    );
+}
+
+#[test]
 fn config_toml_deserializes_model_availability_nux() {
     let toml = r#"
 [tui.model_availability_nux]
