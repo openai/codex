@@ -84,9 +84,6 @@ enum NetworkModeSchema {
 
 impl NetworkToml {
     pub(crate) fn apply_to_network_proxy_config(&self, config: &mut NetworkProxyConfig) {
-        if let Some(enabled) = self.enabled {
-            config.network.enabled = enabled;
-        }
         if let Some(proxy_url) = self.proxy_url.as_ref() {
             config.network.proxy_url = proxy_url.clone();
         }

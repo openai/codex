@@ -324,13 +324,17 @@ allowed_domains = ["openai.com"]
 }
 
 #[test]
-fn permissions_profiles_network_populates_runtime_network_proxy_spec() -> std::io::Result<()> {
+fn permissions_profiles_network_populates_runtime_network_proxy_spec_when_feature_enabled()
+-> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
+            features: Some(FeaturesToml {
+                entries: BTreeMap::from([("enable_network_proxy".to_string(), true)]),
+            }),
             default_permissions: Some("workspace".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
@@ -371,7 +375,8 @@ fn permissions_profiles_network_populates_runtime_network_proxy_spec() -> std::i
 }
 
 #[test]
-fn permissions_profiles_network_disabled_by_default_does_not_start_proxy() -> std::io::Result<()> {
+fn permissions_profiles_network_does_not_start_proxy_without_feature_flag()
+-> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
@@ -390,6 +395,7 @@ fn permissions_profiles_network_disabled_by_default_does_not_start_proxy() -> st
                             )]),
                         }),
                         network: Some(NetworkToml {
+                            enabled: Some(true),
                             allowed_domains: Some(vec!["openai.com".to_string()]),
                             ..Default::default()
                         }),

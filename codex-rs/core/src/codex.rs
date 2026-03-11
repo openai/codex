@@ -1082,7 +1082,7 @@ impl Session {
                 audit_metadata,
             )
             .await
-            .map_err(|err| anyhow::anyhow!("failed to start managed network proxy: {err}"))?;
+            .map_err(|err| anyhow::anyhow!("failed to start network proxy: {err}"))?;
         let session_network_proxy = {
             let proxy = network_proxy.proxy();
             SessionNetworkProxyRuntime {

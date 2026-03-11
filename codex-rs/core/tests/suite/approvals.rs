@@ -2236,11 +2236,13 @@ async fn denying_network_policy_amendment_persists_policy_and_skips_future_netwo
         home.path().join("config.toml"),
         r#"default_permissions = "workspace"
 
+[features]
+enable_network_proxy = true
+
 [permissions.workspace.filesystem]
 ":minimal" = "read"
 
 [permissions.workspace.network]
-enabled = true
 mode = "limited"
 allow_local_binding = true
 "#,
@@ -2266,7 +2268,6 @@ allow_local_binding = true
         let mut requirements = config.config_layer_stack.requirements().clone();
         requirements.network = Some(Sourced::new(
             NetworkConstraints {
-                enabled: Some(true),
                 allow_local_binding: Some(true),
                 ..Default::default()
             },
@@ -2274,7 +2275,6 @@ allow_local_binding = true
         ));
         let mut requirements_toml = config.config_layer_stack.requirements_toml().clone();
         requirements_toml.network = Some(NetworkRequirementsToml {
-            enabled: Some(true),
             allow_local_binding: Some(true),
             ..Default::default()
         });

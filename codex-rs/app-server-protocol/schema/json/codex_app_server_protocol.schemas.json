@@ -12592,12 +12592,6 @@
               "null"
             ]
           },
-          "enabled": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
           "httpPort": {
             "format": "uint16",
             "minimum": 0.0,

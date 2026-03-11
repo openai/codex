@@ -127,9 +127,6 @@ fn network_constraints_from_trusted_layers(
 }
 
 fn apply_network_constraints(network: NetworkToml, constraints: &mut NetworkProxyConstraints) {
-    if let Some(enabled) = network.enabled {
-        constraints.enabled = Some(enabled);
-    }
     if let Some(mode) = network.mode {
         constraints.mode = Some(mode);
     }
@@ -346,6 +343,36 @@ allowed_domains = ["higher.example.com"]
         .expect("higher layer should apply");
 
         assert_eq!(config.network.allowed_domains, vec!["higher.example.com"]);
+    }
+
+    #[test]
+    fn top_level_network_table_is_ignored() {
+        let lower_permissions: toml::Value = toml::from_str(
+            r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+allowed_domains = ["lower.example.com"]
+"#,
+        )
+        .expect("lower layer should parse");
+        let higher_network: toml::Value =
+            toml::from_str(r#"network = { allowed_domains = ["higher.example.com"] }"#)
+                .expect("higher layer should parse");
+
+        let mut config = NetworkProxyConfig::default();
+        apply_network_tables(
+            &mut config,
+            network_tables_from_toml(&lower_permissions).expect("lower layer should deserialize"),
+        )
+        .expect("lower layer should apply");
+        apply_network_tables(
+            &mut config,
+            network_tables_from_toml(&higher_network).expect("higher layer should deserialize"),
+        )
+        .expect("higher layer should apply");
+
+        assert_eq!(config.network.allowed_domains, vec!["lower.example.com"]);
     }
 
     #[test]

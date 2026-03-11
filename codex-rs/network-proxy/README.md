@@ -18,14 +18,20 @@ Network settings live under the selected permissions profile. Example config:
 ```toml
 default_permissions = "workspace"
 
+[features]
+enable_network_proxy = true
+
 [permissions.workspace.network]
+# `enabled` controls sandbox network access for the selected profile.
+# The proxy itself starts when `enable_network_proxy` or requirements enable it.
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
 # SOCKS5 listener (enabled by default).
 enable_socks5 = true
 socks_url = "http://127.0.0.1:8081"
 enable_socks5_udp = true
-# When `enabled` is false, the proxy no-ops and does not bind listeners.
+# Use the `enable_network_proxy` experimental feature or requirements config
+# to activate the proxy when running through Codex.
 # When true, respect HTTP(S)_PROXY/ALL_PROXY for upstream requests (HTTP(S) proxies only),
 # including CONNECT tunnels in full mode.
 allow_upstream_proxy = true
@@ -205,7 +211,8 @@ what it can reasonably guarantee.
     proxy into a remote bridge into local daemons.
 - `dangerously_allow_all_unix_sockets = true` bypasses the unix socket allowlist entirely (still
   macOS-only and absolute-path-only). Use only in tightly controlled environments.
-- `enabled` is enforced at runtime; when false the proxy no-ops and does not bind listeners.
+- Proxy startup is gated by `enable_network_proxy` or requirements, not by
+  `[permissions.<profile>.network].enabled`.
 Limitations:
 
 - DNS rebinding is hard to fully prevent without pinning the resolved IP(s) all the way down to the

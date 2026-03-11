@@ -396,7 +396,6 @@ fn guardian_subagent_config_preserves_parent_network_proxy() {
     let network = NetworkProxySpec::from_config_and_constraints(
         NetworkProxyConfig::default(),
         Some(NetworkConstraints {
-            enabled: Some(true),
             allowed_domains: Some(vec!["github.com".to_string()]),
             ..Default::default()
         }),

@@ -351,16 +351,18 @@ async fn load_requirements_toml(
         AbsolutePathBuf::from_absolute_path(requirements_toml_file.as_ref())?;
     match tokio::fs::read_to_string(&requirements_toml_file).await {
         Ok(contents) => {
-            let requirements_config: ConfigRequirementsToml =
-                toml::from_str(&contents).map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!(
-                            "Error parsing requirements file {}: {e}",
-                            requirements_toml_file.as_ref().display(),
-                        ),
-                    )
-                })?;
+            let requirements_config = parse_requirements_toml_with_legacy_network_enabled_compat(
+                &contents,
+            )
+            .map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Error parsing requirements file {}: {e}",
+                        requirements_toml_file.as_ref().display(),
+                    ),
+                )
+            })?;
             config_requirements_toml.merge_unset_fields(
                 RequirementSource::SystemRequirementsToml {
                     file: requirements_toml_file.clone(),
@@ -382,6 +384,44 @@ async fn load_requirements_toml(
     }
 
     Ok(())
+}
+
+fn parse_requirements_toml_with_legacy_network_enabled_compat(
+    contents: &str,
+) -> Result<ConfigRequirementsToml, toml::de::Error> {
+    let mut raw_requirements: TomlValue = toml::from_str(contents)?;
+    let should_remove_network_table = raw_requirements
+        .as_table_mut()
+        .and_then(|table| table.get_mut("experimental_network"))
+        .and_then(TomlValue::as_table_mut)
+        .and_then(|network_table| network_table.remove("enabled"))
+        .map(|enabled| match enabled {
+            TomlValue::Boolean(false) => {
+                tracing::warn!(
+                    "Ignoring disabled legacy experimental_network table in requirements input"
+                );
+                true
+            }
+            TomlValue::Boolean(true) => {
+                tracing::warn!(
+                    "Ignoring legacy experimental_network.enabled in requirements input"
+                );
+                false
+            }
+            value => {
+                tracing::warn!(
+                    ?value,
+                    "Ignoring malformed legacy experimental_network.enabled in requirements input"
+                );
+                false
+            }
+        })
+        .unwrap_or(false);
+    if should_remove_network_table && let Some(requirements_table) = raw_requirements.as_table_mut()
+    {
+        requirements_table.remove("experimental_network");
+    }
+    raw_requirements.try_into()
 }
 
 #[cfg(unix)]

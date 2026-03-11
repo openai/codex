@@ -363,6 +363,9 @@
             "enable_experimental_windows_sandbox": {
               "type": "boolean"
             },
+            "enable_network_proxy": {
+              "type": "boolean"
+            },
             "enable_request_compression": {
               "type": "boolean"
             },
@@ -1862,6 +1865,9 @@
           "type": "boolean"
         },
         "enable_experimental_windows_sandbox": {
+          "type": "boolean"
+        },
+        "enable_network_proxy": {
           "type": "boolean"
         },
         "enable_request_compression": {
