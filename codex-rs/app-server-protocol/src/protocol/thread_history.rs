@@ -1146,6 +1146,34 @@ impl ThreadHistoryBuilder {
             })
     }
 
+    fn find_item_mut(&mut self, turn_id: Option<&str>, item_id: &str) -> Option<&mut ThreadItem> {
+        if let Some(turn_id) = turn_id {
+            if let Some(turn) = self.current_turn.as_mut()
+                && turn.id == turn_id
+            {
+                return turn.items.iter_mut().find(|item| item.id() == item_id);
+            }
+
+            return self
+                .turns
+                .iter_mut()
+                .find(|turn| turn.id == turn_id)
+                .and_then(|turn| turn.items.iter_mut().find(|item| item.id() == item_id));
+        }
+
+        if let Some(turn) = self.current_turn.as_mut()
+            && let Some(item) = turn.items.iter_mut().find(|item| item.id() == item_id)
+        {
+            return Some(item);
+        }
+
+        self.turns
+            .iter_mut()
+            .rev()
+            .find(|turn| turn.items.iter().any(|item| item.id() == item_id))
+            .and_then(|turn| turn.items.iter_mut().find(|item| item.id() == item_id))
+    }
+
     fn update_mcp_tool_call_approval(
         &mut self,
         turn_id: Option<&str>,
@@ -1162,79 +1190,11 @@ impl ThreadHistoryBuilder {
         approval: ItemApprovalState,
         mark_declined: bool,
     ) {
-        let approved = approval.status == ItemApprovalStatus::Approved;
         let synthetic_network_access = self
             .guardian_network_access_item_ids
             .contains(&(turn_id.map(str::to_owned), item_id.to_string()));
-        let update = |item: &mut ThreadItem| match item {
-            ThreadItem::CommandExecution {
-                status,
-                approval: existing_approval,
-                ..
-            } => {
-                if mark_declined {
-                    *status = CommandExecutionStatus::Declined;
-                } else if approved && synthetic_network_access {
-                    *status = CommandExecutionStatus::Completed;
-                }
-                *existing_approval = Some(approval);
-            }
-            ThreadItem::FileChange {
-                status,
-                approval: existing_approval,
-                ..
-            } => {
-                if mark_declined {
-                    *status = PatchApplyStatus::Declined;
-                }
-                *existing_approval = Some(approval);
-            }
-            ThreadItem::McpToolCall {
-                status,
-                approval: existing_approval,
-                ..
-            } => {
-                if mark_declined {
-                    *status = McpToolCallStatus::Declined;
-                }
-                *existing_approval = Some(approval);
-            }
-            _ => {}
-        };
-
-        if let Some(turn_id) = turn_id {
-            if let Some(turn) = self.current_turn.as_mut()
-                && turn.id == turn_id
-                && let Some(item) = turn.items.iter_mut().find(|item| item.id() == item_id)
-            {
-                update(item);
-                return;
-            }
-
-            if let Some(turn) = self.turns.iter_mut().find(|turn| turn.id == turn_id)
-                && let Some(item) = turn.items.iter_mut().find(|item| item.id() == item_id)
-            {
-                update(item);
-                return;
-            }
-            return;
-        }
-
-        if let Some(turn) = self.current_turn.as_mut()
-            && let Some(item) = turn.items.iter_mut().find(|item| item.id() == item_id)
-        {
-            update(item);
-            return;
-        }
-
-        if let Some(turn) = self
-            .turns
-            .iter_mut()
-            .rev()
-            .find(|turn| turn.items.iter().any(|item| item.id() == item_id))
-            && let Some(item) = turn.items.iter_mut().find(|item| item.id() == item_id)
-        {
-            update(item);
+        if let Some(item) = self.find_item_mut(turn_id, item_id) {
+            apply_approval_to_item(item, approval, mark_declined, synthetic_network_access);
         }
     }
 
@@ -1446,6 +1406,61 @@ fn thread_item_approval(item: &ThreadItem) -> Option<&ItemApprovalState> {
         | ThreadItem::EnteredReviewMode { .. }
         | ThreadItem::ExitedReviewMode { .. }
         | ThreadItem::ContextCompaction { .. } => None,
+    }
+}
+
+fn apply_approval_to_item(
+    item: &mut ThreadItem,
+    approval: ItemApprovalState,
+    mark_declined: bool,
+    synthetic_network_access: bool,
+) {
+    let approved = approval.status == ItemApprovalStatus::Approved;
+    match item {
+        ThreadItem::CommandExecution {
+            status,
+            approval: existing_approval,
+            ..
+        } => {
+            if mark_declined {
+                *status = CommandExecutionStatus::Declined;
+            } else if approved && synthetic_network_access {
+                *status = CommandExecutionStatus::Completed;
+            }
+            *existing_approval = Some(approval);
+        }
+        ThreadItem::FileChange {
+            status,
+            approval: existing_approval,
+            ..
+        } => {
+            if mark_declined {
+                *status = PatchApplyStatus::Declined;
+            }
+            *existing_approval = Some(approval);
+        }
+        ThreadItem::McpToolCall {
+            status,
+            approval: existing_approval,
+            ..
+        } => {
+            if mark_declined {
+                *status = McpToolCallStatus::Declined;
+            }
+            *existing_approval = Some(approval);
+        }
+        ThreadItem::UserMessage { .. }
+        | ThreadItem::AgentMessage { .. }
+        | ThreadItem::Plan { .. }
+        | ThreadItem::Reasoning { .. }
+        | ThreadItem::DynamicToolCall { .. }
+        | ThreadItem::CollabAgentToolCall { .. }
+        | ThreadItem::WebSearch { .. }
+        | ThreadItem::ImageView { .. }
+        | ThreadItem::ImageGeneration { .. }
+        | ThreadItem::EnteredReviewMode { .. }
+        | ThreadItem::ExitedReviewMode { .. }
+        | ThreadItem::ContextCompaction { .. } => {}
     }
 }
 
