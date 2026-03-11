@@ -17,13 +17,14 @@ use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermis
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
-use codex_app_server_protocol::AutoApprovalReviewStartedNotification;
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
 use codex_app_server_protocol::CollabAgentState as V2CollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus as V2CollabToolCallStatus;
 use codex_app_server_protocol::CommandAction as V2ParsedCommand;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::CommandExecutionAutoApprovalReviewCompletedNotification;
+use codex_app_server_protocol::CommandExecutionAutoApprovalReviewStartedNotification;
 use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
@@ -39,6 +40,8 @@ use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeApprovalDecision;
+use codex_app_server_protocol::FileChangeAutoApprovalReviewCompletedNotification;
+use codex_app_server_protocol::FileChangeAutoApprovalReviewStartedNotification;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
@@ -53,6 +56,8 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
+use codex_app_server_protocol::McpToolCallAutoApprovalReviewCompletedNotification;
+use codex_app_server_protocol::McpToolCallAutoApprovalReviewStartedNotification;
 use codex_app_server_protocol::ModelReroutedNotification;
 use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
 use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
@@ -211,32 +216,6 @@ fn clear_started_item(turn_summary: &mut TurnSummary, item_id: &str, item: &Thre
     }
 }
 
-fn guardian_assessment_uses_completed_notification(
-    status: codex_protocol::protocol::GuardianAssessmentStatus,
-    item: &ThreadItem,
-) -> bool {
-    match status {
-        codex_protocol::protocol::GuardianAssessmentStatus::InProgress => false,
-        codex_protocol::protocol::GuardianAssessmentStatus::Approved => matches!(
-            item,
-            ThreadItem::CommandExecution {
-                status: CommandExecutionStatus::Completed,
-                ..
-            }
-        ),
-        codex_protocol::protocol::GuardianAssessmentStatus::Denied => matches!(
-            item,
-            ThreadItem::CommandExecution {
-                status: CommandExecutionStatus::Declined,
-                ..
-            } | ThreadItem::FileChange {
-                status: PatchApplyStatus::Declined,
-                ..
-            }
-        ),
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
@@ -313,35 +292,106 @@ pub(crate) async fn apply_bespoke_event_handling(
                 };
                 match assessment.status {
                     codex_protocol::protocol::GuardianAssessmentStatus::InProgress => {
-                        let notification = AutoApprovalReviewStartedNotification {
-                            item,
-                            thread_id: conversation_id.to_string(),
-                            turn_id,
-                        };
-                        outgoing
-                            .send_server_notification(
-                                ServerNotification::AutoApprovalReviewStarted(notification),
-                            )
-                            .await;
+                        let thread_id = conversation_id.to_string();
+                        match item {
+                            ThreadItem::CommandExecution { .. } => {
+                                let notification =
+                                    CommandExecutionAutoApprovalReviewStartedNotification {
+                                        item,
+                                        thread_id,
+                                        turn_id,
+                                    };
+                                outgoing
+                                    .send_server_notification(
+                                        ServerNotification::CommandExecutionAutoApprovalReviewStarted(
+                                            notification,
+                                        ),
+                                    )
+                                    .await;
+                            }
+                            ThreadItem::FileChange { .. } => {
+                                let notification =
+                                    FileChangeAutoApprovalReviewStartedNotification {
+                                        item,
+                                        thread_id,
+                                        turn_id,
+                                    };
+                                outgoing
+                                    .send_server_notification(
+                                        ServerNotification::FileChangeAutoApprovalReviewStarted(
+                                            notification,
+                                        ),
+                                    )
+                                    .await;
+                            }
+                            ThreadItem::McpToolCall { .. } => {
+                                let notification =
+                                    McpToolCallAutoApprovalReviewStartedNotification {
+                                        item,
+                                        thread_id,
+                                        turn_id,
+                                    };
+                                outgoing
+                                    .send_server_notification(
+                                        ServerNotification::McpToolCallAutoApprovalReviewStarted(
+                                            notification,
+                                        ),
+                                    )
+                                    .await;
+                            }
+                            _ => {}
+                        }
                     }
                     codex_protocol::protocol::GuardianAssessmentStatus::Approved
                     | codex_protocol::protocol::GuardianAssessmentStatus::Denied => {
-                        if guardian_assessment_uses_completed_notification(assessment.status, &item)
-                        {
-                            {
-                                let mut state = thread_state.lock().await;
-                                clear_started_item(&mut state.turn_summary, &assessment.id, &item);
+                        let thread_id = conversation_id.to_string();
+                        match item {
+                            ThreadItem::CommandExecution { .. } => {
+                                let notification =
+                                    CommandExecutionAutoApprovalReviewCompletedNotification {
+                                        item,
+                                        thread_id,
+                                        turn_id,
+                                    };
+                                outgoing
+                                    .send_server_notification(
+                                        ServerNotification::CommandExecutionAutoApprovalReviewCompleted(
+                                            notification,
+                                        ),
+                                    )
+                                    .await;
                             }
-                            let notification = ItemCompletedNotification {
-                                item,
-                                thread_id: conversation_id.to_string(),
-                                turn_id,
-                            };
-                            outgoing
-                                .send_server_notification(ServerNotification::ItemCompleted(
-                                    notification,
-                                ))
-                                .await;
+                            ThreadItem::FileChange { .. } => {
+                                let notification =
+                                    FileChangeAutoApprovalReviewCompletedNotification {
+                                        item,
+                                        thread_id,
+                                        turn_id,
+                                    };
+                                outgoing
+                                    .send_server_notification(
+                                        ServerNotification::FileChangeAutoApprovalReviewCompleted(
+                                            notification,
+                                        ),
+                                    )
+                                    .await;
+                            }
+                            ThreadItem::McpToolCall { .. } => {
+                                let notification =
+                                    McpToolCallAutoApprovalReviewCompletedNotification {
+                                        item,
+                                        thread_id,
+                                        turn_id,
+                                    };
+                                outgoing
+                                    .send_server_notification(
+                                        ServerNotification::McpToolCallAutoApprovalReviewCompleted(
+                                            notification,
+                                        ),
+                                    )
+                                    .await;
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -2711,6 +2761,7 @@ mod tests {
     use anyhow::anyhow;
     use anyhow::bail;
     use codex_app_server_protocol::JSONRPCErrorError;
+    use codex_app_server_protocol::McpToolCallStatus;
     use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
@@ -3265,7 +3316,7 @@ mod tests {
         let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
             OutgoingMessage::AppServerNotification(
-                ServerNotification::AutoApprovalReviewStarted(notification),
+                ServerNotification::CommandExecutionAutoApprovalReviewStarted(notification),
             ) => {
                 assert_eq!(notification.thread_id, conversation_id.to_string());
                 assert_eq!(notification.turn_id, event_turn_id);
@@ -3307,7 +3358,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn guardian_assessment_approved_network_access_emits_item_completed() -> Result<()> {
+    async fn guardian_assessment_approved_network_access_emits_review_completed() -> Result<()> {
         let conversation_id = ThreadId::new();
         let event_turn_id = "turn-network-approved".to_string();
         let thread_state = Arc::new(tokio::sync::Mutex::new(ThreadState::default()));
@@ -3390,9 +3441,9 @@ mod tests {
 
         let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
-            OutgoingMessage::AppServerNotification(ServerNotification::ItemCompleted(
-                notification,
-            )) => {
+            OutgoingMessage::AppServerNotification(
+                ServerNotification::CommandExecutionAutoApprovalReviewCompleted(notification),
+            ) => {
                 assert_eq!(notification.thread_id, conversation_id.to_string());
                 assert_eq!(notification.turn_id, event_turn_id);
                 assert_eq!(
@@ -3434,7 +3485,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn guardian_assessment_denied_command_emits_item_completed() -> Result<()> {
+    async fn guardian_assessment_denied_command_emits_review_completed() -> Result<()> {
         let conversation_id = ThreadId::new();
         let event_turn_id = "turn-command-denied".to_string();
         let thread_state = Arc::new(tokio::sync::Mutex::new(ThreadState::default()));
@@ -3514,9 +3565,9 @@ mod tests {
 
         let msg = recv_broadcast_message(&mut rx).await?;
         match msg {
-            OutgoingMessage::AppServerNotification(ServerNotification::ItemCompleted(
-                notification,
-            )) => {
+            OutgoingMessage::AppServerNotification(
+                ServerNotification::CommandExecutionAutoApprovalReviewCompleted(notification),
+            ) => {
                 assert_eq!(notification.thread_id, conversation_id.to_string());
                 assert_eq!(notification.turn_id, event_turn_id);
                 assert_eq!(
@@ -3557,7 +3608,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn guardian_assessment_denied_mcp_does_not_emit_item_completed() -> Result<()> {
+    async fn guardian_assessment_denied_mcp_emits_review_completed() -> Result<()> {
         let conversation_id = ThreadId::new();
         let event_turn_id = "turn-mcp-denied".to_string();
         let thread_state = Arc::new(tokio::sync::Mutex::new(ThreadState::default()));
@@ -3621,7 +3672,7 @@ mod tests {
 
         apply_bespoke_event_handling(
             Event {
-                id: event_turn_id,
+                id: event_turn_id.clone(),
                 msg: EventMsg::GuardianAssessment(denied_assessment),
             },
             conversation_id,
@@ -3636,10 +3687,45 @@ mod tests {
         )
         .await;
 
-        assert!(
-            rx.try_recv().is_err(),
-            "no app-server notification expected"
-        );
+        let msg = recv_broadcast_message(&mut rx).await?;
+        match msg {
+            OutgoingMessage::AppServerNotification(
+                ServerNotification::McpToolCallAutoApprovalReviewCompleted(notification),
+            ) => {
+                assert_eq!(notification.thread_id, conversation_id.to_string());
+                assert_eq!(notification.turn_id, event_turn_id);
+                assert_eq!(
+                    notification.item,
+                    ThreadItem::McpToolCall {
+                        id: "guardian-mcp-1".to_string(),
+                        server: "docs".to_string(),
+                        tool: "lookup".to_string(),
+                        status: McpToolCallStatus::Declined,
+                        arguments: serde_json::json!({"id": "123"}),
+                        result: None,
+                        error: None,
+                        duration_ms: None,
+                        approval: Some(codex_app_server_protocol::ItemApprovalState {
+                            status: codex_app_server_protocol::ItemApprovalStatus::Declined,
+                            pending_kind: None,
+                            resolved_by: Some(
+                                codex_app_server_protocol::ItemApprovalResolvedBy::Automatic,
+                            ),
+                            automatic_review: Some(
+                                codex_app_server_protocol::AutomaticApprovalReview {
+                                    status:
+                                        codex_app_server_protocol::AutomaticApprovalReviewStatus::Denied,
+                                    risk_score: Some(97),
+                                    risk_level: Some(codex_app_server_protocol::RiskLevel::High),
+                                    rationale: Some("Unsafe MCP call.".to_string()),
+                                },
+                            ),
+                        }),
+                    }
+                );
+            }
+            other => bail!("unexpected notification: {other:?}"),
+        }
 
         Ok(())
     }

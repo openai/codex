@@ -4802,8 +4802,58 @@ pub struct ItemStartedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Sent when automatic approval review begins for an item.
-pub struct AutoApprovalReviewStartedNotification {
+/// [UNSTABLE] Sent when automatic approval review begins for a command execution item.
+pub struct CommandExecutionAutoApprovalReviewStartedNotification {
+    pub item: ThreadItem,
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Sent when automatic approval review resolves for a command execution item.
+pub struct CommandExecutionAutoApprovalReviewCompletedNotification {
+    pub item: ThreadItem,
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Sent when automatic approval review begins for a file change item.
+pub struct FileChangeAutoApprovalReviewStartedNotification {
+    pub item: ThreadItem,
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Sent when automatic approval review resolves for a file change item.
+pub struct FileChangeAutoApprovalReviewCompletedNotification {
+    pub item: ThreadItem,
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Sent when automatic approval review begins for an MCP tool call item.
+pub struct McpToolCallAutoApprovalReviewStartedNotification {
+    pub item: ThreadItem,
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Sent when automatic approval review resolves for an MCP tool call item.
+pub struct McpToolCallAutoApprovalReviewCompletedNotification {
     pub item: ThreadItem,
     pub thread_id: String,
     pub turn_id: String,

@@ -847,8 +847,15 @@ Tool items (`commandExecution`, `fileChange`, and `mcpToolCall`) may include an 
 All items emit shared lifecycle events:
 
 - `item/started` — emits the full `item` when a new unit of work begins so the UI can render it immediately; the `item.id` in this payload matches the `itemId` used by deltas.
-- `item/completed` — sends the final `item` once that work finishes (e.g., after a tool call or message completes); treat this as the authoritative state.
-- `item/autoApprovalReviewStarted` — [UNSTABLE] sent when an automatic approval review begins for an item, with the latest full `item` snapshot.
+- `item/completed` — sends the final `item` once that work itself finishes (for example, after a tool call or message completes); treat this as the authoritative execution/result state.
+- `item/commandExecution/autoApprovalReviewStarted` — [UNSTABLE] sent when an automatic approval review begins for a command execution item, with the latest full `item` snapshot.
+- `item/commandExecution/autoApprovalReviewCompleted` — [UNSTABLE] sent when an automatic approval review resolves for a command execution item, with the latest full `item` snapshot.
+- `item/fileChange/autoApprovalReviewStarted` — [UNSTABLE] sent when an automatic approval review begins for a file change item, with the latest full `item` snapshot.
+- `item/fileChange/autoApprovalReviewCompleted` — [UNSTABLE] sent when an automatic approval review resolves for a file change item, with the latest full `item` snapshot.
+- `item/mcpToolCall/autoApprovalReviewStarted` — [UNSTABLE] sent when an automatic approval review begins for an MCP tool call item, with the latest full `item` snapshot.
+- `item/mcpToolCall/autoApprovalReviewCompleted` — [UNSTABLE] sent when an automatic approval review resolves for an MCP tool call item, with the latest full `item` snapshot.
+
+Automatic approval review notifications are scoped to the parent item type, but they are separate from the item's own completion. An item can finish automatic review and still later emit its normal `item/completed` notification once the underlying work actually finishes.
 
 There are additional item-specific events:
 

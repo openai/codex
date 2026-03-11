@@ -884,7 +884,12 @@ server_notification_definitions! {
     TurnDiffUpdated => "turn/diff/updated" (v2::TurnDiffUpdatedNotification),
     TurnPlanUpdated => "turn/plan/updated" (v2::TurnPlanUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
-    AutoApprovalReviewStarted => "item/autoApprovalReviewStarted" (v2::AutoApprovalReviewStartedNotification),
+    CommandExecutionAutoApprovalReviewStarted => "item/commandExecution/autoApprovalReviewStarted" (v2::CommandExecutionAutoApprovalReviewStartedNotification),
+    CommandExecutionAutoApprovalReviewCompleted => "item/commandExecution/autoApprovalReviewCompleted" (v2::CommandExecutionAutoApprovalReviewCompletedNotification),
+    FileChangeAutoApprovalReviewStarted => "item/fileChange/autoApprovalReviewStarted" (v2::FileChangeAutoApprovalReviewStartedNotification),
+    FileChangeAutoApprovalReviewCompleted => "item/fileChange/autoApprovalReviewCompleted" (v2::FileChangeAutoApprovalReviewCompletedNotification),
+    McpToolCallAutoApprovalReviewStarted => "item/mcpToolCall/autoApprovalReviewStarted" (v2::McpToolCallAutoApprovalReviewStartedNotification),
+    McpToolCallAutoApprovalReviewCompleted => "item/mcpToolCall/autoApprovalReviewCompleted" (v2::McpToolCallAutoApprovalReviewCompletedNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
     /// This event is internal-only. Used by Codex Cloud.
     RawResponseItemCompleted => "rawResponseItem/completed" (v2::RawResponseItemCompletedNotification),

@@ -4,6 +4,6 @@
 import type { ThreadItem } from "./ThreadItem";
 
 /**
- * [UNSTABLE] Sent when automatic approval review begins for an item.
+ * [UNSTABLE] Sent when automatic approval review resolves for a file change item.
  */
-export type AutoApprovalReviewStartedNotification = { item: ThreadItem, threadId: string, turnId: string, };
+export type FileChangeAutoApprovalReviewCompletedNotification = { item: ThreadItem, threadId: string, turnId: string, };

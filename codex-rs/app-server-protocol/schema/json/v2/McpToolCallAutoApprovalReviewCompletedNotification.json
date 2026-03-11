@@ -1344,7 +1344,7 @@
       ]
     }
   },
-  "description": "[UNSTABLE] Sent when automatic approval review begins for an item.",
+  "description": "[UNSTABLE] Sent when automatic approval review resolves for an MCP tool call item.",
   "properties": {
     "item": {
       "$ref": "#/definitions/ThreadItem"
@@ -1361,6 +1361,6 @@
     "threadId",
     "turnId"
   ],
-  "title": "AutoApprovalReviewStartedNotification",
+  "title": "McpToolCallAutoApprovalReviewCompletedNotification",
   "type": "object"
 }

@@ -796,28 +796,6 @@
         }
       ]
     },
-    "AutoApprovalReviewStartedNotification": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "[UNSTABLE] Sent when automatic approval review begins for an item.",
-      "properties": {
-        "item": {
-          "$ref": "#/definitions/ThreadItem"
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "turnId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "item",
-        "threadId",
-        "turnId"
-      ],
-      "title": "AutoApprovalReviewStartedNotification",
-      "type": "object"
-    },
     "AutomaticApprovalReview": {
       "description": "[UNSTABLE] Automatic approval review details for an item.",
       "properties": {
@@ -3019,6 +2997,50 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Empty success response for `command/exec/write`.",
       "title": "CommandExecWriteResponse",
+      "type": "object"
+    },
+    "CommandExecutionAutoApprovalReviewCompletedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "[UNSTABLE] Sent when automatic approval review resolves for a command execution item.",
+      "properties": {
+        "item": {
+          "$ref": "#/definitions/ThreadItem"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item",
+        "threadId",
+        "turnId"
+      ],
+      "title": "CommandExecutionAutoApprovalReviewCompletedNotification",
+      "type": "object"
+    },
+    "CommandExecutionAutoApprovalReviewStartedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "[UNSTABLE] Sent when automatic approval review begins for a command execution item.",
+      "properties": {
+        "item": {
+          "$ref": "#/definitions/ThreadItem"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item",
+        "threadId",
+        "turnId"
+      ],
+      "title": "CommandExecutionAutoApprovalReviewStartedNotification",
       "type": "object"
     },
     "CommandExecutionOutputDeltaNotification": {
@@ -7459,6 +7481,50 @@
         }
       ]
     },
+    "FileChangeAutoApprovalReviewCompletedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "[UNSTABLE] Sent when automatic approval review resolves for a file change item.",
+      "properties": {
+        "item": {
+          "$ref": "#/definitions/ThreadItem"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item",
+        "threadId",
+        "turnId"
+      ],
+      "title": "FileChangeAutoApprovalReviewCompletedNotification",
+      "type": "object"
+    },
+    "FileChangeAutoApprovalReviewStartedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "[UNSTABLE] Sent when automatic approval review begins for a file change item.",
+      "properties": {
+        "item": {
+          "$ref": "#/definitions/ThreadItem"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item",
+        "threadId",
+        "turnId"
+      ],
+      "title": "FileChangeAutoApprovalReviewStartedNotification",
+      "type": "object"
+    },
     "FileChangeOutputDeltaNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -9088,6 +9154,50 @@
           "type": "object"
         }
       ]
+    },
+    "McpToolCallAutoApprovalReviewCompletedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "[UNSTABLE] Sent when automatic approval review resolves for an MCP tool call item.",
+      "properties": {
+        "item": {
+          "$ref": "#/definitions/ThreadItem"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item",
+        "threadId",
+        "turnId"
+      ],
+      "title": "McpToolCallAutoApprovalReviewCompletedNotification",
+      "type": "object"
+    },
+    "McpToolCallAutoApprovalReviewStartedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "[UNSTABLE] Sent when automatic approval review begins for an MCP tool call item.",
+      "properties": {
+        "item": {
+          "$ref": "#/definitions/ThreadItem"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item",
+        "threadId",
+        "turnId"
+      ],
+      "title": "McpToolCallAutoApprovalReviewStartedNotification",
+      "type": "object"
     },
     "McpToolCallError": {
       "properties": {
@@ -12466,20 +12576,120 @@
           "properties": {
             "method": {
               "enum": [
-                "item/autoApprovalReviewStarted"
+                "item/commandExecution/autoApprovalReviewStarted"
               ],
-              "title": "Item/autoApprovalReviewStartedNotificationMethod",
+              "title": "Item/commandExecution/autoApprovalReviewStartedNotificationMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/AutoApprovalReviewStartedNotification"
+              "$ref": "#/definitions/CommandExecutionAutoApprovalReviewStartedNotification"
             }
           },
           "required": [
             "method",
             "params"
           ],
-          "title": "Item/autoApprovalReviewStartedNotification",
+          "title": "Item/commandExecution/autoApprovalReviewStartedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "item/commandExecution/autoApprovalReviewCompleted"
+              ],
+              "title": "Item/commandExecution/autoApprovalReviewCompletedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CommandExecutionAutoApprovalReviewCompletedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Item/commandExecution/autoApprovalReviewCompletedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "item/fileChange/autoApprovalReviewStarted"
+              ],
+              "title": "Item/fileChange/autoApprovalReviewStartedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FileChangeAutoApprovalReviewStartedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Item/fileChange/autoApprovalReviewStartedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "item/fileChange/autoApprovalReviewCompleted"
+              ],
+              "title": "Item/fileChange/autoApprovalReviewCompletedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FileChangeAutoApprovalReviewCompletedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Item/fileChange/autoApprovalReviewCompletedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "item/mcpToolCall/autoApprovalReviewStarted"
+              ],
+              "title": "Item/mcpToolCall/autoApprovalReviewStartedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/McpToolCallAutoApprovalReviewStartedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Item/mcpToolCall/autoApprovalReviewStartedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "item/mcpToolCall/autoApprovalReviewCompleted"
+              ],
+              "title": "Item/mcpToolCall/autoApprovalReviewCompletedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/McpToolCallAutoApprovalReviewCompletedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Item/mcpToolCall/autoApprovalReviewCompletedNotification",
           "type": "object"
         },
         {
