@@ -108,4 +108,10 @@ pub(crate) trait BottomPaneView: Renderable {
                 .thread_id()
                 .is_some_and(|thread_id| thread_id != interrupted_thread_id)
     }
+
+    /// Drop stale state owned by a finished thread while preserving unrelated
+    /// or unscoped views. Returns `true` if the view should remain visible.
+    fn dismiss_on_thread_finished(&mut self, finished_thread_id: ThreadId) -> bool {
+        self.thread_id() != Some(finished_thread_id)
+    }
 }

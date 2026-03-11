@@ -1446,6 +1446,10 @@ impl BottomPaneView for McpServerElicitationOverlay {
         true
     }
 
+    fn dismiss_on_thread_finished(&mut self, finished_thread_id: ThreadId) -> bool {
+        self.request.thread_id != finished_thread_id
+    }
+
     fn prefer_esc_to_handle_key_event(&self) -> bool {
         true
     }

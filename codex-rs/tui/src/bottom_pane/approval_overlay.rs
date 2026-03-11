@@ -517,6 +517,24 @@ impl BottomPaneView for ApprovalOverlay {
         !self.done
     }
 
+    fn dismiss_on_thread_finished(&mut self, finished_thread_id: ThreadId) -> bool {
+        self.queue
+            .retain(|request| request.thread_id() != finished_thread_id);
+
+        if self
+            .current_request
+            .as_ref()
+            .is_some_and(|request| request.thread_id() == finished_thread_id)
+        {
+            self.current_request = None;
+            self.current_complete = false;
+            self.options.clear();
+            self.advance_queue();
+        }
+
+        !self.done
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.try_handle_shortcut(&key_event) {
             return;

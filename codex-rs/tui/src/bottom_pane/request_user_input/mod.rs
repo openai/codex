@@ -1053,6 +1053,17 @@ impl BottomPaneView for RequestUserInputOverlay {
         !self.done
     }
 
+    fn dismiss_on_thread_finished(&mut self, finished_thread_id: ThreadId) -> bool {
+        self.queue
+            .retain(|queued| queued.thread_id != finished_thread_id);
+
+        if self.thread_id == finished_thread_id {
+            self.finish_next_request_matching(|queued| queued.thread_id != finished_thread_id);
+        }
+
+        !self.done
+    }
+
     fn prefer_esc_to_handle_key_event(&self) -> bool {
         true
     }

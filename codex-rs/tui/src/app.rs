@@ -1412,6 +1412,11 @@ impl App {
     async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
         let refresh_pending_thread_approvals =
             ThreadEventStore::event_can_change_pending_thread_approvals(&event);
+        let finished_inactive_thread = self.active_thread_id != Some(thread_id)
+            && matches!(
+                event.msg,
+                EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
+            );
         let inactive_interactive_request = if self.active_thread_id != Some(thread_id) {
             self.interactive_request_for_thread_event(thread_id, &event)
                 .await
@@ -1459,6 +1464,9 @@ impl App {
                     self.chat_widget.push_user_input_request(request);
                 }
             }
+        }
+        if finished_inactive_thread {
+            self.chat_widget.dismiss_finished_thread_views(thread_id);
         }
         if refresh_pending_thread_approvals {
             self.refresh_pending_thread_approvals().await;
@@ -6116,6 +6124,98 @@ mod tests {
         }
 
         panic!("expected user input answer to submit to the source thread");
+    }
+
+    #[tokio::test]
+    async fn inactive_thread_turn_complete_dismisses_visible_user_input_prompt() -> Result<()> {
+        let mut app = make_test_app().await;
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000081").expect("valid thread");
+        let agent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000082").expect("valid thread");
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(main_thread_id);
+        app.thread_event_channels
+            .insert(main_thread_id, ThreadEventChannel::new(1));
+        app.thread_event_channels.insert(
+            agent_thread_id,
+            ThreadEventChannel::new_with_session_configured(
+                1,
+                Event {
+                    id: String::new(),
+                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                        session_id: agent_thread_id,
+                        forked_from_id: None,
+                        thread_name: None,
+                        model: "gpt-5".to_string(),
+                        model_provider_id: "test-provider".to_string(),
+                        service_tier: None,
+                        approval_policy: AskForApproval::OnRequest,
+                        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                        cwd: PathBuf::from("/tmp/agent"),
+                        reasoning_effort: None,
+                        history_log_id: 0,
+                        history_entry_count: 0,
+                        initial_messages: None,
+                        network_proxy: None,
+                        rollout_path: Some(PathBuf::from("/tmp/agent-rollout.jsonl")),
+                    }),
+                },
+            ),
+        );
+        app.agent_navigation.upsert(
+            agent_thread_id,
+            Some("Input".to_string()),
+            Some("worker".to_string()),
+            false,
+        );
+
+        app.enqueue_thread_event(
+            agent_thread_id,
+            Event {
+                id: "ev-user-input".to_string(),
+                msg: EventMsg::RequestUserInput(
+                    codex_protocol::request_user_input::RequestUserInputEvent {
+                        call_id: "call-user-input".to_string(),
+                        turn_id: "turn-user-input".to_string(),
+                        questions: vec![
+                            codex_protocol::request_user_input::RequestUserInputQuestion {
+                                id: "q1".to_string(),
+                                header: "Question".to_string(),
+                                question: "Pick one?".to_string(),
+                                is_other: false,
+                                is_secret: false,
+                                options: Some(vec![
+                                    codex_protocol::request_user_input::RequestUserInputQuestionOption {
+                                        label: "One".to_string(),
+                                        description: "First option".to_string(),
+                                    },
+                                ]),
+                            },
+                        ],
+                    },
+                ),
+            },
+        )
+        .await?;
+
+        assert!(app.chat_widget.has_active_view());
+
+        app.enqueue_thread_event(
+            agent_thread_id,
+            Event {
+                id: "ev-turn-complete".to_string(),
+                msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: "turn-user-input".to_string(),
+                    last_agent_message: None,
+                }),
+            },
+        )
+        .await?;
+
+        assert!(!app.chat_widget.has_active_view());
+        Ok(())
     }
 
     #[tokio::test]

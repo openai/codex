@@ -3130,6 +3130,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn dismiss_finished_thread_views(&mut self, thread_id: ThreadId) {
+        self.bottom_pane.dismiss_finished_thread_views(thread_id);
+        self.request_redraw();
+    }
+
     pub(crate) fn handle_request_user_input_now(&mut self, ev: ThreadUserInputRequest) {
         self.flush_answer_stream_with_separator();
         self.notify(Notification::UserInputRequested {

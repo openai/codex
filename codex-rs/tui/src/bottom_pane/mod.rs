@@ -854,6 +854,21 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Remove stale bottom-pane views owned by a thread that has finished its
+    /// turn while preserving unrelated or unscoped overlays.
+    pub(crate) fn dismiss_finished_thread_views(&mut self, finished_thread_id: ThreadId) {
+        if self.view_stack.is_empty() {
+            return;
+        }
+
+        self.view_stack
+            .retain_mut(|view| view.dismiss_on_thread_finished(finished_thread_id));
+        if self.view_stack.is_empty() {
+            self.on_active_view_complete();
+        }
+        self.request_redraw();
+    }
+
     #[cfg(test)]
     pub(crate) fn pending_thread_approvals(&self) -> &[String] {
         self.pending_thread_approvals.threads()
@@ -2085,6 +2100,91 @@ mod tests {
         pane.dismiss_turn_scoped_views(interrupted_thread_id);
 
         assert_eq!(*dropped.borrow(), vec!["interrupted-thread", "unscoped"]);
+        assert!(pane.has_active_view());
+    }
+
+    #[test]
+    fn dismiss_finished_thread_views_only_clears_finished_thread() {
+        struct TestView {
+            label: &'static str,
+            thread_id: Option<ThreadId>,
+            keep_on_finish: bool,
+            dropped: Rc<RefCell<Vec<&'static str>>>,
+        }
+
+        impl Drop for TestView {
+            fn drop(&mut self) {
+                self.dropped.borrow_mut().push(self.label);
+            }
+        }
+
+        impl Renderable for TestView {
+            fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+
+            fn desired_height(&self, _width: u16) -> u16 {
+                0
+            }
+        }
+
+        impl BottomPaneView for TestView {
+            fn thread_id(&self) -> Option<ThreadId> {
+                self.thread_id
+            }
+
+            fn dismiss_on_thread_finished(&mut self, finished_thread_id: ThreadId) -> bool {
+                if self.keep_on_finish && self.thread_id == Some(finished_thread_id) {
+                    self.thread_id = Some(ThreadId::new());
+                    return true;
+                }
+
+                self.thread_id != Some(finished_thread_id)
+            }
+        }
+
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        let dropped = Rc::new(RefCell::new(Vec::new()));
+        let finished_thread_id = ThreadId::new();
+        let other_thread_id = ThreadId::new();
+        pane.push_view(Box::new(TestView {
+            label: "other-thread",
+            thread_id: Some(other_thread_id),
+            keep_on_finish: false,
+            dropped: Rc::clone(&dropped),
+        }));
+        pane.push_view(Box::new(TestView {
+            label: "keep-finished-thread",
+            thread_id: Some(finished_thread_id),
+            keep_on_finish: true,
+            dropped: Rc::clone(&dropped),
+        }));
+        pane.push_view(Box::new(TestView {
+            label: "finished-thread",
+            thread_id: Some(finished_thread_id),
+            keep_on_finish: false,
+            dropped: Rc::clone(&dropped),
+        }));
+        pane.push_view(Box::new(TestView {
+            label: "unscoped",
+            thread_id: None,
+            keep_on_finish: false,
+            dropped: Rc::clone(&dropped),
+        }));
+
+        pane.dismiss_finished_thread_views(finished_thread_id);
+
+        assert_eq!(*dropped.borrow(), vec!["finished-thread"]);
         assert!(pane.has_active_view());
     }
 }
