@@ -599,8 +599,9 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_request_user_input(&mut self, payload: &RequestUserInputEvent) {
+        let turn_id = (!payload.turn_id.is_empty()).then_some(payload.turn_id.as_str());
         self.update_mcp_tool_call_approval(
-            Some(payload.turn_id.as_str()),
+            turn_id,
             &payload.call_id,
             pending_manual_approval_state(),
         );
@@ -2488,6 +2489,53 @@ mod tests {
                         rationale: Some("Would exfiltrate local source code.".into()),
                     }),
                 }),
+            }
+        );
+    }
+
+    #[test]
+    fn reconstructs_pending_mcp_approval_from_request_user_input_without_turn_id() {
+        let invocation = McpInvocation {
+            server: "docs".into(),
+            tool: "lookup".into(),
+            arguments: Some(serde_json::json!({"id":"123"})),
+        };
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+                call_id: "mcp-1".into(),
+                invocation: invocation.clone(),
+            }),
+            EventMsg::RequestUserInput(RequestUserInputEvent {
+                call_id: "mcp-1".into(),
+                turn_id: String::new(),
+                questions: Vec::new(),
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].items[0],
+            ThreadItem::McpToolCall {
+                id: "mcp-1".into(),
+                server: "docs".into(),
+                tool: "lookup".into(),
+                status: McpToolCallStatus::InProgress,
+                arguments: serde_json::json!({"id":"123"}),
+                result: None,
+                error: None,
+                duration_ms: None,
+                approval: Some(pending_manual_approval_state()),
             }
         );
     }
