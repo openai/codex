@@ -500,7 +500,9 @@ async fn spawn_agent_tool_description_mentions_role_locked_settings() -> Result<
         tool_description(&request, "spawn_agent").expect("spawn_agent description");
     assert!(
         spawn_description.contains(
-            "Custom role\n- This role's model and reasoning effort are set by the role and cannot be changed."
+            &format!(
+                "Custom role\n- This role's model is set to `{ROLE_MODEL}` and its reasoning effort is set to `{ROLE_REASONING_EFFORT}`. These settings cannot be changed."
+            )
         ),
         "expected locked-setting note in spawn_agent tool description: {spawn_description}"
     );

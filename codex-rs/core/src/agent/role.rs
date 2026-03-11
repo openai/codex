@@ -200,19 +200,28 @@ Available roles:
                 })
                 .and_then(|contents| toml::from_str::<TomlValue>(&contents).ok())
                 .map(|role_toml| {
-                    let locks_model = role_toml.get("model").is_some();
-                    let locks_reasoning_effort =
-                        role_toml.get("model_reasoning_effort").is_some();
+                    let model = role_toml
+                        .get("model")
+                        .and_then(TomlValue::as_str);
+                    let reasoning_effort = role_toml
+                        .get("model_reasoning_effort")
+                        .and_then(TomlValue::as_str);
 
-                    match (locks_model, locks_reasoning_effort) {
-                        (true, true) => "\n- This role's model and reasoning effort are set by the role and cannot be changed.",
-                        (true, false) => {
-                            "\n- This role's model is set by the role and cannot be changed."
+                    match (model, reasoning_effort) {
+                        (Some(model), Some(reasoning_effort)) => format!(
+                            "\n- This role's model is set to `{model}` and its reasoning effort is set to `{reasoning_effort}`. These settings cannot be changed."
+                        ),
+                        (Some(model), None) => {
+                            format!(
+                                "\n- This role's model is set to `{model}` and cannot be changed."
+                            )
                         }
-                        (false, true) => {
-                            "\n- This role's reasoning effort is set by the role and cannot be changed."
+                        (None, Some(reasoning_effort)) => {
+                            format!(
+                                "\n- This role's reasoning effort is set to `{reasoning_effort}` and cannot be changed."
+                            )
                         }
-                        (false, false) => "",
+                        (None, None) => String::new(),
                     }
                 })
                 .unwrap_or_default();
