@@ -7,6 +7,7 @@ use crate::features::Feature;
 use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use crate::original_image_detail::can_request_original_image_detail;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::handlers::PLAN_TOOL;
@@ -108,6 +109,7 @@ pub(crate) struct ToolsConfig {
     pub code_mode_enabled: bool,
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
+    pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
     pub artifact_tools: bool,
     pub request_user_input: bool,
@@ -145,6 +147,7 @@ impl ToolsConfig {
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool = features.enabled(Feature::Apps);
+        let include_original_image_detail = can_request_original_image_detail(features, model_info);
         let include_artifact_tools =
             features.enabled(Feature::Artifact) && codex_artifacts::can_manage_artifact_runtime();
         let include_image_gen_tool =
@@ -216,6 +219,7 @@ impl ToolsConfig {
             code_mode_enabled: include_code_mode,
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
+            can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
             artifact_tools: include_artifact_tools,
             request_user_input: include_request_user_input,
@@ -694,14 +698,24 @@ Examples of valid command strings:
     })
 }
 
-fn create_view_image_tool() -> ToolSpec {
+fn create_view_image_tool(can_request_original_image_detail: bool) -> ToolSpec {
     // Support only local filesystem path.
-    let properties = BTreeMap::from([(
+    let mut properties = BTreeMap::from([(
         "path".to_string(),
         JsonSchema::String {
             description: Some("Local filesystem path to an image file".to_string()),
         },
     )]);
+    if can_request_original_image_detail {
+        properties.insert(
+            "detail".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional detail override. The only supported value is `original`; omit this field for default resized behavior. Use `original` to preserve the file's original resolution instead of resizing to fit. This is important when high-fidelity image perception or precise localization is needed, especially for CUA agents.".to_string(),
+                ),
+            },
+        );
+    }
 
     ToolSpec::Function(ResponsesApiTool {
         name: VIEW_IMAGE_TOOL_NAME.to_string(),
@@ -2366,7 +2380,7 @@ pub(crate) fn build_specs(
 
     push_tool_spec(
         &mut builder,
-        create_view_image_tool(),
+        create_view_image_tool(config.can_request_original_image_detail),
         true,
         config.code_mode_enabled,
     );
@@ -2813,7 +2827,7 @@ mod tests {
                 search_context_size: None,
                 search_content_types: None,
             },
-            create_view_image_tool(),
+            create_view_image_tool(config.can_request_original_image_detail),
         ] {
             expected.insert(tool_name(&spec).to_string(), spec);
         }
@@ -2888,6 +2902,67 @@ mod tests {
                 "spawn_agents_on_csv",
             ],
         );
+    }
+
+    #[test]
+    fn view_image_tool_omits_detail_without_original_detail_feature() {
+        let config = test_config();
+        let mut model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        model_info.supports_image_detail_original = true;
+        let features = Features::with_defaults();
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        let view_image = find_tool(&tools, VIEW_IMAGE_TOOL_NAME);
+        let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &view_image.spec else {
+            panic!("view_image should be a function tool");
+        };
+        let JsonSchema::Object { properties, .. } = parameters else {
+            panic!("view_image should use an object schema");
+        };
+        assert!(!properties.contains_key("detail"));
+    }
+
+    #[test]
+    fn view_image_tool_includes_detail_with_original_detail_feature() {
+        let config = test_config();
+        let mut model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        model_info.supports_image_detail_original = true;
+        let mut features = Features::with_defaults();
+        features.enable(Feature::ImageDetailOriginal);
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        let view_image = find_tool(&tools, VIEW_IMAGE_TOOL_NAME);
+        let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &view_image.spec else {
+            panic!("view_image should be a function tool");
+        };
+        let JsonSchema::Object { properties, .. } = parameters else {
+            panic!("view_image should use an object schema");
+        };
+        assert!(properties.contains_key("detail"));
+        let Some(JsonSchema::String {
+            description: Some(description),
+        }) = properties.get("detail")
+        else {
+            panic!("view_image detail should include a description");
+        };
+        assert!(description.contains("only supported value is `original`"));
+        assert!(description.contains("omit this field for default resized behavior"));
     }
 
     #[test]
