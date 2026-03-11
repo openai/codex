@@ -40,7 +40,6 @@ use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::guardian::GuardianApprovalRequest;
-use crate::guardian::review_approval_request;
 use crate::guardian::review_approval_request_with_cancel;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
