@@ -802,6 +802,5 @@ where
 }
 
 #[cfg(test)]
-#[cfg(test)]
 #[path = "codex_delegate_tests.rs"]
 mod tests;
