@@ -13,6 +13,7 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use crate::outgoing_message::RequestContext;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::thread_status::ThreadWatchManager;
 use crate::thread_status::resolve_thread_status;
@@ -301,7 +302,6 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use toml::Value as TomlValue;
 use tracing::Instrument;
-use tracing::Span;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -627,8 +627,7 @@ impl CodexMessageProcessor {
         connection_id: ConnectionId,
         request: ClientRequest,
         app_server_client_name: Option<String>,
-        request_trace_override: Option<W3cTraceContext>,
-        request_span_override: Option<Span>,
+        request_context: RequestContext,
     ) {
         let to_connection_request_id = |request_id| ConnectionRequestId {
             connection_id,
@@ -644,8 +643,7 @@ impl CodexMessageProcessor {
                 self.thread_start(
                     to_connection_request_id(request_id),
                     params,
-                    request_trace_override,
-                    request_span_override,
+                    request_context,
                 )
                 .await;
             }
@@ -1824,8 +1822,7 @@ impl CodexMessageProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ThreadStartParams,
-        request_trace_override: Option<W3cTraceContext>,
-        request_span_override: Option<Span>,
+        request_context: RequestContext,
     ) {
         let ThreadStartParams {
             model,
@@ -1867,18 +1864,7 @@ impl CodexMessageProcessor {
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.clone(),
         };
-        let parent_request_trace = match request_trace_override {
-            Some(request_trace) => Some(request_trace),
-            None => self.request_trace_context(&request_id).await,
-        };
-        let request_span = request_span_override.unwrap_or_else(|| {
-            crate::app_server_tracing::detached_thread_start_request_span(
-                &request_id,
-                parent_request_trace.as_ref(),
-            )
-        });
-        let request_trace =
-            codex_otel::span_w3c_trace_context(&request_span).or(parent_request_trace);
+        let request_trace = request_context.request_trace();
         let thread_start_task = async move {
             Self::thread_start_task(
                 listener_task_context,
@@ -1896,7 +1882,7 @@ impl CodexMessageProcessor {
             .await;
         };
         self.background_tasks
-            .spawn(thread_start_task.instrument(request_span));
+            .spawn(thread_start_task.instrument(request_context.span()));
     }
 
     pub(crate) async fn drain_background_tasks(&self) {

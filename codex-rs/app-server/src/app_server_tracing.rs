@@ -9,7 +9,6 @@
 
 use crate::message_processor::ConnectionSessionState;
 use crate::outgoing_message::ConnectionId;
-use crate::outgoing_message::ConnectionRequestId;
 use crate::transport::AppServerTransport;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeParams;
@@ -31,36 +30,6 @@ pub(crate) fn request_span(
     let initialize_client_info = initialize_client_info(request);
     let method = request.method.as_str();
     let span = app_server_request_span_template(
-        method,
-        transport_name(transport),
-        &request.id,
-        connection_id,
-    );
-
-    record_client_info(
-        &span,
-        client_name(initialize_client_info.as_ref(), session),
-        client_version(initialize_client_info.as_ref(), session),
-    );
-
-    let parent_trace = request.trace.as_ref().map(|trace| W3cTraceContext {
-        traceparent: trace.traceparent.clone(),
-        tracestate: trace.tracestate.clone(),
-    });
-    attach_parent_context(&span, method, &request.id, parent_trace.as_ref());
-
-    span
-}
-
-pub(crate) fn thread_start_request_span(
-    request: &JSONRPCRequest,
-    transport: AppServerTransport,
-    connection_id: ConnectionId,
-    session: &ConnectionSessionState,
-) -> Span {
-    let initialize_client_info = initialize_client_info(request);
-    let method = request.method.as_str();
-    let span = thread_start_request_span_template(
         method,
         transport_name(transport),
         &request.id,
@@ -110,45 +79,6 @@ pub(crate) fn typed_request_span(
     span
 }
 
-pub(crate) fn typed_thread_start_request_span(
-    request: &ClientRequest,
-    connection_id: ConnectionId,
-    session: &ConnectionSessionState,
-) -> Span {
-    let method = request.method();
-    let span =
-        thread_start_request_span_template(&method, "in-process", request.id(), connection_id);
-
-    let client_info = initialize_client_info_from_typed_request(request);
-    record_client_info(
-        &span,
-        client_info
-            .map(|(client_name, _)| client_name)
-            .or(session.app_server_client_name.as_deref()),
-        client_info
-            .map(|(_, client_version)| client_version)
-            .or(session.client_version.as_deref()),
-    );
-
-    attach_parent_context(&span, &method, request.id(), None);
-    span
-}
-
-pub(crate) fn detached_thread_start_request_span(
-    request_id: &ConnectionRequestId,
-    parent_trace: Option<&W3cTraceContext>,
-) -> Span {
-    let span = thread_start_request_span_template(
-        "thread/start",
-        "detached",
-        &request_id.request_id,
-        request_id.connection_id,
-    );
-
-    attach_parent_context(&span, "thread/start", &request_id.request_id, parent_trace);
-    span
-}
-
 fn transport_name(transport: AppServerTransport) -> &'static str {
     match transport {
         AppServerTransport::Stdio => "stdio",
@@ -164,27 +94,6 @@ fn app_server_request_span_template(
 ) -> Span {
     info_span!(
         "app_server.request",
-        otel.kind = "server",
-        otel.name = method,
-        rpc.system = "jsonrpc",
-        rpc.method = method,
-        rpc.transport = transport,
-        rpc.request_id = ?request_id,
-        app_server.connection_id = ?connection_id,
-        app_server.api_version = "v2",
-        app_server.client_name = field::Empty,
-        app_server.client_version = field::Empty,
-    )
-}
-
-fn thread_start_request_span_template(
-    method: &str,
-    transport: &'static str,
-    request_id: &impl std::fmt::Debug,
-    connection_id: ConnectionId,
-) -> Span {
-    info_span!(
-        "thread/start",
         otel.kind = "server",
         otel.name = method,
         rpc.system = "jsonrpc",

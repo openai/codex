@@ -66,7 +66,6 @@ use tokio::time::Duration;
 use tokio::time::timeout;
 use toml::Value as TomlValue;
 use tracing::Instrument;
-use tracing::Span;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -245,7 +244,6 @@ impl MessageProcessor {
         session: &mut ConnectionSessionState,
     ) {
         let request_method = request.method.as_str();
-        let detached_thread_start = request_method == "thread/start";
         tracing::trace!(
             ?connection_id,
             request_id = ?request.id,
@@ -255,29 +253,16 @@ impl MessageProcessor {
             connection_id,
             request_id: request.id.clone(),
         };
-        let request_span = if detached_thread_start {
-            crate::app_server_tracing::thread_start_request_span(
-                &request,
-                transport,
-                connection_id,
-                session,
-            )
-        } else {
-            crate::app_server_tracing::request_span(&request, transport, connection_id, session)
-        };
+        let request_span =
+            crate::app_server_tracing::request_span(&request, transport, connection_id, session);
         let request_trace = request.trace.as_ref().map(|trace| W3cTraceContext {
             traceparent: trace.traceparent.clone(),
             tracestate: trace.tracestate.clone(),
         });
         let request_context = RequestContext::new(request_id.clone(), request_span, request_trace);
-        let request_trace_override = detached_thread_start
-            .then(|| request_context.request_trace())
-            .flatten();
-        let request_span_override = detached_thread_start.then(|| request_context.span());
         Self::run_request_with_context(
             Arc::clone(&self.outgoing),
-            &request_context,
-            detached_thread_start,
+            request_context.clone(),
             async {
                 let request_json = match serde_json::to_value(&request) {
                     Ok(request_json) => request_json,
@@ -313,8 +298,7 @@ impl MessageProcessor {
                     codex_request,
                     session,
                     None,
-                    request_trace_override,
-                    request_span_override,
+                    request_context.clone(),
                 )
                 .await;
             },
@@ -333,22 +317,13 @@ impl MessageProcessor {
         session: &mut ConnectionSessionState,
         outbound_initialized: &AtomicBool,
     ) {
-        let detached_thread_start = matches!(&request, ClientRequest::ThreadStart { .. });
         let request_id = ConnectionRequestId {
             connection_id,
             request_id: request.id().clone(),
         };
-        let request_span = if detached_thread_start {
-            crate::app_server_tracing::typed_thread_start_request_span(
-                &request,
-                connection_id,
-                session,
-            )
-        } else {
-            crate::app_server_tracing::typed_request_span(&request, connection_id, session)
-        };
+        let request_span =
+            crate::app_server_tracing::typed_request_span(&request, connection_id, session);
         let request_context = RequestContext::new(request_id.clone(), request_span, None);
-        let request_span_override = detached_thread_start.then(|| request_context.span());
         tracing::trace!(
             ?connection_id,
             request_id = ?request_id.request_id,
@@ -356,8 +331,7 @@ impl MessageProcessor {
         );
         Self::run_request_with_context(
             Arc::clone(&self.outgoing),
-            &request_context,
-            detached_thread_start,
+            request_context.clone(),
             async {
                 // In-process clients do not have the websocket transport loop that performs
                 // post-initialize bookkeeping, so they still finalize outbound readiness in
@@ -367,8 +341,7 @@ impl MessageProcessor {
                     request,
                     session,
                     Some(outbound_initialized),
-                    None,
-                    request_span_override,
+                    request_context.clone(),
                 )
                 .await;
             },
@@ -391,8 +364,7 @@ impl MessageProcessor {
 
     async fn run_request_with_context<F>(
         outgoing: Arc<OutgoingMessageSender>,
-        request_context: &RequestContext,
-        detached: bool,
+        request_context: RequestContext,
         request_fut: F,
     ) where
         F: Future<Output = ()>,
@@ -400,11 +372,7 @@ impl MessageProcessor {
         outgoing
             .register_request_context(request_context.clone())
             .await;
-        if detached {
-            request_fut.await;
-        } else {
-            request_fut.instrument(request_context.span()).await;
-        }
+        request_fut.instrument(request_context.span()).await;
     }
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
@@ -491,8 +459,7 @@ impl MessageProcessor {
         // connection outbound-ready. Websocket JSON-RPC calls pass `None` so
         // lib.rs can deliver connection-scoped initialize notifications first.
         outbound_initialized: Option<&AtomicBool>,
-        request_trace_override: Option<W3cTraceContext>,
-        request_span_override: Option<Span>,
+        request_context: RequestContext,
     ) {
         let connection_id = connection_request_id.connection_id;
         match codex_request {
@@ -680,8 +647,7 @@ impl MessageProcessor {
                         connection_id,
                         other,
                         session.app_server_client_name.clone(),
-                        request_trace_override,
-                        request_span_override,
+                        request_context,
                     )
                     .boxed()
                     .await;

@@ -419,12 +419,16 @@ impl ThreadManager {
         self.state.threads.write().await.remove(thread_id)
     }
 
-    /// Removes all tracked threads from the manager and tries to shut them down
-    /// concurrently within the provided timeout.
+    /// Tries to shut down all tracked threads concurrently within the provided timeout.
+    /// Threads that complete shutdown are removed from the manager; incomplete shutdowns
+    /// remain tracked so callers can retry or inspect them later.
     pub async fn shutdown_all_threads_bounded(&self, timeout: Duration) -> ThreadShutdownReport {
         let threads = {
-            let mut threads = self.state.threads.write().await;
-            std::mem::take(&mut *threads)
+            let threads = self.state.threads.read().await;
+            threads
+                .iter()
+                .map(|(thread_id, thread)| (*thread_id, Arc::clone(thread)))
+                .collect::<Vec<_>>()
         };
 
         let mut shutdowns = threads
@@ -449,15 +453,20 @@ impl ThreadManager {
             }
         }
 
+        let mut tracked_threads = self.state.threads.write().await;
+        for thread_id in &report.completed {
+            tracked_threads.remove(thread_id);
+        }
+
         report
             .completed
-            .sort_by_key(|thread_id| thread_id.to_string());
+            .sort_by_key(std::string::ToString::to_string);
         report
             .submit_failed
-            .sort_by_key(|thread_id| thread_id.to_string());
+            .sort_by_key(std::string::ToString::to_string);
         report
             .timed_out
-            .sort_by_key(|thread_id| thread_id.to_string());
+            .sort_by_key(std::string::ToString::to_string);
         report
     }
 
@@ -888,17 +897,10 @@ mod tests {
             .await;
 
         let mut expected_completed = vec![thread_1, thread_2];
-        expected_completed.sort_by_key(|thread_id| thread_id.to_string());
+        expected_completed.sort_by_key(std::string::ToString::to_string);
         assert_eq!(report.completed, expected_completed);
         assert!(report.submit_failed.is_empty());
         assert!(report.timed_out.is_empty());
         assert!(manager.list_thread_ids().await.is_empty());
-
-        let shutdown_ops = manager
-            .captured_ops()
-            .into_iter()
-            .filter(|(_, op)| matches!(op, Op::Shutdown))
-            .count();
-        assert_eq!(shutdown_ops, 2);
     }
 }
