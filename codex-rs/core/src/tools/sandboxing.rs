@@ -229,7 +229,7 @@ pub(crate) trait Approvable<Req> {
 
     // In most cases (shell, unified_exec), a request will have a single approval key.
     //
-    // However, apply_patch needs session "approve once, don't ask again" semantics that
+    // However, apply_patch needs session "Allow, don't ask again" semantics that
     // apply to multiple atomic targets (e.g., apply_patch approves per file path). Returning
     // a list of keys lets the runtime treat the request as approved-for-session only if
     // *all* keys are already approved, while still caching approvals per-key so future
@@ -398,6 +398,7 @@ mod tests {
         let policy = AskForApproval::Reject(RejectConfig {
             sandbox_approval: true,
             rules: false,
+            skill_approval: false,
             request_permissions: false,
             mcp_elicitations: false,
         });
@@ -418,6 +419,7 @@ mod tests {
         let policy = AskForApproval::Reject(RejectConfig {
             sandbox_approval: false,
             rules: true,
+            skill_approval: false,
             request_permissions: false,
             mcp_elicitations: true,
         });

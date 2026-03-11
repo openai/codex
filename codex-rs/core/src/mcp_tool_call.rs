@@ -11,6 +11,8 @@ use tracing::error;
 use crate::analytics_client::AppInvocation;
 use crate::analytics_client::InvocationType;
 use crate::analytics_client::build_track_events_context;
+use crate::arc_monitor::ArcMonitorOutcome;
+use crate::arc_monitor::monitor_action;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::edit::ConfigEdit;
@@ -20,6 +22,7 @@ use crate::connectors;
 use crate::features::Feature;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
+use crate::guardian::guardian_approval_request_to_json;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -29,7 +32,6 @@ use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
 use crate::state_db;
 use codex_protocol::mcp::CallToolResult;
-use codex_protocol::models::McpToolOutput;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
@@ -56,7 +58,7 @@ pub(crate) async fn handle_mcp_tool_call(
     server: String,
     tool_name: String,
     arguments: String,
-) -> McpToolOutput {
+) -> CallToolResult {
     // Parse the `arguments` as JSON. An empty string is OK, but invalid JSON
     // is not.
     let arguments_value = if arguments.trim().is_empty() {
@@ -66,7 +68,7 @@ pub(crate) async fn handle_mcp_tool_call(
             Ok(value) => Some(value),
             Err(e) => {
                 error!("failed to parse tool call arguments: {e}");
-                return McpToolOutput::from_error_text(format!("err: {e}"));
+                return CallToolResult::from_error_text(format!("err: {e}"));
             }
         }
     };
@@ -110,7 +112,7 @@ pub(crate) async fn handle_mcp_tool_call(
         turn_context
             .session_telemetry
             .counter("codex.mcp.call", 1, &[("status", status)]);
-        return McpToolOutput::from_result(result);
+        return CallToolResult::from_result(result);
     }
 
     if let Some(decision) = maybe_request_mcp_tool_approval(
@@ -197,6 +199,16 @@ pub(crate) async fn handle_mcp_tool_call(
                 )
                 .await
             }
+            McpToolApprovalDecision::BlockedBySafetyMonitor(message) => {
+                notify_mcp_tool_call_skip(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    &call_id,
+                    invocation,
+                    message,
+                )
+                .await
+            }
         };
 
         let status = if result.is_ok() { "ok" } else { "error" };
@@ -204,7 +216,7 @@ pub(crate) async fn handle_mcp_tool_call(
             .session_telemetry
             .counter("codex.mcp.call", 1, &[("status", status)]);
 
-        return McpToolOutput::from_result(result);
+        return CallToolResult::from_result(result);
     }
 
     let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
@@ -250,7 +262,7 @@ pub(crate) async fn handle_mcp_tool_call(
         .session_telemetry
         .counter("codex.mcp.call", 1, &[("status", status)]);
 
-    McpToolOutput::from_result(result)
+    CallToolResult::from_result(result)
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
@@ -348,13 +360,14 @@ async fn maybe_track_codex_app_used(
     );
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum McpToolApprovalDecision {
     Accept,
     AcceptForSession,
     AcceptAndRemember,
     Decline,
     Cancel,
+    BlockedBySafetyMonitor(String),
 }
 
 struct McpToolApprovalMetadata {
@@ -373,9 +386,9 @@ struct McpToolApprovalPromptOptions {
 }
 
 const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_call_approval";
-const MCP_TOOL_APPROVAL_ACCEPT: &str = "Approve Once";
-const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Approve this session";
-const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Always allow";
+const MCP_TOOL_APPROVAL_ACCEPT: &str = "Allow";
+const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this session";
+const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Allow and don't ask me again";
 const MCP_TOOL_APPROVAL_CANCEL: &str = "Cancel";
 const MCP_TOOL_APPROVAL_KIND_KEY: &str = "codex_approval_kind";
 const MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL: &str = "mcp_tool_call";
@@ -418,15 +431,35 @@ async fn maybe_request_mcp_tool_approval(
     metadata: Option<&McpToolApprovalMetadata>,
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalDecision> {
-    if approval_mode == AppToolApproval::Approve {
-        return None;
-    }
     let annotations = metadata.and_then(|metadata| metadata.annotations.as_ref());
+    let approval_required = annotations.is_some_and(requires_mcp_tool_approval);
+    let mut monitor_reason = None;
+
+    if approval_mode == AppToolApproval::Approve {
+        if !approval_required {
+            return None;
+        }
+
+        match maybe_monitor_auto_approved_mcp_tool_call(sess, turn_context, invocation, metadata)
+            .await
+        {
+            ArcMonitorOutcome::Ok => return None,
+            ArcMonitorOutcome::AskUser(reason) => {
+                monitor_reason = Some(reason);
+            }
+            ArcMonitorOutcome::SteerModel(reason) => {
+                return Some(McpToolApprovalDecision::BlockedBySafetyMonitor(
+                    arc_monitor_interrupt_message(&reason),
+                ));
+            }
+        }
+    }
+
     if approval_mode == AppToolApproval::Auto {
         if is_full_access_mode(turn_context) {
             return None;
         }
-        if !annotations.is_some_and(requires_mcp_tool_approval) {
+        if !approval_required {
             return None;
         }
     }
@@ -444,7 +477,7 @@ async fn maybe_request_mcp_tool_approval(
         .features
         .enabled(Feature::ToolCallMcpElicitation);
 
-    if routes_approval_to_guardian(turn_context) {
+    if monitor_reason.is_none() && routes_approval_to_guardian(turn_context) {
         let decision = review_approval_request(
             sess,
             turn_context,
@@ -456,7 +489,7 @@ async fn maybe_request_mcp_tool_approval(
         apply_mcp_tool_approval_decision(
             sess,
             turn_context,
-            decision,
+            &decision,
             session_approval_key,
             persistent_approval_key,
         )
@@ -470,7 +503,7 @@ async fn maybe_request_mcp_tool_approval(
         tool_call_mcp_elicitation_enabled,
     );
     let question_id = format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}");
-    let question = build_mcp_tool_approval_question(
+    let mut question = build_mcp_tool_approval_question(
         question_id.clone(),
         &invocation.server,
         &invocation.tool,
@@ -479,6 +512,8 @@ async fn maybe_request_mcp_tool_approval(
         annotations,
         prompt_options,
     );
+    question.question =
+        mcp_tool_approval_question_text(question.question, monitor_reason.as_deref());
     if tool_call_mcp_elicitation_enabled {
         let request_id = rmcp::model::RequestId::String(
             format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}").into(),
@@ -501,7 +536,7 @@ async fn maybe_request_mcp_tool_approval(
         apply_mcp_tool_approval_decision(
             sess,
             turn_context,
-            decision,
+            &decision,
             session_approval_key,
             persistent_approval_key,
         )
@@ -522,12 +557,30 @@ async fn maybe_request_mcp_tool_approval(
     apply_mcp_tool_approval_decision(
         sess,
         turn_context,
-        decision,
+        &decision,
         session_approval_key,
         persistent_approval_key,
     )
     .await;
     Some(decision)
+}
+
+async fn maybe_monitor_auto_approved_mcp_tool_call(
+    sess: &Session,
+    turn_context: &TurnContext,
+    invocation: &McpInvocation,
+    metadata: Option<&McpToolApprovalMetadata>,
+) -> ArcMonitorOutcome {
+    let action = prepare_arc_request_action(invocation, metadata);
+    monitor_action(sess, turn_context, action).await
+}
+
+fn prepare_arc_request_action(
+    invocation: &McpInvocation,
+    metadata: Option<&McpToolApprovalMetadata>,
+) -> serde_json::Value {
+    let request = build_guardian_mcp_tool_review_request(invocation, metadata);
+    guardian_approval_request_to_json(&request)
 }
 
 fn session_mcp_tool_approval_key(
@@ -732,7 +785,7 @@ fn build_mcp_tool_approval_question(
     }
     options.push(RequestUserInputQuestionOption {
         label: MCP_TOOL_APPROVAL_CANCEL.to_string(),
-        description: "Cancel this tool call".to_string(),
+        description: "Cancel this tool call.".to_string(),
     });
 
     RequestUserInputQuestion {
@@ -742,6 +795,24 @@ fn build_mcp_tool_approval_question(
         is_other: false,
         is_secret: false,
         options: Some(options),
+    }
+}
+
+fn mcp_tool_approval_question_text(question: String, monitor_reason: Option<&str>) -> String {
+    match monitor_reason.map(str::trim) {
+        Some(reason) if !reason.is_empty() => {
+            format!("Tool call needs your approval. Reason: {reason}")
+        }
+        _ => question,
+    }
+}
+
+fn arc_monitor_interrupt_message(reason: &str) -> String {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        "Tool call was cancelled because of safety risks.".to_string()
+    } else {
+        format!("Tool call was cancelled because of safety risks: {reason}")
     }
 }
 
@@ -1001,7 +1072,7 @@ async fn remember_mcp_tool_approval(sess: &Session, key: McpToolApprovalKey) {
 async fn apply_mcp_tool_approval_decision(
     sess: &Session,
     turn_context: &TurnContext,
-    decision: McpToolApprovalDecision,
+    decision: &McpToolApprovalDecision,
     session_approval_key: Option<McpToolApprovalKey>,
     persistent_approval_key: Option<McpToolApprovalKey>,
 ) {
@@ -1020,7 +1091,8 @@ async fn apply_mcp_tool_approval_decision(
         }
         McpToolApprovalDecision::Accept
         | McpToolApprovalDecision::Decline
-        | McpToolApprovalDecision::Cancel => {}
+        | McpToolApprovalDecision::Cancel
+        | McpToolApprovalDecision::BlockedBySafetyMonitor(_) => {}
     }
 }
 
@@ -1117,6 +1189,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde::Deserialize;
     use std::collections::HashMap;
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     fn annotations(
@@ -1193,6 +1266,17 @@ mod tests {
                 AppToolApproval::Prompt,
             ),
             McpToolApprovalDecision::Accept
+        );
+    }
+
+    #[test]
+    fn approval_question_text_prepends_safety_reason() {
+        assert_eq!(
+            mcp_tool_approval_question_text(
+                "Allow this action?".to_string(),
+                Some("This tool may contact an external system."),
+            ),
+            "Tool call needs your approval. Reason: This tool may contact an external system."
         );
     }
 
@@ -1582,6 +1666,42 @@ mod tests {
     }
 
     #[test]
+    fn prepare_arc_request_action_serializes_mcp_tool_call_shape() {
+        let invocation = McpInvocation {
+            server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            tool: "browser_navigate".to_string(),
+            arguments: Some(serde_json::json!({
+                "url": "https://example.com",
+            })),
+        };
+
+        let action = prepare_arc_request_action(
+            &invocation,
+            Some(&approval_metadata(
+                None,
+                Some("Playwright"),
+                None,
+                Some("Navigate"),
+                None,
+            )),
+        );
+
+        assert_eq!(
+            action,
+            serde_json::json!({
+                "tool": "mcp_tool_call",
+                "server": CODEX_APPS_MCP_SERVER_NAME,
+                "tool_name": "browser_navigate",
+                "arguments": {
+                    "url": "https://example.com",
+                },
+                "connector_name": "Playwright",
+                "tool_title": "Navigate",
+            })
+        );
+    }
+
+    #[test]
     fn guardian_review_decision_maps_to_mcp_tool_decision() {
         assert_eq!(
             mcp_tool_approval_decision_from_guardian(ReviewDecision::Approved),
@@ -1804,5 +1924,105 @@ mod tests {
             }
         );
         assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
+    }
+
+    #[tokio::test]
+    async fn approve_mode_skips_when_annotations_do_not_require_approval() {
+        let (session, turn_context) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let invocation = McpInvocation {
+            server: "custom_server".to_string(),
+            tool: "read_only_tool".to_string(),
+            arguments: None,
+        };
+        let metadata = McpToolApprovalMetadata {
+            annotations: Some(annotations(Some(true), None, None)),
+            connector_id: None,
+            connector_name: None,
+            connector_description: None,
+            tool_title: Some("Read Only Tool".to_string()),
+            tool_description: None,
+        };
+
+        let decision = maybe_request_mcp_tool_approval(
+            &session,
+            &turn_context,
+            "call-1",
+            &invocation,
+            Some(&metadata),
+            AppToolApproval::Approve,
+        )
+        .await;
+
+        assert_eq!(decision, None);
+    }
+
+    #[tokio::test]
+    async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
+        use wiremock::Mock;
+        use wiremock::MockServer;
+        use wiremock::ResponseTemplate;
+        use wiremock::matchers::method;
+        use wiremock::matchers::path;
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/codex/safety/arc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "outcome": "steer-model",
+                "short_reason": "needs approval",
+                "rationale": "high-risk action",
+                "risk_score": 96,
+                "risk_level": "critical",
+                "evidence": [{
+                    "message": "dangerous_tool",
+                    "why": "high-risk action",
+                }],
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.auth_manager = Some(crate::test_support::auth_manager_from_auth(
+            crate::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        ));
+        let mut config = (*turn_context.config).clone();
+        config.chatgpt_base_url = server.uri();
+        turn_context.config = Arc::new(config);
+
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let invocation = McpInvocation {
+            server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            tool: "dangerous_tool".to_string(),
+            arguments: Some(serde_json::json!({ "id": 1 })),
+        };
+        let metadata = McpToolApprovalMetadata {
+            annotations: Some(annotations(Some(false), Some(true), Some(true))),
+            connector_id: Some("calendar".to_string()),
+            connector_name: Some("Calendar".to_string()),
+            connector_description: Some("Manage events".to_string()),
+            tool_title: Some("Dangerous Tool".to_string()),
+            tool_description: Some("Performs a risky action.".to_string()),
+        };
+
+        let decision = maybe_request_mcp_tool_approval(
+            &session,
+            &turn_context,
+            "call-2",
+            &invocation,
+            Some(&metadata),
+            AppToolApproval::Approve,
+        )
+        .await;
+
+        assert_eq!(
+            decision,
+            Some(McpToolApprovalDecision::BlockedBySafetyMonitor(
+                "Tool call was cancelled because of safety risks: high-risk action".to_string(),
+            ))
+        );
     }
 }

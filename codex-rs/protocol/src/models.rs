@@ -110,6 +110,28 @@ pub enum MacOsPreferencesPermission {
     ReadWrite,
 }
 
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Default,
+    Hash,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    TS,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum MacOsContactsPermission {
+    #[default]
+    None,
+    ReadOnly,
+    ReadWrite,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case", try_from = "MacOsAutomationPermissionDe")]
 pub enum MacOsAutomationPermission {
@@ -174,10 +196,16 @@ pub struct MacOsSeatbeltProfileExtensions {
     pub macos_preferences: MacOsPreferencesPermission,
     #[serde(alias = "automations")]
     pub macos_automation: MacOsAutomationPermission,
+    #[serde(alias = "launch_services")]
+    pub macos_launch_services: bool,
     #[serde(alias = "accessibility")]
     pub macos_accessibility: bool,
     #[serde(alias = "calendar")]
     pub macos_calendar: bool,
+    #[serde(alias = "reminders")]
+    pub macos_reminders: bool,
+    #[serde(alias = "contacts")]
+    pub macos_contacts: MacOsContactsPermission,
 }
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -206,7 +234,7 @@ pub enum ResponseInputItem {
     },
     McpToolCallOutput {
         call_id: String,
-        output: McpToolOutput,
+        output: CallToolResult,
     },
     CustomToolCallOutput {
         call_id: String,
@@ -453,6 +481,7 @@ impl DeveloperInstructions {
                 let on_request_instructions = on_request_instructions();
                 let sandbox_approval = reject_config.sandbox_approval;
                 let rules = reject_config.rules;
+                let skill_approval = reject_config.skill_approval;
                 let request_permissions = reject_config.request_permissions;
                 let mcp_elicitations = reject_config.mcp_elicitations;
                 format!(
@@ -460,6 +489,7 @@ impl DeveloperInstructions {
                      Approval policy is `reject`.\n\
                      - `sandbox_approval`: {sandbox_approval}\n\
                      - `rules`: {rules}\n\
+                     - `skill_approval`: {skill_approval}\n\
                      - `request_permissions`: {request_permissions}\n\
                      - `mcp_elicitations`: {mcp_elicitations}\n\
                      When a category is `true`, requests in that category are auto-rejected instead of prompting the user."
@@ -1187,20 +1217,10 @@ impl<'de> Deserialize<'de> for FunctionCallOutputPayload {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct McpToolOutput {
-    pub content: Vec<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub structured_content: Option<serde_json::Value>,
-    pub success: bool,
-}
-
-impl McpToolOutput {
-    pub fn from_result(result: Result<CallToolResult, String>) -> Self {
+impl CallToolResult {
+    pub fn from_result(result: Result<Self, String>) -> Self {
         match result {
-            Ok(result) => Self::from(&result),
+            Ok(result) => result,
             Err(error) => Self::from_error_text(error),
         }
     }
@@ -1212,23 +1232,13 @@ impl McpToolOutput {
                 "text": text,
             })],
             structured_content: None,
-            success: false,
+            is_error: Some(true),
+            meta: None,
         }
     }
 
-    pub fn into_call_tool_result(self) -> CallToolResult {
-        let Self {
-            content,
-            structured_content,
-            success,
-        } = self;
-
-        CallToolResult {
-            content,
-            structured_content,
-            is_error: Some(!success),
-            meta: None,
-        }
+    pub fn success(&self) -> bool {
+        self.is_error != Some(true)
     }
 
     pub fn as_function_call_output_payload(&self) -> FunctionCallOutputPayload {
@@ -1239,7 +1249,7 @@ impl McpToolOutput {
                 Ok(serialized_structured_content) => {
                     return FunctionCallOutputPayload {
                         body: FunctionCallOutputBody::Text(serialized_structured_content),
-                        success: Some(self.success),
+                        success: Some(self.success()),
                     };
                 }
                 Err(err) => {
@@ -1270,29 +1280,12 @@ impl McpToolOutput {
 
         FunctionCallOutputPayload {
             body,
-            success: Some(self.success),
+            success: Some(self.success()),
         }
     }
 
     pub fn into_function_call_output_payload(self) -> FunctionCallOutputPayload {
         self.as_function_call_output_payload()
-    }
-}
-
-impl From<&CallToolResult> for McpToolOutput {
-    fn from(call_tool_result: &CallToolResult) -> Self {
-        let CallToolResult {
-            content,
-            structured_content,
-            is_error,
-            meta: _,
-        } = call_tool_result;
-
-        Self {
-            content: content.clone(),
-            structured_content: structured_content.clone(),
-            success: is_error != &Some(true),
-        }
     }
 }
 
@@ -1497,6 +1490,12 @@ mod tests {
     }
 
     #[test]
+    fn macos_contacts_permission_order_matches_permissiveness() {
+        assert!(MacOsContactsPermission::None < MacOsContactsPermission::ReadOnly);
+        assert!(MacOsContactsPermission::ReadOnly < MacOsContactsPermission::ReadWrite);
+    }
+
+    #[test]
     fn permission_profile_deserializes_macos_seatbelt_profile_extensions() {
         let permission_profile = serde_json::from_value::<PermissionProfile>(serde_json::json!({
             "network": null,
@@ -1504,6 +1503,7 @@ mod tests {
             "macos": {
                 "macos_preferences": "read_write",
                 "macos_automation": ["com.apple.Notes"],
+                "macos_launch_services": true,
                 "macos_accessibility": true,
                 "macos_calendar": true
             }
@@ -1520,8 +1520,38 @@ mod tests {
                     macos_automation: MacOsAutomationPermission::BundleIds(vec![
                         "com.apple.Notes".to_string(),
                     ]),
+                    macos_launch_services: true,
                     macos_accessibility: true,
                     macos_calendar: true,
+                    macos_reminders: false,
+                    macos_contacts: MacOsContactsPermission::None,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn permission_profile_deserializes_macos_reminders_permission() {
+        let permission_profile = serde_json::from_value::<PermissionProfile>(serde_json::json!({
+            "macos": {
+                "macos_reminders": true
+            }
+        }))
+        .expect("deserialize reminders permission profile");
+
+        assert_eq!(
+            permission_profile,
+            PermissionProfile {
+                network: None,
+                file_system: None,
+                macos: Some(MacOsSeatbeltProfileExtensions {
+                    macos_preferences: MacOsPreferencesPermission::ReadOnly,
+                    macos_automation: MacOsAutomationPermission::None,
+                    macos_launch_services: false,
+                    macos_accessibility: false,
+                    macos_calendar: false,
+                    macos_reminders: true,
+                    macos_contacts: MacOsContactsPermission::None,
                 }),
             }
         );
@@ -1542,8 +1572,11 @@ mod tests {
                 macos_automation: MacOsAutomationPermission::BundleIds(vec![
                     "com.apple.Notes".to_string(),
                 ]),
+                macos_launch_services: false,
                 macos_accessibility: false,
                 macos_calendar: false,
+                macos_reminders: false,
+                macos_contacts: MacOsContactsPermission::None,
             }
         );
     }
@@ -1554,8 +1587,11 @@ mod tests {
             serde_json::from_value::<MacOsSeatbeltProfileExtensions>(serde_json::json!({
                 "preferences": "read_write",
                 "automations": ["com.apple.Notes"],
+                "launch_services": true,
                 "accessibility": true,
-                "calendar": true
+                "calendar": true,
+                "reminders": true,
+                "contacts": "read_only"
             }))
             .expect("deserialize macos permissions");
 
@@ -1566,8 +1602,11 @@ mod tests {
                 macos_automation: MacOsAutomationPermission::BundleIds(vec![
                     "com.apple.Notes".to_string(),
                 ]),
+                macos_launch_services: true,
                 macos_accessibility: true,
                 macos_calendar: true,
+                macos_reminders: true,
+                macos_contacts: MacOsContactsPermission::ReadOnly,
             }
         );
     }
@@ -1885,7 +1924,7 @@ mod tests {
             meta: None,
         };
 
-        let payload = McpToolOutput::from(&call_tool_result).into_function_call_output_payload();
+        let payload = call_tool_result.into_function_call_output_payload();
         assert_eq!(payload.success, Some(true));
         let Some(items) = payload.content_items() else {
             panic!("expected content items");
@@ -1952,7 +1991,7 @@ mod tests {
             meta: None,
         };
 
-        let payload = McpToolOutput::from(&call_tool_result).into_function_call_output_payload();
+        let payload = call_tool_result.into_function_call_output_payload();
         let Some(items) = payload.content_items() else {
             panic!("expected content items");
         };

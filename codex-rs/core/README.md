@@ -33,10 +33,16 @@ Seatbelt also supports macOS permission-profile extensions layered on top of
   enables broad Apple Events send permissions.
 - `macos_automation = ["com.apple.Notes", ...]`:
   enables Apple Events send only to listed bundle IDs.
+- `macos_launch_services = true`:
+  enables LaunchServices lookups and open/launch operations.
 - `macos_accessibility = true`:
   enables `com.apple.axserver` mach lookup.
 - `macos_calendar = true`:
   enables `com.apple.CalendarAgent` mach lookup.
+- `macos_contacts = "read_only"`:
+  enables Address Book read access and Contacts read services.
+- `macos_contacts = "read_write"`:
+  includes the readonly Contacts clauses plus Address Book writes and keychain/temp helpers required for writes.
 
 ### Linux
 

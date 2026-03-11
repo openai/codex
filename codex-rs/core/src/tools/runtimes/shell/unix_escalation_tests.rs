@@ -16,6 +16,7 @@ use crate::config::types::ShellEnvironmentPolicy;
 use crate::exec::SandboxType;
 use crate::protocol::AskForApproval;
 use crate::protocol::ReadOnlyAccess;
+use crate::protocol::RejectConfig;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::SandboxPermissions;
 #[cfg(target_os = "macos")]
@@ -78,6 +79,74 @@ fn test_skill_metadata(permission_profile: Option<PermissionProfile>) -> SkillMe
         path_to_skills_md: PathBuf::from("/tmp/skill/SKILL.md"),
         scope: SkillScope::User,
     }
+}
+
+#[test]
+fn execve_prompt_rejection_uses_skill_approval_for_skill_scripts() {
+    let decision_source = super::DecisionSource::SkillScript {
+        skill: test_skill_metadata(None),
+    };
+
+    assert_eq!(
+        super::execve_prompt_is_rejected_by_policy(
+            AskForApproval::Reject(RejectConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: false,
+                request_permissions: false,
+                mcp_elicitations: false,
+            }),
+            &decision_source,
+        ),
+        None,
+    );
+    assert_eq!(
+        super::execve_prompt_is_rejected_by_policy(
+            AskForApproval::Reject(RejectConfig {
+                sandbox_approval: false,
+                rules: false,
+                skill_approval: true,
+                request_permissions: false,
+                mcp_elicitations: false,
+            }),
+            &decision_source,
+        ),
+        Some("approval required by skill, but AskForApproval::Reject.skill_approval is set"),
+    );
+}
+
+#[test]
+fn execve_prompt_rejection_keeps_prefix_rules_on_rules_flag() {
+    assert_eq!(
+        super::execve_prompt_is_rejected_by_policy(
+            AskForApproval::Reject(RejectConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: false,
+                request_permissions: false,
+                mcp_elicitations: false,
+            }),
+            &super::DecisionSource::PrefixRule,
+        ),
+        Some("approval required by policy rule, but AskForApproval::Reject.rules is set"),
+    );
+}
+
+#[test]
+fn execve_prompt_rejection_keeps_unmatched_commands_on_sandbox_flag() {
+    assert_eq!(
+        super::execve_prompt_is_rejected_by_policy(
+            AskForApproval::Reject(RejectConfig {
+                sandbox_approval: true,
+                rules: false,
+                skill_approval: false,
+                request_permissions: false,
+                mcp_elicitations: false,
+            }),
+            &super::DecisionSource::UnmatchedCommandFallback,
+        ),
+        Some("approval required by policy, but AskForApproval::Reject.sandbox_approval is set"),
+    );
 }
 
 #[test]
@@ -657,6 +726,7 @@ async fn prepare_escalated_exec_permission_profile_unions_turn_and_requested_mac
                 PermissionProfile {
                     macos: Some(MacOsSeatbeltProfileExtensions {
                         macos_calendar: true,
+                        macos_reminders: false,
                         ..Default::default()
                     }),
                     ..Default::default()

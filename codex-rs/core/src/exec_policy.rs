@@ -1569,6 +1569,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 AskForApproval::Reject(RejectConfig {
                     sandbox_approval: false,
                     rules: false,
+                    skill_approval: false,
                     request_permissions: false,
                     mcp_elicitations: false,
                 }),
@@ -1591,6 +1592,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 approval_policy: AskForApproval::Reject(RejectConfig {
                     sandbox_approval: true,
                     rules: false,
+                    skill_approval: false,
                     request_permissions: false,
                     mcp_elicitations: false,
                 }),
@@ -1628,6 +1630,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 approval_policy: AskForApproval::Reject(RejectConfig {
                     sandbox_approval: true,
                     rules: false,
+                    skill_approval: false,
                     request_permissions: false,
                     mcp_elicitations: false,
                 }),
@@ -1663,6 +1666,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 approval_policy: AskForApproval::Reject(RejectConfig {
                     sandbox_approval: false,
                     rules: true,
+                    skill_approval: false,
                     request_permissions: false,
                     mcp_elicitations: false,
                 }),

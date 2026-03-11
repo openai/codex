@@ -112,6 +112,7 @@ export type { LocalShellAction } from "./LocalShellAction";
 export type { LocalShellExecAction } from "./LocalShellExecAction";
 export type { LocalShellStatus } from "./LocalShellStatus";
 export type { MacOsAutomationPermission } from "./MacOsAutomationPermission";
+export type { MacOsContactsPermission } from "./MacOsContactsPermission";
 export type { MacOsPreferencesPermission } from "./MacOsPreferencesPermission";
 export type { MacOsSeatbeltProfileExtensions } from "./MacOsSeatbeltProfileExtensions";
 export type { McpAuthStatus } from "./McpAuthStatus";
