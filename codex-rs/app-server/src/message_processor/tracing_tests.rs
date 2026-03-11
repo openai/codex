@@ -11,6 +11,7 @@ use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
+use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
@@ -50,6 +51,29 @@ const TEST_CONNECTION_ID: ConnectionId = ConnectionId(7);
 struct TestTracing {
     exporter: InMemorySpanExporter,
     provider: SdkTracerProvider,
+}
+
+struct RemoteTrace {
+    trace_id: TraceId,
+    parent_span_id: SpanId,
+    context: W3cTraceContext,
+}
+
+impl RemoteTrace {
+    fn new(trace_id: &str, parent_span_id: &str) -> Self {
+        let trace_id = TraceId::from_hex(trace_id).expect("trace id");
+        let parent_span_id = SpanId::from_hex(parent_span_id).expect("parent span id");
+        let context = W3cTraceContext {
+            traceparent: Some(format!("00-{trace_id}-{parent_span_id}-01")),
+            tracestate: Some("vendor=value".to_string()),
+        };
+
+        Self {
+            trace_id,
+            parent_span_id,
+            context,
+        }
+    }
 }
 
 fn init_test_tracing() -> &'static TestTracing {
@@ -93,48 +117,67 @@ impl TracingHarness {
         let server = create_mock_responses_server_repeating_assistant("Done").await;
         let codex_home = TempDir::new()?;
         let config = Arc::new(build_test_config(codex_home.path(), &server.uri()).await?);
-        let (mut processor, outgoing_rx) = build_test_processor(config);
+        let (processor, outgoing_rx) = build_test_processor(config);
         let tracing = init_test_tracing();
         tracing.exporter.reset();
-        let mut session = ConnectionSessionState::default();
         tracing::callsite::rebuild_interest_cache();
-
-        let initialize_request = request_from_client_request(ClientRequest::Initialize {
-            request_id: RequestId::Integer(1),
-            params: InitializeParams {
-                client_info: ClientInfo {
-                    name: "codex-app-server-tests".to_string(),
-                    title: None,
-                    version: "0.1.0".to_string(),
-                },
-                capabilities: Some(InitializeCapabilities {
-                    experimental_api: true,
-                    ..Default::default()
-                }),
-            },
-        });
-        processor
-            .process_request(
-                TEST_CONNECTION_ID,
-                initialize_request,
-                AppServerTransport::Stdio,
-                &mut session,
-            )
-            .await;
-        assert!(session.initialized);
-
-        Ok(Self {
+        let mut harness = Self {
             _server: server,
             _codex_home: codex_home,
             processor,
             outgoing_rx,
-            session,
+            session: ConnectionSessionState::default(),
             tracing,
-        })
+        };
+
+        let _: InitializeResponse = harness
+            .request(
+                ClientRequest::Initialize {
+                    request_id: RequestId::Integer(1),
+                    params: InitializeParams {
+                        client_info: ClientInfo {
+                            name: "codex-app-server-tests".to_string(),
+                            title: None,
+                            version: "0.1.0".to_string(),
+                        },
+                        capabilities: Some(InitializeCapabilities {
+                            experimental_api: true,
+                            ..Default::default()
+                        }),
+                    },
+                },
+                None,
+            )
+            .await;
+        assert!(harness.session.initialized);
+
+        Ok(harness)
     }
 
     fn reset_tracing(&self) {
         self.tracing.exporter.reset();
+    }
+
+    async fn request<T>(&mut self, request: ClientRequest, trace: Option<W3cTraceContext>) -> T
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let request_id = match request.id() {
+            RequestId::Integer(request_id) => *request_id,
+            request_id => panic!("expected integer request id in test harness, got {request_id:?}"),
+        };
+        let mut request = request_from_client_request(request);
+        request.trace = trace;
+
+        self.processor
+            .process_request(
+                TEST_CONNECTION_ID,
+                request,
+                AppServerTransport::Stdio,
+                &mut self.session,
+            )
+            .await;
+        read_response(&mut self.outgoing_rx, request_id).await
     }
 
     async fn start_thread(
@@ -142,24 +185,18 @@ impl TracingHarness {
         request_id: i64,
         trace: Option<W3cTraceContext>,
     ) -> ThreadStartResponse {
-        let mut thread_start_request = request_from_client_request(ClientRequest::ThreadStart {
-            request_id: RequestId::Integer(request_id),
-            params: ThreadStartParams {
-                ephemeral: Some(true),
-                ..ThreadStartParams::default()
-            },
-        });
-        thread_start_request.trace = trace;
-
-        self.processor
-            .process_request(
-                TEST_CONNECTION_ID,
-                thread_start_request,
-                AppServerTransport::Stdio,
-                &mut self.session,
+        let response = self
+            .request(
+                ClientRequest::ThreadStart {
+                    request_id: RequestId::Integer(request_id),
+                    params: ThreadStartParams {
+                        ephemeral: Some(true),
+                        ..ThreadStartParams::default()
+                    },
+                },
+                trace,
             )
             .await;
-        let response = read_response(&mut self.outgoing_rx, request_id).await;
         read_thread_started_notification(&mut self.outgoing_rx).await;
         response
     }
@@ -216,22 +253,6 @@ fn span_attr<'a>(span: &'a SpanData, key: &str) -> Option<&'a str> {
         })
 }
 
-fn find_rpc_span<'a>(spans: &'a [SpanData], kind: SpanKind, method: &str) -> &'a SpanData {
-    spans
-        .iter()
-        .find(|span| {
-            span.span_kind == kind
-                && span_attr(span, "rpc.system") == Some("jsonrpc")
-                && span_attr(span, "rpc.method") == Some(method)
-        })
-        .unwrap_or_else(|| {
-            panic!(
-                "missing {kind:?} span for rpc.method={method}; exported spans:\n{}",
-                format_spans(spans)
-            )
-        })
-}
-
 fn find_rpc_span_with_trace<'a>(
     spans: &'a [SpanData],
     kind: SpanKind,
@@ -249,18 +270,6 @@ fn find_rpc_span_with_trace<'a>(
         .unwrap_or_else(|| {
             panic!(
                 "missing {kind:?} span for rpc.method={method} trace={trace_id}; exported spans:\n{}",
-                format_spans(spans)
-            )
-        })
-}
-
-fn find_span_by_name<'a>(spans: &'a [SpanData], name: &str) -> &'a SpanData {
-    spans
-        .iter()
-        .find(|span| span.name.as_ref() == name)
-        .unwrap_or_else(|| {
-            panic!(
-                "missing span named {name}; exported spans:\n{}",
                 format_spans(spans)
             )
         })
@@ -430,12 +439,11 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
     let _guard = tracing_test_guard().lock().await;
     let mut harness = TracingHarness::new().await?;
 
-    let remote_trace_id = TraceId::from_hex("00000000000000000000000000000011").expect("trace id");
-    let remote_parent_span_id = SpanId::from_hex("0000000000000022").expect("parent span id");
-    let remote_trace = W3cTraceContext {
-        traceparent: Some(format!("00-{remote_trace_id}-{remote_parent_span_id}-01")),
-        tracestate: Some("vendor=value".to_string()),
-    };
+    let RemoteTrace {
+        trace_id: remote_trace_id,
+        context: remote_trace,
+        ..
+    } = RemoteTrace::new("00000000000000000000000000000011", "0000000000000022");
 
     let _: ThreadStartResponse = harness.start_thread(2, Some(remote_trace)).await;
     drop(harness.processor);
@@ -452,8 +460,8 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
 
     let server_request_span =
         find_rpc_span_with_trace(&spans, SpanKind::Server, "thread/start", remote_trace_id);
-    let thread_spawn_span = find_span_by_name(&spans, "thread_spawn");
-    let session_init_span = find_span_by_name(&spans, "session_init");
+    let thread_spawn_span = find_span_by_name_with_trace(&spans, "thread_spawn", remote_trace_id);
+    let session_init_span = find_span_by_name_with_trace(&spans, "session_init", remote_trace_id);
     assert_eq!(server_request_span.name.as_ref(), "thread/start");
     assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
     assert_ne!(server_request_span.span_context.span_id(), SpanId::INVALID);
@@ -472,44 +480,36 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
 
     harness.reset_tracing();
 
-    let remote_trace_id = TraceId::from_hex("00000000000000000000000000000077").expect("trace id");
-    let remote_parent_span_id = SpanId::from_hex("0000000000000088").expect("parent span id");
-    let remote_trace = W3cTraceContext {
-        traceparent: Some(format!("00-{remote_trace_id}-{remote_parent_span_id}-01")),
-        tracestate: Some("vendor=value".to_string()),
-    };
-    let turn_start_request = JSONRPCRequest {
-        id: RequestId::Integer(3),
-        method: "turn/start".to_string(),
-        params: Some(serde_json::to_value(TurnStartParams {
-            thread_id: thread_id.clone(),
-            input: vec![UserInput::Text {
-                text: "hello".to_string(),
-                text_elements: Vec::new(),
-            }],
-            cwd: None,
-            approval_policy: None,
-            sandbox_policy: None,
-            model: None,
-            service_tier: None,
-            effort: None,
-            summary: None,
-            personality: None,
-            output_schema: None,
-            collaboration_mode: None,
-        })?),
-        trace: Some(remote_trace),
-    };
-    harness
-        .processor
-        .process_request(
-            TEST_CONNECTION_ID,
-            turn_start_request,
-            AppServerTransport::Stdio,
-            &mut harness.session,
+    let RemoteTrace {
+        trace_id: remote_trace_id,
+        parent_span_id: remote_parent_span_id,
+        context: remote_trace,
+    } = RemoteTrace::new("00000000000000000000000000000077", "0000000000000088");
+    let _: TurnStartResponse = harness
+        .request(
+            ClientRequest::TurnStart {
+                request_id: RequestId::Integer(3),
+                params: TurnStartParams {
+                    thread_id,
+                    input: vec![UserInput::Text {
+                        text: "hello".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: None,
+                    service_tier: None,
+                    effort: None,
+                    summary: None,
+                    personality: None,
+                    output_schema: None,
+                    collaboration_mode: None,
+                },
+            },
+            Some(remote_trace),
         )
         .await;
-    let turn_start_response: TurnStartResponse = read_response(&mut harness.outgoing_rx, 3).await;
     let spans = wait_for_exported_spans(harness.tracing, |spans| {
         spans
             .iter()
@@ -520,11 +520,11 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
             && spans.iter().any(|span| span.name.as_ref() == "run_turn")
     })
     .await;
-    let _ = turn_start_response;
     drop(harness.processor);
     tokio::task::yield_now().await;
 
-    let server_request_span = find_rpc_span(&spans, SpanKind::Server, "turn/start");
+    let server_request_span =
+        find_rpc_span_with_trace(&spans, SpanKind::Server, "turn/start", remote_trace_id);
     let submission_dispatch_span =
         find_span_by_name_with_trace(&spans, "submission_dispatch", remote_trace_id);
     let session_task_turn_span =
