@@ -75,11 +75,9 @@ fn append_code_mode_sample(
     output_type: String,
 ) -> String {
     let reference = code_mode_tool_reference(tool_name);
-    let local_name = code_mode_local_name(&reference.tool_key);
-
     format!(
-        "{description}\n\nCode mode declaration:\n```ts\nimport {{ tools }} from \"{}\";\ndeclare function {local_name}({input_name}: {input_type}): Promise<{output_type}>;\n```",
-        reference.module_path
+        "{description}\n\nCode mode declaration:\n```ts\nimport {{ {} }} from \"{}\";\ndeclare function {}({input_name}: {input_type}): Promise<{output_type}>;\n```",
+        reference.tool_key, reference.module_path, reference.tool_key
     )
 }
 
@@ -98,22 +96,6 @@ fn code_mode_local_name(tool_key: &str) -> String {
         } else {
             identifier.push('_');
         }
-    }
-
-    if identifier.is_empty() {
-        return "tool_call".to_string();
-    }
-
-    if identifier == "tools" {
-        identifier.push_str("_tool");
-    }
-
-    if identifier
-        .chars()
-        .next()
-        .is_some_and(|ch| ch.is_ascii_digit())
-    {
-        identifier.insert(0, '_');
     }
 
     identifier

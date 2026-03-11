@@ -108,10 +108,6 @@ function formatErrorText(error) {
   return String(error && error.stack ? error.stack : error);
 }
 
-function isValidIdentifier(name) {
-  return /^[A-Za-z_$][0-9A-Za-z_$]*$/.test(name);
-}
-
 function cloneJsonValue(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -154,10 +150,10 @@ function createAllToolsMetadata(enabledTools) {
 function createToolsModule(context, callTool, enabledTools) {
   const tools = createToolsNamespace(callTool, enabledTools);
   const allTools = createAllToolsMetadata(enabledTools);
-  const exportNames = ['ALL_TOOLS', 'tools'];
+  const exportNames = ['ALL_TOOLS'];
 
   for (const { tool_name } of enabledTools) {
-    if (tool_name !== 'tools' && tool_name !== 'ALL_TOOLS' && isValidIdentifier(tool_name)) {
+    if (tool_name !== 'ALL_TOOLS') {
       exportNames.push(tool_name);
     }
   }
@@ -168,9 +164,8 @@ function createToolsModule(context, callTool, enabledTools) {
     uniqueExportNames,
     function initToolsModule() {
       this.setExport('ALL_TOOLS', allTools);
-      this.setExport('tools', tools);
       for (const exportName of uniqueExportNames) {
-        if (exportName !== 'ALL_TOOLS' && exportName !== 'tools') {
+        if (exportName !== 'ALL_TOOLS') {
           this.setExport(exportName, tools[exportName]);
         }
       }
@@ -297,10 +292,10 @@ function createNamespacedToolsNamespace(callTool, enabledTools, namespace) {
 
 function createNamespacedToolsModule(context, callTool, enabledTools, namespace) {
   const tools = createNamespacedToolsNamespace(callTool, enabledTools, namespace);
-  const exportNames = ['tools'];
+  const exportNames = [];
 
   for (const exportName of Object.keys(tools)) {
-    if (exportName !== 'tools' && isValidIdentifier(exportName)) {
+    if (exportName !== 'ALL_TOOLS') {
       exportNames.push(exportName);
     }
   }
@@ -310,11 +305,8 @@ function createNamespacedToolsModule(context, callTool, enabledTools, namespace)
   return new SyntheticModule(
     uniqueExportNames,
     function initNamespacedToolsModule() {
-      this.setExport('tools', tools);
       for (const exportName of uniqueExportNames) {
-        if (exportName !== 'tools') {
-          this.setExport(exportName, tools[exportName]);
-        }
+        this.setExport(exportName, tools[exportName]);
       }
     },
     { context }
