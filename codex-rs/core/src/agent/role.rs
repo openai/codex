@@ -190,48 +190,36 @@ Available roles:
 
     fn format_role(name: &str, declaration: &AgentRoleConfig) -> String {
         if let Some(description) = &declaration.description {
-            let locked_settings_note = locked_settings_note(declaration);
+            let locked_settings_note = declaration
+                .config_file
+                .as_ref()
+                .and_then(|config_file| {
+                    built_in::config_file_contents(config_file)
+                        .map(str::to_owned)
+                        .or_else(|| std::fs::read_to_string(config_file).ok())
+                })
+                .and_then(|contents| toml::from_str::<TomlValue>(&contents).ok())
+                .map(|role_toml| {
+                    let locks_model = role_toml.get("model").is_some();
+                    let locks_reasoning_effort =
+                        role_toml.get("model_reasoning_effort").is_some();
+
+                    match (locks_model, locks_reasoning_effort) {
+                        (true, true) => "\n- This role's model and reasoning effort are set by the role and cannot be changed.",
+                        (true, false) => {
+                            "\n- This role's model is set by the role and cannot be changed."
+                        }
+                        (false, true) => {
+                            "\n- This role's reasoning effort is set by the role and cannot be changed."
+                        }
+                        (false, false) => "",
+                    }
+                })
+                .unwrap_or_default();
             format!("{name}: {{\n{description}{locked_settings_note}\n}}")
         } else {
             format!("{name}: no description")
         }
-    }
-
-    fn locked_settings_note(declaration: &AgentRoleConfig) -> String {
-        let Some(config_file) = declaration.config_file.as_ref() else {
-            return String::new();
-        };
-
-        let Some(contents) = role_config_contents(config_file) else {
-            return String::new();
-        };
-
-        let Ok(role_toml) = toml::from_str::<TomlValue>(&contents) else {
-            return String::new();
-        };
-
-        let locks_model = role_toml.get("model").is_some();
-        let locks_reasoning_effort = role_toml.get("model_reasoning_effort").is_some();
-
-        match (locks_model, locks_reasoning_effort) {
-            (true, true) => {
-                "\n- This role's model and reasoning effort are set by the role and cannot be changed.".to_string()
-            }
-            (true, false) => {
-                "\n- This role's model is set by the role and cannot be changed.".to_string()
-            }
-            (false, true) => {
-                "\n- This role's reasoning effort is set by the role and cannot be changed."
-                    .to_string()
-            }
-            (false, false) => String::new(),
-        }
-    }
-
-    fn role_config_contents(config_file: &Path) -> Option<String> {
-        built_in::config_file_contents(config_file)
-            .map(str::to_owned)
-            .or_else(|| std::fs::read_to_string(config_file).ok())
     }
 }
 

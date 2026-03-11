@@ -63,6 +63,23 @@ fn has_subagent_notification(req: &ResponsesRequest) -> bool {
         .any(|text| text.contains("<subagent_notification>"))
 }
 
+fn tool_description(req: &ResponsesRequest, tool_name: &str) -> Option<String> {
+    req.body_json()
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|tools| {
+            tools.iter().find_map(|tool| {
+                if tool.get("name").and_then(serde_json::Value::as_str) == Some(tool_name) {
+                    tool.get("description")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                } else {
+                    None
+                }
+            })
+        })
+}
+
 async fn wait_for_spawned_thread_id(test: &TestCodex) -> Result<String> {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
@@ -432,6 +449,61 @@ async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> 
 
     assert_eq!(child_snapshot.model, ROLE_MODEL);
     assert_eq!(child_snapshot.reasoning_effort, Some(ROLE_REASONING_EFFORT));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agent_tool_description_mentions_role_locked_settings() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-turn1-1"),
+            ev_assistant_message("msg-turn1-1", "done"),
+            ev_completed("resp-turn1-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        let role_path = config.codex_home.join("custom-role.toml");
+        std::fs::write(
+            &role_path,
+            format!(
+                "developer_instructions = \"Stay focused\"\nmodel = \"{ROLE_MODEL}\"\nmodel_reasoning_effort = \"{ROLE_REASONING_EFFORT}\"\n",
+            ),
+        )
+        .expect("write role config");
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: Some("Custom role".to_string()),
+                config_file: Some(role_path),
+                nickname_candidates: None,
+            },
+        );
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+
+    let request = resp_mock.single_request();
+    let spawn_description =
+        tool_description(&request, "spawn_agent").expect("spawn_agent description");
+    assert!(
+        spawn_description.contains(
+            "Custom role\n- This role's model and reasoning effort are set by the role and cannot be changed."
+        ),
+        "expected locked-setting note in spawn_agent tool description: {spawn_description}"
+    );
 
     Ok(())
 }
