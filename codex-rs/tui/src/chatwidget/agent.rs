@@ -629,8 +629,11 @@ fn additional_permission_profile_to_core(
         macos: value.macos.map(|macos| MacOsSeatbeltProfileExtensions {
             macos_preferences: macos.preferences,
             macos_automation: macos.automations,
+            macos_launch_services: macos.launch_services,
             macos_accessibility: macos.accessibility,
             macos_calendar: macos.calendar,
+            macos_reminders: macos.reminders,
+            macos_contacts: macos.contacts,
         }),
     }
 }
@@ -664,20 +667,32 @@ fn granted_permission_profile_from_core(value: PermissionProfile) -> GrantedPerm
             codex_protocol::models::MacOsAutomationPermission::None => None,
             automations => Some(automations),
         };
+        let launch_services = macos.macos_launch_services.then_some(true);
         let accessibility = macos.macos_accessibility.then_some(true);
         let calendar = macos.macos_calendar.then_some(true);
+        let reminders = macos.macos_reminders.then_some(true);
+        let contacts = match macos.macos_contacts {
+            codex_protocol::models::MacOsContactsPermission::None => None,
+            contacts => Some(contacts),
+        };
         if preferences.is_none()
             && automations.is_none()
+            && launch_services.is_none()
             && accessibility.is_none()
             && calendar.is_none()
+            && reminders.is_none()
+            && contacts.is_none()
         {
             None
         } else {
             Some(GrantedMacOsPermissions {
                 preferences,
                 automations,
+                launch_services,
                 accessibility,
                 calendar,
+                reminders,
+                contacts,
             })
         }
     });
