@@ -76,7 +76,11 @@ pub(crate) fn build_realtime_update_item(
     ) {
         (Some(true), false) => Some(DeveloperInstructions::realtime_end_message("inactive")),
         (Some(false), true) | (None, true) => Some(
-            if let Some(instructions) = next.config.realtime_start_instructions.as_deref() {
+            if let Some(instructions) = next
+                .config
+                .experimental_realtime_start_instructions
+                .as_deref()
+            {
                 DeveloperInstructions::realtime_start_message_with_instructions(instructions)
             } else {
                 DeveloperInstructions::realtime_start_message()

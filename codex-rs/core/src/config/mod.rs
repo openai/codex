@@ -454,10 +454,6 @@ pub struct Config {
     /// Machine-local realtime audio device preferences used by realtime voice.
     pub realtime_audio: RealtimeAudioConfig,
 
-    /// Replaces the built-in realtime start instructions inserted into
-    /// developer messages when realtime becomes active.
-    pub realtime_start_instructions: Option<String>,
-
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport base URL (the `Op::RealtimeConversation`
     /// `/v1/realtime`
@@ -474,6 +470,10 @@ pub struct Config {
     /// context appended to websocket session instructions. An empty string
     /// disables startup context injection entirely.
     pub experimental_realtime_ws_startup_context: Option<String>,
+    /// Experimental / do not use. Replaces the built-in realtime start
+    /// instructions inserted into developer messages when realtime becomes
+    /// active.
+    pub experimental_realtime_start_instructions: Option<String>,
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     pub forced_chatgpt_workspace_id: Option<String>,
 
@@ -1229,10 +1229,6 @@ pub struct ConfigToml {
     #[serde(default)]
     pub audio: Option<RealtimeAudioToml>,
 
-    /// Replaces the built-in realtime start instructions inserted into
-    /// developer messages when realtime becomes active.
-    pub realtime_start_instructions: Option<String>,
-
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport base URL (the `Op::RealtimeConversation`
     /// `/v1/realtime`
@@ -1249,6 +1245,10 @@ pub struct ConfigToml {
     /// context appended to websocket session instructions. An empty string
     /// disables startup context injection entirely.
     pub experimental_realtime_ws_startup_context: Option<String>,
+    /// Experimental / do not use. Replaces the built-in realtime start
+    /// instructions inserted into developer messages when realtime becomes
+    /// active.
+    pub experimental_realtime_start_instructions: Option<String>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, or live.
@@ -2454,11 +2454,11 @@ impl Config {
                     microphone: audio.microphone,
                     speaker: audio.speaker,
                 }),
-            realtime_start_instructions: cfg.realtime_start_instructions,
             experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
             experimental_realtime_ws_model: cfg.experimental_realtime_ws_model,
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
+            experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,

@@ -1516,7 +1516,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_restates_realtime_sta
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_request_uses_custom_realtime_start_instructions() -> Result<()> {
+async fn remote_request_uses_custom_experimental_realtime_start_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = wiremock::MockServer::start().await;
@@ -1525,7 +1525,7 @@ async fn remote_request_uses_custom_realtime_start_instructions() -> Result<()> 
     let mut builder = remote_realtime_test_codex_builder(&realtime_server).with_config({
         let custom_instructions = custom_instructions.to_string();
         move |config| {
-            config.realtime_start_instructions = Some(custom_instructions);
+            config.experimental_realtime_start_instructions = Some(custom_instructions);
         }
     });
     let test = builder.build(&server).await?;

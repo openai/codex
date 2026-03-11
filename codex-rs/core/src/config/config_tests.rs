@@ -3230,7 +3230,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             realtime_audio: RealtimeAudioConfig::default(),
-            realtime_start_instructions: None,
+            experimental_realtime_start_instructions: None,
             experimental_realtime_ws_base_url: None,
             experimental_realtime_ws_model: None,
             experimental_realtime_ws_backend_prompt: None,
@@ -3366,7 +3366,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         realtime_audio: RealtimeAudioConfig::default(),
-        realtime_start_instructions: None,
+        experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
         experimental_realtime_ws_backend_prompt: None,
@@ -3500,7 +3500,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         realtime_audio: RealtimeAudioConfig::default(),
-        realtime_start_instructions: None,
+        experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
         experimental_realtime_ws_backend_prompt: None,
@@ -3620,7 +3620,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
         realtime_audio: RealtimeAudioConfig::default(),
-        realtime_start_instructions: None,
+        experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
         experimental_realtime_ws_backend_prompt: None,
@@ -4531,16 +4531,16 @@ async fn feature_requirements_reject_legacy_aliases() {
 }
 
 #[test]
-fn realtime_start_instructions_load_from_config_toml() -> std::io::Result<()> {
+fn experimental_realtime_start_instructions_load_from_config_toml() -> std::io::Result<()> {
     let cfg: ConfigToml = toml::from_str(
         r#"
-realtime_start_instructions = "start instructions from config"
+experimental_realtime_start_instructions = "start instructions from config"
 "#,
     )
     .expect("TOML deserialization should succeed");
 
     assert_eq!(
-        cfg.realtime_start_instructions.as_deref(),
+        cfg.experimental_realtime_start_instructions.as_deref(),
         Some("start instructions from config")
     );
 
@@ -4552,7 +4552,7 @@ realtime_start_instructions = "start instructions from config"
     )?;
 
     assert_eq!(
-        config.realtime_start_instructions.as_deref(),
+        config.experimental_realtime_start_instructions.as_deref(),
         Some("start instructions from config")
     );
     Ok(())
