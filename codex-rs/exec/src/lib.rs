@@ -949,7 +949,12 @@ fn config_request_overrides_from_config(config: &Config) -> Option<HashMap<Strin
 fn approval_review_policy_override_from_config(
     config: &Config,
 ) -> Option<codex_app_server_protocol::ApprovalReviewPolicy> {
-    Some(config.approval_review_policy.into())
+    match config.approval_review_policy {
+        codex_protocol::config_types::ApprovalReviewPolicy::ManualOnly => None,
+        codex_protocol::config_types::ApprovalReviewPolicy::AutoOnly => {
+            Some(codex_app_server_protocol::ApprovalReviewPolicy::AutoOnly)
+        }
+    }
 }
 
 async fn send_request_with_response<T>(
@@ -1851,20 +1856,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thread_start_params_include_review_policy_when_guardian_feature_enabled() {
+    async fn thread_start_params_include_review_policy_when_auto_review_is_enabled() {
         let codex_home = tempdir().expect("create temp codex home");
         let cwd = tempdir().expect("create temp cwd");
         std::fs::write(
             codex_home.path().join("config.toml"),
-            "[features]\nguardian_approval = true\n",
+            "approval_review_policy = \"auto-only\"\n",
         )
-        .expect("write guardian-enabled config");
+        .expect("write auto-review config");
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .fallback_cwd(Some(cwd.path().to_path_buf()))
             .build()
             .await
-            .expect("build guardian-enabled config");
+            .expect("build auto-review config");
 
         let params = thread_start_params_from_config(&config);
 
