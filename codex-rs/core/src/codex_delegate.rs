@@ -443,60 +443,70 @@ async fn handle_patch_approval(
     let approval_id = call_id.clone();
     let decision = if routes_approval_to_guardian(parent_ctx) {
         let change_count = changes.len();
-        let files = changes
+        let maybe_files = changes
             .keys()
-            .map(|path| {
-                AbsolutePathBuf::from_absolute_path(parent_ctx.cwd.join(path))
-                    .expect("guardian delegated patch paths should resolve against cwd")
-            })
-            .collect::<Vec<_>>();
-        let patch = changes
-            .iter()
-            .map(|(path, change)| match change {
-                codex_protocol::protocol::FileChange::Add { content } => {
-                    format!("*** Add File: {}\n{}", path.display(), content)
-                }
-                codex_protocol::protocol::FileChange::Delete { content } => {
-                    format!("*** Delete File: {}\n{}", path.display(), content)
-                }
-                codex_protocol::protocol::FileChange::Update {
-                    unified_diff,
-                    move_path,
-                } => {
-                    if let Some(move_path) = move_path {
-                        format!(
-                            "*** Update File: {}\n*** Move to: {}\n{}",
-                            path.display(),
-                            move_path.display(),
-                            unified_diff
-                        )
-                    } else {
-                        format!("*** Update File: {}\n{}", path.display(), unified_diff)
+            .map(|path| AbsolutePathBuf::from_absolute_path(parent_ctx.cwd.join(path)).ok())
+            .collect::<Option<Vec<_>>>();
+        if let Some(files) = maybe_files {
+            let patch = changes
+                .iter()
+                .map(|(path, change)| match change {
+                    codex_protocol::protocol::FileChange::Add { content } => {
+                        format!("*** Add File: {}\n{}", path.display(), content)
                     }
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let review_rx = spawn_guardian_review(
-            Arc::clone(parent_session),
-            Arc::clone(parent_ctx),
-            GuardianApprovalRequest::ApplyPatch {
-                id: approval_id.clone(),
-                cwd: parent_ctx.cwd.clone(),
-                files,
-                changes,
-                change_count,
-                patch,
-            },
-            reason,
-        );
-        await_approval_with_cancel(
-            async move { review_rx.await.unwrap_or_default() },
-            parent_session,
-            &approval_id,
-            cancel_token,
-        )
-        .await
+                    codex_protocol::protocol::FileChange::Delete { content } => {
+                        format!("*** Delete File: {}\n{}", path.display(), content)
+                    }
+                    codex_protocol::protocol::FileChange::Update {
+                        unified_diff,
+                        move_path,
+                    } => {
+                        if let Some(move_path) = move_path {
+                            format!(
+                                "*** Update File: {}\n*** Move to: {}\n{}",
+                                path.display(),
+                                move_path.display(),
+                                unified_diff
+                            )
+                        } else {
+                            format!("*** Update File: {}\n{}", path.display(), unified_diff)
+                        }
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let review_rx = spawn_guardian_review(
+                Arc::clone(parent_session),
+                Arc::clone(parent_ctx),
+                GuardianApprovalRequest::ApplyPatch {
+                    id: approval_id.clone(),
+                    cwd: parent_ctx.cwd.clone(),
+                    files,
+                    changes,
+                    change_count,
+                    patch,
+                },
+                reason,
+            );
+            await_approval_with_cancel(
+                async move { review_rx.await.unwrap_or_default() },
+                parent_session,
+                &approval_id,
+                cancel_token,
+            )
+            .await
+        } else {
+            let decision_rx = parent_session
+                .request_patch_approval(parent_ctx, call_id, changes, reason, grant_root)
+                .await;
+            await_approval_with_cancel(
+                async move { decision_rx.await.unwrap_or_default() },
+                parent_session,
+                &approval_id,
+                cancel_token,
+            )
+            .await
+        }
     } else {
         let decision_rx = parent_session
             .request_patch_approval(parent_ctx, call_id, changes, reason, grant_root)
@@ -548,10 +558,13 @@ fn spawn_guardian_review(
 ) -> oneshot::Receiver<ReviewDecision> {
     let (tx, rx) = oneshot::channel();
     std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
+        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .expect("guardian delegate review runtime should initialize");
+        else {
+            let _ = tx.send(ReviewDecision::Denied);
+            return;
+        };
         let decision = runtime.block_on(review_approval_request(
             &session,
             &turn,
@@ -665,6 +678,7 @@ where
     }
 }
 
+#[cfg(test)]
 #[cfg(test)]
 #[path = "codex_delegate_tests.rs"]
 mod tests;
