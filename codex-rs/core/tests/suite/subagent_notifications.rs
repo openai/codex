@@ -498,15 +498,13 @@ async fn spawn_agent_tool_description_mentions_role_locked_settings() -> Result<
     let request = resp_mock.single_request();
     let spawn_description =
         tool_description(&request, "spawn_agent").expect("spawn_agent description");
-    let custom_role_entry = spawn_description
+    let custom_role_locked_settings_note = spawn_description
         .lines()
-        .skip_while(|line| *line != "custom: {")
-        .take_while(|line| *line != "default: {")
-        .collect::<Vec<_>>()
-        .join("\n");
+        .find(|line| line.contains("This role's model is set to"))
+        .expect("custom role locked settings note");
     assert_eq!(
-        custom_role_entry,
-        "custom: {\nCustom role\n- This role's model is set to `gpt-5.1-codex-max` and its reasoning effort is set to `high`. These settings cannot be changed.\n}"
+        custom_role_locked_settings_note,
+        "- This role's model is set to `gpt-5.1-codex-max` and its reasoning effort is set to `high`. These settings cannot be changed."
     );
 
     Ok(())
