@@ -239,7 +239,6 @@ use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
-use crate::bottom_pane::parse_slash_name;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::clipboard_text;
@@ -4229,14 +4228,8 @@ impl ChatWidget {
         if matches!(key_event.code, KeyCode::Esc)
             && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
             && self.bottom_pane.is_task_running()
-            && (self
-                .bottom_pane
-                .composer_text()
-                .lines()
-                .next()
-                .and_then(parse_slash_name)
-                .is_none_or(|(name, _, _)| name != "agent")
-                || !self.pending_steers.is_empty())
+            && self.bottom_pane.no_modal_or_popup_active()
+            && (!self.pending_steers.is_empty() || self.bottom_pane.composer_text().is_empty())
         {
             self.submit_pending_steers_after_interrupt = !self.pending_steers.is_empty();
             if !self.submit_op(Op::Interrupt) {

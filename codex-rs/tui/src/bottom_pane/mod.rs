@@ -137,14 +137,12 @@ pub(crate) enum CancellationEvent {
     NotHandled,
 }
 
+use crate::status_indicator_widget::StatusDetailsCapitalization;
+use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
-pub(crate) use prompt_args::parse_slash_name;
-
-use crate::status_indicator_widget::StatusDetailsCapitalization;
-use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
@@ -409,20 +407,12 @@ impl BottomPane {
             self.request_redraw();
             InputResult::None
         } else {
-            let is_agent_command = self
-                .composer_text()
-                .lines()
-                .next()
-                .and_then(parse_slash_name)
-                .is_some_and(|(name, _, _)| name == "agent");
-
             // If a task is running and a status line is visible, allow Esc to
-            // send an interrupt even while the composer has focus.
-            // When a popup is active, prefer dismissing it over interrupting the task.
+            // send an interrupt only from an empty composer with no popup active.
             if key_event.code == KeyCode::Esc
                 && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
                 && self.is_task_running
-                && !is_agent_command
+                && self.composer_text().is_empty()
                 && !self.composer.popup_active()
                 && let Some(status) = &self.status
             {
@@ -1811,6 +1801,35 @@ mod tests {
             matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
             "expected Esc to send Op::Interrupt while a task is running"
         );
+    }
+
+    #[test]
+    fn esc_with_nonempty_composer_does_not_interrupt_task() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.insert_str("still editing");
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        while let Ok(ev) = rx.try_recv() {
+            assert!(
+                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
+                "expected Esc to not send Op::Interrupt while composer has text"
+            );
+        }
+        assert_eq!(pane.composer_text(), "still editing");
     }
 
     #[test]

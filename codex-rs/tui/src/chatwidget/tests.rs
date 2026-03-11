@@ -8171,7 +8171,19 @@ async fn model_selection_queues_selected_action_while_task_running() {
 }
 
 #[tokio::test]
-async fn esc_interrupts_running_task_even_with_model_popup_active() {
+async fn esc_interrupts_running_task_with_empty_composer() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    next_interrupt_op(&mut op_rx);
+    assert!(!chat.has_active_view(), "expected no popup to remain open");
+}
+
+#[tokio::test]
+async fn esc_with_model_popup_active_dismisses_popup_without_interrupting() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
@@ -8181,32 +8193,41 @@ async fn esc_interrupts_running_task_even_with_model_popup_active() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
-    next_interrupt_op(&mut op_rx);
-    assert!(
-        chat.has_active_view(),
-        "expected popup to remain open during interrupt"
-    );
+    while let Ok(op) = op_rx.try_recv() {
+        assert!(
+            !matches!(op, Op::Interrupt),
+            "expected Esc to dismiss the popup without interrupting"
+        );
+    }
+    assert!(!chat.has_active_view(), "expected /model popup to close");
 }
 
 #[tokio::test]
-async fn interrupt_with_popup_active_restores_queued_drafts_into_composer() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
+async fn esc_with_popup_active_does_not_interrupt_pending_steers() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
-    chat.queue_user_message("queued draft".into());
+
+    chat.bottom_pane
+        .set_composer_text("pending steer".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { .. } => {}
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
     chat.dispatch_command(SlashCommand::Model);
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    next_interrupt_op(&mut op_rx);
-    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
 
-    assert!(
-        chat.has_active_view(),
-        "expected popup to remain open after interrupt"
-    );
-    assert_eq!(chat.bottom_pane.composer_text(), "queued draft");
-    assert!(chat.queued_user_messages.is_empty());
-    let _ = drain_insert_history(&mut rx);
+    while let Ok(op) = op_rx.try_recv() {
+        assert!(
+            !matches!(op, Op::Interrupt),
+            "expected Esc to dismiss the popup before interrupting pending steers"
+        );
+    }
+    assert!(!chat.has_active_view(), "expected /model popup to close");
+    assert_eq!(chat.pending_steers.len(), 1);
 }
 
 #[tokio::test]
