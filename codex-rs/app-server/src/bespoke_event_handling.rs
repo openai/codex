@@ -53,7 +53,6 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
-use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ModelReroutedNotification;
 use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
 use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
@@ -232,9 +231,6 @@ fn guardian_assessment_uses_completed_notification(
                 ..
             } | ThreadItem::FileChange {
                 status: PatchApplyStatus::Declined,
-                ..
-            } | ThreadItem::McpToolCall {
-                status: McpToolCallStatus::Declined,
                 ..
             }
         ),
@@ -764,10 +760,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                         state.active_turn_snapshot().map(|turn| turn.id)
                     }
                 };
-                let request_id = request.id.to_string();
-                let call_id = request_id
-                    .strip_prefix("mcp_tool_call_approval_")
-                    .map(str::to_string);
                 let server_name = request.server_name.clone();
                 let request_body = match request.request.try_into() {
                     Ok(request_body) => request_body,
@@ -3560,6 +3552,94 @@ mod tests {
             }
             other => bail!("unexpected notification: {other:?}"),
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn guardian_assessment_denied_mcp_does_not_emit_item_completed() -> Result<()> {
+        let conversation_id = ThreadId::new();
+        let event_turn_id = "turn-mcp-denied".to_string();
+        let thread_state = Arc::new(tokio::sync::Mutex::new(ThreadState::default()));
+        let thread_watch_manager = ThreadWatchManager::default();
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            ThreadId::new(),
+        );
+        let codex_home = tempfile::tempdir()?;
+        let mut config = codex_core::config::ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await?;
+        config.model_provider_id = "openai".to_string();
+        let thread_manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider(
+                codex_core::CodexAuth::from_api_key("dummy"),
+                codex_core::built_in_model_providers()["openai"].clone(),
+            ),
+        );
+        let conversation = thread_manager.start_thread(config).await?.thread;
+        let in_progress_assessment = codex_protocol::protocol::GuardianAssessmentEvent {
+            id: "guardian-mcp-1".to_string(),
+            turn_id: event_turn_id.clone(),
+            status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
+            risk_score: None,
+            risk_level: None,
+            rationale: None,
+            action: Some(serde_json::json!({
+                "tool": "mcp_tool_call",
+                "server": "docs",
+                "tool_name": "lookup",
+                "arguments": {"id": "123"},
+            })),
+        };
+        let denied_assessment = codex_protocol::protocol::GuardianAssessmentEvent {
+            id: "guardian-mcp-1".to_string(),
+            turn_id: event_turn_id.clone(),
+            status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
+            risk_score: Some(97),
+            risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
+            rationale: Some("Unsafe MCP call.".to_string()),
+            action: None,
+        };
+        {
+            let mut state = thread_state.lock().await;
+            state.track_current_turn_event(&EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: event_turn_id.clone(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }));
+            state.track_current_turn_event(&EventMsg::GuardianAssessment(
+                in_progress_assessment.clone(),
+            ));
+            state
+                .track_current_turn_event(&EventMsg::GuardianAssessment(denied_assessment.clone()));
+        }
+
+        apply_bespoke_event_handling(
+            Event {
+                id: event_turn_id,
+                msg: EventMsg::GuardianAssessment(denied_assessment),
+            },
+            conversation_id,
+            conversation,
+            thread_manager,
+            outgoing,
+            thread_state,
+            thread_watch_manager,
+            ApiVersion::V2,
+            "test-provider".to_string(),
+            codex_home.path(),
+        )
+        .await;
+
+        assert!(
+            rx.try_recv().is_err(),
+            "no app-server notification expected"
+        );
 
         Ok(())
     }
