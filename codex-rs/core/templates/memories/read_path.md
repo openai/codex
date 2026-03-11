@@ -25,14 +25,15 @@ Memory layout (general -> specific):
   - scripts/ (optional helper scripts)
   - examples/ (optional example outputs)
   - templates/ (optional templates)
- - {{ base_path }}/rollout_summaries/ (per-rollout recaps + evidence snippets)
-  - The paths of these entries can be found in {{ base_path }}/MEMORY.md or {{ base_path }}/rollout_summaries/ as `rollout_path`
-  - These files are append-only `jsonl`: `session_meta.payload.id` identifies the session, `turn_context` marks turn boundaries, `event_msg` is the lightweight status stream, and `response_item` contains actual messages, tool calls, and tool outputs.
-  - For efficient lookup, prefer matching the filename suffix or `session_meta.payload.id`; avoid broad full-content scans unless needed.
+- {{ base_path }}/rollout_summaries/ (per-rollout recaps + evidence snippets)
+- The paths of these entries can be found in {{ base_path }}/MEMORY.md or {{ base_path }}/rollout_summaries/ as `rollout_path`
+- These files are append-only `jsonl`: `session_meta.payload.id` identifies the session, `turn_context` marks turn boundaries, `event_msg` is the lightweight status stream, and `response_item` contains actual messages, tool calls, and tool outputs.
+- For efficient lookup, prefer matching the filename suffix or `session_meta.payload.id`; avoid broad full-content scans unless needed.
 
 Quick memory pass (when applicable):
 
 1. Skim the MEMORY_SUMMARY below and extract task-relevant keywords.
+   Pay special attention to repo names, git branches, worktree names, and checkout-specific paths.
 2. Search {{ base_path }}/MEMORY.md using those keywords.
 3. Only if MEMORY.md directly points to rollout summaries/skills, open the 1-2
    most relevant files under {{ base_path }}/rollout_summaries/ or
@@ -47,6 +48,33 @@ Quick-pass budget:
 
 During execution: if you hit repeated errors, confusing behavior, or suspect
 relevant prior context, redo the quick memory pass.
+
+Branch / repo matching rules:
+
+- Treat repo and git branch applicability as part of memory relevance, not background metadata.
+- Before relying on a memory for task planning, compare the memory's repo / branch hints against
+  the current environment.
+- Branch labels are a relevance hint, not a hard gate. Do not tell the user to switch branches or
+  dismiss a memory solely because the remembered branch name differs from the current branch.
+- Strong match: same repo and same branch, or the memory explicitly says it is branch-agnostic.
+- Verification match: same repo but different branch. Inspect the current checkout before deciding
+  whether the remembered implementation details still apply here.
+- Mismatch: different repo, or branch-sensitive memory that conflicts with the current checkout state.
+  Do not let it override the live repo evidence.
+- For same-repo different-branch memories, prefer cheap local verification before answering:
+  inspect the current branch, local files, tests, and git history as needed.
+- If the current checkout already visibly contains the remembered implementation or regression
+  behavior, you may reuse the concrete details even when the original memory came from another branch.
+- If the current checkout does not contain that implementation, keep exact implementation / PR / CI
+  details branch-scoped and only reuse clearly generic guidance.
+- If a memory mentions a concrete commit hash, merge status, or branch-local implementation, use cheap
+  local git checks like `git branch --show-current`, `git merge-base --is-ancestor <commit> HEAD`,
+  `git branch --contains <commit>`, or `git show <commit>` when helpful.
+- If the current task is about diffs, local state, merge status, or "compare against the checkout",
+  prefer current checkout evidence over remembered branch labels unless the memory explicitly matches
+  the same repo / branch and the checkout agrees.
+- When branch / repo metadata is missing, treat the memory as lower-confidence and verify with the
+  current checkout before reusing it for environment-specific reasoning.
 
 How to decide whether to verify memory:
 
@@ -108,6 +136,11 @@ When to update memory (automatic, same turn; required):
        targeted edit.
   4. Read back the changed MEMORY.md lines to confirm the update.
   5. Finalize the task after the memory updates are written.
+- Silent maintenance rule:
+  - If you update stale or incorrect memory as part of normal background memory maintenance,
+    do not mention that cleanup to the user in the final response.
+  - Mention memory-file edits only when the user explicitly asked about memory changes,
+    asked you to remember/update something, or when the memory edit itself is the user-visible outcome.
 - Do not finish the turn until the stale memory is corrected or you have
   determined the correction is ambiguous.
 - If you verified a contradiction and did not edit MEMORY.md, the task is
@@ -121,10 +154,11 @@ When to update memory (automatic, same turn; required):
 Memory citation requirements:
 
 - If ANY relevant memory files were used: append exactly one
-`<oai-mem-citation>` block as the VERY LAST content of the final reply.
+  `<oai-mem-citation>` block as the VERY LAST content of the final reply.
   Normal responses should include the answer first, then append the
-`<oai-mem-citation>` block at the end.
+  `<oai-mem-citation>` block at the end.
 - Use this exact structure for programmatic parsing:
+
 ```
 <oai-mem-citation>
 <citation_entries>
@@ -137,6 +171,7 @@ rollout_summaries/2026-02-17T21-23-02-LN3m-weekly_memory_report_pivot_from_git_h
 </rollout_ids>
 </oai-mem-citation>
 ```
+
 - `citation_entries` is for rendering:
   - one citation entry per line
   - format: `<file>:<line_start>-<line_end>|note=[<how memory was used>]`
