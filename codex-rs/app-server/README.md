@@ -228,7 +228,7 @@ Start a fresh thread when you need a new Codex conversation.
 
 Valid `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. When `"none"` is selected, the personality placeholder is replaced with an empty string.
 
-To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, including `approvalReviewPolicy`:
+To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, including the [UNSTABLE] `approvalReviewPolicy` field:
 
 ```json
 { "method": "thread/resume", "id": 11, "params": {
@@ -421,7 +421,7 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 
 You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn.
 
-`approvalReviewPolicy` accepts:
+`approvalReviewPolicy` is [UNSTABLE] and accepts:
 
 - `"manual-only"` — keep approval requests manual.
 - `"auto-only"` — let Codex automatically review `on-request` approvals instead of blocking on user input.
@@ -837,18 +837,18 @@ Today both notifications carry an empty `items` array even when item events were
 - `contextCompaction` — `{id}` emitted when codex compacts the conversation history. This can happen automatically.
 - `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically. **Deprecated:** Use `contextCompaction` instead.
 
-Tool items (`commandExecution`, `fileChange`, and `mcpToolCall`) may include an `approval` object:
+Tool items (`commandExecution`, `fileChange`, and `mcpToolCall`) may include an [UNSTABLE] `approval` object:
 
 - `approval.status` — `pending`, `approved`, `declined`, or `cancelled`
 - `approval.pendingKind?` — `manualRequest` or `automaticReview`
 - `approval.resolvedBy?` — `user` or `automatic`
-- `approval.automaticReview?` — `{status, riskScore?, riskLevel?, rationale?}` for automatic approval review state
+- `approval.automaticReview?` — [UNSTABLE] `{status, riskScore?, riskLevel?, rationale?}` for automatic approval review state
 
 All items emit shared lifecycle events:
 
 - `item/started` — emits the full `item` when a new unit of work begins so the UI can render it immediately; the `item.id` in this payload matches the `itemId` used by deltas.
 - `item/completed` — sends the final `item` once that work finishes (e.g., after a tool call or message completes); treat this as the authoritative state.
-- `item/autoApprovalReviewStarted` — sent when an automatic approval review begins for an item, with the latest full `item` snapshot.
+- `item/autoApprovalReviewStarted` — [UNSTABLE] sent when an automatic approval review begins for an item, with the latest full `item` snapshot.
 
 There are additional item-specific events:
 

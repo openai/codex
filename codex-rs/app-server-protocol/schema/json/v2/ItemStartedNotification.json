@@ -2,6 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
     "AutomaticApprovalReview": {
+      "description": "[UNSTABLE] Automatic approval review details for an item.",
       "properties": {
         "rationale": {
           "type": [
@@ -37,6 +38,7 @@
       "type": "object"
     },
     "AutomaticApprovalReviewStatus": {
+      "description": "[UNSTABLE] Lifecycle state for an automatic approval review.",
       "enum": [
         "inProgress",
         "approved",
@@ -300,6 +302,7 @@
       "type": "object"
     },
     "ItemApprovalPendingKind": {
+      "description": "[UNSTABLE] Whether a pending approval is waiting on manual input or automatic review.",
       "enum": [
         "manualRequest",
         "automaticReview"
@@ -307,6 +310,7 @@
       "type": "string"
     },
     "ItemApprovalResolvedBy": {
+      "description": "[UNSTABLE] Who ultimately resolved an approval request.",
       "enum": [
         "user",
         "automatic"
@@ -314,6 +318,7 @@
       "type": "string"
     },
     "ItemApprovalState": {
+      "description": "[UNSTABLE] Approval state attached to a tool item.",
       "properties": {
         "automaticReview": {
           "anyOf": [
@@ -483,6 +488,7 @@
       ]
     },
     "RiskLevel": {
+      "description": "[UNSTABLE] Risk level assigned by automatic approval review.",
       "enum": [
         "low",
         "medium",
@@ -653,7 +659,8 @@
                 {
                   "type": "null"
                 }
-              ]
+              ],
+              "description": "[UNSTABLE] Approval state for this command execution."
             },
             "command": {
               "description": "The command to be executed.",
@@ -728,7 +735,8 @@
                 {
                   "type": "null"
                 }
-              ]
+              ],
+              "description": "[UNSTABLE] Approval state for this file change."
             },
             "changes": {
               "items": {
@@ -769,7 +777,8 @@
                 {
                   "type": "null"
                 }
-              ]
+              ],
+              "description": "[UNSTABLE] Approval state for this MCP tool call."
             },
             "arguments": true,
             "durationMs": {

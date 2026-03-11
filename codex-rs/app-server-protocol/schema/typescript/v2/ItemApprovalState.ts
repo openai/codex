@@ -6,4 +6,7 @@ import type { ItemApprovalPendingKind } from "./ItemApprovalPendingKind";
 import type { ItemApprovalResolvedBy } from "./ItemApprovalResolvedBy";
 import type { ItemApprovalStatus } from "./ItemApprovalStatus";
 
+/**
+ * [UNSTABLE] Approval state attached to a tool item.
+ */
 export type ItemApprovalState = { status: ItemApprovalStatus, pendingKind: ItemApprovalPendingKind | null, resolvedBy: ItemApprovalResolvedBy | null, automaticReview: AutomaticApprovalReview | null, };

@@ -33,8 +33,8 @@ path?: string | null, /**
  * Configuration overrides for the resumed thread, if any.
  */
 model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier | null | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, /**
- * Override whether approvals stay manual or are automatically reviewed
- * for this thread and subsequent turns.
+ * [UNSTABLE] Override whether approvals stay manual or are automatically
+ * reviewed for this thread and subsequent turns.
  */
 approvalReviewPolicy?: ApprovalReviewPolicy | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, /**
  * If true, persist additional rollout EventMsg variants required to

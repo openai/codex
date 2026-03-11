@@ -6,6 +6,7 @@
       "type": "string"
     },
     "ApprovalReviewPolicy": {
+      "description": "[UNSTABLE] Controls whether approvals remain manual or are automatically reviewed.",
       "enum": [
         "manual-only",
         "auto-only"
@@ -2524,7 +2525,7 @@
               "type": "null"
             }
           ],
-          "description": "Override whether approvals stay manual or are automatically reviewed for this thread and subsequent turns."
+          "description": "[UNSTABLE] Override whether approvals stay manual or are automatically reviewed for this thread and subsequent turns."
         },
         "baseInstructions": {
           "type": [
@@ -2815,7 +2816,7 @@
               "type": "null"
             }
           ],
-          "description": "Override whether approvals stay manual or are automatically reviewed for this thread and subsequent turns."
+          "description": "[UNSTABLE] Override whether approvals stay manual or are automatically reviewed for this thread and subsequent turns."
         },
         "baseInstructions": {
           "type": [
@@ -2977,7 +2978,7 @@
               "type": "null"
             }
           ],
-          "description": "Override whether approvals stay manual or are automatically reviewed for this thread and subsequent turns."
+          "description": "[UNSTABLE] Override whether approvals stay manual or are automatically reviewed for this thread and subsequent turns."
         },
         "baseInstructions": {
           "type": [
@@ -3127,7 +3128,7 @@
               "type": "null"
             }
           ],
-          "description": "Override whether approvals stay manual or are automatically reviewed for this turn and subsequent turns."
+          "description": "[UNSTABLE] Override whether approvals stay manual or are automatically reviewed for this turn and subsequent turns."
         },
         "cwd": {
           "description": "Override the working directory for this turn and subsequent turns.",

@@ -4,4 +4,7 @@
 import type { AutomaticApprovalReviewStatus } from "./AutomaticApprovalReviewStatus";
 import type { RiskLevel } from "./RiskLevel";
 
+/**
+ * [UNSTABLE] Automatic approval review details for an item.
+ */
 export type AutomaticApprovalReview = { status: AutomaticApprovalReviewStatus, riskScore: number | null, riskLevel: RiskLevel | null, rationale: string | null, };

@@ -10,6 +10,7 @@ import type { Thread } from "./Thread";
 
 export type ThreadStartResponse = { thread: Thread, model: string, modelProvider: string, serviceTier: ServiceTier | null, cwd: string, approvalPolicy: AskForApproval, 
 /**
- * Whether approvals remain manual or are automatically reviewed.
+ * [UNSTABLE] Whether approvals remain manual or are automatically
+ * reviewed.
  */
 approvalReviewPolicy: ApprovalReviewPolicy, sandbox: SandboxPolicy, reasoningEffort: ReasoningEffort | null, };

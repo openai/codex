@@ -17,7 +17,7 @@ import type { SandboxWorkspaceWrite } from "./SandboxWorkspaceWrite";
 import type { ToolsV2 } from "./ToolsV2";
 
 export type Config = {model: string | null, review_model: string | null, model_context_window: bigint | null, model_auto_compact_token_limit: bigint | null, model_provider: string | null, approval_policy: AskForApproval | null, /**
- * Optional default for how approval requests are reviewed. Use
+ * [UNSTABLE] Optional default for how approval requests are reviewed. Use
  * `manual-only` for user approval prompts or `auto-only` for automatic
  * approval review.
  */

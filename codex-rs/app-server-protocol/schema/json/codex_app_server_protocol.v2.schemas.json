@@ -621,6 +621,7 @@
       "type": "object"
     },
     "ApprovalReviewPolicy": {
+      "description": "[UNSTABLE] Controls whether approvals remain manual or are automatically reviewed.",
       "enum": [
         "manual-only",
         "auto-only"
@@ -797,6 +798,7 @@
     },
     "AutoApprovalReviewStartedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "[UNSTABLE] Sent when automatic approval review begins for an item.",
       "properties": {
         "item": {
           "$ref": "#/definitions/ThreadItem"
@@ -817,6 +819,7 @@
       "type": "object"
     },
     "AutomaticApprovalReview": {
+      "description": "[UNSTABLE] Automatic approval review details for an item.",
       "properties": {
         "rationale": {
           "type": [
@@ -852,6 +855,7 @@
       "type": "object"
     },
     "AutomaticApprovalReviewStatus": {
+      "description": "[UNSTABLE] Lifecycle state for an automatic approval review.",
       "enum": [
         "inProgress",
         "approved",
@@ -3083,7 +3087,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional default for how approval requests are reviewed. Use `manual-only` for user approval prompts or `auto-only` for automatic approval review."
+          "description": "[UNSTABLE] Optional default for how approval requests are reviewed. Use `manual-only` for user approval prompts or `auto-only` for automatic approval review."
         },
         "compact_prompt": {
           "type": [
@@ -8418,6 +8422,7 @@
       ]
     },
     "ItemApprovalPendingKind": {
+      "description": "[UNSTABLE] Whether a pending approval is waiting on manual input or automatic review.",
       "enum": [
         "manualRequest",
         "automaticReview"
@@ -8425,6 +8430,7 @@
       "type": "string"
     },
     "ItemApprovalResolvedBy": {
+      "description": "[UNSTABLE] Who ultimately resolved an approval request.",
       "enum": [
         "user",
         "automatic"
@@ -8432,6 +8438,7 @@
       "type": "string"
     },
     "ItemApprovalState": {
+      "description": "[UNSTABLE] Approval state attached to a tool item.",
       "properties": {
         "automaticReview": {
           "anyOf": [
@@ -10232,7 +10239,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional override for how approval requests are reviewed in this profile. Use `manual-only` for user approval prompts or `auto-only` for automatic approval review."
+          "description": "[UNSTABLE] Optional override for how approval requests are reviewed in this profile. Use `manual-only` for user approval prompts or `auto-only` for automatic approval review."
         },
         "chatgpt_base_url": {
           "type": [
@@ -11971,6 +11978,7 @@
       ]
     },
     "RiskLevel": {
+      "description": "[UNSTABLE] Risk level assigned by automatic approval review.",
       "enum": [
         "low",
         "medium",
@@ -13945,7 +13953,7 @@
               "type": "null"
             }
           ],
-          "description": "Override whether approvals stay manual or are automatically reviewed for this thread and subsequent turns."
+          "description": "[UNSTABLE] Override whether approvals stay manual or are automatically reviewed for this thread and subsequent turns."
         },
         "baseInstructions": {
           "type": [
@@ -14037,7 +14045,7 @@
               "$ref": "#/definitions/ApprovalReviewPolicy"
             }
           ],
-          "description": "Whether approvals remain manual or are automatically reviewed."
+          "description": "[UNSTABLE] Whether approvals remain manual or are automatically reviewed."
         },
         "cwd": {
           "type": "string"
@@ -14230,7 +14238,8 @@
                 {
                   "type": "null"
                 }
-              ]
+              ],
+              "description": "[UNSTABLE] Approval state for this command execution."
             },
             "command": {
               "description": "The command to be executed.",
@@ -14305,7 +14314,8 @@
                 {
                   "type": "null"
                 }
-              ]
+              ],
+              "description": "[UNSTABLE] Approval state for this file change."
             },
             "changes": {
               "items": {
@@ -14346,7 +14356,8 @@
                 {
                   "type": "null"
                 }
-              ]
+              ],
+              "description": "[UNSTABLE] Approval state for this MCP tool call."
             },
             "arguments": true,
             "durationMs": {
@@ -15113,7 +15124,7 @@
               "type": "null"
             }
           ],
-          "description": "Override whether approvals stay manual or are automatically reviewed for this thread and subsequent turns."
+          "description": "[UNSTABLE] Override whether approvals stay manual or are automatically reviewed for this thread and subsequent turns."
         },
         "baseInstructions": {
           "type": [
@@ -15212,7 +15223,7 @@
               "$ref": "#/definitions/ApprovalReviewPolicy"
             }
           ],
-          "description": "Whether approvals remain manual or are automatically reviewed."
+          "description": "[UNSTABLE] Whether approvals remain manual or are automatically reviewed."
         },
         "cwd": {
           "type": "string"
@@ -15366,7 +15377,7 @@
               "type": "null"
             }
           ],
-          "description": "Override whether approvals stay manual or are automatically reviewed for this thread and subsequent turns."
+          "description": "[UNSTABLE] Override whether approvals stay manual or are automatically reviewed for this thread and subsequent turns."
         },
         "baseInstructions": {
           "type": [
@@ -15470,7 +15481,7 @@
               "$ref": "#/definitions/ApprovalReviewPolicy"
             }
           ],
-          "description": "Whether approvals remain manual or are automatically reviewed."
+          "description": "[UNSTABLE] Whether approvals remain manual or are automatically reviewed."
         },
         "cwd": {
           "type": "string"
@@ -16307,7 +16318,7 @@
               "type": "null"
             }
           ],
-          "description": "Override whether approvals stay manual or are automatically reviewed for this turn and subsequent turns."
+          "description": "[UNSTABLE] Override whether approvals stay manual or are automatically reviewed for this turn and subsequent turns."
         },
         "cwd": {
           "description": "Override the working directory for this turn and subsequent turns.",
