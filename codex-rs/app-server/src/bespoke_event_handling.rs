@@ -53,6 +53,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
+use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ModelReroutedNotification;
 use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
 use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
@@ -3555,9 +3556,8 @@ mod tests {
             state.track_current_turn_event(&EventMsg::GuardianAssessment(
                 in_progress_assessment.clone(),
             ));
-            state.track_current_turn_event(&EventMsg::GuardianAssessment(
-                denied_assessment.clone(),
-            ));
+            state
+                .track_current_turn_event(&EventMsg::GuardianAssessment(denied_assessment.clone()));
         }
 
         apply_bespoke_event_handling(
