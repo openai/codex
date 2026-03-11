@@ -128,7 +128,7 @@ jobs:
 
           print_interesting_console_failure_lines() {
             local console_log="$1"
-            local failure_pattern='^ERROR: |^FAILED:|^FAIL: |^error: |^Caused by:|panicked at|assertion .* failed|^failures:$|^failures:|^test result: FAILED|^  --> '
+            local failure_pattern='^ERROR: |^FAILED:|^FAIL: |^error: |^Caused by:|panicked at|assertion .* failed|^failures:$|^failures:|^test result: FAILED'
 
             grep -nE -C 2 "$failure_pattern" "$console_log" | tail -n 160
           }
