@@ -706,22 +706,23 @@ mod tests {
     #[test]
     fn agent_shortcut_matches_option_arrows_only() {
         assert!(previous_agent_shortcut_matches(
-            KeyEvent::new(KeyCode::Left, crossterm::event::KeyModifiers::ALT),
-            false,
+            KeyEvent::new(KeyCode::Left, crossterm::event::KeyModifiers::ALT,),
+            false
         ));
         assert!(next_agent_shortcut_matches(
-            KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::ALT),
-            false,
+            KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::ALT,),
+            false
         ));
         assert!(!previous_agent_shortcut_matches(
-            KeyEvent::new(KeyCode::Char('b'), crossterm::event::KeyModifiers::ALT),
-            false,
+            KeyEvent::new(KeyCode::Char('b'), crossterm::event::KeyModifiers::ALT,),
+            false
         ));
         assert!(!next_agent_shortcut_matches(
-            KeyEvent::new(KeyCode::Char('f'), crossterm::event::KeyModifiers::ALT),
-            false,
+            KeyEvent::new(KeyCode::Char('f'), crossterm::event::KeyModifiers::ALT,),
+            false
         ));
     }
+
     #[test]
     fn title_styles_nickname_and_role() {
         let sender_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000001")

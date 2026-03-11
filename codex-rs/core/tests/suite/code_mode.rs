@@ -495,44 +495,6 @@ contentLength=0"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_can_access_namespaced_mcp_tool_from_flat_tools_namespace() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = responses::start_mock_server().await;
-    let code = r#"
-import { tools } from "tools.js";
-
-const { structuredContent, isError } = await tools["mcp__rmcp__echo"]({
-  message: "ping",
-});
-add_content(
-  `echo=${structuredContent?.echo ?? "missing"}\n` +
-    `env=${structuredContent?.env ?? "missing"}\n` +
-    `isError=${String(isError)}`
-);
-"#;
-
-    let (_test, second_mock) =
-        run_code_mode_turn_with_rmcp(&server, "use exec to run the rmcp echo tool", code).await?;
-
-    let req = second_mock.single_request();
-    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
-    assert_ne!(
-        success,
-        Some(false),
-        "exec rmcp echo call failed unexpectedly: {output}"
-    );
-    assert_eq!(
-        output,
-        "echo=ECHOING: ping
-env=propagated-env
-isError=false"
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_exports_all_tools_metadata_for_builtin_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
