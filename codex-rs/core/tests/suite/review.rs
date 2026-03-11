@@ -244,8 +244,8 @@ async fn review_filters_agent_message_related_events() {
             "type":"message", "role":"assistant", "id":"msg-1",
             "content":[{"type":"output_text","text":""}]
         }},
-        {"type":"response.output_text.delta", "delta":"Hi"},
-        {"type":"response.output_text.delta", "delta":" there"},
+        {"type":"response.output_text.delta", "item_id":"msg-1", "delta":"Hi"},
+        {"type":"response.output_text.delta", "item_id":"msg-1", "delta":" there"},
         {"type":"response.output_item.done", "item":{
             "type":"message", "role":"assistant", "id":"msg-1",
             "content":[{"type":"output_text","text":"Hi there"}]

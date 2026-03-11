@@ -44,7 +44,7 @@ async fn plan_mode_uses_proposed_plan_block_for_plan_item() -> Result<()> {
     let responses = vec![responses::sse(vec![
         responses::ev_response_created("resp-1"),
         responses::ev_message_item_added("msg-1", ""),
-        responses::ev_output_text_delta(&full_message),
+        responses::ev_output_text_delta("msg-1", &full_message),
         responses::ev_assistant_message("msg-1", &full_message),
         responses::ev_completed("resp-1"),
     ])];

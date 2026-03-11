@@ -68,16 +68,22 @@ pub enum ResponseEvent {
         response_id: String,
         token_usage: Option<TokenUsage>,
     },
-    OutputTextDelta(String),
+    OutputTextDelta {
+        item_id: String,
+        delta: String,
+    },
     ReasoningSummaryDelta {
+        item_id: String,
         delta: String,
         summary_index: i64,
     },
     ReasoningContentDelta {
+        item_id: String,
         delta: String,
         content_index: i64,
     },
     ReasoningSummaryPartAdded {
+        item_id: String,
         summary_index: i64,
     },
     RateLimits(RateLimitSnapshot),

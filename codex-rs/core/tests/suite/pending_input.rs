@@ -60,11 +60,11 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
         },
         StreamingSseChunk {
             gate: None,
-            body: sse_event(ev_output_text_delta("first ")),
+            body: sse_event(ev_output_text_delta("msg-1", "first ")),
         },
         StreamingSseChunk {
             gate: None,
-            body: sse_event(ev_output_text_delta("turn")),
+            body: sse_event(ev_output_text_delta("msg-1", "turn")),
         },
         StreamingSseChunk {
             gate: None,

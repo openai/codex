@@ -162,6 +162,7 @@ pub struct ResponsesStreamEvent {
     headers: Option<Value>,
     response: Option<Value>,
     item: Option<Value>,
+    item_id: Option<String>,
     delta: Option<String>,
     summary_index: Option<i64>,
     content_index: Option<i64>,
@@ -241,21 +242,27 @@ pub fn process_responses_event(
             }
         }
         "response.output_text.delta" => {
-            if let Some(delta) = event.delta {
-                return Ok(Some(ResponseEvent::OutputTextDelta(delta)));
+            if let (Some(item_id), Some(delta)) = (event.item_id, event.delta) {
+                return Ok(Some(ResponseEvent::OutputTextDelta { item_id, delta }));
             }
         }
         "response.reasoning_summary_text.delta" => {
-            if let (Some(delta), Some(summary_index)) = (event.delta, event.summary_index) {
+            if let (Some(item_id), Some(delta), Some(summary_index)) =
+                (event.item_id, event.delta, event.summary_index)
+            {
                 return Ok(Some(ResponseEvent::ReasoningSummaryDelta {
+                    item_id,
                     delta,
                     summary_index,
                 }));
             }
         }
         "response.reasoning_text.delta" => {
-            if let (Some(delta), Some(content_index)) = (event.delta, event.content_index) {
+            if let (Some(item_id), Some(delta), Some(content_index)) =
+                (event.item_id, event.delta, event.content_index)
+            {
                 return Ok(Some(ResponseEvent::ReasoningContentDelta {
+                    item_id,
                     delta,
                     content_index,
                 }));
@@ -335,8 +342,9 @@ pub fn process_responses_event(
             }
         }
         "response.reasoning_summary_part.added" => {
-            if let Some(summary_index) = event.summary_index {
+            if let (Some(item_id), Some(summary_index)) = (event.item_id, event.summary_index) {
                 return Ok(Some(ResponseEvent::ReasoningSummaryPartAdded {
+                    item_id,
                     summary_index,
                 }));
             }

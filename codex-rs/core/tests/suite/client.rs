@@ -2299,7 +2299,7 @@ async fn incomplete_response_emits_content_filter_error_message() -> anyhow::Res
     let incomplete_response = sse(vec![
         ev_response_created("resp_incomplete"),
         ev_message_item_added("msg_incomplete", "partial content"),
-        ev_output_text_delta("continued chunk"),
+        ev_output_text_delta("msg_incomplete", "continued chunk"),
         json!({
             "type": "response.incomplete",
             "response": {
@@ -2543,9 +2543,9 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
             "type":"message", "role":"assistant",
             "content":[{"type":"output_text","text":""}]
         }},
-        {"type":"response.output_text.delta", "delta":"Hey "},
-        {"type":"response.output_text.delta", "delta":"there"},
-        {"type":"response.output_text.delta", "delta":"!\n"},
+        {"type":"response.output_text.delta", "item_id":"msg-1", "delta":"Hey "},
+        {"type":"response.output_text.delta", "item_id":"msg-1", "delta":"there"},
+        {"type":"response.output_text.delta", "item_id":"msg-1", "delta":"!\n"},
         {"type":"response.output_item.done", "item":{
             "type":"message", "role":"assistant",
             "content":[{"type":"output_text","text":"Hey there!\n"}]

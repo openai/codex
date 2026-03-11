@@ -201,7 +201,7 @@ async fn codex_delegate_ignores_legacy_deltas() {
     let sse_stream = sse(vec![
         ev_response_created("resp-1"),
         ev_reasoning_item_added("reason-1", &["initial"]),
-        ev_reasoning_summary_text_delta("think-1"),
+        ev_reasoning_summary_text_delta("reason-1", "think-1"),
         ev_completed("resp-1"),
     ]);
 

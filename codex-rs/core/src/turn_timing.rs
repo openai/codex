@@ -104,7 +104,7 @@ fn response_event_records_turn_ttft(event: &ResponseEvent) -> bool {
         ResponseEvent::OutputItemDone(item) | ResponseEvent::OutputItemAdded(item) => {
             response_item_records_turn_ttft(item)
         }
-        ResponseEvent::OutputTextDelta(_)
+        ResponseEvent::OutputTextDelta { .. }
         | ResponseEvent::ReasoningSummaryDelta { .. }
         | ResponseEvent::ReasoningContentDelta { .. } => true,
         ResponseEvent::Created
@@ -170,7 +170,10 @@ mod tests {
         let state = TurnTimingState::default();
         assert_eq!(
             state
-                .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta("hi".to_string()))
+                .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta {
+                    item_id: "msg-1".to_string(),
+                    delta: "hi".to_string(),
+                })
                 .await,
             None
         );
@@ -184,15 +187,19 @@ mod tests {
         );
         assert!(
             state
-                .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta("hi".to_string()))
+                .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta {
+                    item_id: "msg-1".to_string(),
+                    delta: "hi".to_string(),
+                })
                 .await
                 .is_some()
         );
         assert_eq!(
             state
-                .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta(
-                    "again".to_string()
-                ))
+                .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta {
+                    item_id: "msg-1".to_string(),
+                    delta: "again".to_string(),
+                })
                 .await,
             None
         );
@@ -205,7 +212,10 @@ mod tests {
 
         assert!(
             state
-                .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta("hi".to_string()))
+                .record_ttft_for_response_event(&ResponseEvent::OutputTextDelta {
+                    item_id: "msg-1".to_string(),
+                    delta: "hi".to_string(),
+                })
                 .await
                 .is_some()
         );

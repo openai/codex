@@ -1862,11 +1862,11 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
         },
         StreamingSseChunk {
             gate: None,
-            body: sse_event(responses::ev_output_text_delta("first ")),
+            body: sse_event(responses::ev_output_text_delta("msg-1", "first ")),
         },
         StreamingSseChunk {
             gate: None,
-            body: sse_event(responses::ev_output_text_delta("turn")),
+            body: sse_event(responses::ev_output_text_delta("msg-1", "turn")),
         },
         StreamingSseChunk {
             gate: None,

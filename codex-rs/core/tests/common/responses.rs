@@ -650,9 +650,10 @@ pub fn ev_message_item_added(id: &str, text: &str) -> Value {
     })
 }
 
-pub fn ev_output_text_delta(delta: &str) -> Value {
+pub fn ev_output_text_delta(item_id: &str, delta: &str) -> Value {
     serde_json::json!({
         "type": "response.output_text.delta",
+        "item_id": item_id,
         "delta": delta,
     })
 }
@@ -705,17 +706,19 @@ pub fn ev_reasoning_item_added(id: &str, summary: &[&str]) -> Value {
     })
 }
 
-pub fn ev_reasoning_summary_text_delta(delta: &str) -> Value {
+pub fn ev_reasoning_summary_text_delta(item_id: &str, delta: &str) -> Value {
     serde_json::json!({
         "type": "response.reasoning_summary_text.delta",
+        "item_id": item_id,
         "delta": delta,
         "summary_index": 0,
     })
 }
 
-pub fn ev_reasoning_text_delta(delta: &str) -> Value {
+pub fn ev_reasoning_text_delta(item_id: &str, delta: &str) -> Value {
     serde_json::json!({
         "type": "response.reasoning_text.delta",
+        "item_id": item_id,
         "delta": delta,
         "content_index": 0,
     })

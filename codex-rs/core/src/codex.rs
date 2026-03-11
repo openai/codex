@@ -6402,6 +6402,16 @@ impl AssistantMessageStreamParsers {
     }
 }
 
+fn response_item_stream_id(item: &ResponseItem) -> Option<String> {
+    match item {
+        ResponseItem::Message { id, role, .. } if role == "assistant" => id.clone(),
+        ResponseItem::Reasoning { id, .. } => Some(id.clone()),
+        ResponseItem::WebSearchCall { id, .. } => Some(id.clone().unwrap_or_default()),
+        ResponseItem::ImageGenerationCall { id, .. } => Some(id.clone()),
+        _ => None,
+    }
+}
+
 impl ProposedPlanItemState {
     fn new(turn_id: &str) -> Self {
         Self {
@@ -6904,7 +6914,7 @@ async fn try_run_sampling_request(
         FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
-    let mut active_item: Option<TurnItem> = None;
+    let mut items_by_id: HashMap<String, TurnItem> = HashMap::new();
     let mut should_emit_turn_diff = false;
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
@@ -6947,7 +6957,8 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                let previously_active_item = active_item.take();
+                let previously_active_item =
+                    response_item_stream_id(&item).and_then(|item_id| items_by_id.remove(&item_id));
                 if let Some(previous) = previously_active_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
                 {
@@ -7048,7 +7059,7 @@ async fn try_run_sampling_request(
                         )
                         .await;
                     }
-                    active_item = Some(turn_item);
+                    items_by_id.insert(turn_item.id(), turn_item);
                 }
             }
             ResponseEvent::ServerModel(server_model) => {
@@ -7094,81 +7105,74 @@ async fn try_run_sampling_request(
                     last_agent_message,
                 });
             }
-            ResponseEvent::OutputTextDelta(delta) => {
+            ResponseEvent::OutputTextDelta { item_id, delta } => {
                 // In review child threads, suppress assistant text deltas; the
                 // UI will show a selection popup from the final ReviewOutput.
-                if let Some(active) = active_item.as_ref() {
-                    let item_id = active.id();
-                    if matches!(active, TurnItem::AgentMessage(_)) {
-                        let parsed = assistant_message_stream_parsers.parse_delta(&item_id, &delta);
-                        emit_streamed_assistant_text_delta(
-                            &sess,
-                            &turn_context,
-                            plan_mode_state.as_mut(),
-                            &item_id,
-                            parsed,
-                        )
-                        .await;
-                    } else {
-                        let event = AgentMessageContentDeltaEvent {
-                            thread_id: sess.conversation_id.to_string(),
-                            turn_id: turn_context.sub_id.clone(),
-                            item_id,
-                            delta,
-                        };
-                        sess.send_event(&turn_context, EventMsg::AgentMessageContentDelta(event))
-                            .await;
-                    }
+                if let Some(TurnItem::AgentMessage(_)) = items_by_id.get(&item_id) {
+                    let parsed = assistant_message_stream_parsers.parse_delta(&item_id, &delta);
+                    emit_streamed_assistant_text_delta(
+                        &sess,
+                        &turn_context,
+                        plan_mode_state.as_mut(),
+                        &item_id,
+                        parsed,
+                    )
+                    .await;
                 } else {
-                    error_or_panic("OutputTextDelta without active item".to_string());
+                    error_or_panic(format!("OutputTextDelta without item {item_id}"));
                 }
             }
             ResponseEvent::ReasoningSummaryDelta {
+                item_id,
                 delta,
                 summary_index,
             } => {
-                if let Some(active) = active_item.as_ref() {
+                if let Some(TurnItem::Reasoning(_)) = items_by_id.get(&item_id) {
                     let event = ReasoningContentDeltaEvent {
                         thread_id: sess.conversation_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
-                        item_id: active.id(),
+                        item_id,
                         delta,
                         summary_index,
                     };
                     sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
                         .await;
                 } else {
-                    error_or_panic("ReasoningSummaryDelta without active item".to_string());
+                    error_or_panic(format!("ReasoningSummaryDelta without item {item_id}"));
                 }
             }
-            ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
-                if let Some(active) = active_item.as_ref() {
+            ResponseEvent::ReasoningSummaryPartAdded {
+                item_id,
+                summary_index,
+            } => {
+                if let Some(TurnItem::Reasoning(_)) = items_by_id.get(&item_id) {
                     let event =
                         EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
-                            item_id: active.id(),
+                            item_id,
                             summary_index,
                         });
                     sess.send_event(&turn_context, event).await;
                 } else {
-                    error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
+                    error_or_panic(format!("ReasoningSummaryPartAdded without item {item_id}"));
                 }
             }
             ResponseEvent::ReasoningContentDelta {
+                item_id,
                 delta,
                 content_index,
             } => {
-                if let Some(active) = active_item.as_ref() {
+                if let Some(TurnItem::Reasoning(_)) = items_by_id.get(&item_id) {
                     let event = ReasoningRawContentDeltaEvent {
                         thread_id: sess.conversation_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
-                        item_id: active.id(),
+                        item_id,
                         delta,
                         content_index,
                     };
                     sess.send_event(&turn_context, EventMsg::ReasoningRawContentDelta(event))
                         .await;
                 } else {
-                    error_or_panic("ReasoningRawContentDelta without active item".to_string());
+                    error_or_panic(format!("ReasoningRawContentDelta without item {item_id}"));
                 }
             }
         }

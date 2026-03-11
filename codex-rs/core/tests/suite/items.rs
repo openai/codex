@@ -381,7 +381,7 @@ async fn agent_message_content_delta_has_item_metadata() -> anyhow::Result<()> {
     let stream = sse(vec![
         ev_response_created("resp-1"),
         ev_message_item_added("msg-1", ""),
-        ev_output_text_delta("streamed response"),
+        ev_output_text_delta("msg-1", "streamed response"),
         ev_assistant_message("msg-1", "streamed response"),
         ev_completed("resp-1"),
     ]);
@@ -438,6 +438,102 @@ async fn agent_message_content_delta_has_item_metadata() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interleaved_reasoning_and_assistant_streams_keep_item_ids_aligned() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let TestCodex { codex, .. } = test_codex().build(&server).await?;
+
+    let stream = sse(vec![
+        ev_response_created("resp-1"),
+        ev_reasoning_item_added("reasoning-1", &[""]),
+        ev_message_item_added("msg-1", ""),
+        ev_reasoning_summary_text_delta("reasoning-1", "thinking"),
+        ev_reasoning_item("reasoning-1", &["thinking"], &[]),
+        ev_output_text_delta("msg-1", "answer"),
+        ev_assistant_message("msg-1", "answer"),
+        ev_completed("resp-1"),
+    ]);
+    mount_sse_once(&server, stream).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "please reason and answer".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let reasoning_started = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::Reasoning(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
+    let agent_started = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::AgentMessage(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
+    let reasoning_delta = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ReasoningContentDelta(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    let reasoning_completed = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::Reasoning(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
+    let agent_delta = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::AgentMessageContentDelta(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    let agent_completed = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::AgentMessage(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(reasoning_started.id, "reasoning-1");
+    assert_eq!(reasoning_started.summary_text, vec![String::new()]);
+    assert_eq!(reasoning_delta.item_id, reasoning_started.id);
+    assert_eq!(reasoning_delta.delta, "thinking");
+    assert_eq!(reasoning_completed.id, reasoning_started.id);
+    assert_eq!(
+        reasoning_completed.summary_text,
+        vec!["thinking".to_string()]
+    );
+    assert_eq!(reasoning_completed.raw_content, Vec::<String>::new());
+
+    assert_eq!(agent_started.id, "msg-1");
+    assert_eq!(agent_delta.item_id, agent_started.id);
+    assert_eq!(agent_delta.delta, "answer");
+    assert_eq!(agent_completed.id, agent_started.id);
+    let Some(AgentMessageContent::Text { text }) = agent_completed.content.first() else {
+        panic!("expected completed agent message text content");
+    };
+    assert_eq!(text, "answer");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plan_mode_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -454,7 +550,7 @@ async fn plan_mode_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<
     let stream = sse(vec![
         ev_response_created("resp-1"),
         ev_message_item_added("msg-1", ""),
-        ev_output_text_delta(&full_message),
+        ev_output_text_delta("msg-1", &full_message),
         ev_assistant_message("msg-1", &full_message),
         ev_completed("resp-1"),
     ]);
@@ -530,7 +626,7 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
     let stream = sse(vec![
         ev_response_created("resp-1"),
         ev_message_item_added("msg-1", ""),
-        ev_output_text_delta(&full_message),
+        ev_output_text_delta("msg-1", &full_message),
         ev_assistant_message("msg-1", &full_message),
         ev_completed("resp-1"),
     ]);
@@ -638,7 +734,7 @@ async fn plan_mode_streaming_citations_are_stripped_across_added_deltas_and_done
         ev_message_item_added("msg-1", added_text),
     ];
     for delta in deltas {
-        events.push(ev_output_text_delta(delta));
+        events.push(ev_output_text_delta("msg-1", delta));
     }
     events.push(ev_assistant_message("msg-1", &full_message));
     events.push(ev_completed("resp-1"));
@@ -824,7 +920,7 @@ async fn plan_mode_streaming_proposed_plan_tag_split_across_added_and_delta_is_p
         ev_message_item_added("msg-1", added_text),
     ];
     for delta in deltas {
-        events.push(ev_output_text_delta(delta));
+        events.push(ev_output_text_delta("msg-1", delta));
     }
     events.push(ev_assistant_message("msg-1", &full_message));
     events.push(ev_completed("resp-1"));
@@ -937,7 +1033,7 @@ async fn plan_mode_handles_missing_plan_close_tag() -> anyhow::Result<()> {
     let stream = sse(vec![
         ev_response_created("resp-1"),
         ev_message_item_added("msg-1", ""),
-        ev_output_text_delta(full_message),
+        ev_output_text_delta("msg-1", full_message),
         ev_assistant_message("msg-1", full_message),
         ev_completed("resp-1"),
     ]);
@@ -1023,7 +1119,7 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
     let stream = sse(vec![
         ev_response_created("resp-1"),
         ev_reasoning_item_added("reasoning-1", &[""]),
-        ev_reasoning_summary_text_delta("step one"),
+        ev_reasoning_summary_text_delta("reasoning-1", "step one"),
         ev_reasoning_item("reasoning-1", &["step one"], &[]),
         ev_completed("resp-1"),
     ]);
@@ -1082,7 +1178,7 @@ async fn reasoning_raw_content_delta_respects_flag() -> anyhow::Result<()> {
     let stream = sse(vec![
         ev_response_created("resp-1"),
         ev_reasoning_item_added("reasoning-raw", &[""]),
-        ev_reasoning_text_delta("raw detail"),
+        ev_reasoning_text_delta("reasoning-raw", "raw detail"),
         ev_reasoning_item("reasoning-raw", &["complete"], &["raw detail"]),
         ev_completed("resp-1"),
     ]);
