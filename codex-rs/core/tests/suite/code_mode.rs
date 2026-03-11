@@ -574,12 +574,12 @@ async fn code_mode_can_print_content_only_mcp_tool_result_fields() -> Result<()>
 
     let server = responses::start_mock_server().await;
     let code = r#"
-	import { tools } from "tools/mcp/rmcp.js";
+import { image_scenario } from "tools/mcp/rmcp.js";
 
-	const { content, structuredContent, isError } = await tools["image-scenario"]({
-	  scenario: "text_only",
-	  caption: "caption from mcp",
-	});
+const { content, structuredContent, isError } = await image_scenario({
+  scenario: "text_only",
+  caption: "caption from mcp",
+});
 add_content(
   `firstType=${content[0]?.type ?? "missing"}\n` +
     `firstText=${content[0]?.text ?? "missing"}\n` +

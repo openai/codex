@@ -160,10 +160,14 @@ where
     let mut seen_raw_names = HashSet::new();
     let mut qualified_tools = HashMap::new();
     for tool in tools {
-        let qualified_name_raw = format!(
-            "mcp{}{}{}{}",
-            MCP_TOOL_NAME_DELIMITER, tool.server_name, MCP_TOOL_NAME_DELIMITER, tool.tool_name
-        );
+        let qualified_name_raw = if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+            format!(
+                "mcp{}{}{}{}",
+                MCP_TOOL_NAME_DELIMITER, tool.server_name, MCP_TOOL_NAME_DELIMITER, tool.tool_name
+            )
+        } else {
+            format!("{}{}", tool.tool_namespace, tool.tool_name)
+        };
         if !seen_raw_names.insert(qualified_name_raw.clone()) {
             warn!("skipping duplicated tool {}", qualified_name_raw);
             continue;
@@ -198,6 +202,7 @@ where
 pub(crate) struct ToolInfo {
     pub(crate) server_name: String,
     pub(crate) tool_name: String,
+    pub(crate) tool_namespace: String,
     pub(crate) tool: Tool,
     pub(crate) connector_id: Option<String>,
     pub(crate) connector_name: Option<String>,
@@ -1171,7 +1176,7 @@ impl ToolFilter {
 fn filter_tools(tools: Vec<ToolInfo>, filter: &ToolFilter) -> Vec<ToolInfo> {
     tools
         .into_iter()
-        .filter(|tool| filter.allows(&tool.tool_name))
+        .filter(|tool| filter.allows(&tool.tool.name))
         .collect()
 }
 
@@ -1209,6 +1214,57 @@ fn normalize_codex_apps_tool_title(
     }
 
     value.to_string()
+}
+
+fn normalize_codex_apps_tool_name(
+    server_name: &str,
+    tool_name: &str,
+    connector_id: Option<&str>,
+    connector_name: Option<&str>,
+) -> String {
+    if server_name != CODEX_APPS_MCP_SERVER_NAME {
+        return tool_name.to_string();
+    }
+
+    let tool_name = sanitize_name(tool_name);
+
+    if let Some(connector_name) = connector_name
+        .map(str::trim)
+        .map(sanitize_name)
+        .filter(|name| !name.is_empty())
+        && let Some(stripped) = tool_name.strip_prefix(&connector_name)
+        && !stripped.is_empty()
+    {
+        return stripped.to_string();
+    }
+
+    if let Some(connector_id) = connector_id
+        .map(str::trim)
+        .map(sanitize_name)
+        .filter(|name| !name.is_empty())
+        && let Some(stripped) = tool_name.strip_prefix(&connector_id)
+        && !stripped.is_empty()
+    {
+        return stripped.to_string();
+    }
+
+    tool_name
+}
+
+fn normalize_codex_apps_namespace(server_name: &str, connector_name: Option<&str>) -> String {
+    if server_name != CODEX_APPS_MCP_SERVER_NAME {
+        server_name.to_string()
+    } else if let Some(connector_name) = connector_name {
+        format!(
+            "mcp{}{}{}{}",
+            MCP_TOOL_NAME_DELIMITER,
+            server_name,
+            MCP_TOOL_NAME_DELIMITER,
+            sanitize_name(connector_name)
+        )
+    } else {
+        server_name.to_string()
+    }
 }
 
 fn resolve_bearer_token(
@@ -1529,7 +1585,14 @@ async fn list_tools_for_client_uncached(
         .tools
         .into_iter()
         .map(|tool| {
-            let tool_name = sanitize_name(&tool.tool.name);
+            let tool_name = normalize_codex_apps_tool_name(
+                server_name,
+                &tool.tool.name,
+                tool.connector_id.as_deref(),
+                tool.connector_name.as_deref(),
+            );
+            let tool_namespace =
+                normalize_codex_apps_namespace(server_name, tool.connector_name.as_deref());
             let connector_name = tool.connector_name;
             let connector_description = tool.connector_description;
             let mut tool_def = tool.tool;
@@ -1543,6 +1606,7 @@ async fn list_tools_for_client_uncached(
             ToolInfo {
                 server_name: server_name.to_owned(),
                 tool_name,
+                tool_namespace,
                 tool: tool_def,
                 connector_id: tool.connector_id,
                 connector_name,
@@ -1648,6 +1712,11 @@ mod tests {
         ToolInfo {
             server_name: server_name.to_string(),
             tool_name: tool_name.to_string(),
+            tool_namespace: if server_name == CODEX_APPS_MCP_SERVER_NAME {
+                format!("mcp__{server_name}__")
+            } else {
+                server_name.to_string()
+            },
             tool: Tool {
                 name: tool_name.to_string().into(),
                 title: None,

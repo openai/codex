@@ -21,8 +21,8 @@ use crate::tools::handlers::multi_agents::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
-use crate::tools::handlers::split_namespace_and_name;
 use crate::tools::registry::ToolRegistryBuilder;
+use crate::tools::registry::tool_handler_key;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -1451,10 +1451,6 @@ fn create_tool_search_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSpec {
     }
 }
 
-pub(crate) fn namespaced_tool_handler_name(namespace: &str, tool_name: &str) -> String {
-    format!("{namespace}:{tool_name}")
-}
-
 fn create_read_file_tool() -> ToolSpec {
     let indentation_properties = BTreeMap::from([
         (
@@ -2300,9 +2296,9 @@ pub(crate) fn build_specs(
         );
         builder.register_handler(TOOL_SEARCH_TOOL_NAME, search_tool_handler);
 
-        for (qualified_tool_name, tool) in &app_tools {
-            let (namespace, tool_name) = split_namespace_and_name(qualified_tool_name, tool);
-            let alias_name = namespaced_tool_handler_name(namespace.as_str(), tool_name.as_str());
+        for tool in app_tools.values() {
+            let alias_name =
+                tool_handler_key(tool.tool_name.as_str(), Some(tool.tool_namespace.as_str()));
 
             builder.register_handler(alias_name, mcp_handler.clone());
         }
@@ -4077,7 +4073,8 @@ mod tests {
                     "mcp__codex_apps__calendar-create-event".to_string(),
                     ToolInfo {
                         server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                        tool_name: "calendar-create-event".to_string(),
+                        tool_name: "-create-event".to_string(),
+                        tool_namespace: "mcp__codex_apps__calendar".to_string(),
                         tool: mcp_tool(
                             "calendar-create-event",
                             "Create calendar event",
@@ -4094,6 +4091,7 @@ mod tests {
                     ToolInfo {
                         server_name: "rmcp".to_string(),
                         tool_name: "echo".to_string(),
+                        tool_namespace: "rmcp".to_string(),
                         tool: mcp_tool("echo", "Echo", serde_json::json!({"type": "object"})),
                         connector_id: None,
                         connector_name: None,
@@ -4125,6 +4123,7 @@ mod tests {
             ToolInfo {
                 server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 tool_name: "calendar_create_event".to_string(),
+                tool_namespace: "mcp__codex_apps__calendar".to_string(),
                 tool: mcp_tool(
                     "calendar_create_event",
                     "Create calendar event",
@@ -4213,7 +4212,8 @@ mod tests {
                     "mcp__codex_apps__calendar-create-event".to_string(),
                     ToolInfo {
                         server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                        tool_name: "calendar-create-event".to_string(),
+                        tool_name: "-create-event".to_string(),
+                        tool_namespace: "mcp__codex_apps__calendar".to_string(),
                         tool: mcp_tool(
                             "calendar-create-event",
                             "Create calendar event",
@@ -4229,7 +4229,8 @@ mod tests {
                     "mcp__codex_apps__calendar-list-events".to_string(),
                     ToolInfo {
                         server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                        tool_name: "calendar-list-events".to_string(),
+                        tool_name: "-list-events".to_string(),
+                        tool_namespace: "mcp__codex_apps__calendar".to_string(),
                         tool: mcp_tool(
                             "calendar-list-events",
                             "List calendar events",
@@ -4246,7 +4247,7 @@ mod tests {
         )
         .build();
 
-        let alias = namespaced_tool_handler_name("mcp__codex_apps__calendar", "-create-event");
+        let alias = tool_handler_key("-create-event", Some("mcp__codex_apps__calendar"));
 
         assert!(registry.has_handler(TOOL_SEARCH_TOOL_NAME, None));
         assert!(registry.has_handler(alias.as_str(), None));

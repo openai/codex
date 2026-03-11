@@ -56,7 +56,6 @@ pub use test_sync::TestSyncHandler;
 pub(crate) use tool_search::DEFAULT_LIMIT as TOOL_SEARCH_DEFAULT_LIMIT;
 pub(crate) use tool_search::TOOL_SEARCH_TOOL_NAME;
 pub use tool_search::ToolSearchHandler;
-pub(crate) use tool_search::split_namespace_and_name;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;
 

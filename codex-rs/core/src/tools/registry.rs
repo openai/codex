@@ -12,7 +12,6 @@ use crate::sandbox_tags::sandbox_tag;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use crate::tools::spec::namespaced_tool_handler_name;
 use async_trait::async_trait;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterToolUse;
@@ -123,6 +122,14 @@ where
     }
 }
 
+pub(crate) fn tool_handler_key(tool_name: &str, namespace: Option<&str>) -> String {
+    if let Some(namespace) = namespace {
+        format!("{namespace}:{tool_name}")
+    } else {
+        tool_name.to_string()
+    }
+}
+
 pub struct ToolRegistry {
     handlers: HashMap<String, Arc<dyn AnyToolHandler>>,
 }
@@ -133,12 +140,9 @@ impl ToolRegistry {
     }
 
     fn handler(&self, name: &str, namespace: Option<&str>) -> Option<Arc<dyn AnyToolHandler>> {
-        if let Some(namespace) = namespace {
-            let name = namespaced_tool_handler_name(namespace, name);
-            self.handlers.get(&name).map(Arc::clone)
-        } else {
-            self.handlers.get(name).map(Arc::clone)
-        }
+        self.handlers
+            .get(&tool_handler_key(name, namespace))
+            .map(Arc::clone)
     }
 
     #[cfg(test)]
@@ -398,9 +402,7 @@ fn unsupported_tool_call_message(
     tool_name: &str,
     namespace: Option<&str>,
 ) -> String {
-    let tool_name = namespace
-        .map(|namespace| namespaced_tool_handler_name(namespace, tool_name))
-        .unwrap_or_else(|| tool_name.to_string());
+    let tool_name = tool_handler_key(tool_name, namespace);
     match payload {
         ToolPayload::Custom { .. } => format!("unsupported custom tool call: {tool_name}"),
         _ => format!("unsupported call: {tool_name}"),
@@ -575,7 +577,7 @@ mod tests {
         let namespaced_handler = Arc::new(TestHandler) as Arc<dyn AnyToolHandler>;
         let namespace = "mcp__codex_apps__gmail";
         let tool_name = "gmail_get_recent_emails";
-        let namespaced_name = namespaced_tool_handler_name(namespace, tool_name);
+        let namespaced_name = tool_handler_key(tool_name, Some(namespace));
         let registry = ToolRegistry::new(HashMap::from([
             (tool_name.to_string(), Arc::clone(&plain_handler)),
             (namespaced_name, Arc::clone(&namespaced_handler)),

@@ -1,7 +1,6 @@
 use crate::client_common::tools::ResponsesApiNamespace;
 use crate::client_common::tools::ResponsesApiNamespaceTool;
 use crate::client_common::tools::ToolSearchOutputTool;
-use crate::connectors::sanitize_name;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::tools::context::ToolInvocation;
@@ -101,14 +100,13 @@ impl ToolHandler for ToolSearchHandler {
 fn serialize_tool_search_output_tools(
     matched_entries: &[&(String, ToolInfo)],
 ) -> Result<Vec<ToolSearchOutputTool>, serde_json::Error> {
-    let grouped: BTreeMap<String, Vec<(String, ToolInfo)>> =
+    let grouped: BTreeMap<String, Vec<ToolInfo>> =
         matched_entries
             .iter()
-            .fold(BTreeMap::new(), |mut acc, (name, tool)| {
-                let (namespace, _) = split_namespace_and_name(name, tool);
-                acc.entry(namespace)
+            .fold(BTreeMap::new(), |mut acc, (_name, tool)| {
+                acc.entry(tool.tool_namespace.clone())
                     .or_default()
-                    .push((name.clone(), tool.clone()));
+                    .push(tool.clone());
 
                 acc
             });
@@ -119,9 +117,8 @@ fn serialize_tool_search_output_tools(
             continue;
         };
 
-        let description = first_tool.1.connector_description.clone().or_else(|| {
+        let description = first_tool.connector_description.clone().or_else(|| {
             first_tool
-                .1
                 .connector_name
                 .as_deref()
                 .map(str::trim)
@@ -131,9 +128,8 @@ fn serialize_tool_search_output_tools(
 
         let tools = tools
             .iter()
-            .map(|(name, tool)| {
-                let (_, tool_name) = split_namespace_and_name(name, tool);
-                mcp_tool_to_deferred_openai_tool(tool_name, tool.tool.clone())
+            .map(|tool| {
+                mcp_tool_to_deferred_openai_tool(tool.tool_name.clone(), tool.tool.clone())
                     .map(ResponsesApiNamespaceTool::Function)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -146,26 +142,6 @@ fn serialize_tool_search_output_tools(
     }
 
     Ok(results)
-}
-
-pub(crate) fn split_namespace_and_name(
-    qualified_tool_name: &str,
-    tool: &ToolInfo,
-) -> (String, String) {
-    let namespace = if let Some(connector_name) = tool.connector_name.clone() {
-        format!(
-            "mcp__{}__{}",
-            tool.server_name,
-            sanitize_name(&connector_name)
-        )
-    } else {
-        format!("mcp__{}", tool.server_name)
-    };
-    let tool_name = qualified_tool_name
-        .strip_prefix(&namespace)
-        .unwrap_or(&tool.tool_name);
-
-    (namespace, tool_name.to_string())
 }
 
 fn build_search_text(name: &str, info: &ToolInfo) -> String {
@@ -221,31 +197,6 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
 
-    fn test_tool_info(tool_name: &str, connector_name: Option<&str>) -> ToolInfo {
-        ToolInfo {
-            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            tool_name: tool_name.to_string(),
-            tool: Tool {
-                name: tool_name.to_string().into(),
-                title: None,
-                description: Some("Test tool.".into()),
-                input_schema: Arc::new(JsonObject::from_iter([(
-                    "type".to_string(),
-                    json!("object"),
-                )])),
-                output_schema: None,
-                annotations: None,
-                execution: None,
-                icons: None,
-                meta: None,
-            },
-            connector_id: None,
-            connector_name: connector_name.map(str::to_string),
-            plugin_display_names: Vec::new(),
-            connector_description: None,
-        }
-    }
-
     #[test]
     fn serialize_tool_search_output_tools_groups_results_by_namespace() {
         let entries = [
@@ -253,7 +204,8 @@ mod tests {
                 "mcp__codex_apps__calendar-create-event".to_string(),
                 ToolInfo {
                     server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                    tool_name: "calendar-create-event".to_string(),
+                    tool_name: "-create-event".to_string(),
+                    tool_namespace: "mcp__codex_apps__calendar".to_string(),
                     tool: Tool {
                         name: "calendar-create-event".to_string().into(),
                         title: None,
@@ -278,7 +230,8 @@ mod tests {
                 "mcp__codex_apps__gmail-read-email".to_string(),
                 ToolInfo {
                     server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                    tool_name: "gmail-read-email".to_string(),
+                    tool_name: "-read-email".to_string(),
+                    tool_namespace: "mcp__codex_apps__gmail".to_string(),
                     tool: Tool {
                         name: "gmail-read-email".to_string().into(),
                         title: None,
@@ -303,7 +256,8 @@ mod tests {
                 "mcp__codex_apps__calendar-list-events".to_string(),
                 ToolInfo {
                     server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                    tool_name: "calendar-list-events".to_string(),
+                    tool_name: "-list-events".to_string(),
+                    tool_namespace: "mcp__codex_apps__calendar".to_string(),
                     tool: Tool {
                         name: "calendar-list-events".to_string().into(),
                         title: None,
@@ -388,7 +342,8 @@ mod tests {
             "mcp__codex_apps__gmail-batch-read-email".to_string(),
             ToolInfo {
                 server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                tool_name: "gmail-batch-read-email".to_string(),
+                tool_name: "-batch-read-email".to_string(),
+                tool_namespace: "mcp__codex_apps__gmail".to_string(),
                 tool: Tool {
                     name: "gmail-batch-read-email".to_string().into(),
                     title: None,
@@ -430,41 +385,6 @@ mod tests {
                     output_schema: None,
                 })],
             })]
-        );
-    }
-
-    #[test]
-    fn split_namespace_and_name_splits_qualified_tool_name() {
-        assert_eq!(
-            split_namespace_and_name(
-                "mcp__codex_apps__gmail-batch-read-email",
-                &test_tool_info("gmail-batch-read-email", Some("Gmail"))
-            ),
-            (
-                "mcp__codex_apps__gmail".to_string(),
-                "-batch-read-email".to_string()
-            )
-        );
-        assert_eq!(
-            split_namespace_and_name(
-                "mcp__codex_apps__gmail-search-emails-personalization",
-                &test_tool_info("gmail-search-emails-personalization", Some("Gmail"))
-            ),
-            (
-                "mcp__codex_apps__gmail".to_string(),
-                "-search-emails-personalization".to_string()
-            )
-        );
-    }
-
-    #[test]
-    fn split_namespace_and_name_uses_server_name_without_connector_name() {
-        assert_eq!(
-            split_namespace_and_name(
-                "mcp__codex_apps__read-email",
-                &test_tool_info("read-email", None)
-            ),
-            ("mcp__codex_apps".to_string(), "__read-email".to_string())
         );
     }
 }

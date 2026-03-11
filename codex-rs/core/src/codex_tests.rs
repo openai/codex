@@ -259,9 +259,19 @@ fn make_mcp_tool(
     connector_id: Option<&str>,
     connector_name: Option<&str>,
 ) -> ToolInfo {
+    let tool_namespace = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        connector_name
+            .map(crate::connectors::sanitize_name)
+            .map(|connector_name| format!("mcp__{server_name}__{connector_name}"))
+            .unwrap_or_else(|| server_name.to_string())
+    } else {
+        server_name.to_string()
+    };
+
     ToolInfo {
         server_name: server_name.to_string(),
         tool_name: tool_name.to_string(),
+        tool_namespace,
         tool: Tool {
             name: tool_name.to_string().into(),
             title: None,

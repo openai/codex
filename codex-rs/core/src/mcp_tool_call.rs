@@ -674,7 +674,7 @@ async fn lookup_mcp_tool_metadata(
 
     let tool_info = tools
         .into_values()
-        .find(|tool_info| tool_info.server_name == server && tool_info.tool_name == tool_name)?;
+        .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
         let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
             turn_context.config.as_ref(),
@@ -723,7 +723,7 @@ async fn lookup_mcp_app_usage_metadata(
         .await;
 
     tools.into_values().find_map(|tool_info| {
-        if tool_info.server_name == server && tool_info.tool_name == tool_name {
+        if tool_info.server_name == server && tool_info.tool.name == tool_name {
             Some(McpAppUsageMetadata {
                 connector_id: tool_info.connector_id,
                 app_name: tool_info.connector_name,
