@@ -687,6 +687,7 @@ fn build_guardian_subagent_config(
         )?);
     }
     for feature in [
+        Feature::SpawnCsv,
         Feature::Collab,
         Feature::WebSearchRequest,
         Feature::WebSearchCached,

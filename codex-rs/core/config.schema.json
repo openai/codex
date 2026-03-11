@@ -459,6 +459,9 @@
             "skill_mcp_dependency_install": {
               "type": "boolean"
             },
+            "spawn_csv": {
+              "type": "boolean"
+            },
             "sqlite": {
               "type": "boolean"
             },
@@ -1951,6 +1954,9 @@
           "type": "boolean"
         },
         "skill_mcp_dependency_install": {
+          "type": "boolean"
+        },
+        "spawn_csv": {
           "type": "boolean"
         },
         "sqlite": {
