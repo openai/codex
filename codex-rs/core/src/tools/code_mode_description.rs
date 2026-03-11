@@ -252,8 +252,11 @@ fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>, indent: u
         .cloned()
         .unwrap_or_default();
 
-    let mut lines = properties
-        .iter()
+    let mut sorted_properties = properties.iter().collect::<Vec<_>>();
+    sorted_properties.sort_unstable_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
+
+    let mut lines = sorted_properties
+        .into_iter()
         .map(|(name, value)| {
             let optional = if required.iter().any(|required_name| required_name == name) {
                 ""
@@ -361,6 +364,25 @@ mod tests {
         assert_eq!(
             render_json_schema_to_typescript(&schema),
             "{\n  tags?: Array<string>;\n  [key: string]: number;\n}"
+        );
+    }
+
+    #[test]
+    fn render_json_schema_to_typescript_sorts_object_properties() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "structuredContent": {"type": "string"},
+                "_meta": {"type": "string"},
+                "isError": {"type": "boolean"},
+                "content": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["content"]
+        });
+
+        assert_eq!(
+            render_json_schema_to_typescript(&schema),
+            "{\n  _meta?: string;\n  content: Array<string>;\n  isError?: boolean;\n  structuredContent?: string;\n}"
         );
     }
 }
