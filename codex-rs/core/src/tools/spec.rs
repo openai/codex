@@ -859,8 +859,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
 - Run multiple independent information-seeking subtasks in parallel when you have distinct questions that can be answered independently.
 - Split implementation into disjoint codebase slices and spawn multiple agents for them in parallel when the write scopes do not overlap.
 - Delegate verification only when it can run in parallel with ongoing implementation and is likely to catch a concrete risk before final integration.
-- The key is to find opportunities to spawn multiple independent subtasks in parallel within the same round, while ensuring each subtask is well-defined, self-contained, and materially advances the main task."#,
-            available_models_description
+- The key is to find opportunities to spawn multiple independent subtasks in parallel within the same round, while ensuring each subtask is well-defined, self-contained, and materially advances the main task."#
         ),
         strict: false,
         parameters: JsonSchema::Object {
