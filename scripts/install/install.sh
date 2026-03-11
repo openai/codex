@@ -290,12 +290,20 @@ classify_existing_codex() {
 prompt_yes_no() {
   prompt="$1"
 
-  if [ ! -t 0 ]; then
+  if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+    printf '%s [y/N] ' "$prompt" >/dev/tty
+    if ! IFS= read -r answer </dev/tty; then
+      return 1
+    fi
+  elif [ -t 0 ]; then
+    printf '%s [y/N] ' "$prompt"
+    if ! IFS= read -r answer; then
+      return 1
+    fi
+  else
     return 1
   fi
 
-  printf '%s [y/N] ' "$prompt"
-  read -r answer
   case "$answer" in
     y | Y | yes | YES)
       return 0
@@ -304,6 +312,37 @@ prompt_yes_no() {
       return 1
       ;;
   esac
+}
+
+print_launch_instructions() {
+  case "$path_action" in
+    added)
+      step "Current terminal: export PATH=\"$BIN_DIR:\$PATH\" && codex"
+      step "Future terminals: open a new terminal and run: codex"
+      step "PATH was added to $path_profile"
+      ;;
+    updated)
+      step "Current terminal: export PATH=\"$BIN_DIR:\$PATH\" && codex"
+      step "Future terminals: open a new terminal and run: codex"
+      step "PATH was updated in $path_profile"
+      ;;
+    configured)
+      step "Current terminal: export PATH=\"$BIN_DIR:\$PATH\" && codex"
+      step "Future terminals: open a new terminal and run: codex"
+      step "PATH is already configured in $path_profile"
+      ;;
+    *)
+      step "Current terminal: codex"
+      step "Future terminals: open a new terminal and run: codex"
+      ;;
+  esac
+}
+
+maybe_launch_codex_now() {
+  if prompt_yes_no "Start Codex now?"; then
+    step "Launching Codex"
+    "$BIN_PATH"
+  fi
 }
 
 handle_conflicting_install() {
@@ -501,24 +540,19 @@ add_to_path
 
 case "$path_action" in
   added)
-    step "PATH updated for future shells in $path_profile"
-    step "Run now: export PATH=\"$BIN_DIR:\$PATH\" && codex"
-    step "Or open a new terminal and run: codex"
+    print_launch_instructions
     ;;
   updated)
-    step "PATH updated in $path_profile"
-    step "Run now: export PATH=\"$BIN_DIR:\$PATH\" && codex"
-    step "Or open a new terminal and run: codex"
+    print_launch_instructions
     ;;
   configured)
-    step "PATH is already configured for future shells in $path_profile"
-    step "Run now: export PATH=\"$BIN_DIR:\$PATH\" && codex"
-    step "Or open a new terminal and run: codex"
+    print_launch_instructions
     ;;
   *)
     step "$BIN_DIR is already on PATH"
-    step "Run: codex"
+    print_launch_instructions
     ;;
 esac
 
 printf 'Codex CLI %s installed successfully.\n' "$resolved_version"
+maybe_launch_codex_now

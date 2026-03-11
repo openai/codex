@@ -22,6 +22,19 @@ function Write-WarningStep {
     Write-Warning $Message
 }
 
+function Prompt-YesNo {
+    param(
+        [string]$Prompt
+    )
+
+    if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
+        return $false
+    }
+
+    $choice = Read-Host "$Prompt [y/N]"
+    return $choice -match "^(?i:y(?:es)?)$"
+}
+
 function Normalize-Version {
     param(
         [string]$RawVersion
@@ -213,8 +226,7 @@ function Maybe-HandleConflictingInstall {
     }
     $uninstallCommand = if ($manager -eq "bun") { "bun" } else { "npm" }
 
-    $choice = Read-Host "Uninstall the existing $manager-managed Codex now? [y/N]"
-    if ($choice -match "^(?i:y(?:es)?)$") {
+    if (Prompt-YesNo "Uninstall the existing $manager-managed Codex now?") {
         Write-Step "Running: $uninstallCommand $($uninstallArgs -join ' ')"
         try {
             & $uninstallCommand @uninstallArgs
@@ -345,7 +357,6 @@ target = "$target"
 }
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-$pathNeedsNewShell = $false
 if (-not (Path-Contains -PathValue $userPath -Entry $visibleBinDir)) {
     if ([string]::IsNullOrWhiteSpace($userPath)) {
         $newUserPath = $visibleBinDir
@@ -354,27 +365,27 @@ if (-not (Path-Contains -PathValue $userPath -Entry $visibleBinDir)) {
     }
 
     [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
-    if (-not (Path-Contains -PathValue $env:Path -Entry $visibleBinDir)) {
-        if ([string]::IsNullOrWhiteSpace($env:Path)) {
-            $env:Path = $visibleBinDir
-        } else {
-            $env:Path = "$visibleBinDir;$env:Path"
-        }
-    }
     Write-Step "PATH updated for future PowerShell sessions."
-    $pathNeedsNewShell = $true
 } elseif (Path-Contains -PathValue $env:Path -Entry $visibleBinDir) {
     Write-Step "$visibleBinDir is already on PATH."
 } else {
     Write-Step "PATH is already configured for future PowerShell sessions."
-    $pathNeedsNewShell = $true
 }
 
-if ($pathNeedsNewShell) {
-    Write-Step ('Run now: $env:Path = "{0};$env:Path"; codex' -f $visibleBinDir)
-    Write-Step "Or open a new PowerShell window and run: codex"
-} else {
-    Write-Step "Run: codex"
+if (-not (Path-Contains -PathValue $env:Path -Entry $visibleBinDir)) {
+    if ([string]::IsNullOrWhiteSpace($env:Path)) {
+        $env:Path = $visibleBinDir
+    } else {
+        $env:Path = "$visibleBinDir;$env:Path"
+    }
 }
 
+Write-Step "Current PowerShell session: codex"
+Write-Step "Future PowerShell windows: open a new PowerShell window and run: codex"
 Write-Host "Codex CLI $resolvedVersion installed successfully."
+
+$codexCommand = Join-Path $visibleBinDir "codex.exe"
+if (Prompt-YesNo "Start Codex now?") {
+    Write-Step "Launching Codex"
+    & $codexCommand
+}
