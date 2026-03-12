@@ -13,6 +13,8 @@ use tracing::warn;
 
 use super::auth::McpOAuthLoginSupport;
 use super::auth::oauth_login_support;
+use super::auth::resolve_oauth_scopes;
+use super::auth::should_retry_without_scopes;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
@@ -236,20 +238,52 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         )
         .await;
 
-        if let Err(err) = perform_oauth_login(
+        let resolved_scopes = resolve_oauth_scopes(
+            None,
+            server_config.scopes.clone(),
+            oauth_config.discovered_scopes.clone(),
+        );
+        let first_attempt = perform_oauth_login(
             &name,
             &oauth_config.url,
             config.mcp_oauth_credentials_store_mode,
-            oauth_config.http_headers,
-            oauth_config.env_http_headers,
-            &[],
+            oauth_config.http_headers.clone(),
+            oauth_config.env_http_headers.clone(),
+            &resolved_scopes.scopes,
             server_config.oauth_resource.as_deref(),
             config.mcp_oauth_callback_port,
             config.mcp_oauth_callback_url.as_deref(),
         )
-        .await
-        {
-            warn!("failed to login to MCP dependency {name}: {err}");
+        .await;
+
+        if let Err(err) = first_attempt {
+            if should_retry_without_scopes(&resolved_scopes, &err) {
+                sess.notify_background_event(
+                    turn_context,
+                    format!(
+                        "Retrying MCP {name} authentication without scopes after provider rejection."
+                    ),
+                )
+                .await;
+
+                if let Err(err) = perform_oauth_login(
+                    &name,
+                    &oauth_config.url,
+                    config.mcp_oauth_credentials_store_mode,
+                    oauth_config.http_headers,
+                    oauth_config.env_http_headers,
+                    &[],
+                    server_config.oauth_resource.as_deref(),
+                    config.mcp_oauth_callback_port,
+                    config.mcp_oauth_callback_url.as_deref(),
+                )
+                .await
+                {
+                    warn!("failed to login to MCP dependency {name}: {err}");
+                }
+            } else {
+                warn!("failed to login to MCP dependency {name}: {err}");
+            }
         }
     }
 
