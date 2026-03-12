@@ -173,7 +173,6 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 use codex_config::CONFIG_TOML_FILE;
 
-mod interrupt_cleanup;
 mod rollout_reconstruction;
 #[cfg(test)]
 mod rollout_reconstruction_tests;

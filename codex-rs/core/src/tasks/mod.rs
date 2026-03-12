@@ -386,6 +386,23 @@ impl Session {
         active.take()
     }
 
+    pub(crate) async fn close_unified_exec_processes(&self) {
+        self.services
+            .unified_exec_manager
+            .terminate_all_processes()
+            .await;
+    }
+
+    pub(crate) async fn cleanup_after_interrupt(&self, turn_context: &Arc<TurnContext>) {
+        self.close_unified_exec_processes().await;
+
+        if let Some(manager) = turn_context.js_repl.manager_if_initialized()
+            && let Err(err) = manager.interrupt_turn_exec(&turn_context.sub_id).await
+        {
+            warn!("failed to interrupt js_repl kernel: {err}");
+        }
+    }
+
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
         let sub_id = task.turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
