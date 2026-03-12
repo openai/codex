@@ -50,6 +50,14 @@ Object.defineProperty(globalThis, '__codexContentItems', {
     __codexContentItems.push(...contentItems);
     return contentItems;
   };
+
+  globalThis.console = Object.freeze({
+    log() {},
+    info() {},
+    warn() {},
+    error() {},
+    debug() {},
+  });
 })();
 
 __CODE_MODE_USER_CODE_PLACEHOLDER__
