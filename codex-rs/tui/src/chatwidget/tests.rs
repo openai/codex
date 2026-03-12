@@ -5997,6 +5997,21 @@ async fn slash_copy_reports_when_no_copyable_output_exists() {
 }
 
 #[tokio::test]
+async fn slash_help_renders_reference_page() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Help);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one help cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert_snapshot!("slash_help_output", rendered);
+    assert!(rendered.contains("/help"));
+    assert!(rendered.contains("/model <model>"));
+    assert!(rendered.contains("/review <instructions>"));
+}
+
+#[tokio::test]
 async fn slash_copy_state_is_preserved_during_running_task() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 

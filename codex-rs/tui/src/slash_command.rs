@@ -12,6 +12,7 @@ use strum_macros::IntoStaticStr;
 pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
+    Help,
     Model,
     Fast,
     Approvals,
@@ -67,6 +68,7 @@ impl SlashCommand {
     /// User-visible description shown in the popup.
     pub fn description(self) -> &'static str {
         match self {
+            SlashCommand::Help => "show slash command help",
             SlashCommand::Feedback => "send logs to maintainers",
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
@@ -119,9 +121,69 @@ impl SlashCommand {
         self.into()
     }
 
+    /// Human-facing forms accepted by the TUI.
+    ///
+    /// An empty string represents the bare `/command` form.
+    pub fn help_forms(self) -> &'static [&'static str] {
+        match self {
+            SlashCommand::Help => &[""],
+            SlashCommand::Model => &[
+                "",
+                "<model> [default|none|minimal|low|medium|high|xhigh] [plan-only|all-modes]",
+            ],
+            SlashCommand::Fast => &["", "<on|off|status>"],
+            SlashCommand::Approvals | SlashCommand::Permissions => &[
+                "",
+                "<read-only|auto|full-access> [--confirm-full-access] [--remember-full-access] [--confirm-world-writable] [--remember-world-writable] [--enable-windows-sandbox=elevated|legacy]",
+            ],
+            SlashCommand::ElevateSandbox => &[""],
+            SlashCommand::SandboxReadRoot => &["<absolute-directory-path>"],
+            SlashCommand::Experimental => &["", "<feature-key>=on|off ..."],
+            SlashCommand::Skills => &["", "<list|manage>"],
+            SlashCommand::Review => &[
+                "",
+                "uncommitted",
+                "branch <name>",
+                "commit <sha> [title]",
+                "<instructions>",
+            ],
+            SlashCommand::Rename => &["", "<title...>"],
+            SlashCommand::New => &[""],
+            SlashCommand::Resume => &["", "<thread-id>"],
+            SlashCommand::Fork => &[""],
+            SlashCommand::Init => &[""],
+            SlashCommand::Compact => &[""],
+            SlashCommand::Plan => &["", "<prompt...>"],
+            SlashCommand::Collab => &["", "<default|plan>"],
+            SlashCommand::Agent | SlashCommand::MultiAgents => &["", "<thread-id>"],
+            SlashCommand::Diff => &[""],
+            SlashCommand::Copy => &[""],
+            SlashCommand::Mention => &[""],
+            SlashCommand::Status => &[""],
+            SlashCommand::DebugConfig => &[""],
+            SlashCommand::Statusline => &["", "<item-id>...", "none"],
+            SlashCommand::Theme => &["", "<theme-name>"],
+            SlashCommand::Mcp => &[""],
+            SlashCommand::Apps => &[""],
+            SlashCommand::Logout => &[""],
+            SlashCommand::Quit | SlashCommand::Exit => &[""],
+            SlashCommand::Feedback => &["", "<bug|bad-result|good-result|safety-check|other>"],
+            SlashCommand::Rollout => &[""],
+            SlashCommand::Ps => &[""],
+            SlashCommand::Clean => &[""],
+            SlashCommand::Clear => &[""],
+            SlashCommand::Personality => &["", "<none|friendly|pragmatic>"],
+            SlashCommand::Realtime => &[""],
+            SlashCommand::Settings => &["", "<microphone|speaker> [default|<device-name>]"],
+            SlashCommand::TestApproval => &[""],
+            SlashCommand::MemoryDrop | SlashCommand::MemoryUpdate => &[""],
+        }
+    }
+
     /// Whether bare dispatch opens interactive UI that should be resolved before queueing.
     pub fn requires_interaction(self) -> bool {
         match self {
+            SlashCommand::Help => false,
             SlashCommand::Feedback
             | SlashCommand::Resume
             | SlashCommand::Review
@@ -170,6 +232,7 @@ impl SlashCommand {
     /// Whether this command can be run while a task is in progress.
     pub fn available_during_task(self) -> bool {
         match self {
+            SlashCommand::Help => true,
             SlashCommand::New
             | SlashCommand::Resume
             | SlashCommand::Fork

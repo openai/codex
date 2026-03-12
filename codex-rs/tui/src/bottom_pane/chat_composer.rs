@@ -6382,6 +6382,63 @@ mod tests {
     }
 
     #[test]
+    fn slash_popup_help_first_for_root_ui() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        type_chars_humanlike(&mut composer, &['/']);
+
+        let mut terminal = match Terminal::new(TestBackend::new(60, 8)) {
+            Ok(t) => t,
+            Err(e) => panic!("Failed to create terminal: {e}"),
+        };
+        terminal
+            .draw(|f| composer.render(f.area(), f.buffer_mut()))
+            .unwrap_or_else(|e| panic!("Failed to draw composer: {e}"));
+
+        insta::assert_snapshot!("slash_popup_root", terminal.backend());
+    }
+
+    #[test]
+    fn slash_popup_help_first_for_root_logic() {
+        use super::super::command_popup::CommandItem;
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        type_chars_humanlike(&mut composer, &['/']);
+
+        match &composer.active_popup {
+            ActivePopup::Command(popup) => match popup.selected_item() {
+                Some(CommandItem::Builtin(cmd)) => {
+                    assert_eq!(cmd.command(), "help")
+                }
+                Some(CommandItem::UserPrompt(_)) => {
+                    panic!("unexpected prompt selected for '/'")
+                }
+                None => panic!("no selected command for '/'"),
+            },
+            _ => panic!("slash popup not active after typing '/'"),
+        }
+    }
+
+    #[test]
     fn slash_popup_model_first_for_mo_ui() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
