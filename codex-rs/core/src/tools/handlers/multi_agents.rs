@@ -223,6 +223,8 @@ mod spawn {
                     new_agent_nickname,
                     new_agent_role,
                     prompt,
+                    model: args.model.clone().unwrap_or_default(),
+                    reasoning_effort: args.reasoning_effort.unwrap_or_default(),
                     status,
                 }
                 .into(),
@@ -1723,6 +1725,7 @@ mod tests {
                 })]),
                 AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
                 false,
+                None,
             )
             .await
             .expect("start thread");

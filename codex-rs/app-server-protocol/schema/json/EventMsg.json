@@ -3059,6 +3059,10 @@
               "description": "Identifier for the collab tool call.",
               "type": "string"
             },
+            "model": {
+              "description": "Model requested for the spawned agent.",
+              "type": "string"
+            },
             "new_agent_nickname": {
               "description": "Optional nickname assigned to the new agent.",
               "type": [
@@ -3088,6 +3092,14 @@
               "description": "Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
               "type": "string"
             },
+            "reasoning_effort": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReasoningEffort"
+                }
+              ],
+              "description": "Reasoning effort requested for the spawned agent."
+            },
             "sender_thread_id": {
               "allOf": [
                 {
@@ -3114,7 +3126,9 @@
           },
           "required": [
             "call_id",
+            "model",
             "prompt",
+            "reasoning_effort",
             "sender_thread_id",
             "status",
             "type"
@@ -9278,6 +9292,10 @@
           "description": "Identifier for the collab tool call.",
           "type": "string"
         },
+        "model": {
+          "description": "Model requested for the spawned agent.",
+          "type": "string"
+        },
         "new_agent_nickname": {
           "description": "Optional nickname assigned to the new agent.",
           "type": [
@@ -9307,6 +9325,14 @@
           "description": "Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
           "type": "string"
         },
+        "reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Reasoning effort requested for the spawned agent."
+        },
         "sender_thread_id": {
           "allOf": [
             {
@@ -9333,7 +9359,9 @@
       },
       "required": [
         "call_id",
+        "model",
         "prompt",
+        "reasoning_effort",
         "sender_thread_id",
         "status",
         "type"

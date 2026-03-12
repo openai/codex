@@ -27,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::AuthManager;
 use crate::codex::Codex;
+use crate::codex::CodexSpawnArgs;
 use crate::codex::CodexSpawnOk;
 use crate::codex::SUBMISSION_CHANNEL_CAPACITY;
 use crate::codex::Session;
@@ -35,6 +36,9 @@ use crate::config::Config;
 use crate::error::CodexErr;
 use crate::models_manager::manager::ModelsManager;
 use codex_protocol::protocol::InitialHistory;
+
+#[cfg(test)]
+use crate::codex::completed_session_loop_termination;
 
 /// Start an interactive sub-Codex thread and return IO channels.
 ///
@@ -55,22 +59,23 @@ pub(crate) async fn run_codex_thread_interactive(
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
 
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
+    let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
         models_manager,
-        Arc::clone(&parent_session.services.skills_manager),
-        Arc::clone(&parent_session.services.plugins_manager),
-        Arc::clone(&parent_session.services.mcp_manager),
-        Arc::clone(&parent_session.services.file_watcher),
-        initial_history.unwrap_or(InitialHistory::New),
-        SessionSource::SubAgent(subagent_source),
-        parent_session.services.agent_control.clone(),
-        Vec::new(),
-        false,
-        None,
-        None,
-    )
+        skills_manager: Arc::clone(&parent_session.services.skills_manager),
+        plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
+        mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
+        file_watcher: Arc::clone(&parent_session.services.file_watcher),
+        conversation_history: initial_history.unwrap_or(InitialHistory::New),
+        session_source: SessionSource::SubAgent(subagent_source),
+        agent_control: parent_session.services.agent_control.clone(),
+        dynamic_tools: Vec::new(),
+        persist_extended_history: false,
+        metrics_service_name: None,
+        inherited_shell_snapshot: None,
+        parent_trace: None,
+    })
     .await?;
     let codex = Arc::new(codex);
 
@@ -105,6 +110,7 @@ pub(crate) async fn run_codex_thread_interactive(
         rx_event: rx_sub,
         agent_status: codex.agent_status.clone(),
         session: Arc::clone(&codex.session),
+        session_loop_termination: codex.session_loop_termination.clone(),
     })
 }
 
@@ -151,6 +157,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     let ops_tx = io.tx_sub.clone();
     let agent_status = io.agent_status.clone();
     let session = Arc::clone(&io.session);
+    let session_loop_termination = io.session_loop_termination.clone();
     let io_for_bridge = io;
     tokio::spawn(async move {
         while let Ok(event) = io_for_bridge.next_event().await {
@@ -184,6 +191,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         tx_sub: tx_closed,
         agent_status,
         session,
+        session_loop_termination,
     })
 }
 
@@ -572,6 +580,7 @@ mod tests {
             rx_event: rx_events,
             agent_status,
             session: Arc::clone(&session),
+            session_loop_termination: completed_session_loop_termination(),
         });
 
         let (tx_out, rx_out) = bounded(1);
@@ -645,6 +654,7 @@ mod tests {
             rx_event: rx_events,
             agent_status,
             session,
+            session_loop_termination: completed_session_loop_termination(),
         });
         let (tx_ops, rx_ops) = bounded(1);
         let cancel = CancellationToken::new();
@@ -691,6 +701,7 @@ mod tests {
             rx_event: rx_events_child,
             agent_status,
             session: Arc::clone(&parent_session),
+            session_loop_termination: completed_session_loop_termination(),
         });
 
         let call_id = "tool-call-1".to_string();

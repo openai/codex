@@ -112,7 +112,7 @@ fn proxy_only_mode_takes_precedence_over_full_network_policy() {
 }
 
 #[test]
-fn split_only_filesystem_policy_forces_bwrap_usage() {
+fn split_only_filesystem_policy_requires_direct_runtime_enforcement() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
     let docs = temp_dir.path().join("docs");
     std::fs::create_dir_all(&docs).expect("create docs");
@@ -130,16 +130,13 @@ fn split_only_filesystem_policy_forces_bwrap_usage() {
         },
     ]);
 
-    assert!(should_use_bwrap_sandbox(
-        false,
-        &policy,
-        NetworkSandboxPolicy::Restricted,
-        temp_dir.path(),
-    ));
+    assert!(
+        policy.needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, temp_dir.path(),)
+    );
 }
 
 #[test]
-fn root_write_read_only_carveout_forces_bwrap_usage() {
+fn root_write_read_only_carveout_requires_direct_runtime_enforcement() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
     let docs = temp_dir.path().join("docs");
     std::fs::create_dir_all(&docs).expect("create docs");
@@ -157,12 +154,9 @@ fn root_write_read_only_carveout_forces_bwrap_usage() {
         },
     ]);
 
-    assert!(should_use_bwrap_sandbox(
-        false,
-        &policy,
-        NetworkSandboxPolicy::Restricted,
-        temp_dir.path(),
-    ));
+    assert!(
+        policy.needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, temp_dir.path(),)
+    );
 }
 
 #[test]
@@ -185,7 +179,6 @@ fn managed_proxy_inner_command_includes_route_spec() {
         sandbox_policy: &sandbox_policy,
         file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
-        use_bwrap_sandbox: true,
         allow_network_for_proxy: true,
         proxy_route_spec: Some("{\"routes\":[]}".to_string()),
         command: vec!["/bin/true".to_string()],
@@ -203,7 +196,6 @@ fn inner_command_includes_split_policy_flags() {
         sandbox_policy: &sandbox_policy,
         file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
-        use_bwrap_sandbox: true,
         allow_network_for_proxy: false,
         proxy_route_spec: None,
         command: vec!["/bin/true".to_string()],
@@ -221,7 +213,6 @@ fn non_managed_inner_command_omits_route_spec() {
         sandbox_policy: &sandbox_policy,
         file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
-        use_bwrap_sandbox: true,
         allow_network_for_proxy: false,
         proxy_route_spec: None,
         command: vec!["/bin/true".to_string()],
@@ -239,7 +230,6 @@ fn managed_proxy_inner_command_requires_route_spec() {
             sandbox_policy: &sandbox_policy,
             file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
             network_sandbox_policy: NetworkSandboxPolicy::Restricted,
-            use_bwrap_sandbox: true,
             allow_network_for_proxy: true,
             proxy_route_spec: None,
             command: vec!["/bin/true".to_string()],
@@ -395,8 +385,39 @@ fn resolve_sandbox_policies_accepts_semantically_equivalent_workspace_write_inpu
 }
 
 #[test]
-fn apply_seccomp_then_exec_without_bwrap_panics() {
-    let result = std::panic::catch_unwind(|| ensure_inner_stage_mode_is_valid(true, false));
+fn apply_seccomp_then_exec_with_legacy_landlock_panics() {
+    let result = std::panic::catch_unwind(|| ensure_inner_stage_mode_is_valid(true, true));
+    assert!(result.is_err());
+}
+
+#[test]
+fn legacy_landlock_rejects_split_only_filesystem_policies() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let docs = temp_dir.path().join("docs");
+    std::fs::create_dir_all(&docs).expect("create docs");
+    let docs = AbsolutePathBuf::from_absolute_path(&docs).expect("absolute docs");
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Special {
+                value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+            },
+            access: codex_protocol::permissions::FileSystemAccessMode::Read,
+        },
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
+            access: codex_protocol::permissions::FileSystemAccessMode::Write,
+        },
+    ]);
+
+    let result = std::panic::catch_unwind(|| {
+        ensure_legacy_landlock_mode_supports_policy(
+            true,
+            &policy,
+            NetworkSandboxPolicy::Restricted,
+            temp_dir.path(),
+        );
+    });
+
     assert!(result.is_err());
 }
 
@@ -404,5 +425,5 @@ fn apply_seccomp_then_exec_without_bwrap_panics() {
 fn valid_inner_stage_modes_do_not_panic() {
     ensure_inner_stage_mode_is_valid(false, false);
     ensure_inner_stage_mode_is_valid(false, true);
-    ensure_inner_stage_mode_is_valid(true, true);
+    ensure_inner_stage_mode_is_valid(true, false);
 }

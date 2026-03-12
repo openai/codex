@@ -6,7 +6,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 pub(crate) fn sandbox_tag(
     policy: &SandboxPolicy,
     windows_sandbox_level: WindowsSandboxLevel,
-    use_linux_sandbox_bwrap: bool,
+    use_legacy_landlock: bool,
 ) -> &'static str {
     if matches!(policy, SandboxPolicy::DangerFullAccess) {
         return "none";
@@ -18,7 +18,7 @@ pub(crate) fn sandbox_tag(
     {
         return "windows_elevated";
     }
-    if cfg!(target_os = "linux") && use_linux_sandbox_bwrap {
+    if cfg!(target_os = "linux") && !use_legacy_landlock {
         return "linux_bubblewrap";
     }
 
@@ -38,33 +38,33 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn danger_full_access_is_untagged_even_when_bubblewrap_is_enabled() {
+    fn danger_full_access_is_untagged_even_when_bubblewrap_is_default() {
         let actual = sandbox_tag(
             &SandboxPolicy::DangerFullAccess,
             WindowsSandboxLevel::Disabled,
-            true,
+            false,
         );
         assert_eq!(actual, "none");
     }
 
     #[test]
-    fn external_sandbox_keeps_external_tag_when_bubblewrap_is_enabled() {
+    fn external_sandbox_keeps_external_tag_when_bubblewrap_is_default() {
         let actual = sandbox_tag(
             &SandboxPolicy::ExternalSandbox {
                 network_access: NetworkAccess::Enabled,
             },
             WindowsSandboxLevel::Disabled,
-            true,
+            false,
         );
         assert_eq!(actual, "external");
     }
 
     #[test]
-    fn bubblewrap_feature_sets_distinct_linux_tag() {
+    fn bubblewrap_default_sets_distinct_linux_tag() {
         let actual = sandbox_tag(
             &SandboxPolicy::new_read_only_policy(),
             WindowsSandboxLevel::Disabled,
-            true,
+            false,
         );
         let expected = if cfg!(target_os = "linux") {
             "linux_bubblewrap"

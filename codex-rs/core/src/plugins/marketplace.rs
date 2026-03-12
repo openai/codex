@@ -21,7 +21,7 @@ const MARKETPLACE_RELATIVE_PATH: &str = ".agents/plugins/marketplace.json";
 pub struct ResolvedMarketplacePlugin {
     pub plugin_id: PluginId,
     pub source_path: AbsolutePathBuf,
-    pub auth_policy: Option<MarketplacePluginAuthPolicy>,
+    pub auth_policy: MarketplacePluginAuthPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,8 +35,8 @@ pub struct MarketplaceSummary {
 pub struct MarketplacePluginSummary {
     pub name: String,
     pub source: MarketplacePluginSourceSummary,
-    pub install_policy: Option<MarketplacePluginInstallPolicy>,
-    pub auth_policy: Option<MarketplacePluginAuthPolicy>,
+    pub install_policy: MarketplacePluginInstallPolicy,
+    pub auth_policy: MarketplacePluginAuthPolicy,
     pub interface: Option<PluginManifestInterfaceSummary>,
 }
 
@@ -45,18 +45,20 @@ pub enum MarketplacePluginSourceSummary {
     Local { path: AbsolutePathBuf },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 pub enum MarketplacePluginInstallPolicy {
     #[serde(rename = "NOT_AVAILABLE")]
     NotAvailable,
+    #[default]
     #[serde(rename = "AVAILABLE")]
     Available,
     #[serde(rename = "INSTALLED_BY_DEFAULT")]
     InstalledByDefault,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 pub enum MarketplacePluginAuthPolicy {
+    #[default]
     #[serde(rename = "ON_INSTALL")]
     OnInstall,
     #[serde(rename = "ON_USE")]
@@ -148,7 +150,7 @@ pub fn resolve_marketplace_plugin(
         auth_policy,
         ..
     } = plugin;
-    if install_policy == Some(MarketplacePluginInstallPolicy::NotAvailable) {
+    if install_policy == MarketplacePluginInstallPolicy::NotAvailable {
         return Err(MarketplaceError::PluginNotAvailable {
             plugin_name: name,
             marketplace_name,
@@ -243,6 +245,15 @@ fn discover_marketplace_paths_from_roots(
     }
 
     for root in additional_roots {
+        // Curated marketplaces can now come from an HTTP-downloaded directory that is not a git
+        // checkout, so check the root directly before falling back to repo-root discovery.
+        if let Ok(path) = root.join(MARKETPLACE_RELATIVE_PATH)
+            && path.as_path().is_file()
+            && !paths.contains(&path)
+        {
+            paths.push(path);
+            continue;
+        }
         if let Some(repo_root) = get_git_repo_root(root.as_path())
             && let Ok(repo_root) = AbsolutePathBuf::try_from(repo_root)
             && let Ok(path) = repo_root.join(MARKETPLACE_RELATIVE_PATH)
@@ -365,9 +376,9 @@ struct MarketplacePlugin {
     name: String,
     source: MarketplacePluginSource,
     #[serde(default)]
-    install_policy: Option<MarketplacePluginInstallPolicy>,
+    install_policy: MarketplacePluginInstallPolicy,
     #[serde(default)]
-    auth_policy: Option<MarketplacePluginAuthPolicy>,
+    auth_policy: MarketplacePluginAuthPolicy,
     #[serde(default)]
     category: Option<String>,
 }
@@ -420,7 +431,7 @@ mod tests {
                 plugin_id: PluginId::new("local-plugin".to_string(), "codex-curated".to_string())
                     .unwrap(),
                 source_path: AbsolutePathBuf::try_from(repo_root.join("plugin-1")).unwrap(),
-                auth_policy: None,
+                auth_policy: MarketplacePluginAuthPolicy::OnInstall,
             }
         );
     }
@@ -527,8 +538,8 @@ mod tests {
                                 path: AbsolutePathBuf::try_from(home_root.join("home-shared"))
                                     .unwrap(),
                             },
-                            install_policy: None,
-                            auth_policy: None,
+                            install_policy: MarketplacePluginInstallPolicy::Available,
+                            auth_policy: MarketplacePluginAuthPolicy::OnInstall,
                             interface: None,
                         },
                         MarketplacePluginSummary {
@@ -537,8 +548,8 @@ mod tests {
                                 path: AbsolutePathBuf::try_from(home_root.join("home-only"))
                                     .unwrap(),
                             },
-                            install_policy: None,
-                            auth_policy: None,
+                            install_policy: MarketplacePluginInstallPolicy::Available,
+                            auth_policy: MarketplacePluginAuthPolicy::OnInstall,
                             interface: None,
                         },
                     ],
@@ -556,8 +567,8 @@ mod tests {
                                 path: AbsolutePathBuf::try_from(repo_root.join("repo-shared"))
                                     .unwrap(),
                             },
-                            install_policy: None,
-                            auth_policy: None,
+                            install_policy: MarketplacePluginInstallPolicy::Available,
+                            auth_policy: MarketplacePluginAuthPolicy::OnInstall,
                             interface: None,
                         },
                         MarketplacePluginSummary {
@@ -566,8 +577,8 @@ mod tests {
                                 path: AbsolutePathBuf::try_from(repo_root.join("repo-only"))
                                     .unwrap(),
                             },
-                            install_policy: None,
-                            auth_policy: None,
+                            install_policy: MarketplacePluginInstallPolicy::Available,
+                            auth_policy: MarketplacePluginAuthPolicy::OnInstall,
                             interface: None,
                         },
                     ],
@@ -638,8 +649,8 @@ mod tests {
                         source: MarketplacePluginSourceSummary::Local {
                             path: AbsolutePathBuf::try_from(home_root.join("home-plugin")).unwrap(),
                         },
-                        install_policy: None,
-                        auth_policy: None,
+                        install_policy: MarketplacePluginInstallPolicy::Available,
+                        auth_policy: MarketplacePluginAuthPolicy::OnInstall,
                         interface: None,
                     }],
                 },
@@ -651,8 +662,8 @@ mod tests {
                         source: MarketplacePluginSourceSummary::Local {
                             path: AbsolutePathBuf::try_from(repo_root.join("repo-plugin")).unwrap(),
                         },
-                        install_policy: None,
-                        auth_policy: None,
+                        install_policy: MarketplacePluginInstallPolicy::Available,
+                        auth_policy: MarketplacePluginAuthPolicy::OnInstall,
                         interface: None,
                     }],
                 },
@@ -717,8 +728,8 @@ mod tests {
                     source: MarketplacePluginSourceSummary::Local {
                         path: AbsolutePathBuf::try_from(repo_root.join("plugin")).unwrap(),
                     },
-                    install_policy: None,
-                    auth_policy: None,
+                    install_policy: MarketplacePluginInstallPolicy::Available,
+                    auth_policy: MarketplacePluginAuthPolicy::OnInstall,
                     interface: None,
                 }],
             }]
@@ -774,11 +785,11 @@ mod tests {
 
         assert_eq!(
             marketplaces[0].plugins[0].install_policy,
-            Some(MarketplacePluginInstallPolicy::Available)
+            MarketplacePluginInstallPolicy::Available
         );
         assert_eq!(
             marketplaces[0].plugins[0].auth_policy,
-            Some(MarketplacePluginAuthPolicy::OnInstall)
+            MarketplacePluginAuthPolicy::OnInstall
         );
         assert_eq!(
             marketplaces[0].plugins[0].interface,
@@ -868,8 +879,14 @@ mod tests {
                 screenshots: Vec::new(),
             })
         );
-        assert_eq!(marketplaces[0].plugins[0].install_policy, None);
-        assert_eq!(marketplaces[0].plugins[0].auth_policy, None);
+        assert_eq!(
+            marketplaces[0].plugins[0].install_policy,
+            MarketplacePluginInstallPolicy::Available
+        );
+        assert_eq!(
+            marketplaces[0].plugins[0].auth_policy,
+            MarketplacePluginAuthPolicy::OnInstall
+        );
     }
 
     #[test]

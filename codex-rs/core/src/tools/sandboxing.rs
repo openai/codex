@@ -7,6 +7,7 @@
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
+#[cfg(test)]
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
@@ -17,6 +18,7 @@ use crate::tools::network_approval::NetworkApprovalSpec;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
+use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
@@ -158,20 +160,22 @@ impl ExecApprovalRequirement {
 }
 
 /// - Never, OnFailure: do not ask
-/// - OnRequest: ask unless sandbox policy is DangerFullAccess
-/// - Reject: ask unless sandbox policy is DangerFullAccess, but auto-reject
+/// - OnRequest: ask unless filesystem access is unrestricted
+/// - Reject: ask unless filesystem access is unrestricted, but auto-reject
 ///   when `sandbox_approval` rejection is enabled.
 /// - UnlessTrusted: always ask
 pub(crate) fn default_exec_approval_requirement(
     policy: AskForApproval,
-    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
 ) -> ExecApprovalRequirement {
     let needs_approval = match policy {
         AskForApproval::Never | AskForApproval::OnFailure => false,
-        AskForApproval::OnRequest | AskForApproval::Reject(_) => !matches!(
-            sandbox_policy,
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-        ),
+        AskForApproval::OnRequest | AskForApproval::Reject(_) => {
+            matches!(
+                file_system_sandbox_policy.kind,
+                FileSystemSandboxKind::Restricted
+            )
+        }
         AskForApproval::UnlessTrusted => true,
     };
 
@@ -326,7 +330,7 @@ pub(crate) struct SandboxAttempt<'a> {
     pub(crate) manager: &'a SandboxManager,
     pub(crate) sandbox_cwd: &'a Path,
     pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
-    pub use_linux_sandbox_bwrap: bool,
+    pub use_legacy_landlock: bool,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
 }
 
@@ -349,7 +353,7 @@ impl<'a> SandboxAttempt<'a> {
                 #[cfg(target_os = "macos")]
                 macos_seatbelt_profile_extensions: None,
                 codex_linux_sandbox_exe: self.codex_linux_sandbox_exe,
-                use_linux_sandbox_bwrap: self.use_linux_sandbox_bwrap,
+                use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
             })
     }
@@ -365,12 +369,13 @@ mod tests {
 
     #[test]
     fn external_sandbox_skips_exec_approval_on_request() {
+        let sandbox_policy = SandboxPolicy::ExternalSandbox {
+            network_access: NetworkAccess::Restricted,
+        };
         assert_eq!(
             default_exec_approval_requirement(
                 AskForApproval::OnRequest,
-                &SandboxPolicy::ExternalSandbox {
-                    network_access: NetworkAccess::Restricted,
-                },
+                &FileSystemSandboxPolicy::from(&sandbox_policy),
             ),
             ExecApprovalRequirement::Skip {
                 bypass_sandbox: false,
@@ -381,10 +386,11 @@ mod tests {
 
     #[test]
     fn restricted_sandbox_requires_exec_approval_on_request() {
+        let sandbox_policy = SandboxPolicy::new_read_only_policy();
         assert_eq!(
             default_exec_approval_requirement(
                 AskForApproval::OnRequest,
-                &SandboxPolicy::new_read_only_policy()
+                &FileSystemSandboxPolicy::from(&sandbox_policy)
             ),
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
@@ -403,8 +409,11 @@ mod tests {
             mcp_elicitations: false,
         });
 
-        let requirement =
-            default_exec_approval_requirement(policy, &SandboxPolicy::new_read_only_policy());
+        let sandbox_policy = SandboxPolicy::new_read_only_policy();
+        let requirement = default_exec_approval_requirement(
+            policy,
+            &FileSystemSandboxPolicy::from(&sandbox_policy),
+        );
 
         assert_eq!(
             requirement,
@@ -424,8 +433,11 @@ mod tests {
             mcp_elicitations: true,
         });
 
-        let requirement =
-            default_exec_approval_requirement(policy, &SandboxPolicy::new_read_only_policy());
+        let sandbox_policy = SandboxPolicy::new_read_only_policy();
+        let requirement = default_exec_approval_requirement(
+            policy,
+            &FileSystemSandboxPolicy::from(&sandbox_policy),
+        );
 
         assert_eq!(
             requirement,

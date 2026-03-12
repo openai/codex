@@ -471,13 +471,16 @@
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
+            "tool_suggest": {
+              "type": "boolean"
+            },
             "undo": {
               "type": "boolean"
             },
             "unified_exec": {
               "type": "boolean"
             },
-            "use_linux_sandbox_bwrap": {
+            "use_legacy_landlock": {
               "type": "boolean"
             },
             "voice_transcription": {
@@ -1973,13 +1976,16 @@
         "tool_call_mcp_elicitation": {
           "type": "boolean"
         },
+        "tool_suggest": {
+          "type": "boolean"
+        },
         "undo": {
           "type": "boolean"
         },
         "unified_exec": {
           "type": "boolean"
         },
-        "use_linux_sandbox_bwrap": {
+        "use_legacy_landlock": {
           "type": "boolean"
         },
         "voice_transcription": {

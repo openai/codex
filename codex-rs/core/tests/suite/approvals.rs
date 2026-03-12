@@ -1321,7 +1321,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             expectation: Expectation::FileNotCreated {
                 target: TargetPath::Workspace("ro_never.txt"),
                 message_contains: if cfg!(target_os = "linux") {
-                    &["Permission denied"]
+                    &["Permission denied|Read-only file system"]
                 } else {
                     &[
                         "Permission denied|Operation not permitted|operation not permitted|\
@@ -1468,7 +1468,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             expectation: Expectation::FileNotCreated {
                 target: TargetPath::OutsideWorkspace("ww_never.txt"),
                 message_contains: if cfg!(target_os = "linux") {
-                    &["Permission denied"]
+                    &["Permission denied|Read-only file system"]
                 } else {
                     &[
                         "Permission denied|Operation not permitted|operation not permitted|\
@@ -2290,20 +2290,17 @@ allow_local_binding = true
         test.config.permissions.network.is_some(),
         "expected managed network proxy config to be present"
     );
-    let runtime_proxy = test
-        .session_configured
+    test.session_configured
         .network_proxy
         .as_ref()
         .expect("expected runtime managed network proxy addresses");
-    let proxy_addr = runtime_proxy.http_addr.as_str();
 
     let call_id_first = "allow-network-first";
-    // Use the same urllib-based pattern as the other network integration tests,
-    // but point it at the runtime proxy directly so the blocked host reliably
-    // produces a network approval request without relying on curl.
-    let fetch_command = format!(
-        "python3 -c \"import urllib.request; proxy = urllib.request.ProxyHandler({{'http': 'http://{proxy_addr}'}}); opener = urllib.request.build_opener(proxy); print('OK:' + opener.open('http://codex-network-test.invalid', timeout=30).read().decode(errors='replace'))\""
-    );
+    // Use urllib without overriding proxy settings so managed-network sessions
+    // continue to exercise the env-based proxy routing path under bubblewrap.
+    let fetch_command =
+        "python3 -c \"import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://codex-network-test.invalid', timeout=30).read().decode(errors='replace'))\""
+            .to_string();
     let first_event = shell_event(
         call_id_first,
         &fetch_command,

@@ -4,7 +4,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::client_common::tools::ToolSpec;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::SandboxPolicy;
@@ -174,10 +173,7 @@ impl ToolRegistry {
                 sandbox_tag(
                     &invocation.turn.sandbox_policy,
                     invocation.turn.windows_sandbox_level,
-                    invocation
-                        .turn
-                        .features
-                        .enabled(Feature::UseLinuxSandboxBwrap),
+                    invocation.turn.features.use_legacy_landlock(),
                 ),
             ),
             (
@@ -505,7 +501,7 @@ async fn dispatch_after_tool_use_hook(
                     sandbox: sandbox_tag(
                         &turn.sandbox_policy,
                         turn.windows_sandbox_level,
-                        turn.features.enabled(Feature::UseLinuxSandboxBwrap),
+                        turn.features.use_legacy_landlock(),
                     )
                     .to_string(),
                     sandbox_policy: sandbox_policy_tag(&turn.sandbox_policy).to_string(),

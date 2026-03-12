@@ -9,13 +9,17 @@ use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use std::time::Instant;
 
+use anyhow::Context;
 use async_channel::unbounded;
 pub use codex_app_server_protocol::AppBranding;
 pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
+use codex_connectors::AllConnectorsCacheKey;
+use codex_connectors::DirectoryListResponse;
 use codex_protocol::protocol::SandboxPolicy;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use tracing::warn;
 
 use crate::AuthManager;
@@ -24,9 +28,9 @@ use crate::SandboxState;
 use crate::config::Config;
 use crate::config::types::AppToolApproval;
 use crate::config::types::AppsConfigToml;
+use crate::default_client::create_client;
 use crate::default_client::is_first_party_chat_originator;
 use crate::default_client::originator;
-use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
 use crate::mcp::ToolPluginProvenance;
@@ -38,8 +42,22 @@ use crate::plugins::AppConnectorId;
 use crate::plugins::PluginsManager;
 use crate::token_data::TokenData;
 
-pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
+pub use codex_connectors::CONNECTORS_CACHE_TTL;
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
+const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
+const TOOL_SUGGEST_DISCOVERABLE_CONNECTOR_IDS: &[&str] = &[
+    "connector_2128aebfecb84f64a069897515042a44",
+    "connector_68df038e0ba48191908c8434991bbac2",
+    "asdk_app_69a1d78e929881919bba0dbda1f6436d",
+    "connector_4964e3b22e3e427e9b4ae1acf2c1fa34",
+    "connector_9d7cfa34e6654a5f98d3387af34b2e1c",
+    "connector_6f1ec045b8fa4ced8738e32c7f74514b",
+    "connector_947e0d954944416db111db556030eea6",
+    "connector_5f3c8c41a1e54ad7a76272c89e2554fa",
+    "connector_686fad9b54914a35b75be6d06a0f6f31",
+    "connector_76869538009648d5b282a4bb21c3d157",
+    "connector_37316be7febe4224b3d31465bae4dbd7",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AppToolPolicy {
@@ -90,6 +108,19 @@ pub async fn list_accessible_connectors_from_mcp_tools(
     )
 }
 
+pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    accessible_connectors: &[AppInfo],
+) -> anyhow::Result<Vec<AppInfo>> {
+    let directory_connectors =
+        list_directory_connectors_for_tool_suggest_with_auth(config, auth).await?;
+    Ok(filter_tool_suggest_discoverable_tools(
+        directory_connectors,
+        accessible_connectors,
+    ))
+}
+
 pub async fn list_cached_accessible_connectors_from_mcp_tools(
     config: &Config,
 ) -> Option<Vec<AppInfo>> {
@@ -100,6 +131,21 @@ pub async fn list_cached_accessible_connectors_from_mcp_tools(
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
     read_cached_accessible_connectors(&cache_key).map(filter_disallowed_connectors)
+}
+
+pub(crate) fn refresh_accessible_connectors_cache_from_mcp_tools(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
+) {
+    if !config.features.enabled(Feature::Apps) {
+        return;
+    }
+
+    let cache_key = accessible_connectors_cache_key(config, auth);
+    let accessible_connectors =
+        filter_disallowed_connectors(accessible_connectors_from_mcp_tools(mcp_tools));
+    write_cached_accessible_connectors(cache_key, &accessible_connectors);
 }
 
 pub async fn list_accessible_connectors_from_mcp_tools_with_options(
@@ -156,7 +202,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
         sandbox_cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
-        use_linux_sandbox_bwrap: config.features.enabled(Feature::UseLinuxSandboxBwrap),
+        use_legacy_landlock: config.features.use_legacy_landlock(),
     };
 
     let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
@@ -172,19 +218,33 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     )
     .await;
 
-    if force_refetch
-        && let Err(err) = mcp_connection_manager
+    let refreshed_tools = if force_refetch {
+        match mcp_connection_manager
             .hard_refresh_codex_apps_tools_cache()
             .await
-    {
-        warn!(
-            "failed to force-refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}', using cached/startup tools: {err:#}"
-        );
-    }
+        {
+            Ok(tools) => Some(tools),
+            Err(err) => {
+                warn!(
+                    "failed to force-refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}', using cached/startup tools: {err:#}"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let refreshed_tools_succeeded = refreshed_tools.is_some();
 
-    let mut tools = mcp_connection_manager.list_all_tools().await;
+    let mut tools = if let Some(tools) = refreshed_tools {
+        tools
+    } else {
+        mcp_connection_manager.list_all_tools().await
+    };
     let mut should_reload_tools = false;
-    let codex_apps_ready = if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
+    let codex_apps_ready = if refreshed_tools_succeeded {
+        true
+    } else if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
         let immediate_ready = mcp_connection_manager
             .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, Duration::ZERO)
             .await;
@@ -279,6 +339,119 @@ fn write_cached_accessible_connectors(
         expires_at: Instant::now() + CONNECTORS_CACHE_TTL,
         connectors: connectors.to_vec(),
     });
+}
+
+fn filter_tool_suggest_discoverable_tools(
+    directory_connectors: Vec<AppInfo>,
+    accessible_connectors: &[AppInfo],
+) -> Vec<AppInfo> {
+    let accessible_connector_ids: HashSet<&str> = accessible_connectors
+        .iter()
+        .filter(|connector| connector.is_accessible && connector.is_enabled)
+        .map(|connector| connector.id.as_str())
+        .collect();
+    let allowed_connector_ids: HashSet<&str> = TOOL_SUGGEST_DISCOVERABLE_CONNECTOR_IDS
+        .iter()
+        .copied()
+        .collect();
+
+    let mut connectors = filter_disallowed_connectors(directory_connectors)
+        .into_iter()
+        .filter(|connector| !accessible_connector_ids.contains(connector.id.as_str()))
+        .filter(|connector| allowed_connector_ids.contains(connector.id.as_str()))
+        .collect::<Vec<_>>();
+    connectors.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    connectors
+}
+
+async fn list_directory_connectors_for_tool_suggest_with_auth(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+) -> anyhow::Result<Vec<AppInfo>> {
+    if !config.features.enabled(Feature::Apps) {
+        return Ok(Vec::new());
+    }
+
+    let token_data = if let Some(auth) = auth {
+        auth.get_token_data().ok()
+    } else {
+        let auth_manager = auth_manager_from_config(config);
+        auth_manager
+            .auth()
+            .await
+            .and_then(|auth| auth.get_token_data().ok())
+    };
+    let Some(token_data) = token_data else {
+        return Ok(Vec::new());
+    };
+
+    let account_id = match token_data.account_id.as_deref() {
+        Some(account_id) if !account_id.is_empty() => account_id,
+        _ => return Ok(Vec::new()),
+    };
+    let access_token = token_data.access_token.clone();
+    let account_id = account_id.to_string();
+    let is_workspace_account = token_data.id_token.is_workspace_account();
+    let cache_key = AllConnectorsCacheKey::new(
+        config.chatgpt_base_url.clone(),
+        Some(account_id.clone()),
+        token_data.id_token.chatgpt_user_id.clone(),
+        is_workspace_account,
+    );
+
+    codex_connectors::list_all_connectors_with_options(
+        cache_key,
+        is_workspace_account,
+        false,
+        |path| {
+            let access_token = access_token.clone();
+            let account_id = account_id.clone();
+            async move {
+                chatgpt_get_request_with_token::<DirectoryListResponse>(
+                    config,
+                    path,
+                    access_token.as_str(),
+                    account_id.as_str(),
+                )
+                .await
+            }
+        },
+    )
+    .await
+}
+
+async fn chatgpt_get_request_with_token<T: DeserializeOwned>(
+    config: &Config,
+    path: String,
+    access_token: &str,
+    account_id: &str,
+) -> anyhow::Result<T> {
+    let client = create_client();
+    let url = format!("{}{}", config.chatgpt_base_url, path);
+    let response = client
+        .get(&url)
+        .bearer_auth(access_token)
+        .header("chatgpt-account-id", account_id)
+        .header("Content-Type", "application/json")
+        .timeout(DIRECTORY_CONNECTORS_TIMEOUT)
+        .send()
+        .await
+        .context("failed to send request")?;
+
+    if response.status().is_success() {
+        response
+            .json()
+            .await
+            .context("failed to parse JSON response")
+    } else {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("request failed with status {status}: {body}");
+    }
 }
 
 fn auth_manager_from_config(config: &Config) -> std::sync::Arc<AuthManager> {
@@ -719,10 +892,12 @@ fn format_connector_label(name: &str, _id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ConfigBuilder;
     use crate::config::types::AppConfig;
     use crate::config::types::AppToolConfig;
     use crate::config::types::AppToolsConfig;
     use crate::config::types::AppsDefaultConfig;
+    use crate::features::Feature;
     use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
     use crate::mcp_connection_manager::ToolInfo;
     use pretty_assertions::assert_eq;
@@ -730,6 +905,7 @@ mod tests {
     use rmcp::model::Tool;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use tempfile::tempdir;
 
     fn annotations(
         destructive_hint: Option<bool>,
@@ -759,6 +935,15 @@ mod tests {
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
+        }
+    }
+
+    fn named_app(id: &str, name: &str) -> AppInfo {
+        AppInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            install_url: Some(connector_install_url(name, id)),
+            ..app(id)
         }
     }
 
@@ -819,6 +1004,21 @@ mod tests {
             connector_description: None,
             plugin_display_names: plugin_names(plugin_display_names),
         }
+    }
+
+    fn with_accessible_connectors_cache_cleared<R>(f: impl FnOnce() -> R) -> R {
+        let previous = {
+            let mut cache_guard = ACCESSIBLE_CONNECTORS_CACHE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            cache_guard.take()
+        };
+        let result = f();
+        let mut cache_guard = ACCESSIBLE_CONNECTORS_CACHE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *cache_guard = previous;
+        result
     }
 
     #[test]
@@ -903,6 +1103,62 @@ mod tests {
                 is_accessible: true,
                 is_enabled: true,
                 plugin_display_names: plugin_names(&["beta", "sample"]),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_installed_apps() {
+        let codex_home = tempdir().expect("tempdir should succeed");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config should load");
+        let _ = config.features.set_enabled(Feature::Apps, true);
+        let cache_key = accessible_connectors_cache_key(&config, None);
+        let tools = HashMap::from([
+            (
+                "mcp__codex_apps__calendar_list_events".to_string(),
+                codex_app_tool(
+                    "calendar_list_events",
+                    "calendar",
+                    Some("Google Calendar"),
+                    &["calendar-plugin"],
+                ),
+            ),
+            (
+                "mcp__codex_apps__openai_hidden".to_string(),
+                codex_app_tool(
+                    "openai_hidden",
+                    "connector_openai_hidden",
+                    Some("Hidden"),
+                    &[],
+                ),
+            ),
+        ]);
+
+        let cached = with_accessible_connectors_cache_cleared(|| {
+            refresh_accessible_connectors_cache_from_mcp_tools(&config, None, &tools);
+            read_cached_accessible_connectors(&cache_key).expect("cache should be populated")
+        });
+
+        assert_eq!(
+            cached,
+            vec![AppInfo {
+                id: "calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                install_url: Some(connector_install_url("Google Calendar", "calendar")),
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: plugin_names(&["calendar-plugin"]),
             }]
         );
     }
@@ -1342,6 +1598,70 @@ mod tests {
         assert_eq!(
             filtered,
             vec![app("asdk_app_6938a94a61d881918ef32cb999ff937c")]
+        );
+    }
+
+    #[test]
+    fn filter_tool_suggest_discoverable_tools_keeps_only_allowlisted_uninstalled_apps() {
+        let filtered = filter_tool_suggest_discoverable_tools(
+            vec![
+                named_app(
+                    "connector_2128aebfecb84f64a069897515042a44",
+                    "Google Calendar",
+                ),
+                named_app("connector_68df038e0ba48191908c8434991bbac2", "Gmail"),
+                named_app("connector_other", "Other"),
+            ],
+            &[AppInfo {
+                is_accessible: true,
+                ..named_app(
+                    "connector_2128aebfecb84f64a069897515042a44",
+                    "Google Calendar",
+                )
+            }],
+        );
+
+        assert_eq!(
+            filtered,
+            vec![named_app(
+                "connector_68df038e0ba48191908c8434991bbac2",
+                "Gmail",
+            )]
+        );
+    }
+
+    #[test]
+    fn filter_tool_suggest_discoverable_tools_keeps_disabled_accessible_apps() {
+        let filtered = filter_tool_suggest_discoverable_tools(
+            vec![
+                named_app(
+                    "connector_2128aebfecb84f64a069897515042a44",
+                    "Google Calendar",
+                ),
+                named_app("connector_68df038e0ba48191908c8434991bbac2", "Gmail"),
+            ],
+            &[
+                AppInfo {
+                    is_accessible: true,
+                    ..named_app(
+                        "connector_2128aebfecb84f64a069897515042a44",
+                        "Google Calendar",
+                    )
+                },
+                AppInfo {
+                    is_accessible: true,
+                    is_enabled: false,
+                    ..named_app("connector_68df038e0ba48191908c8434991bbac2", "Gmail")
+                },
+            ],
+        );
+
+        assert_eq!(
+            filtered,
+            vec![named_app(
+                "connector_68df038e0ba48191908c8434991bbac2",
+                "Gmail"
+            )]
         );
     }
 }

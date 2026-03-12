@@ -9,11 +9,15 @@ use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_otel::span_w3c_trace_context;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::W3cTraceContext;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tracing::Instrument;
+use tracing::Span;
 use tracing::warn;
 
 use crate::error_code::INTERNAL_ERROR_CODE;
@@ -35,6 +39,37 @@ pub(crate) struct ConnectionRequestId {
     pub(crate) request_id: RequestId,
 }
 
+/// Trace data we keep for an incoming request until we send its final
+/// response or error.
+#[derive(Clone)]
+pub(crate) struct RequestContext {
+    request_id: ConnectionRequestId,
+    span: Span,
+    parent_trace: Option<W3cTraceContext>,
+}
+
+impl RequestContext {
+    pub(crate) fn new(
+        request_id: ConnectionRequestId,
+        span: Span,
+        parent_trace: Option<W3cTraceContext>,
+    ) -> Self {
+        Self {
+            request_id,
+            span,
+            parent_trace,
+        }
+    }
+
+    pub(crate) fn request_trace(&self) -> Option<W3cTraceContext> {
+        span_w3c_trace_context(&self.span).or_else(|| self.parent_trace.clone())
+    }
+
+    pub(crate) fn span(&self) -> Span {
+        self.span.clone()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum OutgoingEnvelope {
     ToConnection {
@@ -51,6 +86,10 @@ pub(crate) struct OutgoingMessageSender {
     next_server_request_id: AtomicI64,
     sender: mpsc::Sender<OutgoingEnvelope>,
     request_id_to_callback: Mutex<HashMap<RequestId, PendingCallbackEntry>>,
+    /// Incoming requests that are still waiting on a final response or error.
+    /// We keep them here because this is where responses, errors, and
+    /// disconnect cleanup all get handled.
+    request_contexts: Mutex<HashMap<ConnectionRequestId, RequestContext>>,
 }
 
 #[derive(Clone)]
@@ -142,7 +181,46 @@ impl OutgoingMessageSender {
             next_server_request_id: AtomicI64::new(0),
             sender,
             request_id_to_callback: Mutex::new(HashMap::new()),
+            request_contexts: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub(crate) async fn register_request_context(&self, request_context: RequestContext) {
+        let mut request_contexts = self.request_contexts.lock().await;
+        if request_contexts
+            .insert(request_context.request_id.clone(), request_context)
+            .is_some()
+        {
+            warn!("replaced unresolved request context");
+        }
+    }
+
+    pub(crate) async fn connection_closed(&self, connection_id: ConnectionId) {
+        let mut request_contexts = self.request_contexts.lock().await;
+        request_contexts.retain(|request_id, _| request_id.connection_id != connection_id);
+    }
+
+    pub(crate) async fn request_trace_context(
+        &self,
+        request_id: &ConnectionRequestId,
+    ) -> Option<W3cTraceContext> {
+        let request_contexts = self.request_contexts.lock().await;
+        request_contexts
+            .get(request_id)
+            .and_then(RequestContext::request_trace)
+    }
+
+    async fn take_request_context(
+        &self,
+        request_id: &ConnectionRequestId,
+    ) -> Option<RequestContext> {
+        let mut request_contexts = self.request_contexts.lock().await;
+        request_contexts.remove(request_id)
+    }
+
+    #[cfg(test)]
+    async fn request_context_count(&self) -> usize {
+        self.request_contexts.lock().await.len()
     }
 
     pub(crate) async fn send_request(
@@ -353,25 +431,24 @@ impl OutgoingMessageSender {
         request_id: ConnectionRequestId,
         response: T,
     ) {
+        let request_context = self.take_request_context(&request_id).await;
         match serde_json::to_value(response) {
             Ok(result) => {
                 let outgoing_message = OutgoingMessage::Response(OutgoingResponse {
-                    id: request_id.request_id,
+                    id: request_id.request_id.clone(),
                     result,
                 });
-                if let Err(err) = self
-                    .sender
-                    .send(OutgoingEnvelope::ToConnection {
-                        connection_id: request_id.connection_id,
-                        message: outgoing_message,
-                    })
-                    .await
-                {
-                    warn!("failed to send response to client: {err:?}");
-                }
+                self.send_outgoing_message_to_connection(
+                    request_context,
+                    request_id.connection_id,
+                    outgoing_message,
+                    "response",
+                )
+                .await;
             }
             Err(err) => {
-                self.send_error(
+                self.send_error_inner(
+                    request_context,
                     request_id,
                     JSONRPCErrorError {
                         code: INTERNAL_ERROR_CODE,
@@ -462,19 +539,49 @@ impl OutgoingMessageSender {
         request_id: ConnectionRequestId,
         error: JSONRPCErrorError,
     ) {
+        let request_context = self.take_request_context(&request_id).await;
+        self.send_error_inner(request_context, request_id, error)
+            .await;
+    }
+
+    async fn send_error_inner(
+        &self,
+        request_context: Option<RequestContext>,
+        request_id: ConnectionRequestId,
+        error: JSONRPCErrorError,
+    ) {
         let outgoing_message = OutgoingMessage::Error(OutgoingError {
             id: request_id.request_id,
             error,
         });
-        if let Err(err) = self
-            .sender
-            .send(OutgoingEnvelope::ToConnection {
-                connection_id: request_id.connection_id,
-                message: outgoing_message,
-            })
-            .await
-        {
-            warn!("failed to send error to client: {err:?}");
+        self.send_outgoing_message_to_connection(
+            request_context,
+            request_id.connection_id,
+            outgoing_message,
+            "error",
+        )
+        .await;
+    }
+
+    async fn send_outgoing_message_to_connection(
+        &self,
+        request_context: Option<RequestContext>,
+        connection_id: ConnectionId,
+        message: OutgoingMessage,
+        message_kind: &'static str,
+    ) {
+        let send_fut = self.sender.send(OutgoingEnvelope::ToConnection {
+            connection_id,
+            message,
+        });
+        let send_result = if let Some(request_context) = request_context {
+            send_fut.instrument(request_context.span()).await
+        } else {
+            send_fut.await
+        };
+
+        if let Err(err) = send_result {
+            warn!("failed to send {message_kind} to client: {err:?}");
         }
     }
 }
@@ -739,6 +846,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn send_response_clears_registered_request_context() {
+        let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(4);
+        let outgoing = OutgoingMessageSender::new(tx);
+        let request_id = ConnectionRequestId {
+            connection_id: ConnectionId(42),
+            request_id: RequestId::Integer(7),
+        };
+
+        outgoing
+            .register_request_context(RequestContext::new(
+                request_id.clone(),
+                tracing::info_span!("app_server.request", rpc.method = "thread/start"),
+                None,
+            ))
+            .await;
+        assert_eq!(outgoing.request_context_count().await, 1);
+
+        outgoing
+            .send_response(request_id, json!({ "ok": true }))
+            .await;
+
+        assert_eq!(outgoing.request_context_count().await, 0);
+    }
+
+    #[tokio::test]
     async fn send_error_routes_to_target_connection() {
         let (tx, mut rx) = mpsc::channel::<OutgoingEnvelope>(4);
         let outgoing = OutgoingMessageSender::new(tx);
@@ -773,6 +905,40 @@ mod tests {
             }
             other => panic!("expected targeted error envelope, got: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn connection_closed_clears_registered_request_contexts() {
+        let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(4);
+        let outgoing = OutgoingMessageSender::new(tx);
+        let closed_connection_request = ConnectionRequestId {
+            connection_id: ConnectionId(9),
+            request_id: RequestId::Integer(3),
+        };
+        let open_connection_request = ConnectionRequestId {
+            connection_id: ConnectionId(10),
+            request_id: RequestId::Integer(4),
+        };
+
+        outgoing
+            .register_request_context(RequestContext::new(
+                closed_connection_request,
+                tracing::info_span!("app_server.request", rpc.method = "turn/interrupt"),
+                None,
+            ))
+            .await;
+        outgoing
+            .register_request_context(RequestContext::new(
+                open_connection_request,
+                tracing::info_span!("app_server.request", rpc.method = "turn/start"),
+                None,
+            ))
+            .await;
+        assert_eq!(outgoing.request_context_count().await, 2);
+
+        outgoing.connection_closed(ConnectionId(9)).await;
+
+        assert_eq!(outgoing.request_context_count().await, 1);
     }
 
     #[tokio::test]
