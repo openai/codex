@@ -20,6 +20,12 @@ In the codex-rs folder where the rust code lives:
 - After dependency changes, run `just bazel-lock-check` from the repo root so lockfile drift is caught
   locally before CI.
 - Do not create small helper methods that are referenced only once.
+- On Termux/Android, before long-running build/test commands, load the latest safe shell snapshot with
+  `. "$(ls -t "$HOME"/.codex/shell_snapshots/*.sh | head -n 1)"`.
+- On Termux/Android, continuously monitor system pressure while builds/tests are running. At minimum,
+  watch `MemAvailable` from `/proc/meminfo`, `df -P /data`, and top RSS processes via
+  `ps -eo rss,pcpu,comm --sort=-rss`, and stop or scale back if memory or disk pressure approaches
+  instability.
 
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 

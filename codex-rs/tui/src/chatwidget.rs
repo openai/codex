@@ -135,6 +135,7 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnDiffEvent;
+use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UndoCompletedEvent;
 use codex_protocol::protocol::UndoStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
@@ -522,6 +523,70 @@ fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
     }
 }
 
+fn should_retry_current_message_immediately(
+    codex_error_info: Option<&CodexErrorInfo>,
+    message: &str,
+) -> bool {
+    match codex_error_info {
+        Some(
+            CodexErrorInfo::ServerOverloaded
+            | CodexErrorInfo::HttpConnectionFailed { .. }
+            | CodexErrorInfo::ResponseStreamConnectionFailed { .. }
+            | CodexErrorInfo::InternalServerError
+            | CodexErrorInfo::ResponseStreamDisconnected { .. }
+            | CodexErrorInfo::ResponseTooManyFailedAttempts { .. },
+        ) => true,
+        Some(
+            CodexErrorInfo::ContextWindowExceeded
+            | CodexErrorInfo::UsageLimitExceeded
+            | CodexErrorInfo::Unauthorized
+            | CodexErrorInfo::BadRequest
+            | CodexErrorInfo::SandboxError
+            | CodexErrorInfo::ThreadRollbackFailed,
+        ) => false,
+        Some(CodexErrorInfo::Other) | None => {
+            let message = message.to_ascii_lowercase();
+            [
+                "429",
+                "too many requests",
+                "retry limit",
+                "connection failed",
+                "temporarily unavailable",
+                "timeout",
+                "timed out",
+                "server overloaded",
+                "stream disconnected",
+            ]
+            .iter()
+            .any(|pattern| message.contains(pattern))
+        }
+    }
+}
+
+fn should_hold_queue_after_error(
+    codex_error_info: Option<&CodexErrorInfo>,
+    _message: &str,
+) -> bool {
+    match codex_error_info {
+        Some(
+            CodexErrorInfo::ContextWindowExceeded
+            | CodexErrorInfo::UsageLimitExceeded
+            | CodexErrorInfo::ServerOverloaded
+            | CodexErrorInfo::HttpConnectionFailed { .. }
+            | CodexErrorInfo::ResponseStreamConnectionFailed { .. }
+            | CodexErrorInfo::InternalServerError
+            | CodexErrorInfo::Unauthorized
+            | CodexErrorInfo::BadRequest
+            | CodexErrorInfo::SandboxError
+            | CodexErrorInfo::ResponseStreamDisconnected { .. }
+            | CodexErrorInfo::ResponseTooManyFailedAttempts { .. }
+            | CodexErrorInfo::ThreadRollbackFailed
+            | CodexErrorInfo::Other,
+        )
+        | None => true,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ExternalEditorState {
     #[default]
@@ -633,6 +698,17 @@ pub(crate) struct ChatWidget {
     queued_user_messages: VecDeque<UserMessage>,
     // Monotonic sequence source used when enqueuing `queued_user_messages`.
     next_queued_message_seq: u64,
+    // User message most recently submitted to core and still awaiting a terminal turn outcome.
+    in_flight_user_message: Option<UserMessage>,
+    // Retries the failed in-flight message before advancing queued drafts after transient failures.
+    retry_current_user_message: Option<UserMessage>,
+    // Preserves the failed current message when the queue must pause but should not auto-retry.
+    paused_current_user_message: Option<UserMessage>,
+    // The live turn id most recently started by core, if any.
+    active_turn_id: Option<String>,
+    // Turn ids that already ended locally via error/abort, so late TurnComplete events must not
+    // release queued follow-ups or clear preserved retry/pause state.
+    ignored_turn_complete_ids: HashSet<String>,
     // RLPH `/exec` commands are submitted as user shell commands and bridged
     // back into a follow-up prompt on command completion.
     pending_rlph_exec_commands: VecDeque<String>,
@@ -988,6 +1064,20 @@ enum ReplayKind {
 }
 
 impl ChatWidget {
+    fn retry_or_pause_blocks_submission(&self) -> bool {
+        self.retry_current_user_message.is_some() || self.paused_current_user_message.is_some()
+    }
+
+    fn queue_advancement_blocked(&self) -> bool {
+        self.in_flight_user_message.is_some() || self.retry_or_pause_blocks_submission()
+    }
+
+    fn remember_active_turn_complete_as_stale(&mut self) {
+        if let Some(turn_id) = self.active_turn_id.take() {
+            self.ignored_turn_complete_ids.insert(turn_id);
+        }
+    }
+
     fn realtime_conversation_enabled(&self) -> bool {
         self.config.features.enabled(Feature::RealtimeConversation)
             && cfg!(not(target_os = "linux"))
@@ -1585,6 +1675,7 @@ impl ChatWidget {
         {
             self.last_copyable_output = Some(message.clone());
         }
+        self.active_turn_id = None;
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take()
@@ -1627,6 +1718,9 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         self.request_redraw();
+        self.in_flight_user_message = None;
+        self.retry_current_user_message = None;
+        self.paused_current_user_message = None;
 
         let had_pending_steers = !self.pending_steers.is_empty();
         self.refresh_pending_input_preview();
@@ -1912,6 +2006,7 @@ impl ChatWidget {
     }
 
     fn on_server_overloaded_error(&mut self, message: String) {
+        self.remember_active_turn_complete_as_stale();
         self.finalize_turn();
 
         let message = if message.trim().is_empty() {
@@ -1922,13 +2017,27 @@ impl ChatWidget {
 
         self.add_to_history(history_cell::new_warning_event(message));
         self.request_redraw();
+        self.retry_current_user_message = self.in_flight_user_message.take();
+        self.paused_current_user_message = None;
         self.maybe_send_next_queued_input();
     }
 
-    fn on_error(&mut self, message: String) {
+    fn on_error(&mut self, message: String, retry_current_message: bool, hold_queue: bool) {
+        self.remember_active_turn_complete_as_stale();
         self.finalize_turn();
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
+        if retry_current_message {
+            self.retry_current_user_message = self.in_flight_user_message.take();
+            self.paused_current_user_message = None;
+        } else if hold_queue {
+            self.paused_current_user_message = self.in_flight_user_message.take();
+            self.retry_current_user_message = None;
+        } else {
+            self.in_flight_user_message = None;
+            self.retry_current_user_message = None;
+            self.paused_current_user_message = None;
+        }
 
         // After an error ends the turn, try sending the next queued input.
         self.maybe_send_next_queued_input();
@@ -2012,7 +2121,11 @@ impl ChatWidget {
     /// separated by newlines rather than auto‑submitting the next one.
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
+        self.remember_active_turn_complete_as_stale();
         self.finalize_turn();
+        self.in_flight_user_message = None;
+        self.retry_current_user_message = None;
+        self.paused_current_user_message = None;
         if reason == TurnAbortReason::Interrupted {
             self.clear_unified_exec_processes();
         }
@@ -2188,6 +2301,11 @@ impl ChatWidget {
             self.queued_user_messages = input_state.pending_steers;
             self.queued_user_messages
                 .extend(input_state.queued_user_messages);
+            self.in_flight_user_message = None;
+            self.retry_current_user_message = None;
+            self.paused_current_user_message = None;
+            self.active_turn_id = None;
+            self.ignored_turn_complete_ids.clear();
             self.pending_rlph_exec_commands.clear();
             self.active_rlph_exec_commands.clear();
         } else {
@@ -2202,6 +2320,11 @@ impl ChatWidget {
             );
             self.bottom_pane.set_composer_pending_pastes(Vec::new());
             self.queued_user_messages.clear();
+            self.in_flight_user_message = None;
+            self.retry_current_user_message = None;
+            self.paused_current_user_message = None;
+            self.active_turn_id = None;
+            self.ignored_turn_complete_ids.clear();
             self.pending_rlph_exec_commands.clear();
             self.active_rlph_exec_commands.clear();
         }
@@ -3224,6 +3347,11 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             next_queued_message_seq: 0,
+            in_flight_user_message: None,
+            retry_current_user_message: None,
+            paused_current_user_message: None,
+            active_turn_id: None,
+            ignored_turn_complete_ids: HashSet::new(),
             pending_rlph_exec_commands: VecDeque::new(),
             active_rlph_exec_commands: HashMap::new(),
             pending_steers: VecDeque::new(),
@@ -3413,6 +3541,11 @@ impl ChatWidget {
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
             next_queued_message_seq: 0,
+            in_flight_user_message: None,
+            retry_current_user_message: None,
+            paused_current_user_message: None,
+            active_turn_id: None,
+            ignored_turn_complete_ids: HashSet::new(),
             pending_rlph_exec_commands: VecDeque::new(),
             active_rlph_exec_commands: HashMap::new(),
             pending_steers: VecDeque::new(),
@@ -3586,6 +3719,11 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             next_queued_message_seq: 0,
+            in_flight_user_message: None,
+            retry_current_user_message: None,
+            paused_current_user_message: None,
+            active_turn_id: None,
+            ignored_turn_complete_ids: HashSet::new(),
             pending_rlph_exec_commands: VecDeque::new(),
             active_rlph_exec_commands: HashMap::new(),
             pending_steers: VecDeque::new(),
@@ -3728,6 +3866,21 @@ impl ChatWidget {
             return;
         }
 
+        if key_event.kind == KeyEventKind::Press
+            && key_event.code == KeyCode::Enter
+            && key_event.modifiers == KeyModifiers::NONE
+            && self.bottom_pane.no_modal_or_popup_active()
+            && self.bottom_pane.composer_is_empty()
+            && let Some(user_message) = self.paused_current_user_message.take()
+        {
+            self.reasoning_buffer.clear();
+            self.full_reasoning_buffer.clear();
+            self.set_status_header(String::from("Working"));
+            self.submit_user_message_internal(user_message, true);
+            self.refresh_pending_input_preview();
+            return;
+        }
+
         match key_event {
             _ if is_cycle_mode_or_repeat_queue_key(key_event)
                 && self.collaboration_modes_enabled()
@@ -3769,8 +3922,9 @@ impl ChatWidget {
                     else {
                         return;
                     };
-                    let should_submit_now =
-                        self.is_session_configured() && !self.is_plan_streaming_in_tui();
+                    let should_submit_now = self.is_session_configured()
+                        && !self.is_plan_streaming_in_tui()
+                        && !self.retry_or_pause_blocks_submission();
                     if should_submit_now {
                         // Submitted is emitted when user submits.
                         // Reset any reasoning header only when we are actually submitting a turn.
@@ -4486,6 +4640,7 @@ impl ChatWidget {
         if !self.is_session_configured()
             || self.bottom_pane.is_task_running()
             || self.is_review_mode
+            || self.queue_advancement_blocked()
         {
             self.push_queued_user_message_back(user_message);
             self.refresh_pending_input_preview();
@@ -4616,6 +4771,10 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        self.submit_user_message_internal(user_message, false);
+    }
+
+    fn submit_user_message_internal(&mut self, user_message: UserMessage, is_retry: bool) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.push_queued_user_message_front(user_message);
@@ -4628,6 +4787,7 @@ impl ChatWidget {
             return;
         }
 
+        let submitted_user_message = user_message.clone();
         let UserMessage {
             text,
             local_images,
@@ -4844,6 +5004,14 @@ impl ChatWidget {
         if !self.submit_op(op) {
             return;
         }
+        self.in_flight_user_message = Some(submitted_user_message);
+        self.retry_current_user_message = None;
+        self.paused_current_user_message = None;
+
+        if is_retry {
+            self.needs_final_message_separator = false;
+            return;
+        }
 
         // Persist the text to cross-session message history.
         if !text.is_empty() {
@@ -5026,14 +5194,31 @@ impl ChatWidget {
                 self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TurnStarted(_) => {
+            EventMsg::TurnStarted(TurnStartedEvent { turn_id, .. }) => {
                 if !is_resume_initial_replay {
+                    self.active_turn_id = Some(turn_id);
                     self.on_task_started();
                 }
             }
             EventMsg::TurnComplete(TurnCompleteEvent {
-                last_agent_message, ..
-            }) => self.on_task_complete(last_agent_message, from_replay),
+                turn_id,
+                last_agent_message,
+                ..
+            }) => {
+                if !from_replay {
+                    if self.ignored_turn_complete_ids.remove(&turn_id) {
+                        return;
+                    }
+                    if self
+                        .active_turn_id
+                        .as_ref()
+                        .is_some_and(|active_turn_id| active_turn_id != &turn_id)
+                    {
+                        return;
+                    }
+                }
+                self.on_task_complete(last_agent_message, from_replay)
+            }
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
@@ -5044,19 +5229,22 @@ impl ChatWidget {
                 message,
                 codex_error_info,
             }) => {
-                if let Some(info) = codex_error_info
-                    && let Some(kind) = rate_limit_error_kind(&info)
+                let retry_current_message =
+                    should_retry_current_message_immediately(codex_error_info.as_ref(), &message);
+                let hold_queue = should_hold_queue_after_error(codex_error_info.as_ref(), &message);
+                if let Some(info) = codex_error_info.as_ref()
+                    && let Some(kind) = rate_limit_error_kind(info)
                 {
                     match kind {
                         RateLimitErrorKind::ServerOverloaded => {
                             self.on_server_overloaded_error(message)
                         }
                         RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                            self.on_error(message)
+                            self.on_error(message, retry_current_message, hold_queue)
                         }
                     }
                 } else {
-                    self.on_error(message);
+                    self.on_error(message, retry_current_message, hold_queue);
                 }
             }
             EventMsg::McpStartupUpdate(ev) => self.on_mcp_startup_update(ev),
@@ -5068,7 +5256,11 @@ impl ChatWidget {
                 TurnAbortReason::Replaced => {
                     self.pending_steers.clear();
                     self.refresh_pending_input_preview();
-                    self.on_error("Turn aborted: replaced by a new task".to_owned())
+                    self.on_error(
+                        "Turn aborted: replaced by a new task".to_owned(),
+                        false,
+                        false,
+                    )
                 }
                 TurnAbortReason::ReviewEnded => {
                     self.on_interrupted_turn(ev.reason);
@@ -5373,6 +5565,21 @@ impl ChatWidget {
     // If idle and there are queued inputs, submit exactly one to start the next turn.
     pub(crate) fn maybe_send_next_queued_input(&mut self) {
         if self.suppress_queue_autosend {
+            return;
+        }
+        if !self.bottom_pane.is_task_running()
+            && let Some(user_message) = self.retry_current_user_message.take()
+        {
+            self.submit_user_message_internal(user_message, true);
+            self.refresh_pending_input_preview();
+            return;
+        }
+        if self.in_flight_user_message.is_some() {
+            self.refresh_pending_input_preview();
+            return;
+        }
+        if self.paused_current_user_message.is_some() {
+            self.refresh_pending_input_preview();
             return;
         }
         if self.bottom_pane.is_task_running()
