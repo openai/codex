@@ -121,38 +121,98 @@ impl SlashCommand {
 
     /// Whether this command supports inline args (for example `/model ...` or `/review ...`).
     pub fn supports_inline_args(self) -> bool {
-        matches!(
-            self,
+        match self {
             SlashCommand::Model
-                | SlashCommand::Review
-                | SlashCommand::Rename
-                | SlashCommand::Plan
-                | SlashCommand::Fast
-                | SlashCommand::SandboxReadRoot
-        )
+            | SlashCommand::Review
+            | SlashCommand::Rename
+            | SlashCommand::Plan
+            | SlashCommand::Fast
+            | SlashCommand::SandboxReadRoot => true,
+            SlashCommand::Approvals
+            | SlashCommand::Permissions
+            | SlashCommand::ElevateSandbox
+            | SlashCommand::Experimental
+            | SlashCommand::Skills
+            | SlashCommand::New
+            | SlashCommand::Resume
+            | SlashCommand::Fork
+            | SlashCommand::Init
+            | SlashCommand::Compact
+            | SlashCommand::Collab
+            | SlashCommand::Agent
+            | SlashCommand::Diff
+            | SlashCommand::Copy
+            | SlashCommand::Mention
+            | SlashCommand::Status
+            | SlashCommand::DebugConfig
+            | SlashCommand::Statusline
+            | SlashCommand::Theme
+            | SlashCommand::Mcp
+            | SlashCommand::Apps
+            | SlashCommand::Logout
+            | SlashCommand::Quit
+            | SlashCommand::Exit
+            | SlashCommand::Feedback
+            | SlashCommand::Rollout
+            | SlashCommand::Ps
+            | SlashCommand::Clean
+            | SlashCommand::Clear
+            | SlashCommand::Personality
+            | SlashCommand::Realtime
+            | SlashCommand::Settings
+            | SlashCommand::TestApproval
+            | SlashCommand::MultiAgents
+            | SlashCommand::MemoryDrop
+            | SlashCommand::MemoryUpdate => false,
+        }
     }
 
     /// Whether bare dispatch opens interactive UI that should be resolved before queueing.
     pub fn requires_interaction(self) -> bool {
-        matches!(
-            self,
+        match self {
             SlashCommand::Feedback
-                | SlashCommand::Resume
-                | SlashCommand::Review
-                | SlashCommand::Rename
-                | SlashCommand::Model
-                | SlashCommand::Settings
-                | SlashCommand::Personality
-                | SlashCommand::Collab
-                | SlashCommand::Agent
-                | SlashCommand::MultiAgents
-                | SlashCommand::Approvals
-                | SlashCommand::Permissions
-                | SlashCommand::Experimental
-                | SlashCommand::Skills
-                | SlashCommand::Statusline
-                | SlashCommand::Theme
-        )
+            | SlashCommand::Resume
+            | SlashCommand::Review
+            | SlashCommand::Rename
+            | SlashCommand::Model
+            | SlashCommand::Settings
+            | SlashCommand::Personality
+            | SlashCommand::Collab
+            | SlashCommand::Agent
+            | SlashCommand::MultiAgents
+            | SlashCommand::Approvals
+            | SlashCommand::Permissions
+            | SlashCommand::Experimental
+            | SlashCommand::Skills
+            | SlashCommand::Statusline
+            | SlashCommand::Theme => true,
+            SlashCommand::Fast
+            | SlashCommand::ElevateSandbox
+            | SlashCommand::SandboxReadRoot
+            | SlashCommand::New
+            | SlashCommand::Fork
+            | SlashCommand::Init
+            | SlashCommand::Compact
+            | SlashCommand::Plan
+            | SlashCommand::Diff
+            | SlashCommand::Copy
+            | SlashCommand::Mention
+            | SlashCommand::Status
+            | SlashCommand::DebugConfig
+            | SlashCommand::Mcp
+            | SlashCommand::Apps
+            | SlashCommand::Logout
+            | SlashCommand::Quit
+            | SlashCommand::Exit
+            | SlashCommand::Rollout
+            | SlashCommand::Ps
+            | SlashCommand::Clean
+            | SlashCommand::Clear
+            | SlashCommand::Realtime
+            | SlashCommand::TestApproval
+            | SlashCommand::MemoryDrop
+            | SlashCommand::MemoryUpdate => false,
+        }
     }
 
     /// Whether this command can be run while a task is in progress.
