@@ -3686,10 +3686,18 @@ impl App {
     }
 
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+        // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
+        // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
+        // agent-switch shortcuts when the composer is empty so we never steal the expected
+        // editing behavior for moving across words inside a draft.
         let allow_agent_word_motion_fallback = !self.enhanced_keys_supported
             && self.chat_widget.composer_text_with_pending().is_empty();
         if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
+            // Alt+Left/Right are also natural word-motion keys in the composer. Keep agent
+            // fast-switch available only once the draft is empty so editing behavior wins whenever
+            // there is text on screen.
+            && self.chat_widget.composer_text_with_pending().is_empty()
             && previous_agent_shortcut_matches(key_event, allow_agent_word_motion_fallback)
         {
             if let Some(thread_id) = self.agent_navigation.adjacent_thread_id(
@@ -3702,6 +3710,9 @@ impl App {
         }
         if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
+            // Mirror the previous-agent rule above: empty drafts may use these keys for thread
+            // switching, but non-empty drafts keep them for expected word-wise cursor motion.
+            && self.chat_widget.composer_text_with_pending().is_empty()
             && next_agent_shortcut_matches(key_event, allow_agent_word_motion_fallback)
         {
             if let Some(thread_id) = self.agent_navigation.adjacent_thread_id(

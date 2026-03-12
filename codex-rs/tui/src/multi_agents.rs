@@ -121,8 +121,10 @@ fn previous_agent_word_motion_fallback(
     key_event: KeyEvent,
     allow_word_motion_fallback: bool,
 ) -> bool {
-    // macOS terminals often send Option+b/f as word-motion keys instead of Option+arrow events
-    // unless enhanced keyboard reporting is enabled.
+    // Some terminals, especially on macOS, send Option+b/f as word-motion keys instead of
+    // Option+arrow events unless enhanced keyboard reporting is enabled. Callers should only
+    // enable this fallback when the composer is empty so draft editing retains the expected
+    // word-wise motion behavior.
     allow_word_motion_fallback
         && matches!(
             key_event,
@@ -145,8 +147,10 @@ fn previous_agent_word_motion_fallback(
 
 #[cfg(target_os = "macos")]
 fn next_agent_word_motion_fallback(key_event: KeyEvent, allow_word_motion_fallback: bool) -> bool {
-    // macOS terminals often send Option+b/f as word-motion keys instead of Option+arrow events
-    // unless enhanced keyboard reporting is enabled.
+    // Some terminals, especially on macOS, send Option+b/f as word-motion keys instead of
+    // Option+arrow events unless enhanced keyboard reporting is enabled. Callers should only
+    // enable this fallback when the composer is empty so draft editing retains the expected
+    // word-wise motion behavior.
     allow_word_motion_fallback
         && matches!(
             key_event,
@@ -671,7 +675,15 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn agent_shortcut_matches_option_arrow_word_motion_fallbacks() {
+    fn agent_shortcut_matches_option_arrow_word_motion_fallbacks_only_when_allowed() {
+        assert!(previous_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Left, KeyModifiers::ALT),
+            false,
+        ));
+        assert!(next_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Right, KeyModifiers::ALT),
+            false,
+        ));
         assert!(previous_agent_shortcut_matches(
             KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT),
             true,
@@ -687,6 +699,27 @@ mod tests {
         assert!(!next_agent_shortcut_matches(
             KeyEvent::new(KeyCode::Char('f'), KeyModifiers::ALT),
             false,
+        ));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn agent_shortcut_matches_option_arrows_only() {
+        assert!(previous_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Left, crossterm::event::KeyModifiers::ALT,),
+            false
+        ));
+        assert!(next_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::ALT,),
+            false
+        ));
+        assert!(!previous_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Char('b'), crossterm::event::KeyModifiers::ALT,),
+            false
+        ));
+        assert!(!next_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Char('f'), crossterm::event::KeyModifiers::ALT,),
+            false
         ));
     }
 
