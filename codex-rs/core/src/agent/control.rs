@@ -74,6 +74,14 @@ pub(crate) struct AgentControl {
     state: Arc<Guards>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct AgentMetadata {
+    pub(crate) nickname: Option<String>,
+    pub(crate) role: Option<String>,
+    pub(crate) model: String,
+    pub(crate) reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+}
+
 impl AgentControl {
     /// Construct a new `AgentControl` that can spawn/message agents via the given manager state.
     pub(crate) fn new(manager: Weak<ThreadManagerState>) -> Self {
@@ -347,17 +355,26 @@ impl AgentControl {
         &self,
         agent_id: ThreadId,
     ) -> Option<(Option<String>, Option<String>)> {
+        self.get_agent_metadata(agent_id)
+            .await
+            .map(|metadata| (metadata.nickname, metadata.role))
+    }
+
+    pub(crate) async fn get_agent_metadata(&self, agent_id: ThreadId) -> Option<AgentMetadata> {
         let Ok(state) = self.upgrade() else {
             return None;
         };
         let Ok(thread) = state.get_thread(agent_id).await else {
             return None;
         };
-        let session_source = thread.config_snapshot().await.session_source;
-        Some((
-            session_source.get_nickname(),
-            session_source.get_agent_role(),
-        ))
+        let snapshot = thread.config_snapshot().await;
+        let session_source = snapshot.session_source;
+        Some(AgentMetadata {
+            nickname: session_source.get_nickname(),
+            role: session_source.get_agent_role(),
+            model: snapshot.model,
+            reasoning_effort: snapshot.reasoning_effort,
+        })
     }
 
     /// Subscribe to status updates for `agent_id`, yielding the latest value and changes.

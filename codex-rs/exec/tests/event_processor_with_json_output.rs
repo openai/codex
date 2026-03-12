@@ -548,8 +548,6 @@ fn collab_spawn_begin_and_end_emit_item_events() {
             call_id: "call-10".to_string(),
             sender_thread_id,
             prompt: prompt.clone(),
-            model: "gpt-5".to_string(),
-            reasoning_effort: ReasoningEffortConfig::default(),
         }),
     );
     let begin_events = ep.collect_thread_events(&begin);

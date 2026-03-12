@@ -1841,7 +1841,6 @@ async fn make_chatwidget_manual(
         plan_stream_controller: None,
         last_copyable_output: None,
         running_commands: HashMap::new(),
-        pending_collab_spawn_requests: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
         skills_all: Vec::new(),
         skills_initial_state: None,
@@ -2027,8 +2026,6 @@ async fn collab_spawn_end_shows_requested_model_and_effort() {
             call_id: "call-spawn".to_string(),
             sender_thread_id,
             prompt: "Explore the repo".to_string(),
-            model: "gpt-5".to_string(),
-            reasoning_effort: ReasoningEffortConfig::High,
         }),
     });
     chat.handle_codex_event(Event {

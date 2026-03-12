@@ -862,8 +862,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_ids: Vec::new(),
                 prompt: Some(begin_event.prompt),
-                model: Some(begin_event.model),
-                reasoning_effort: Some(begin_event.reasoning_effort),
+                model: None,
+                reasoning_effort: None,
                 agents_states: HashMap::new(),
             };
             let notification = ItemStartedNotification {
@@ -2557,8 +2557,8 @@ fn collab_resume_end_item(end_event: codex_protocol::protocol::CollabResumeEndEv
         sender_thread_id: end_event.sender_thread_id.to_string(),
         receiver_thread_ids: vec![receiver_id],
         prompt: None,
-        model: None,
-        reasoning_effort: None,
+        model: end_event.model,
+        reasoning_effort: end_event.reasoning_effort,
         agents_states,
     }
 }
@@ -2946,6 +2946,8 @@ mod tests {
             receiver_thread_id: ThreadId::new(),
             receiver_agent_nickname: None,
             receiver_agent_role: None,
+            model: Some("gpt-5.4-mini".to_string()),
+            reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
             status: codex_protocol::protocol::AgentStatus::NotFound,
         };
 
@@ -2958,8 +2960,8 @@ mod tests {
             sender_thread_id: event.sender_thread_id.to_string(),
             receiver_thread_ids: vec![receiver_id.clone()],
             prompt: None,
-            model: None,
-            reasoning_effort: None,
+            model: Some("gpt-5.4-mini".to_string()),
+            reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
             agents_states: [(
                 receiver_id,
                 V2CollabAgentStatus::from(codex_protocol::protocol::AgentStatus::NotFound),
