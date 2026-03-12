@@ -949,12 +949,7 @@ fn config_request_overrides_from_config(config: &Config) -> Option<HashMap<Strin
 fn approval_review_policy_override_from_config(
     config: &Config,
 ) -> Option<codex_app_server_protocol::ApprovalReviewPolicy> {
-    match config.approval_review_policy {
-        codex_protocol::config_types::ApprovalReviewPolicy::ManualOnly => None,
-        codex_protocol::config_types::ApprovalReviewPolicy::AutoOnly => {
-            Some(codex_app_server_protocol::ApprovalReviewPolicy::AutoOnly)
-        }
-    }
+    Some(config.approval_review_policy.into())
 }
 
 async fn send_request_with_response<T>(
@@ -1840,7 +1835,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thread_start_params_omit_review_policy_when_review_policy_is_manual_only() {
+    async fn thread_start_params_include_review_policy_when_review_policy_is_manual_only() {
         let codex_home = tempdir().expect("create temp codex home");
         let cwd = tempdir().expect("create temp cwd");
         let config = ConfigBuilder::default()
@@ -1852,7 +1847,10 @@ mod tests {
 
         let params = thread_start_params_from_config(&config);
 
-        assert_eq!(params.approval_review_policy, None);
+        assert_eq!(
+            params.approval_review_policy,
+            Some(codex_app_server_protocol::ApprovalReviewPolicy::ManualOnly)
+        );
     }
 
     #[tokio::test]
