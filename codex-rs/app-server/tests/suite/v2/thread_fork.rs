@@ -213,6 +213,61 @@ async fn thread_fork_rejects_unmaterialized_thread() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_fork_surfaces_config_load_errors() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_required_broken_mcp(codex_home.path(), &server.uri())?;
+
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        None,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: conversation_id,
+            ..Default::default()
+        })
+        .await?;
+    let fork_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+
+    assert!(
+        fork_err
+            .error
+            .message
+            .contains("failed to load configuration"),
+        "unexpected fork error: {}",
+        fork_err.error.message
+    );
+    assert!(
+        fork_err
+            .error
+            .message
+            .contains("required MCP servers failed to initialize"),
+        "unexpected fork error: {}",
+        fork_err.error.message
+    );
+    assert!(
+        fork_err.error.message.contains("required_broken"),
+        "unexpected fork error: {}",
+        fork_err.error.message
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -394,6 +449,36 @@ base_url = "{server_uri}/v1"
 wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
+"#
+        ),
+    )
+}
+
+fn create_config_toml_with_required_broken_mcp(
+    codex_home: &Path,
+    server_uri: &str,
+) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+
+[mcp_servers.required_broken]
+command = "codex-definitely-not-a-real-binary"
+required = true
 "#
         ),
     )
