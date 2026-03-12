@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 use std::future::Future;
+use std::io::Error as IoError;
+use std::io::ErrorKind;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
@@ -170,7 +172,7 @@ pub(crate) struct MessageProcessorArgs {
 impl MessageProcessor {
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
-    pub(crate) fn new(args: MessageProcessorArgs) -> Self {
+    pub(crate) fn new(args: MessageProcessorArgs) -> std::io::Result<Self> {
         let MessageProcessorArgs {
             outgoing,
             arg0_paths,
@@ -206,7 +208,12 @@ impl MessageProcessor {
                 ));
                 (auth_manager, thread_manager)
             }
-            _ => panic!("MessageProcessorArgs must provide both auth_manager and thread_manager"),
+            _ => {
+                return Err(IoError::new(
+                    ErrorKind::InvalidInput,
+                    "MessageProcessorArgs must provide both auth_manager and thread_manager",
+                ));
+            }
         };
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
         auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
@@ -237,14 +244,14 @@ impl MessageProcessor {
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
 
-        Self {
+        Ok(Self {
             outgoing,
             codex_message_processor,
             config_api,
             external_agent_config_api,
             config,
             config_warnings: Arc::new(config_warnings),
-        }
+        })
     }
 
     pub(crate) async fn process_request(

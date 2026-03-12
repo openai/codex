@@ -1753,6 +1753,14 @@ impl App {
         )
         .await;
         if let Some(exit_info) = exit_info {
+            embedded_app_server
+                .client
+                .shutdown()
+                .await
+                .inspect_err(|err| {
+                    tracing::warn!("embedded app-server shutdown failed: {err}");
+                })
+                .ok();
             return Ok(exit_info);
         }
         if let Some(updated_model) = config.model.clone() {

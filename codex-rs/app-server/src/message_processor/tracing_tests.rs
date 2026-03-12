@@ -20,10 +20,13 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_arg0::Arg0DispatchPaths;
+use codex_core::AuthManager;
+use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
@@ -38,6 +41,7 @@ use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::trace::SpanData;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -248,8 +252,73 @@ fn build_test_processor(
         config_warnings: Vec::new(),
         session_source: SessionSource::VSCode,
         enable_codex_api_key_env: false,
-    });
+    })
+    .expect("test message processor should initialize");
     (processor, outgoing_rx)
+}
+
+#[tokio::test]
+async fn message_processor_rejects_partial_shared_managers() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let config = Arc::new(build_test_config(codex_home.path(), &server.uri()).await?);
+    let (outgoing_tx, _outgoing_rx) = mpsc::channel(16);
+    let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        false,
+        config.cli_auth_credentials_store_mode,
+    );
+    let thread_manager = Arc::new(ThreadManager::new(
+        config.as_ref(),
+        auth_manager.clone(),
+        SessionSource::VSCode,
+        CollaborationModesConfig {
+            default_mode_request_user_input: config
+                .features
+                .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+        },
+    ));
+
+    let auth_only = MessageProcessor::new(MessageProcessorArgs {
+        outgoing: outgoing.clone(),
+        arg0_paths: Arg0DispatchPaths::default(),
+        config: config.clone(),
+        cli_overrides: Vec::new(),
+        loader_overrides: LoaderOverrides::default(),
+        cloud_requirements: CloudRequirementsLoader::default(),
+        auth_manager: Some(auth_manager),
+        thread_manager: None,
+        feedback: CodexFeedback::new(),
+        log_db: None,
+        config_warnings: Vec::new(),
+        session_source: SessionSource::VSCode,
+        enable_codex_api_key_env: false,
+    })
+    .err()
+    .expect("partial shared managers should be rejected");
+    assert_eq!(auth_only.kind(), ErrorKind::InvalidInput);
+
+    let thread_only = MessageProcessor::new(MessageProcessorArgs {
+        outgoing,
+        arg0_paths: Arg0DispatchPaths::default(),
+        config,
+        cli_overrides: Vec::new(),
+        loader_overrides: LoaderOverrides::default(),
+        cloud_requirements: CloudRequirementsLoader::default(),
+        auth_manager: None,
+        thread_manager: Some(thread_manager),
+        feedback: CodexFeedback::new(),
+        log_db: None,
+        config_warnings: Vec::new(),
+        session_source: SessionSource::VSCode,
+        enable_codex_api_key_env: false,
+    })
+    .err()
+    .expect("partial shared managers should be rejected");
+    assert_eq!(thread_only.kind(), ErrorKind::InvalidInput);
+
+    Ok(())
 }
 
 fn span_attr<'a>(span: &'a SpanData, key: &str) -> Option<&'a str> {
