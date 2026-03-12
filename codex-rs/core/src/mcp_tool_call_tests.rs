@@ -484,6 +484,7 @@ fn guardian_mcp_review_request_includes_invocation_metadata() {
     };
 
     let request = build_guardian_mcp_tool_review_request(
+        "call-1",
         &invocation,
         Some(&approval_metadata(
             Some("playwright"),
@@ -497,6 +498,7 @@ fn guardian_mcp_review_request_includes_invocation_metadata() {
     assert_eq!(
         request,
         GuardianApprovalRequest::McpToolCall {
+            id: "call-1".to_string(),
             server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
             tool_name: "browser_navigate".to_string(),
             arguments: Some(serde_json::json!({
@@ -528,11 +530,12 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
         tool_description: None,
     };
 
-    let request = build_guardian_mcp_tool_review_request(&invocation, Some(&metadata));
+    let request = build_guardian_mcp_tool_review_request("call-1", &invocation, Some(&metadata));
 
     assert_eq!(
         request,
         GuardianApprovalRequest::McpToolCall {
+            id: "call-1".to_string(),
             server: "custom_server".to_string(),
             tool_name: "dangerous_tool".to_string(),
             arguments: None,

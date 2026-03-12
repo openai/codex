@@ -55,13 +55,15 @@ fn guardian_review_request_includes_full_patch_without_duplicate_changes() {
         codex_exe: None,
     };
 
-    let guardian_request = ApplyPatchRuntime::build_guardian_review_request(&request);
+    let guardian_request = ApplyPatchRuntime::build_guardian_review_request(&request, "call-1");
 
     assert_eq!(
         guardian_request,
         GuardianApprovalRequest::ApplyPatch {
+            id: "call-1".to_string(),
             cwd: expected_cwd,
             files: request.file_paths,
+            changes: request.changes,
             change_count: 1usize,
             patch: expected_patch,
         }

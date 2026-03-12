@@ -11,6 +11,9 @@ use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::sync::watch;
 
 #[tokio::test]
@@ -45,6 +48,7 @@ async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
         tx_out.clone(),
         session,
         ctx,
+        Arc::new(Mutex::new(HashMap::new())),
         cancel.clone(),
     ));
 
@@ -169,8 +173,8 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
         async move {
             handle_request_permissions(
                 codex.as_ref(),
-                parent_session.as_ref(),
-                parent_ctx.as_ref(),
+                &parent_session,
+                &parent_ctx,
                 RequestPermissionsEvent {
                     call_id: request_call_id,
                     turn_id: "child-turn-1".to_string(),

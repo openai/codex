@@ -5900,7 +5900,7 @@ impl CodexMessageProcessor {
                         approval_policy: params.approval_policy.map(AskForApproval::to_core),
                         approval_review_policy: params
                             .approval_review_policy
-                            .map(ApprovalReviewPolicy::to_core),
+                            .map(codex_app_server_protocol::ApprovalReviewPolicy::to_core),
                         sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
                         windows_sandbox_level: None,
                         model: params.model,
