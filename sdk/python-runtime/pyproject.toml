@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codex-cli-bin"
+version = "0.0.0-dev"
+description = "Pinned Codex CLI runtime for the Python SDK"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "OpenAI" }]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+
+[project.urls]
+Homepage = "https://github.com/openai/codex"
+Repository = "https://github.com/openai/codex"
+Issues = "https://github.com/openai/codex/issues"
+
+[tool.hatch.build]
+exclude = [
+  ".venv/**",
+  ".pytest_cache/**",
+  "dist/**",
+  "build/**",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codex_cli_bin"]
+include = ["src/codex_cli_bin/bin/**"]
+
+[tool.hatch.build.targets.wheel.hooks.custom]
+
+[tool.hatch.build.targets.sdist]
+
+[tool.hatch.build.targets.sdist.hooks.custom]
