@@ -17,4 +17,10 @@ pub mod plan_tool;
 pub mod protocol;
 pub mod request_permissions;
 pub mod request_user_input;
+mod rollout_line_schema;
 pub mod user_input;
+
+#[doc(hidden)]
+pub use rollout_line_schema::default_rollout_line_schema_dir;
+#[doc(hidden)]
+pub use rollout_line_schema::write_rollout_line_schema_artifacts;
