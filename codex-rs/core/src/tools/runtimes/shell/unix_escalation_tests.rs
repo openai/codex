@@ -78,6 +78,7 @@ fn read_only_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
     }])
 }
 
+#[cfg(target_os = "macos")]
 fn unrestricted_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
     FileSystemSandboxPolicy::unrestricted()
 }
