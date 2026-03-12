@@ -11,16 +11,25 @@ On Linux, the bubblewrap pipeline uses the vendored bubblewrap path compiled
 into this binary.
 
 **Current Behavior**
+- Legacy `SandboxPolicy` / `sandbox_mode` configs remain supported.
 - Legacy Landlock + mount protections remain available as the legacy pipeline.
-- The default Linux sandbox pipeline is bubblewrap on the vendored path.
 - Set `features.use_legacy_landlock = true` (or CLI `-c use_legacy_landlock=true`)
   to force the legacy Landlock fallback.
+- The legacy Landlock fallback is used only when the split filesystem policy is
+  sandbox-equivalent to the legacy model after `cwd` resolution.
+- The default Linux sandbox pipeline for new split `[permissions]` profiles is
+  bubblewrap on the vendored path.
 - When the default bubblewrap pipeline is active, it applies `PR_SET_NO_NEW_PRIVS` and a
   seccomp network filter in-process.
 - When the default bubblewrap pipeline is active, the filesystem is read-only by default via `--ro-bind / /`.
 - When the default bubblewrap pipeline is active, writable roots are layered with `--bind <root> <root>`.
 - When the default bubblewrap pipeline is active, protected subpaths under writable roots (for example `.git`,
   resolved `gitdir:`, and `.codex`) are re-applied as read-only via `--ro-bind`.
+- When the default bubblewrap pipeline is active, explicit denied subpaths are
+  masked after broader writable roots are bound, and narrower writable children
+  can still be reopened if they are more specific than the deny. For example,
+  `/repo = write`, `/repo/a = none`, `/repo/a/b = write` keeps `/repo`
+  writable, denies `/repo/a`, and reopens `/repo/a/b` as writable again.
 - When the default bubblewrap pipeline is active, symlink-in-path and non-existent protected paths inside
   writable roots are blocked by mounting `/dev/null` on the symlink or first
   missing component.
