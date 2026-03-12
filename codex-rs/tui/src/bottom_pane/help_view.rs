@@ -19,7 +19,6 @@ use crate::slash_command::built_in_slash_commands;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
 
-const HELP_VIEW_MAX_HEIGHT: u16 = 28;
 const HELP_VIEW_MIN_BODY_ROWS: u16 = 6;
 
 pub(crate) struct SlashHelpView {
@@ -203,6 +202,6 @@ impl crate::render::renderable::Renderable for SlashHelpView {
 
     fn desired_height(&self, width: u16) -> u16 {
         let content_rows = Self::build_lines(width.saturating_sub(4)).len() as u16;
-        content_rows.clamp(HELP_VIEW_MIN_BODY_ROWS + 3, HELP_VIEW_MAX_HEIGHT)
+        content_rows.max(HELP_VIEW_MIN_BODY_ROWS + 3)
     }
 }
