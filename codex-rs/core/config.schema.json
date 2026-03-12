@@ -483,6 +483,9 @@
             "use_legacy_landlock": {
               "type": "boolean"
             },
+            "use_linux_sandbox_bwrap": {
+              "type": "boolean"
+            },
             "voice_transcription": {
               "type": "boolean"
             },
@@ -1986,6 +1989,9 @@
           "type": "boolean"
         },
         "use_legacy_landlock": {
+          "type": "boolean"
+        },
+        "use_linux_sandbox_bwrap": {
           "type": "boolean"
         },
         "voice_transcription": {
