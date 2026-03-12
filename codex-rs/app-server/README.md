@@ -228,7 +228,7 @@ Start a fresh thread when you need a new Codex conversation.
 
 Valid `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. When `"none"` is selected, the personality placeholder is replaced with an empty string.
 
-To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, including the [UNSTABLE] `approvalReviewPolicy` field:
+To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, including `approvalReviewPolicy`:
 
 ```json
 { "method": "thread/resume", "id": 11, "params": {
@@ -421,7 +421,7 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 
 You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn.
 
-`approvalReviewPolicy` is [UNSTABLE] and accepts:
+`approvalReviewPolicy` accepts:
 
 - `"manual-only"` — keep approval requests manual.
 - `"auto-only"` — let Codex automatically review `on-request` approvals instead of blocking on user input.

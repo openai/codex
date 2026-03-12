@@ -6,7 +6,7 @@
       "type": "string"
     },
     "ApprovalReviewPolicy": {
-      "description": "[UNSTABLE] Controls whether approvals remain manual or are automatically reviewed.",
+      "description": "Controls whether approvals remain manual or are automatically reviewed.",
       "enum": [
         "manual-only",
         "auto-only"
@@ -1969,7 +1969,7 @@
           "$ref": "#/definitions/ApprovalReviewPolicy"
         }
       ],
-      "description": "[UNSTABLE] Whether approvals remain manual or are automatically reviewed."
+      "description": "Whether approvals remain manual or are automatically reviewed."
     },
     "cwd": {
       "type": "string"
