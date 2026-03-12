@@ -826,9 +826,9 @@ Today both notifications carry an empty `items` array even when item events were
 - `agentMessage` — `{id, text}` containing the accumulated agent reply.
 - `plan` — `{id, text}` emitted for plan-mode turns; plan text can stream via `item/plan/delta` (experimental).
 - `reasoning` — `{id, summary, content}` where `summary` holds streamed reasoning summaries (applicable for most OpenAI models) and `content` holds raw reasoning blocks (applicable for e.g. open source models).
-- `commandExecution` — `{id, command, cwd, status, commandActions, aggregatedOutput?, exitCode?, durationMs?, approval?}` for sandboxed commands; `status` is `inProgress`, `completed`, `failed`, or `declined`.
-- `fileChange` — `{id, changes, status, approval?}` describing proposed edits; `changes` list `{path, kind, diff}` and `status` is `inProgress`, `completed`, `failed`, or `declined`.
-- `mcpToolCall` — `{id, server, tool, status, arguments, result?, error?, approval?}` describing MCP calls; `status` is `inProgress`, `completed`, `failed`, or `declined`.
+- `commandExecution` — `{id, command, cwd, status, commandActions, aggregatedOutput?, exitCode?, durationMs?}` for sandboxed commands; `status` is `inProgress`, `completed`, `failed`, or `declined`.
+- `fileChange` — `{id, changes, status}` describing proposed edits; `changes` list `{path, kind, diff}` and `status` is `inProgress`, `completed`, `failed`, or `declined`.
+- `mcpToolCall` — `{id, server, tool, status, arguments, result?, error?}` describing MCP calls; `status` is `inProgress`, `completed`, or `failed`.
 - `collabToolCall` — `{id, tool, status, senderThreadId, receiverThreadId?, newThreadId?, prompt?, agentStatus?}` describing collab tool calls (`spawn_agent`, `send_input`, `resume_agent`, `wait`, `close_agent`); `status` is `inProgress`, `completed`, or `failed`.
 - `webSearch` — `{id, query, action?}` for a web search request issued by the agent; `action` mirrors the Responses API web_search action payload (`search`, `open_page`, `find_in_page`) and may be omitted until completion.
 - `imageView` — `{id, path}` emitted when the agent invokes the image viewer tool.
@@ -837,25 +837,14 @@ Today both notifications carry an empty `items` array even when item events were
 - `contextCompaction` — `{id}` emitted when codex compacts the conversation history. This can happen automatically.
 - `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically. **Deprecated:** Use `contextCompaction` instead.
 
-Tool items (`commandExecution`, `fileChange`, and `mcpToolCall`) may include an [UNSTABLE] `approval` object:
-
-- `approval.status` — `pending`, `approved`, `declined`, or `cancelled`
-- `approval.pendingKind?` — `manualRequest` or `automaticReview`
-- `approval.resolvedBy?` — `user` or `automatic`
-- `approval.automaticReview?` — [UNSTABLE] `{status, riskScore?, riskLevel?, rationale?}` for automatic approval review state
-
 All items emit shared lifecycle events:
 
 - `item/started` — emits the full `item` when a new unit of work begins so the UI can render it immediately; the `item.id` in this payload matches the `itemId` used by deltas.
 - `item/completed` — sends the final `item` once that work itself finishes (for example, after a tool call or message completes); treat this as the authoritative execution/result state.
-- `item/commandExecution/autoApprovalReview/started` — [UNSTABLE] sent when an automatic approval review begins for a command execution item, with the latest full `item` snapshot.
-- `item/commandExecution/autoApprovalReview/completed` — [UNSTABLE] sent when an automatic approval review resolves for a command execution item, with the latest full `item` snapshot.
-- `item/fileChange/autoApprovalReview/started` — [UNSTABLE] sent when an automatic approval review begins for a file change item, with the latest full `item` snapshot.
-- `item/fileChange/autoApprovalReview/completed` — [UNSTABLE] sent when an automatic approval review resolves for a file change item, with the latest full `item` snapshot.
-- `item/mcpToolCall/autoApprovalReview/started` — [UNSTABLE] sent when an automatic approval review begins for an MCP tool call item, with the latest full `item` snapshot.
-- `item/mcpToolCall/autoApprovalReview/completed` — [UNSTABLE] sent when an automatic approval review resolves for an MCP tool call item, with the latest full `item` snapshot.
+- `item/autoApprovalReview/started` — [UNSTABLE] temporary guardian notification carrying `{threadId, turnId, targetItemId, review}` when automatic approval review begins. This shape is expected to change soon.
+- `item/autoApprovalReview/completed` — [UNSTABLE] temporary guardian notification carrying `{threadId, turnId, targetItemId, review}` when automatic approval review resolves. This shape is expected to change soon.
 
-Automatic approval review notifications are scoped to the parent item type, but they are separate from the item's own completion. An item can finish automatic review and still later emit its normal `item/completed` notification once the underlying work actually finishes.
+`review` is [UNSTABLE] and currently has `{status, riskScore?, riskLevel?, rationale?}`. These notifications are separate from the target item's own `item/completed` lifecycle and are intentionally temporary while the guardian app protocol is still being designed.
 
 There are additional item-specific events:
 

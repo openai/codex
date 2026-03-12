@@ -51,8 +51,6 @@ use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
-use codex_protocol::protocol::GranularApprovalConfig as CoreGranularApprovalConfig;
-use codex_protocol::protocol::GuardianAssessmentStatus as CoreAutomaticReviewStatus;
 use codex_protocol::protocol::GuardianRiskLevel as CoreRiskLevel;
 use codex_protocol::protocol::HookEventName as CoreHookEventName;
 use codex_protocol::protocol::HookExecutionMode as CoreHookExecutionMode;
@@ -4148,8 +4146,6 @@ pub enum ThreadItem {
         /// The duration of the command execution in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
-        /// [UNSTABLE] Approval state for this command execution.
-        approval: Option<ItemApprovalState>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4157,8 +4153,6 @@ pub enum ThreadItem {
         id: String,
         changes: Vec<FileUpdateChange>,
         status: PatchApplyStatus,
-        /// [UNSTABLE] Approval state for this file change.
-        approval: Option<ItemApprovalState>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4173,8 +4167,6 @@ pub enum ThreadItem {
         /// The duration of the MCP tool call in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
-        /// [UNSTABLE] Approval state for this MCP tool call.
-        approval: Option<ItemApprovalState>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4266,34 +4258,6 @@ impl ThreadItem {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub enum ItemApprovalStatus {
-    Pending,
-    Approved,
-    Declined,
-    Cancelled,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-/// [UNSTABLE] Whether a pending approval is waiting on manual input or automatic review.
-pub enum ItemApprovalPendingKind {
-    ManualRequest,
-    AutomaticReview,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-/// [UNSTABLE] Who ultimately resolved an approval request.
-pub enum ItemApprovalResolvedBy {
-    User,
-    Automatic,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
 /// [UNSTABLE] Lifecycle state for an automatic approval review.
 pub enum AutomaticApprovalReviewStatus {
     InProgress,
@@ -4321,7 +4285,9 @@ impl From<CoreRiskLevel> for RiskLevel {
     }
 }
 
-/// [UNSTABLE] Automatic approval review details for an item.
+/// [UNSTABLE] Temporary guardian approval review payload used by
+/// `item/autoApprovalReview/*` notifications. This shape is expected to change
+/// soon.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -4333,38 +4299,6 @@ pub struct AutomaticApprovalReview {
     #[serde(alias = "risk_level")]
     pub risk_level: Option<RiskLevel>,
     pub rationale: Option<String>,
-}
-
-impl AutomaticApprovalReview {
-    pub(crate) fn from_core_review_status(
-        status: CoreAutomaticReviewStatus,
-        risk_score: Option<u8>,
-        risk_level: Option<CoreRiskLevel>,
-        rationale: Option<String>,
-    ) -> Self {
-        let status = match status {
-            CoreAutomaticReviewStatus::InProgress => AutomaticApprovalReviewStatus::InProgress,
-            CoreAutomaticReviewStatus::Approved => AutomaticApprovalReviewStatus::Approved,
-            CoreAutomaticReviewStatus::Denied => AutomaticApprovalReviewStatus::Denied,
-        };
-        Self {
-            status,
-            risk_score,
-            risk_level: risk_level.map(Into::into),
-            rationale,
-        }
-    }
-}
-
-/// [UNSTABLE] Approval state attached to a tool item.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ItemApprovalState {
-    pub status: ItemApprovalStatus,
-    pub pending_kind: Option<ItemApprovalPendingKind>,
-    pub resolved_by: Option<ItemApprovalResolvedBy>,
-    pub automatic_review: Option<AutomaticApprovalReview>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4541,7 +4475,6 @@ pub enum McpToolCallStatus {
     InProgress,
     Completed,
     Failed,
-    Declined,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4802,61 +4735,25 @@ pub struct ItemStartedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Sent when automatic approval review begins for a command execution item.
-pub struct CommandExecutionAutoApprovalReviewStartedNotification {
-    pub item: ThreadItem,
+/// [UNSTABLE] Temporary notification payload for guardian automatic approval
+/// review. This shape is expected to change soon.
+pub struct ItemAutoApprovalReviewStartedNotification {
     pub thread_id: String,
     pub turn_id: String,
+    pub target_item_id: String,
+    pub review: AutomaticApprovalReview,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Sent when automatic approval review resolves for a command execution item.
-pub struct CommandExecutionAutoApprovalReviewCompletedNotification {
-    pub item: ThreadItem,
+/// [UNSTABLE] Temporary notification payload for guardian automatic approval
+/// review. This shape is expected to change soon.
+pub struct ItemAutoApprovalReviewCompletedNotification {
     pub thread_id: String,
     pub turn_id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-/// [UNSTABLE] Sent when automatic approval review begins for a file change item.
-pub struct FileChangeAutoApprovalReviewStartedNotification {
-    pub item: ThreadItem,
-    pub thread_id: String,
-    pub turn_id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-/// [UNSTABLE] Sent when automatic approval review resolves for a file change item.
-pub struct FileChangeAutoApprovalReviewCompletedNotification {
-    pub item: ThreadItem,
-    pub thread_id: String,
-    pub turn_id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-/// [UNSTABLE] Sent when automatic approval review begins for an MCP tool call item.
-pub struct McpToolCallAutoApprovalReviewStartedNotification {
-    pub item: ThreadItem,
-    pub thread_id: String,
-    pub turn_id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-/// [UNSTABLE] Sent when automatic approval review resolves for an MCP tool call item.
-pub struct McpToolCallAutoApprovalReviewCompletedNotification {
-    pub item: ThreadItem,
-    pub thread_id: String,
-    pub turn_id: String,
+    pub target_item_id: String,
+    pub review: AutomaticApprovalReview,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

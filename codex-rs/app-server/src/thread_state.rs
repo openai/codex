@@ -2,7 +2,6 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadHistoryBuilder;
-use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_core::CodexThread;
@@ -47,7 +46,6 @@ pub(crate) enum ThreadListenerCommand {
 pub(crate) struct TurnSummary {
     pub(crate) file_change_started: HashSet<String>,
     pub(crate) command_execution_started: HashSet<String>,
-    pub(crate) mcp_tool_call_started: HashSet<String>,
     pub(crate) last_error: Option<TurnError>,
 }
 
@@ -108,10 +106,6 @@ impl ThreadState {
 
     pub(crate) fn active_turn_snapshot(&self) -> Option<Turn> {
         self.current_turn_history.active_turn_snapshot()
-    }
-
-    pub(crate) fn item_snapshot(&self, turn_id: Option<&str>, item_id: &str) -> Option<ThreadItem> {
-        self.current_turn_history.item_snapshot(turn_id, item_id)
     }
 
     pub(crate) fn track_current_turn_event(&mut self, event: &EventMsg) {

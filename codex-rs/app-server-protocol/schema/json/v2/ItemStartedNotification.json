@@ -1,51 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "AutomaticApprovalReview": {
-      "description": "[UNSTABLE] Automatic approval review details for an item.",
-      "properties": {
-        "rationale": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "riskLevel": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/RiskLevel"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "riskScore": {
-          "format": "uint8",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "status": {
-          "$ref": "#/definitions/AutomaticApprovalReviewStatus"
-        }
-      },
-      "required": [
-        "status"
-      ],
-      "type": "object"
-    },
-    "AutomaticApprovalReviewStatus": {
-      "description": "[UNSTABLE] Lifecycle state for an automatic approval review.",
-      "enum": [
-        "inProgress",
-        "approved",
-        "denied"
-      ],
-      "type": "string"
-    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -301,73 +256,6 @@
       ],
       "type": "object"
     },
-    "ItemApprovalPendingKind": {
-      "description": "[UNSTABLE] Whether a pending approval is waiting on manual input or automatic review.",
-      "enum": [
-        "manualRequest",
-        "automaticReview"
-      ],
-      "type": "string"
-    },
-    "ItemApprovalResolvedBy": {
-      "description": "[UNSTABLE] Who ultimately resolved an approval request.",
-      "enum": [
-        "user",
-        "automatic"
-      ],
-      "type": "string"
-    },
-    "ItemApprovalState": {
-      "description": "[UNSTABLE] Approval state attached to a tool item.",
-      "properties": {
-        "automaticReview": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AutomaticApprovalReview"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "pendingKind": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ItemApprovalPendingKind"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "resolvedBy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ItemApprovalResolvedBy"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "status": {
-          "$ref": "#/definitions/ItemApprovalStatus"
-        }
-      },
-      "required": [
-        "status"
-      ],
-      "type": "object"
-    },
-    "ItemApprovalStatus": {
-      "enum": [
-        "pending",
-        "approved",
-        "declined",
-        "cancelled"
-      ],
-      "type": "string"
-    },
     "McpToolCallError": {
       "properties": {
         "message": {
@@ -396,8 +284,7 @@
       "enum": [
         "inProgress",
         "completed",
-        "failed",
-        "declined"
+        "failed"
       ],
       "type": "string"
     },
@@ -487,12 +374,15 @@
         }
       ]
     },
-    "RiskLevel": {
-      "description": "[UNSTABLE] Risk level assigned by automatic approval review.",
+    "ReasoningEffort": {
+      "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
       "enum": [
+        "none",
+        "minimal",
         "low",
         "medium",
-        "high"
+        "high",
+        "xhigh"
       ],
       "type": "string"
     },
@@ -651,17 +541,6 @@
                 "null"
               ]
             },
-            "approval": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemApprovalState"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "[UNSTABLE] Approval state for this command execution."
-            },
             "command": {
               "description": "The command to be executed.",
               "type": "string"
@@ -727,17 +606,6 @@
         },
         {
           "properties": {
-            "approval": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemApprovalState"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "[UNSTABLE] Approval state for this file change."
-            },
             "changes": {
               "items": {
                 "$ref": "#/definitions/FileUpdateChange"
@@ -769,17 +637,6 @@
         },
         {
           "properties": {
-            "approval": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemApprovalState"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "[UNSTABLE] Approval state for this MCP tool call."
-            },
             "arguments": true,
             "durationMs": {
               "description": "The duration of the MCP tool call in milliseconds.",
@@ -906,12 +763,30 @@
               "description": "Unique identifier for this collab tool call.",
               "type": "string"
             },
+            "model": {
+              "description": "Model requested for the spawned agent, when applicable.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "prompt": {
               "description": "Prompt text sent as part of the collab tool call, when available.",
               "type": [
                 "string",
                 "null"
               ]
+            },
+            "reasoningEffort": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningEffort"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reasoning effort requested for the spawned agent, when applicable."
             },
             "receiverThreadIds": {
               "description": "Thread ID of the receiving agent, when applicable. In case of spawn operation, this corresponds to the newly spawned agent.",

@@ -5,6 +5,8 @@ import type { AutomaticApprovalReviewStatus } from "./AutomaticApprovalReviewSta
 import type { RiskLevel } from "./RiskLevel";
 
 /**
- * [UNSTABLE] Automatic approval review details for an item.
+ * [UNSTABLE] Temporary guardian approval review payload used by
+ * `item/autoApprovalReview/*` notifications. This shape is expected to change
+ * soon.
  */
 export type AutomaticApprovalReview = { status: AutomaticApprovalReviewStatus, riskScore: number | null, riskLevel: RiskLevel | null, rationale: string | null, };

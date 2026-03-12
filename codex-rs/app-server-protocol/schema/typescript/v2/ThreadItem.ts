@@ -12,7 +12,6 @@ import type { CommandExecutionStatus } from "./CommandExecutionStatus";
 import type { DynamicToolCallOutputContentItem } from "./DynamicToolCallOutputContentItem";
 import type { DynamicToolCallStatus } from "./DynamicToolCallStatus";
 import type { FileUpdateChange } from "./FileUpdateChange";
-import type { ItemApprovalState } from "./ItemApprovalState";
 import type { McpToolCallError } from "./McpToolCallError";
 import type { McpToolCallResult } from "./McpToolCallResult";
 import type { McpToolCallStatus } from "./McpToolCallStatus";
@@ -50,23 +49,11 @@ exitCode: number | null,
 /**
  * The duration of the command execution in milliseconds.
  */
-durationMs: number | null, 
-/**
- * [UNSTABLE] Approval state for this command execution.
- */
-approval: ItemApprovalState | null, } | { "type": "fileChange", id: string, changes: Array<FileUpdateChange>, status: PatchApplyStatus, 
-/**
- * [UNSTABLE] Approval state for this file change.
- */
-approval: ItemApprovalState | null, } | { "type": "mcpToolCall", id: string, server: string, tool: string, status: McpToolCallStatus, arguments: JsonValue, result: McpToolCallResult | null, error: McpToolCallError | null, 
+durationMs: number | null, } | { "type": "fileChange", id: string, changes: Array<FileUpdateChange>, status: PatchApplyStatus, } | { "type": "mcpToolCall", id: string, server: string, tool: string, status: McpToolCallStatus, arguments: JsonValue, result: McpToolCallResult | null, error: McpToolCallError | null, 
 /**
  * The duration of the MCP tool call in milliseconds.
  */
-durationMs: number | null, 
-/**
- * [UNSTABLE] Approval state for this MCP tool call.
- */
-approval: ItemApprovalState | null, } | { "type": "dynamicToolCall", id: string, tool: string, arguments: JsonValue, status: DynamicToolCallStatus, contentItems: Array<DynamicToolCallOutputContentItem> | null, success: boolean | null, 
+durationMs: number | null, } | { "type": "dynamicToolCall", id: string, tool: string, arguments: JsonValue, status: DynamicToolCallStatus, contentItems: Array<DynamicToolCallOutputContentItem> | null, success: boolean | null, 
 /**
  * The duration of the dynamic tool call in milliseconds.
  */

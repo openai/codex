@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "AutomaticApprovalReview": {
+      "description": "[UNSTABLE] Temporary guardian approval review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
+      "properties": {
+        "rationale": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "riskLevel": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RiskLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "riskScore": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/AutomaticApprovalReviewStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "AutomaticApprovalReviewStatus": {
+      "description": "[UNSTABLE] Lifecycle state for an automatic approval review.",
+      "enum": [
+        "inProgress",
+        "approved",
+        "denied"
+      ],
+      "type": "string"
+    },
+    "RiskLevel": {
+      "description": "[UNSTABLE] Risk level assigned by automatic approval review.",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
+  "properties": {
+    "review": {
+      "$ref": "#/definitions/AutomaticApprovalReview"
+    },
+    "targetItemId": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "review",
+    "targetItemId",
+    "threadId",
+    "turnId"
+  ],
+  "title": "ItemAutoApprovalReviewStartedNotification",
+  "type": "object"
+}
