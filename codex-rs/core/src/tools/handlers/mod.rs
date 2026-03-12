@@ -35,6 +35,7 @@ use crate::sandboxing::normalize_additional_permissions;
 pub use apply_patch::ApplyPatchHandler;
 pub use artifacts::ArtifactsHandler;
 pub use code_mode::CodeModeHandler;
+pub use code_mode::CodeModeWaitHandler;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use dynamic::DynamicToolHandler;

@@ -81,27 +81,65 @@ impl PluginStore {
         &self.root
     }
 
-    pub fn plugin_root(&self, plugin_id: &PluginId, plugin_version: &str) -> AbsolutePathBuf {
+    pub fn plugin_base_root(&self, plugin_id: &PluginId) -> AbsolutePathBuf {
         AbsolutePathBuf::try_from(
             self.root
                 .as_path()
                 .join(&plugin_id.marketplace_name)
-                .join(&plugin_id.plugin_name)
+                .join(&plugin_id.plugin_name),
+        )
+        .unwrap_or_else(|err| panic!("plugin cache path should resolve to an absolute path: {err}"))
+    }
+
+    pub fn plugin_root(&self, plugin_id: &PluginId, plugin_version: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::try_from(
+            self.plugin_base_root(plugin_id)
+                .as_path()
                 .join(plugin_version),
         )
         .unwrap_or_else(|err| panic!("plugin cache path should resolve to an absolute path: {err}"))
     }
 
+    pub fn active_plugin_version(&self, plugin_id: &PluginId) -> Option<String> {
+        let mut discovered_versions = fs::read_dir(self.plugin_base_root(plugin_id).as_path())
+            .ok()?
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                entry.file_type().ok().filter(std::fs::FileType::is_dir)?;
+                entry.file_name().into_string().ok()
+            })
+            .filter(|version| validate_plugin_segment(version, "plugin version").is_ok())
+            .collect::<Vec<_>>();
+        discovered_versions.sort_unstable();
+        if discovered_versions.len() == 1 {
+            discovered_versions.pop()
+        } else {
+            None
+        }
+    }
+
+    pub fn active_plugin_root(&self, plugin_id: &PluginId) -> Option<AbsolutePathBuf> {
+        self.active_plugin_version(plugin_id)
+            .map(|plugin_version| self.plugin_root(plugin_id, &plugin_version))
+    }
+
     pub fn is_installed(&self, plugin_id: &PluginId) -> bool {
-        self.plugin_root(plugin_id, DEFAULT_PLUGIN_VERSION)
-            .as_path()
-            .is_dir()
+        self.active_plugin_version(plugin_id).is_some()
     }
 
     pub fn install(
         &self,
         source_path: AbsolutePathBuf,
         plugin_id: PluginId,
+    ) -> Result<PluginInstallResult, PluginStoreError> {
+        self.install_with_version(source_path, plugin_id, DEFAULT_PLUGIN_VERSION.to_string())
+    }
+
+    pub fn install_with_version(
+        &self,
+        source_path: AbsolutePathBuf,
+        plugin_id: PluginId,
+        plugin_version: String,
     ) -> Result<PluginInstallResult, PluginStoreError> {
         if !source_path.as_path().is_dir() {
             return Err(PluginStoreError::Invalid(format!(
@@ -117,17 +155,14 @@ impl PluginStore {
                 plugin_id.plugin_name
             )));
         }
-        let plugin_version = DEFAULT_PLUGIN_VERSION.to_string();
+        validate_plugin_segment(&plugin_version, "plugin version")
+            .map_err(PluginStoreError::Invalid)?;
         let installed_path = self.plugin_root(&plugin_id, &plugin_version);
-
-        if let Some(parent) = installed_path.parent() {
-            fs::create_dir_all(parent.as_path()).map_err(|err| {
-                PluginStoreError::io("failed to create plugin cache directory", err)
-            })?;
-        }
-
-        remove_existing_target(installed_path.as_path())?;
-        copy_dir_recursive(source_path.as_path(), installed_path.as_path())?;
+        replace_plugin_root_atomically(
+            source_path.as_path(),
+            self.plugin_base_root(&plugin_id).as_path(),
+            &plugin_version,
+        )?;
 
         Ok(PluginInstallResult {
             plugin_id,
@@ -137,12 +172,7 @@ impl PluginStore {
     }
 
     pub fn uninstall(&self, plugin_id: &PluginId) -> Result<(), PluginStoreError> {
-        let plugin_path = self
-            .root
-            .as_path()
-            .join(&plugin_id.marketplace_name)
-            .join(&plugin_id.plugin_name);
-        remove_existing_target(&plugin_path)
+        remove_existing_target(self.plugin_base_root(plugin_id).as_path())
     }
 }
 
@@ -216,6 +246,73 @@ fn remove_existing_target(path: &Path) -> Result<(), PluginStoreError> {
             PluginStoreError::io("failed to remove existing plugin cache entry", err)
         })
     }
+}
+
+fn replace_plugin_root_atomically(
+    source: &Path,
+    target_root: &Path,
+    plugin_version: &str,
+) -> Result<(), PluginStoreError> {
+    let Some(parent) = target_root.parent() else {
+        return Err(PluginStoreError::Invalid(format!(
+            "plugin cache path has no parent: {}",
+            target_root.display()
+        )));
+    };
+
+    fs::create_dir_all(parent)
+        .map_err(|err| PluginStoreError::io("failed to create plugin cache directory", err))?;
+
+    let Some(plugin_dir_name) = target_root.file_name() else {
+        return Err(PluginStoreError::Invalid(format!(
+            "plugin cache path has no directory name: {}",
+            target_root.display()
+        )));
+    };
+    let staged_dir = tempfile::Builder::new()
+        .prefix("plugin-install-")
+        .tempdir_in(parent)
+        .map_err(|err| {
+            PluginStoreError::io("failed to create temporary plugin cache directory", err)
+        })?;
+    let staged_root = staged_dir.path().join(plugin_dir_name);
+    let staged_version_root = staged_root.join(plugin_version);
+    copy_dir_recursive(source, &staged_version_root)?;
+
+    if target_root.exists() {
+        let backup_dir = tempfile::Builder::new()
+            .prefix("plugin-backup-")
+            .tempdir_in(parent)
+            .map_err(|err| {
+                PluginStoreError::io("failed to create plugin cache backup directory", err)
+            })?;
+        let backup_root = backup_dir.path().join(plugin_dir_name);
+        fs::rename(target_root, &backup_root)
+            .map_err(|err| PluginStoreError::io("failed to back up plugin cache entry", err))?;
+
+        if let Err(err) = fs::rename(&staged_root, target_root) {
+            let rollback_result = fs::rename(&backup_root, target_root);
+            return match rollback_result {
+                Ok(()) => Err(PluginStoreError::io(
+                    "failed to activate updated plugin cache entry",
+                    err,
+                )),
+                Err(rollback_err) => {
+                    let backup_path = backup_dir.keep().join(plugin_dir_name);
+                    Err(PluginStoreError::Invalid(format!(
+                        "failed to activate updated plugin cache entry at {}: {err}; failed to restore previous cache entry (left at {}): {rollback_err}",
+                        target_root.display(),
+                        backup_path.display()
+                    )))
+                }
+            };
+        }
+    } else {
+        fs::rename(&staged_root, target_root)
+            .map_err(|err| PluginStoreError::io("failed to activate plugin cache entry", err))?;
+    }
+
+    Ok(())
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), PluginStoreError> {
@@ -324,6 +421,57 @@ mod tests {
         assert_eq!(
             store.plugin_root(&plugin_id, "local").as_path(),
             tmp.path().join("plugins/cache/debug/sample/local")
+        );
+    }
+
+    #[test]
+    fn install_with_version_uses_requested_cache_version() {
+        let tmp = tempdir().unwrap();
+        write_plugin(tmp.path(), "sample-plugin", "sample-plugin");
+        let plugin_id =
+            PluginId::new("sample-plugin".to_string(), "openai-curated".to_string()).unwrap();
+        let plugin_version = "0123456789abcdef".to_string();
+
+        let result = PluginStore::new(tmp.path().to_path_buf())
+            .install_with_version(
+                AbsolutePathBuf::try_from(tmp.path().join("sample-plugin")).unwrap(),
+                plugin_id.clone(),
+                plugin_version.clone(),
+            )
+            .unwrap();
+
+        let installed_path = tmp.path().join(format!(
+            "plugins/cache/openai-curated/sample-plugin/{plugin_version}"
+        ));
+        assert_eq!(
+            result,
+            PluginInstallResult {
+                plugin_id,
+                plugin_version,
+                installed_path: AbsolutePathBuf::try_from(installed_path.clone()).unwrap(),
+            }
+        );
+        assert!(installed_path.join(".codex-plugin/plugin.json").is_file());
+    }
+
+    #[test]
+    fn active_plugin_version_reads_version_directory_name() {
+        let tmp = tempdir().unwrap();
+        write_plugin(
+            &tmp.path().join("plugins/cache/debug"),
+            "sample-plugin/local",
+            "sample-plugin",
+        );
+        let store = PluginStore::new(tmp.path().to_path_buf());
+        let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
+
+        assert_eq!(
+            store.active_plugin_version(&plugin_id),
+            Some("local".to_string())
+        );
+        assert_eq!(
+            store.active_plugin_root(&plugin_id).unwrap().as_path(),
+            tmp.path().join("plugins/cache/debug/sample-plugin/local")
         );
     }
 

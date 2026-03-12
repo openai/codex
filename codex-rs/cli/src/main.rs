@@ -239,7 +239,7 @@ enum SandboxCommand {
     #[clap(visible_alias = "seatbelt")]
     Macos(SeatbeltCommand),
 
-    /// Run a command under Landlock+seccomp (Linux only).
+    /// Run a command under the Linux sandbox (bubblewrap by default).
     #[clap(visible_alias = "landlock")]
     Linux(LandlockCommand),
 

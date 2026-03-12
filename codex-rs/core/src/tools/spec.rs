@@ -8,7 +8,9 @@ use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::original_image_detail::can_request_original_image_detail;
+use crate::tools::code_mode::DEFAULT_WAIT_YIELD_TIME_MS;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
+use crate::tools::code_mode::WAIT_TOOL_NAME;
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::discoverable::DiscoverablePluginInfo;
 use crate::tools::discoverable::DiscoverableTool;
@@ -589,6 +591,55 @@ fn create_write_stdin_tool() -> ToolSpec {
     })
 }
 
+fn create_exec_wait_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "session_id".to_string(),
+            JsonSchema::Number {
+                description: Some("Identifier of the running exec session.".to_string()),
+            },
+        ),
+        (
+            "yield_time_ms".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "How long to wait (in milliseconds) for more output before yielding again."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "max_tokens".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Maximum number of output tokens to return for this wait call.".to_string(),
+                ),
+            },
+        ),
+        (
+            "terminate".to_string(),
+            JsonSchema::Boolean {
+                description: Some("Whether to terminate the running exec session.".to_string()),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: WAIT_TOOL_NAME.to_string(),
+        description: format!(
+            "Waits on a yielded `{PUBLIC_TOOL_NAME}` session and returns new output or completion."
+        ),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["session_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+        defer_loading: None,
+    })
+}
+
 fn create_shell_tool(request_permission_enabled: bool) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
@@ -853,7 +904,10 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
         name: "spawn_agent".to_string(),
         description: format!(
             r#"
-        Only use `spawn_agent` if and only if the user explicitly asked for sub-agents or parallel agent work. Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
+        Only use `spawn_agent` if and only if the user explicitly asks for sub-agents, delegation, or parallel agent work.
+        Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn.
+        Agent-role guidance below only helps choose which agent to use after spawning is already authorized; it never authorizes spawning by itself.
+        Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
 
 {available_models_description}
 ### When to delegate vs. do the subtask yourself
@@ -1829,7 +1883,7 @@ source: /[\s\S]+/
         enabled_tool_names.join(", ")
     };
     let description = format!(
-        "Runs JavaScript in a Node-backed `node:vm` context. This is a freeform tool: send raw JavaScript source text (no JSON/quotes/markdown fences). Direct tool calls remain available while `{PUBLIC_TOOL_NAME}` is enabled. Inside JavaScript, import nested tools from `tools.js`, for example `import {{ exec_command }} from \"tools.js\"` or `import {{ ALL_TOOLS }} from \"tools.js\"` to inspect the available `{{ module, name, description }}` entries. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import {{ append_notebook_logs_chart }} from \"tools/mcp/ologs.js\"`. Nested tool calls resolve to their code-mode result values. Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, store, load }}` from `\"@openai/code_mode\"` (or `\"openai/code_mode\"`); `output_text(value)` surfaces text back to the model and stringifies non-string objects when possible, `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs, `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, `load(key)` returns a cloned stored value or `undefined`, and `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `{PUBLIC_TOOL_NAME}` execution. The default is `10000`. This guards the overall `{PUBLIC_TOOL_NAME}` output, not individual nested tool invocations. The returned content starts with a separate `Script completed` or `Script failed` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker. Function tools require JSON object arguments. Freeform tools require raw strings. `add_content(value)` remains available for compatibility with a content item, content-item array, or string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`. Only content passed to `output_text(...)`, `output_image(...)`, or `add_content(value)` is surfaced back to the model. Enabled nested tools: {enabled_list}."
+        "Runs JavaScript in a Node-backed `node:vm` context. This is a freeform tool: send raw JavaScript source text (no JSON/quotes/markdown fences). Direct tool calls remain available while `{PUBLIC_TOOL_NAME}` is enabled. Inside JavaScript, import nested tools from `tools.js`, for example `import {{ exec_command }} from \"tools.js\"` or `import {{ ALL_TOOLS }} from \"tools.js\"` to inspect the available `{{ module, name, description }}` entries. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import {{ append_notebook_logs_chart }} from \"tools/mcp/ologs.js\"`. Nested tool calls resolve to their code-mode result values. Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, set_yield_time, store, load }}` from `\"@openai/code_mode\"` (or `\"openai/code_mode\"`); `output_text(value)` surfaces text back to the model and stringifies non-string objects when possible, `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs, `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, `load(key)` returns a cloned stored value or `undefined`, `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate direct `{PUBLIC_TOOL_NAME}` returns, and `{WAIT_TOOL_NAME}` uses its own `max_tokens` argument with a default of `10000`. `set_yield_time(value)` asks `{PUBLIC_TOOL_NAME}` to return early if the script is still running after that many milliseconds so `{WAIT_TOOL_NAME}` can resume it later. The default wait timeout for `{WAIT_TOOL_NAME}` is {DEFAULT_WAIT_YIELD_TIME_MS}. The returned content starts with a separate `Script completed`, `Script failed`, or `Script running with session ID …` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker. Function tools require JSON object arguments. Freeform tools require raw strings. `add_content(value)` remains available for compatibility with a content item, content-item array, or string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`. Only content passed to `output_text(...)`, `output_image(...)`, or `add_content(value)` is surfaced back to the model. Enabled nested tools: {enabled_list}."
     );
 
     ToolSpec::Freeform(FreeformTool {
@@ -1844,7 +1898,9 @@ source: /[\s\S]+/
 }
 
 fn is_code_mode_nested_tool(spec: &ToolSpec) -> bool {
-    spec.name() != PUBLIC_TOOL_NAME && matches!(spec, ToolSpec::Function(_) | ToolSpec::Freeform(_))
+    spec.name() != PUBLIC_TOOL_NAME
+        && spec.name() != WAIT_TOOL_NAME
+        && matches!(spec, ToolSpec::Function(_) | ToolSpec::Freeform(_))
 }
 
 fn create_list_mcp_resources_tool() -> ToolSpec {
@@ -2240,6 +2296,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::ArtifactsHandler;
     use crate::tools::handlers::CodeModeHandler;
+    use crate::tools::handlers::CodeModeWaitHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
@@ -2278,6 +2335,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     });
     let tool_suggest_handler = Arc::new(ToolSuggestHandler);
     let code_mode_handler = Arc::new(CodeModeHandler);
+    let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
     let artifacts_handler = Arc::new(ArtifactsHandler);
@@ -2308,6 +2366,13 @@ pub(crate) fn build_specs_with_discoverable_tools(
             config.code_mode_enabled,
         );
         builder.register_handler(PUBLIC_TOOL_NAME, code_mode_handler);
+        push_tool_spec(
+            &mut builder,
+            create_exec_wait_tool(),
+            false,
+            config.code_mode_enabled,
+        );
+        builder.register_handler(WAIT_TOOL_NAME, code_mode_wait_handler);
     }
 
     match &config.shell_type {

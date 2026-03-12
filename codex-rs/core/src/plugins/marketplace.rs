@@ -245,6 +245,15 @@ fn discover_marketplace_paths_from_roots(
     }
 
     for root in additional_roots {
+        // Curated marketplaces can now come from an HTTP-downloaded directory that is not a git
+        // checkout, so check the root directly before falling back to repo-root discovery.
+        if let Ok(path) = root.join(MARKETPLACE_RELATIVE_PATH)
+            && path.as_path().is_file()
+            && !paths.contains(&path)
+        {
+            paths.push(path);
+            continue;
+        }
         if let Some(repo_root) = get_git_repo_root(root.as_path())
             && let Ok(repo_root) = AbsolutePathBuf::try_from(repo_root)
             && let Ok(path) = repo_root.join(MARKETPLACE_RELATIVE_PATH)
