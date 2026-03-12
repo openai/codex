@@ -6,7 +6,6 @@ const { Buffer } = require("node:buffer");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const { builtinModules, createRequire } = require("node:module");
-const { createInterface } = require("node:readline");
 const { performance } = require("node:perf_hooks");
 const path = require("node:path");
 const { URL, URLSearchParams, fileURLToPath, pathToFileURL } = require(
@@ -1659,6 +1658,7 @@ function handleEmitImageResult(message) {
 }
 
 let queue = Promise.resolve();
+let inputBuffer = Buffer.alloc(0);
 
 process.on("uncaughtException", (error) => {
   scheduleFatalExit("uncaught exception", error);
@@ -1668,8 +1668,7 @@ process.on("unhandledRejection", (reason) => {
   scheduleFatalExit("unhandled rejection", reason);
 });
 
-const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
-input.on("line", (line) => {
+function handleInputLine(line) {
   if (!line.trim()) {
     return;
   }
@@ -1692,4 +1691,38 @@ input.on("line", (line) => {
   if (message.type === "emit_image_result") {
     handleEmitImageResult(message);
   }
+}
+
+function consumeInputBuffer(flushRemainder = false) {
+  let frameEnd = inputBuffer.indexOf(0x0a);
+  while (frameEnd !== -1) {
+    let frame = inputBuffer.subarray(0, frameEnd);
+    if (frame[frame.length - 1] === 0x0d) {
+      frame = frame.subarray(0, frame.length - 1);
+    }
+    inputBuffer = inputBuffer.subarray(frameEnd + 1);
+    handleInputLine(frame.toString("utf8"));
+    frameEnd = inputBuffer.indexOf(0x0a);
+  }
+
+  if (!flushRemainder || inputBuffer.length === 0) {
+    return;
+  }
+
+  let frame = inputBuffer;
+  if (frame[frame.length - 1] === 0x0d) {
+    frame = frame.subarray(0, frame.length - 1);
+  }
+  inputBuffer = Buffer.alloc(0);
+  handleInputLine(frame.toString("utf8"));
+}
+
+process.stdin.on("data", (chunk) => {
+  inputBuffer =
+    inputBuffer.length === 0 ? Buffer.from(chunk) : Buffer.concat([inputBuffer, chunk]);
+  consumeInputBuffer(false);
+});
+
+process.stdin.on("end", () => {
+  consumeInputBuffer(true);
 });
