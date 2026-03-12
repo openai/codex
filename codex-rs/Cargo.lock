@@ -1442,6 +1442,7 @@ dependencies = [
  "codex-utils-pty",
  "core_test_support",
  "futures",
+ "notify",
  "opentelemetry",
  "opentelemetry_sdk",
  "owo-colors",

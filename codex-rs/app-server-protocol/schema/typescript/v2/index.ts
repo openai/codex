@@ -95,6 +95,7 @@ export type { FileChangeOutputDeltaNotification } from "./FileChangeOutputDeltaN
 export type { FileChangeRequestApprovalParams } from "./FileChangeRequestApprovalParams";
 export type { FileChangeRequestApprovalResponse } from "./FileChangeRequestApprovalResponse";
 export type { FileUpdateChange } from "./FileUpdateChange";
+export type { FsChangedNotification } from "./FsChangedNotification";
 export type { FsCopyParams } from "./FsCopyParams";
 export type { FsCopyResponse } from "./FsCopyResponse";
 export type { FsCreateDirectoryParams } from "./FsCreateDirectoryParams";
@@ -108,6 +109,10 @@ export type { FsReadFileParams } from "./FsReadFileParams";
 export type { FsReadFileResponse } from "./FsReadFileResponse";
 export type { FsRemoveParams } from "./FsRemoveParams";
 export type { FsRemoveResponse } from "./FsRemoveResponse";
+export type { FsUnwatchParams } from "./FsUnwatchParams";
+export type { FsUnwatchResponse } from "./FsUnwatchResponse";
+export type { FsWatchParams } from "./FsWatchParams";
+export type { FsWatchResponse } from "./FsWatchResponse";
 export type { FsWriteFileParams } from "./FsWriteFileParams";
 export type { FsWriteFileResponse } from "./FsWriteFileResponse";
 export type { GetAccountParams } from "./GetAccountParams";

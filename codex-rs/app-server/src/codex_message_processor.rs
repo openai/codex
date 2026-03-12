@@ -903,7 +903,9 @@ impl CodexMessageProcessor {
             | ClientRequest::FsGetMetadata { .. }
             | ClientRequest::FsReadDirectory { .. }
             | ClientRequest::FsRemove { .. }
-            | ClientRequest::FsCopy { .. } => {
+            | ClientRequest::FsCopy { .. }
+            | ClientRequest::FsWatch { .. }
+            | ClientRequest::FsUnwatch { .. } => {
                 warn!("Filesystem request reached CodexMessageProcessor unexpectedly");
             }
             ClientRequest::ConfigRequirementsRead { .. } => {
