@@ -2085,7 +2085,8 @@ impl Config {
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
 
-        let agent_roles = agent_roles::load_agent_roles(&cfg, &config_layer_stack)?;
+        let agent_roles =
+            agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.

@@ -1532,6 +1532,95 @@ await codex.emitImage(out);
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn js_repl_dynamic_tool_response_preserves_js_line_separator_text() -> anyhow::Result<()> {
+    if !can_run_js_repl_runtime_tests().await {
+        return Ok(());
+    }
+
+    for (tool_name, description, expected_text, literal) in [
+        (
+            "line_separator_tool",
+            "Returns text containing U+2028.",
+            "alpha\u{2028}omega".to_string(),
+            r#""alpha\u2028omega""#,
+        ),
+        (
+            "paragraph_separator_tool",
+            "Returns text containing U+2029.",
+            "alpha\u{2029}omega".to_string(),
+            r#""alpha\u2029omega""#,
+        ),
+    ] {
+        let (session, turn, rx_event) =
+            make_session_and_context_with_dynamic_tools_and_rx(vec![DynamicToolSpec {
+                name: tool_name.to_string(),
+                description: description.to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+            }])
+            .await;
+
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = format!(
+            r#"
+const out = await codex.tool("{tool_name}", {{}});
+const text = typeof out === "string" ? out : out?.output;
+console.log(text === {literal});
+console.log(text);
+"#
+        );
+
+        let session_for_response = Arc::clone(&session);
+        let expected_text_for_response = expected_text.clone();
+        let response_watcher = async move {
+            loop {
+                let event = tokio::time::timeout(Duration::from_secs(2), rx_event.recv()).await??;
+                if let EventMsg::DynamicToolCallRequest(request) = event.msg {
+                    session_for_response
+                        .notify_dynamic_tool_response(
+                            &request.call_id,
+                            DynamicToolResponse {
+                                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                                    text: expected_text_for_response.clone(),
+                                }],
+                                success: true,
+                            },
+                        )
+                        .await;
+                    return Ok::<(), anyhow::Error>(());
+                }
+            }
+        };
+
+        let (result, response_watcher_result) = tokio::join!(
+            manager.execute(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                tracker,
+                JsReplArgs {
+                    code,
+                    timeout_ms: Some(15_000),
+                },
+            ),
+            response_watcher,
+        );
+        response_watcher_result?;
+
+        let result = result?;
+        assert_eq!(result.output, format!("true\n{expected_text}"));
+    }
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn js_repl_prefers_env_node_module_dirs_over_config() -> anyhow::Result<()> {
     if !can_run_js_repl_runtime_tests().await {

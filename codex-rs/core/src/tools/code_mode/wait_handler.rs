@@ -54,7 +54,6 @@ impl ToolHandler for CodeModeWaitHandler {
         let ToolInvocation {
             session,
             turn,
-            tracker,
             tool_name,
             payload,
             ..
@@ -63,11 +62,7 @@ impl ToolHandler for CodeModeWaitHandler {
         match payload {
             ToolPayload::Function { arguments } if tool_name == WAIT_TOOL_NAME => {
                 let args: ExecWaitArgs = parse_arguments(&arguments)?;
-                let exec = ExecContext {
-                    session,
-                    turn,
-                    tracker,
-                };
+                let exec = ExecContext { session, turn };
                 let request_id = exec
                     .session
                     .services

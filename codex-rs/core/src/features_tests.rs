@@ -133,18 +133,18 @@ fn collab_is_legacy_alias_for_multi_agent() {
 }
 
 #[test]
-fn spawn_csv_is_under_development() {
+fn enable_fanout_is_under_development() {
     assert_eq!(Feature::SpawnCsv.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::SpawnCsv.default_enabled(), false);
 }
 
 #[test]
-fn spawn_csv_normalization_enables_multi_agent_one_way() {
-    let mut spawn_csv_features = Features::with_defaults();
-    spawn_csv_features.enable(Feature::SpawnCsv);
-    spawn_csv_features.normalize_dependencies();
-    assert_eq!(spawn_csv_features.enabled(Feature::SpawnCsv), true);
-    assert_eq!(spawn_csv_features.enabled(Feature::Collab), true);
+fn enable_fanout_normalization_enables_multi_agent_one_way() {
+    let mut enable_fanout_features = Features::with_defaults();
+    enable_fanout_features.enable(Feature::SpawnCsv);
+    enable_fanout_features.normalize_dependencies();
+    assert_eq!(enable_fanout_features.enabled(Feature::SpawnCsv), true);
+    assert_eq!(enable_fanout_features.enabled(Feature::Collab), true);
 
     let mut collab_features = Features::with_defaults();
     collab_features.enable(Feature::Collab);

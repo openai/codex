@@ -709,7 +709,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::SpawnCsv,
-        key: "spawn_csv",
+        key: "enable_fanout",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

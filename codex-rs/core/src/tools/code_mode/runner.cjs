@@ -265,7 +265,7 @@ function codeModeWorkerMain() {
         'set_max_output_tokens_per_exec_call',
         'set_yield_time',
         'store',
-        'background',
+        'yield_control',
       ],
       function initCodeModeModule() {
         this.setExport('load', load);
@@ -289,7 +289,7 @@ function codeModeWorkerMain() {
           return normalized;
         });
         this.setExport('store', store);
-        this.setExport('background', () => {
+        this.setExport('yield_control', () => {
           parentPort.postMessage({ type: 'yield' });
         });
       },
@@ -572,6 +572,7 @@ function startSession(protocol, sessions, start) {
   const session = {
     completed: false,
     content_items: [],
+    default_yield_time_ms: normalizeYieldTime(start.default_yield_time_ms),
     id: start.session_id,
     initial_yield_timer: null,
     initial_yield_triggered: false,
@@ -585,6 +586,7 @@ function startSession(protocol, sessions, start) {
     }),
   };
   sessions.set(session.id, session);
+  scheduleInitialYield(protocol, session, session.default_yield_time_ms);
 
   session.worker.on('message', (message) => {
     void handleWorkerMessage(protocol, sessions, session, message).catch((error) => {
@@ -697,6 +699,9 @@ async function sendYielded(protocol, session) {
   if (session.completed || session.request_id === null) {
     return;
   }
+  session.initial_yield_timer = clearTimer(session.initial_yield_timer);
+  session.initial_yield_triggered = true;
+  session.poll_yield_timer = clearTimer(session.poll_yield_timer);
   const contentItems = takeContentItems(session);
   const requestId = session.request_id;
   try {

@@ -216,6 +216,8 @@ use codex_core::find_thread_name_by_id;
 use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::git_info::git_diff_to_remote;
+use codex_core::mcp::auth::discover_supported_scopes;
+use codex_core::mcp::auth::resolve_oauth_scopes;
 use codex_core::mcp::collect_mcp_snapshot;
 use codex_core::mcp::group_tools_by_server;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -4554,7 +4556,13 @@ impl CodexMessageProcessor {
             }
         };
 
-        let scopes = scopes.or_else(|| server.scopes.clone());
+        let discovered_scopes = if scopes.is_none() && server.scopes.is_none() {
+            discover_supported_scopes(&server.transport).await
+        } else {
+            None
+        };
+        let resolved_scopes =
+            resolve_oauth_scopes(scopes, server.scopes.clone(), discovered_scopes);
 
         match perform_oauth_login_return_url(
             &name,
@@ -4562,7 +4570,7 @@ impl CodexMessageProcessor {
             config.mcp_oauth_credentials_store_mode,
             http_headers,
             env_http_headers,
-            scopes.as_deref().unwrap_or_default(),
+            &resolved_scopes.scopes,
             server.oauth_resource.as_deref(),
             timeout_secs,
             config.mcp_oauth_callback_port,

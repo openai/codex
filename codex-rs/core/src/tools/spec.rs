@@ -8,9 +8,10 @@ use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::original_image_detail::can_request_original_image_detail;
-use crate::tools::code_mode::DEFAULT_WAIT_YIELD_TIME_MS;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::code_mode::WAIT_TOOL_NAME;
+use crate::tools::code_mode::tool_description as code_mode_tool_description;
+use crate::tools::code_mode::wait_tool_description as code_mode_wait_tool_description;
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::discoverable::DiscoverablePluginInfo;
 use crate::tools::discoverable::DiscoverableTool;
@@ -32,6 +33,7 @@ use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::registry::tool_handler_key;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::ApplyPatchToolType;
@@ -40,6 +42,7 @@ use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::WebSearchToolType;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use serde::Deserialize;
@@ -136,6 +139,21 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) features: &'a Features,
     pub(crate) web_search_mode: Option<WebSearchMode>,
     pub(crate) session_source: SessionSource,
+    pub(crate) sandbox_policy: &'a SandboxPolicy,
+    pub(crate) windows_sandbox_level: WindowsSandboxLevel,
+}
+
+fn unified_exec_allowed_in_environment(
+    is_windows: bool,
+    sandbox_policy: &SandboxPolicy,
+    windows_sandbox_level: WindowsSandboxLevel,
+) -> bool {
+    !(is_windows
+        && windows_sandbox_level != WindowsSandboxLevel::Disabled
+        && !matches!(
+            sandbox_policy,
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+        ))
 }
 
 impl ToolsConfig {
@@ -146,6 +164,8 @@ impl ToolsConfig {
             features,
             web_search_mode,
             session_source,
+            sandbox_policy,
+            windows_sandbox_level,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_code_mode = features.enabled(Feature::CodeMode);
@@ -179,17 +199,25 @@ impl ToolsConfig {
                 UnifiedExecBackendConfig::Direct
             };
 
+        let unified_exec_allowed = unified_exec_allowed_in_environment(
+            cfg!(target_os = "windows"),
+            sandbox_policy,
+            *windows_sandbox_level,
+        );
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
         } else if features.enabled(Feature::ShellZshFork) {
             ConfigShellToolType::ShellCommand
-        } else if features.enabled(Feature::UnifiedExec) {
+        } else if features.enabled(Feature::UnifiedExec) && unified_exec_allowed {
             // If ConPTY not supported (for old Windows versions), fallback on ShellCommand.
             if codex_utils_pty::conpty_supported() {
                 ConfigShellToolType::UnifiedExec
             } else {
                 ConfigShellToolType::ShellCommand
             }
+        } else if model_info.shell_type == ConfigShellToolType::UnifiedExec && !unified_exec_allowed
+        {
+            ConfigShellToolType::ShellCommand
         } else {
             model_info.shell_type
         };
@@ -627,7 +655,8 @@ fn create_exec_wait_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: WAIT_TOOL_NAME.to_string(),
         description: format!(
-            "Waits on a yielded `{PUBLIC_TOOL_NAME}` session and returns new output or completion."
+            "Waits on a yielded `{PUBLIC_TOOL_NAME}` session and returns new output or completion.\n{}",
+            code_mode_wait_tool_description().trim()
         ),
         strict: false,
         parameters: JsonSchema::Object {
@@ -1877,18 +1906,9 @@ start: source
 source: /[\s\S]+/
 "#;
 
-    let enabled_list = if enabled_tool_names.is_empty() {
-        "none".to_string()
-    } else {
-        enabled_tool_names.join(", ")
-    };
-    let description = format!(
-        "Runs JavaScript in a Node-backed `node:vm` context. This is a freeform tool: send raw JavaScript source text (no JSON/quotes/markdown fences). Direct tool calls remain available while `{PUBLIC_TOOL_NAME}` is enabled. Inside JavaScript, import nested tools from `tools.js`, for example `import {{ exec_command }} from \"tools.js\"` or `import {{ ALL_TOOLS }} from \"tools.js\"` to inspect the available `{{ module, name, description }}` entries. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import {{ append_notebook_logs_chart }} from \"tools/mcp/ologs.js\"`. Nested tool calls resolve to their code-mode result values. Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, set_yield_time, store, load }}` from `\"@openai/code_mode\"` (or `\"openai/code_mode\"`); `output_text(value)` surfaces text back to the model and stringifies non-string objects when possible, `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs, `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, `load(key)` returns a cloned stored value or `undefined`, `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate direct `{PUBLIC_TOOL_NAME}` returns, and `{WAIT_TOOL_NAME}` uses its own `max_tokens` argument with a default of `10000`. `set_yield_time(value)` asks `{PUBLIC_TOOL_NAME}` to return early if the script is still running after that many milliseconds so `{WAIT_TOOL_NAME}` can resume it later. The default wait timeout for `{WAIT_TOOL_NAME}` is {DEFAULT_WAIT_YIELD_TIME_MS}. The returned content starts with a separate `Script completed`, `Script failed`, or `Script running with session ID …` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker. Function tools require JSON object arguments. Freeform tools require raw strings. `add_content(value)` remains available for compatibility with a content item, content-item array, or string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`. Only content passed to `output_text(...)`, `output_image(...)`, or `add_content(value)` is surfaced back to the model. Enabled nested tools: {enabled_list}."
-    );
-
     ToolSpec::Freeform(FreeformTool {
         name: PUBLIC_TOOL_NAME.to_string(),
-        description,
+        description: code_mode_tool_description(enabled_tool_names),
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
             syntax: "lark".to_string(),
