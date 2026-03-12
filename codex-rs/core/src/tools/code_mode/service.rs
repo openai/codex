@@ -9,6 +9,8 @@ use tracing::warn;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::features::Feature;
+use crate::tools::ToolRouter;
+use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::js_repl::resolve_compatible_node;
 use crate::tools::parallel::ToolCallRuntime;
 
@@ -65,7 +67,8 @@ impl CodeModeService {
         &self,
         session: &Arc<Session>,
         turn: &Arc<TurnContext>,
-        tool_runtime: ToolCallRuntime,
+        router: Arc<ToolRouter>,
+        tracker: SharedTurnDiffTracker,
     ) -> Option<CodeModeWorker> {
         if !turn.features.enabled(Feature::CodeMode) {
             return None;
@@ -74,6 +77,8 @@ impl CodeModeService {
             session: Arc::clone(session),
             turn: Arc::clone(turn),
         };
+        let tool_runtime =
+            ToolCallRuntime::new(router, Arc::clone(session), Arc::clone(turn), tracker);
         let mut process_slot = match self.ensure_started().await {
             Ok(process_slot) => process_slot,
             Err(err) => {

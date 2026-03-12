@@ -52,12 +52,9 @@ impl ToolCallRuntime {
         call: ToolCall,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
-        async move {
-            self.handle_tool_call_with_source(call, ToolCallSource::Direct, cancellation_token)
-                .await
-                .map(AnyToolResult::into_response)
-        }
-        .in_current_span()
+        let future =
+            self.handle_tool_call_with_source(call, ToolCallSource::Direct, cancellation_token);
+        async move { future.await.map(AnyToolResult::into_response) }.in_current_span()
     }
 
     #[instrument(level = "trace", skip_all)]
