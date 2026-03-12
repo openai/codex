@@ -2884,6 +2884,21 @@ pub struct PluginListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct PluginReadParams {
+    pub marketplace_path: AbsolutePathBuf,
+    pub plugin_name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginReadResponse {
+    pub plugin: PluginDetail,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct SkillsRemoteReadParams {
     #[serde(default)]
     pub hazelnut_scope: HazelnutScope,
@@ -3090,6 +3105,47 @@ pub struct PluginSummary {
     pub install_policy: PluginInstallPolicy,
     pub auth_policy: PluginAuthPolicy,
     pub interface: Option<PluginInterface>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginDetail {
+    pub marketplace_name: String,
+    pub marketplace_path: AbsolutePathBuf,
+    pub summary: PluginSummary,
+    pub description: Option<String>,
+    pub skills: Vec<PluginSkillSummary>,
+    pub apps: Vec<PluginAppSummary>,
+    pub mcp_servers: Vec<PluginMcpServerSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginSkillSummary {
+    pub name: String,
+    pub description: String,
+    pub short_description: Option<String>,
+    pub interface: Option<SkillInterface>,
+    pub path: PathBuf,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginAppSummary {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub install_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginMcpServerSummary {
+    pub name: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

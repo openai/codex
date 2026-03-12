@@ -83,12 +83,18 @@ use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::PluginAppSummary;
+use codex_app_server_protocol::PluginDetail;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginInterface;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
+use codex_app_server_protocol::PluginMcpServerSummary;
+use codex_app_server_protocol::PluginReadParams;
+use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginSkillSummary;
 use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallParams;
@@ -225,6 +231,7 @@ use codex_core::plugins::MarketplaceError;
 use codex_core::plugins::MarketplacePluginSourceSummary;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
+use codex_core::plugins::PluginReadRequest;
 use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core::plugins::load_plugin_apps;
 use codex_core::read_head_for_summary;
@@ -716,6 +723,10 @@ impl CodexMessageProcessor {
             }
             ClientRequest::PluginList { request_id, params } => {
                 self.plugin_list(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::PluginRead { request_id, params } => {
+                self.plugin_read(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::SkillsRemoteList { request_id, params } => {
@@ -5252,6 +5263,44 @@ impl CodexMessageProcessor {
         connectors::merge_connectors_with_accessible(all, accessible, all_connectors_loaded)
     }
 
+    async fn load_plugin_app_summaries(
+        config: &Config,
+        plugin_apps: &[AppConnectorId],
+        plugin_id: &str,
+    ) -> Vec<PluginAppSummary> {
+        if plugin_apps.is_empty() {
+            return Vec::new();
+        }
+
+        let connectors = match connectors::list_all_connectors_with_options(config, false).await {
+            Ok(connectors) => connectors,
+            Err(err) => {
+                warn!(
+                    plugin = plugin_id,
+                    "failed to load app metadata for plugin/read: {err:#}"
+                );
+                connectors::list_cached_all_connectors(config)
+                    .await
+                    .unwrap_or_default()
+            }
+        };
+        let plugin_app_ids = plugin_apps
+            .iter()
+            .map(|connector_id| connector_id.0.as_str())
+            .collect::<HashSet<_>>();
+
+        filter_disallowed_connectors(merge_plugin_apps(connectors, plugin_apps.to_vec()))
+            .into_iter()
+            .filter(|connector| plugin_app_ids.contains(connector.id.as_str()))
+            .map(|connector| PluginAppSummary {
+                id: connector.id,
+                name: connector.name,
+                description: connector.description,
+                install_url: connector.install_url,
+            })
+            .collect()
+    }
+
     fn plugin_apps_needing_auth(
         all_connectors: &[AppInfo],
         accessible_connectors: &[AppInfo],
@@ -5460,29 +5509,10 @@ impl CodexMessageProcessor {
                                 installed: plugin.installed,
                                 enabled: plugin.enabled,
                                 name: plugin.name,
-                                source: match plugin.source {
-                                    MarketplacePluginSourceSummary::Local { path } => {
-                                        PluginSource::Local { path }
-                                    }
-                                },
+                                source: marketplace_plugin_source_to_info(plugin.source),
                                 install_policy: plugin.install_policy.into(),
                                 auth_policy: plugin.auth_policy.into(),
-                                interface: plugin.interface.map(|interface| PluginInterface {
-                                    display_name: interface.display_name,
-                                    short_description: interface.short_description,
-                                    long_description: interface.long_description,
-                                    developer_name: interface.developer_name,
-                                    category: interface.category,
-                                    capabilities: interface.capabilities,
-                                    website_url: interface.website_url,
-                                    privacy_policy_url: interface.privacy_policy_url,
-                                    terms_of_service_url: interface.terms_of_service_url,
-                                    default_prompt: interface.default_prompt,
-                                    brand_color: interface.brand_color,
-                                    composer_icon: interface.composer_icon,
-                                    logo: interface.logo,
-                                    screenshots: interface.screenshots,
-                                }),
+                                interface: plugin.interface.map(plugin_interface_to_info),
                             })
                             .collect(),
                     })
@@ -5515,6 +5545,79 @@ impl CodexMessageProcessor {
                     remote_sync_error,
                 },
             )
+            .await;
+    }
+
+    async fn plugin_read(&self, request_id: ConnectionRequestId, params: PluginReadParams) {
+        let plugins_manager = self.thread_manager.plugins_manager();
+        let PluginReadParams {
+            marketplace_path,
+            plugin_name,
+        } = params;
+        let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
+
+        let config = match self.load_latest_config(config_cwd).await {
+            Ok(config) => config,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
+
+        let request = PluginReadRequest {
+            plugin_name,
+            marketplace_path,
+        };
+        let config_for_read = config.clone();
+        let outcome = match tokio::task::spawn_blocking(move || {
+            plugins_manager.read_plugin_for_config(&config_for_read, &request)
+        })
+        .await
+        {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(err)) => {
+                self.send_marketplace_error(request_id, err, "read plugin details")
+                    .await;
+                return;
+            }
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!("failed to read plugin details: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+        let app_summaries =
+            Self::load_plugin_app_summaries(&config, &outcome.plugin.apps, &outcome.plugin.id)
+                .await;
+        let plugin = PluginDetail {
+            marketplace_name: outcome.marketplace_name,
+            marketplace_path: outcome.marketplace_path,
+            summary: PluginSummary {
+                id: outcome.plugin.id,
+                name: outcome.plugin.name,
+                source: marketplace_plugin_source_to_info(outcome.plugin.source),
+                installed: outcome.plugin.installed,
+                enabled: outcome.plugin.enabled,
+                install_policy: outcome.plugin.install_policy.into(),
+                auth_policy: outcome.plugin.auth_policy.into(),
+                interface: outcome.plugin.interface.map(plugin_interface_to_info),
+            },
+            description: outcome.plugin.description,
+            skills: plugin_skills_to_info(&outcome.plugin.skills),
+            apps: app_summaries,
+            mcp_servers: outcome
+                .plugin
+                .mcp_server_names
+                .into_iter()
+                .map(|name| PluginMcpServerSummary { name })
+                .collect(),
+        };
+
+        self.outgoing
+            .send_response(request_id, PluginReadResponse { plugin })
             .await;
     }
 
@@ -7426,6 +7529,55 @@ fn skills_to_info(
             }
         })
         .collect()
+}
+
+fn plugin_skills_to_info(skills: &[codex_core::skills::SkillMetadata]) -> Vec<PluginSkillSummary> {
+    skills
+        .iter()
+        .map(|skill| PluginSkillSummary {
+            name: skill.name.clone(),
+            description: skill.description.clone(),
+            short_description: skill.short_description.clone(),
+            interface: skill.interface.clone().map(|interface| {
+                codex_app_server_protocol::SkillInterface {
+                    display_name: interface.display_name,
+                    short_description: interface.short_description,
+                    icon_small: interface.icon_small,
+                    icon_large: interface.icon_large,
+                    brand_color: interface.brand_color,
+                    default_prompt: interface.default_prompt,
+                }
+            }),
+            path: skill.path_to_skills_md.clone(),
+        })
+        .collect()
+}
+
+fn plugin_interface_to_info(
+    interface: codex_core::plugins::PluginManifestInterfaceSummary,
+) -> PluginInterface {
+    PluginInterface {
+        display_name: interface.display_name,
+        short_description: interface.short_description,
+        long_description: interface.long_description,
+        developer_name: interface.developer_name,
+        category: interface.category,
+        capabilities: interface.capabilities,
+        website_url: interface.website_url,
+        privacy_policy_url: interface.privacy_policy_url,
+        terms_of_service_url: interface.terms_of_service_url,
+        default_prompt: interface.default_prompt,
+        brand_color: interface.brand_color,
+        composer_icon: interface.composer_icon,
+        logo: interface.logo,
+        screenshots: interface.screenshots,
+    }
+}
+
+fn marketplace_plugin_source_to_info(source: MarketplacePluginSourceSummary) -> PluginSource {
+    match source {
+        MarketplacePluginSourceSummary::Local { path } => PluginSource::Local { path },
+    }
 }
 
 fn errors_to_info(

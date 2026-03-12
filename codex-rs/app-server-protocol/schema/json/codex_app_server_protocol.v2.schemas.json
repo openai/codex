@@ -1278,6 +1278,30 @@
             },
             "method": {
               "enum": [
+                "plugin/read"
+              ],
+              "title": "Plugin/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PluginReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "skills/remote/list"
               ],
               "title": "Skills/remote/listRequestMethod",
@@ -9111,12 +9135,85 @@
       ],
       "type": "string"
     },
+    "PluginAppSummary": {
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "installUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
     "PluginAuthPolicy": {
       "enum": [
         "ON_INSTALL",
         "ON_USE"
       ],
       "type": "string"
+    },
+    "PluginDetail": {
+      "properties": {
+        "apps": {
+          "items": {
+            "$ref": "#/definitions/PluginAppSummary"
+          },
+          "type": "array"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "marketplaceName": {
+          "type": "string"
+        },
+        "marketplacePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "mcpServers": {
+          "items": {
+            "$ref": "#/definitions/PluginMcpServerSummary"
+          },
+          "type": "array"
+        },
+        "skills": {
+          "items": {
+            "$ref": "#/definitions/PluginSkillSummary"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "$ref": "#/definitions/PluginSummary"
+        }
+      },
+      "required": [
+        "apps",
+        "marketplaceName",
+        "marketplacePath",
+        "mcpServers",
+        "skills",
+        "summary"
+      ],
+      "type": "object"
     },
     "PluginInstallParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -9326,6 +9423,82 @@
         "name",
         "path",
         "plugins"
+      ],
+      "type": "object"
+    },
+    "PluginMcpServerSummary": {
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "PluginReadParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "marketplacePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "pluginName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "marketplacePath",
+        "pluginName"
+      ],
+      "title": "PluginReadParams",
+      "type": "object"
+    },
+    "PluginReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "plugin": {
+          "$ref": "#/definitions/PluginDetail"
+        }
+      },
+      "required": [
+        "plugin"
+      ],
+      "title": "PluginReadResponse",
+      "type": "object"
+    },
+    "PluginSkillSummary": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "interface": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SkillInterface"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "shortDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "description",
+        "name",
+        "path"
       ],
       "type": "object"
     },
