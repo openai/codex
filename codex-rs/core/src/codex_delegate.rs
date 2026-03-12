@@ -13,15 +13,21 @@ use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionsArgs;
+use codex_protocol::request_permissions::RequestPermissionsEvent;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
+use serde_json::Value;
 use std::time::Duration;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use crate::AuthManager;
 use crate::codex::Codex;
+use crate::codex::CodexSpawnArgs;
 use crate::codex::CodexSpawnOk;
 use crate::codex::SUBMISSION_CHANNEL_CAPACITY;
 use crate::codex::Session;
@@ -31,11 +37,15 @@ use crate::error::CodexErr;
 use crate::models_manager::manager::ModelsManager;
 use codex_protocol::protocol::InitialHistory;
 
+#[cfg(test)]
+use crate::codex::completed_session_loop_termination;
+
 /// Start an interactive sub-Codex thread and return IO channels.
 ///
 /// The returned `events_rx` yields non-approval events emitted by the sub-agent.
 /// Approval requests are handled via `parent_session` and are not surfaced.
 /// The returned `ops_tx` allows the caller to submit additional `Op`s to the sub-agent.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_codex_thread_interactive(
     config: Config,
     auth_manager: Arc<AuthManager>,
@@ -43,27 +53,29 @@ pub(crate) async fn run_codex_thread_interactive(
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
+    subagent_source: SubAgentSource,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
 
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
+    let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
         models_manager,
-        Arc::clone(&parent_session.services.skills_manager),
-        Arc::clone(&parent_session.services.plugins_manager),
-        Arc::clone(&parent_session.services.mcp_manager),
-        Arc::clone(&parent_session.services.file_watcher),
-        initial_history.unwrap_or(InitialHistory::New),
-        SessionSource::SubAgent(SubAgentSource::Review),
-        parent_session.services.agent_control.clone(),
-        Vec::new(),
-        false,
-        None,
-        None,
-    )
+        skills_manager: Arc::clone(&parent_session.services.skills_manager),
+        plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
+        mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
+        file_watcher: Arc::clone(&parent_session.services.file_watcher),
+        conversation_history: initial_history.unwrap_or(InitialHistory::New),
+        session_source: SessionSource::SubAgent(subagent_source),
+        agent_control: parent_session.services.agent_control.clone(),
+        dynamic_tools: Vec::new(),
+        persist_extended_history: false,
+        metrics_service_name: None,
+        inherited_shell_snapshot: None,
+        parent_trace: None,
+    })
     .await?;
     let codex = Arc::new(codex);
 
@@ -98,6 +110,7 @@ pub(crate) async fn run_codex_thread_interactive(
         rx_event: rx_sub,
         agent_status: codex.agent_status.clone(),
         session: Arc::clone(&codex.session),
+        session_loop_termination: codex.session_loop_termination.clone(),
     })
 }
 
@@ -113,6 +126,8 @@ pub(crate) async fn run_codex_thread_one_shot(
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
+    subagent_source: SubAgentSource,
+    final_output_json_schema: Option<Value>,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
     // Use a child token so we can stop the delegate after completion without
@@ -125,6 +140,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         parent_session,
         parent_ctx,
         child_cancel.clone(),
+        subagent_source,
         initial_history,
     )
     .await?;
@@ -132,7 +148,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     // Send the initial input to kick off the one-shot turn.
     io.submit(Op::UserInput {
         items: input,
-        final_output_json_schema: None,
+        final_output_json_schema,
     })
     .await?;
 
@@ -141,6 +157,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     let ops_tx = io.tx_sub.clone();
     let agent_status = io.agent_status.clone();
     let session = Arc::clone(&io.session);
+    let session_loop_termination = io.session_loop_termination.clone();
     let io_for_bridge = io;
     tokio::spawn(async move {
         while let Ok(event) = io_for_bridge.next_event().await {
@@ -154,6 +171,7 @@ pub(crate) async fn run_codex_thread_one_shot(
                     .send(Submission {
                         id: "shutdown".to_string(),
                         op: Op::Shutdown {},
+                        trace: None,
                     })
                     .await;
                 child_cancel.cancel();
@@ -173,6 +191,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         tx_sub: tx_closed,
         agent_status,
         session,
+        session_loop_termination,
     })
 }
 
@@ -245,6 +264,19 @@ async fn forward_events(
                         .await;
                     }
                     Event {
+                        msg: EventMsg::RequestPermissions(event),
+                        ..
+                    } => {
+                        handle_request_permissions(
+                            &codex,
+                            &parent_session,
+                            &parent_ctx,
+                            event,
+                            &cancel_token,
+                        )
+                        .await;
+                    }
+                    Event {
                         id,
                         msg: EventMsg::RequestUserInput(event),
                     } => {
@@ -298,11 +330,11 @@ async fn forward_ops(
     cancel_token_ops: CancellationToken,
 ) {
     loop {
-        let op: Op = match rx_ops.recv().or_cancel(&cancel_token_ops).await {
-            Ok(Ok(Submission { id: _, op })) => op,
+        let submission = match rx_ops.recv().or_cancel(&cancel_token_ops).await {
+            Ok(Ok(submission)) => submission,
             Ok(Err(_)) | Err(_) => break,
         };
-        let _ = codex.submit(op).await;
+        let _ = codex.submit_with_id(submission).await;
     }
 }
 
@@ -325,6 +357,7 @@ async fn handle_exec_approval(
         network_approval_context,
         proposed_execpolicy_amendment,
         additional_permissions,
+        skill_metadata,
         available_decisions,
         ..
     } = event;
@@ -339,6 +372,7 @@ async fn handle_exec_approval(
         network_approval_context,
         proposed_execpolicy_amendment,
         additional_permissions,
+        skill_metadata,
         available_decisions,
     );
     let decision = await_approval_with_cancel(
@@ -416,6 +450,30 @@ async fn handle_request_user_input(
     let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
 }
 
+async fn handle_request_permissions(
+    codex: &Codex,
+    parent_session: &Session,
+    parent_ctx: &TurnContext,
+    event: RequestPermissionsEvent,
+    cancel_token: &CancellationToken,
+) {
+    let call_id = event.call_id;
+    let args = RequestPermissionsArgs {
+        reason: event.reason,
+        permissions: event.permissions,
+    };
+    let response_fut = parent_session.request_permissions(parent_ctx, call_id.clone(), args);
+    let response =
+        await_request_permissions_with_cancel(response_fut, parent_session, &call_id, cancel_token)
+            .await;
+    let _ = codex
+        .submit(Op::RequestPermissionsResponse {
+            id: call_id,
+            response,
+        })
+        .await;
+}
+
 async fn await_user_input_with_cancel<F>(
     fut: F,
     parent_session: &Session,
@@ -438,6 +496,34 @@ where
         }
         response = fut => response.unwrap_or_else(|| RequestUserInputResponse {
             answers: HashMap::new(),
+        }),
+    }
+}
+
+async fn await_request_permissions_with_cancel<F>(
+    fut: F,
+    parent_session: &Session,
+    call_id: &str,
+    cancel_token: &CancellationToken,
+) -> RequestPermissionsResponse
+where
+    F: core::future::Future<Output = Option<RequestPermissionsResponse>>,
+{
+    tokio::select! {
+        biased;
+        _ = cancel_token.cancelled() => {
+            let empty = RequestPermissionsResponse {
+                permissions: Default::default(),
+                scope: PermissionGrantScope::Turn,
+            };
+            parent_session
+                .notify_request_permissions_response(call_id, empty.clone())
+                .await;
+            empty
+        }
+        response = fut => response.unwrap_or_else(|| RequestPermissionsResponse {
+            permissions: Default::default(),
+            scope: PermissionGrantScope::Turn,
         }),
     }
 }
@@ -467,87 +553,5 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use async_channel::bounded;
-    use codex_protocol::models::ResponseItem;
-    use codex_protocol::protocol::AgentStatus;
-    use codex_protocol::protocol::RawResponseItemEvent;
-    use codex_protocol::protocol::TurnAbortReason;
-    use codex_protocol::protocol::TurnAbortedEvent;
-    use pretty_assertions::assert_eq;
-    use tokio::sync::watch;
-
-    #[tokio::test]
-    async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
-        let (tx_events, rx_events) = bounded(1);
-        let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
-        let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
-        let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;
-        let codex = Arc::new(Codex {
-            tx_sub,
-            rx_event: rx_events,
-            agent_status,
-            session: Arc::clone(&session),
-        });
-
-        let (tx_out, rx_out) = bounded(1);
-        tx_out
-            .send(Event {
-                id: "full".to_string(),
-                msg: EventMsg::TurnAborted(TurnAbortedEvent {
-                    turn_id: Some("turn-1".to_string()),
-                    reason: TurnAbortReason::Interrupted,
-                }),
-            })
-            .await
-            .unwrap();
-
-        let cancel = CancellationToken::new();
-        let forward = tokio::spawn(forward_events(
-            Arc::clone(&codex),
-            tx_out.clone(),
-            session,
-            ctx,
-            cancel.clone(),
-        ));
-
-        tx_events
-            .send(Event {
-                id: "evt".to_string(),
-                msg: EventMsg::RawResponseItem(RawResponseItemEvent {
-                    item: ResponseItem::CustomToolCall {
-                        id: None,
-                        status: None,
-                        call_id: "call-1".to_string(),
-                        name: "tool".to_string(),
-                        input: "{}".to_string(),
-                    },
-                }),
-            })
-            .await
-            .unwrap();
-
-        drop(tx_events);
-        cancel.cancel();
-        timeout(std::time::Duration::from_millis(1000), forward)
-            .await
-            .expect("forward_events hung")
-            .expect("forward_events join error");
-
-        let received = rx_out.recv().await.expect("prefilled event missing");
-        assert_eq!("full", received.id);
-        let mut ops = Vec::new();
-        while let Ok(sub) = rx_sub.try_recv() {
-            ops.push(sub.op);
-        }
-        assert!(
-            ops.iter().any(|op| matches!(op, Op::Interrupt)),
-            "expected Interrupt op after cancellation"
-        );
-        assert!(
-            ops.iter().any(|op| matches!(op, Op::Shutdown)),
-            "expected Shutdown op after cancellation"
-        );
-    }
-}
+#[path = "codex_delegate_tests.rs"]
+mod tests;

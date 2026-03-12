@@ -26,6 +26,7 @@ pub(crate) struct PendingThreadResumeRequest {
     pub(crate) request_id: ConnectionRequestId,
     pub(crate) rollout_path: PathBuf,
     pub(crate) config_snapshot: ThreadConfigSnapshot,
+    pub(crate) thread_summary: codex_app_server_protocol::Thread,
 }
 
 // ThreadListenerCommand is used to perform operations in the context of the thread listener, for serialization purposes.

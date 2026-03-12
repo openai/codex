@@ -3,8 +3,12 @@ use std::path::Path;
 
 use pretty_assertions::assert_eq;
 
+use crate::combine_output_receivers;
 use crate::spawn_pipe_process;
+use crate::spawn_pipe_process_no_stdin;
 use crate::spawn_pty_process;
+use crate::SpawnedProcess;
+use crate::TerminalSize;
 
 fn find_python() -> Option<String> {
     for candidate in ["python3", "python"] {
@@ -51,6 +55,44 @@ fn echo_sleep_command(marker: &str) -> String {
     }
 }
 
+fn split_stdout_stderr_command() -> String {
+    if cfg!(windows) {
+        // Keep this in cmd.exe syntax so the test does not depend on a runner-local
+        // PowerShell/Python setup just to produce deterministic split output.
+        "(echo split-out)&(>&2 echo split-err)".to_string()
+    } else {
+        "printf 'split-out\\n'; printf 'split-err\\n' >&2".to_string()
+    }
+}
+
+async fn collect_split_output(mut output_rx: tokio::sync::mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
+    let mut collected = Vec::new();
+    while let Some(chunk) = output_rx.recv().await {
+        collected.extend_from_slice(&chunk);
+    }
+    collected
+}
+
+fn combine_spawned_output(
+    spawned: SpawnedProcess,
+) -> (
+    crate::ProcessHandle,
+    tokio::sync::broadcast::Receiver<Vec<u8>>,
+    tokio::sync::oneshot::Receiver<i32>,
+) {
+    let SpawnedProcess {
+        session,
+        stdout_rx,
+        stderr_rx,
+        exit_rx,
+    } = spawned;
+    (
+        session,
+        combine_output_receivers(stdout_rx, stderr_rx),
+        exit_rx,
+    )
+}
+
 async fn collect_output_until_exit(
     mut output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
     exit_rx: tokio::sync::oneshot::Receiver<i32>,
@@ -94,52 +136,36 @@ async fn collect_output_until_exit(
 }
 
 async fn wait_for_python_repl_ready(
-    writer: &tokio::sync::mpsc::Sender<Vec<u8>>,
     output_rx: &mut tokio::sync::broadcast::Receiver<Vec<u8>>,
     timeout_ms: u64,
-    newline: &str,
+    ready_marker: &str,
 ) -> anyhow::Result<Vec<u8>> {
     let mut collected = Vec::new();
-    let marker = "__codex_pty_ready__";
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
-    let probe_window = tokio::time::Duration::from_millis(if cfg!(windows) { 750 } else { 250 });
 
     while tokio::time::Instant::now() < deadline {
-        writer
-            .send(format!("print('{marker}'){newline}").into_bytes())
-            .await?;
-
-        let probe_deadline = tokio::time::Instant::now() + probe_window;
-        loop {
-            let now = tokio::time::Instant::now();
-            if now >= deadline || now >= probe_deadline {
-                break;
-            }
-            let remaining = std::cmp::min(
-                deadline.saturating_duration_since(now),
-                probe_deadline.saturating_duration_since(now),
-            );
-            match tokio::time::timeout(remaining, output_rx.recv()).await {
-                Ok(Ok(chunk)) => {
-                    collected.extend_from_slice(&chunk);
-                    if String::from_utf8_lossy(&collected).contains(marker) {
-                        return Ok(collected);
-                    }
+        let now = tokio::time::Instant::now();
+        let remaining = deadline.saturating_duration_since(now);
+        match tokio::time::timeout(remaining, output_rx.recv()).await {
+            Ok(Ok(chunk)) => {
+                collected.extend_from_slice(&chunk);
+                if String::from_utf8_lossy(&collected).contains(ready_marker) {
+                    return Ok(collected);
                 }
-                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
-                    anyhow::bail!(
-                        "PTY output closed while waiting for Python REPL readiness: {:?}",
-                        String::from_utf8_lossy(&collected)
-                    );
-                }
-                Err(_) => break,
             }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                anyhow::bail!(
+                    "PTY output closed while waiting for Python REPL readiness: {:?}",
+                    String::from_utf8_lossy(&collected)
+                );
+            }
+            Err(_) => break,
         }
     }
 
     anyhow::bail!(
-        "timed out waiting for Python REPL readiness in PTY: {:?}",
+        "timed out waiting for Python REPL readiness marker {ready_marker:?} in PTY: {:?}",
         String::from_utf8_lossy(&collected)
     );
 }
@@ -218,22 +244,36 @@ async fn pty_python_repl_emits_output_and_exits() -> anyhow::Result<()> {
         return Ok(());
     };
 
+    let ready_marker = "__codex_pty_ready__";
+    let args = vec![
+        "-i".to_string(),
+        "-q".to_string(),
+        "-c".to_string(),
+        format!("print('{ready_marker}')"),
+    ];
     let env_map: HashMap<String, String> = std::env::vars().collect();
-    let spawned = spawn_pty_process(&python, &[], Path::new("."), &env_map, &None).await?;
-    let writer = spawned.session.writer_sender();
-    let mut output_rx = spawned.output_rx;
+    let spawned = spawn_pty_process(
+        &python,
+        &args,
+        Path::new("."),
+        &env_map,
+        &None,
+        TerminalSize::default(),
+    )
+    .await?;
+    let (session, mut output_rx, exit_rx) = combine_spawned_output(spawned);
+    let writer = session.writer_sender();
     let newline = if cfg!(windows) { "\r\n" } else { "\n" };
     let startup_timeout_ms = if cfg!(windows) { 10_000 } else { 5_000 };
     let mut output =
-        wait_for_python_repl_ready(&writer, &mut output_rx, startup_timeout_ms, newline).await?;
+        wait_for_python_repl_ready(&mut output_rx, startup_timeout_ms, ready_marker).await?;
     writer
         .send(format!("print('hello from pty'){newline}").into_bytes())
         .await?;
     writer.send(format!("exit(){newline}").into_bytes()).await?;
 
     let timeout_ms = if cfg!(windows) { 10_000 } else { 5_000 };
-    let (remaining_output, code) =
-        collect_output_until_exit(output_rx, spawned.exit_rx, timeout_ms).await;
+    let (remaining_output, code) = collect_output_until_exit(output_rx, exit_rx, timeout_ms).await;
     output.extend_from_slice(&remaining_output);
     let text = String::from_utf8_lossy(&output);
 
@@ -248,22 +288,44 @@ async fn pty_python_repl_emits_output_and_exits() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipe_process_round_trips_stdin() -> anyhow::Result<()> {
-    let Some(python) = find_python() else {
-        eprintln!("python not found; skipping pipe_process_round_trips_stdin");
-        return Ok(());
+    let (program, args) = if cfg!(windows) {
+        let cmd = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+        (
+            cmd,
+            vec![
+                "/Q".to_string(),
+                "/V:ON".to_string(),
+                "/D".to_string(),
+                "/C".to_string(),
+                "set /p line= & echo(!line!".to_string(),
+            ],
+        )
+    } else {
+        let Some(python) = find_python() else {
+            eprintln!("python not found; skipping pipe_process_round_trips_stdin");
+            return Ok(());
+        };
+        (
+            python,
+            vec![
+                "-u".to_string(),
+                "-c".to_string(),
+                "import sys; print(sys.stdin.readline().strip());".to_string(),
+            ],
+        )
     };
-
-    let args = vec![
-        "-u".to_string(),
-        "-c".to_string(),
-        "import sys; print(sys.stdin.readline().strip());".to_string(),
-    ];
     let env_map: HashMap<String, String> = std::env::vars().collect();
-    let spawned = spawn_pipe_process(&python, &args, Path::new("."), &env_map, &None).await?;
-    let writer = spawned.session.writer_sender();
-    writer.send(b"roundtrip\n".to_vec()).await?;
+    let spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None).await?;
+    let (session, output_rx, exit_rx) = combine_spawned_output(spawned);
+    let writer = session.writer_sender();
+    let newline = if cfg!(windows) { "\r\n" } else { "\n" };
+    writer
+        .send(format!("roundtrip{newline}").into_bytes())
+        .await?;
+    drop(writer);
+    session.close_stdin();
 
-    let (output, code) = collect_output_until_exit(spawned.output_rx, spawned.exit_rx, 5_000).await;
+    let (output, code) = collect_output_until_exit(output_rx, exit_rx, 5_000).await;
     let text = String::from_utf8_lossy(&output);
 
     assert!(
@@ -288,7 +350,7 @@ async fn pipe_process_detaches_from_parent_session() -> anyhow::Result<()> {
     let (program, args) = shell_command(script);
     let spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None).await?;
 
-    let mut output_rx = spawned.output_rx;
+    let (_session, mut output_rx, exit_rx) = combine_spawned_output(spawned);
     let pid_bytes =
         tokio::time::timeout(tokio::time::Duration::from_millis(500), output_rx.recv()).await??;
     let pid_text = String::from_utf8_lossy(&pid_bytes);
@@ -309,7 +371,7 @@ async fn pipe_process_detaches_from_parent_session() -> anyhow::Result<()> {
         "expected child to be detached from parent session"
     );
 
-    let exit_code = spawned.exit_rx.await.unwrap_or(-1);
+    let exit_code = exit_rx.await.unwrap_or(-1);
     assert_eq!(
         exit_code, 0,
         "expected detached pipe process to exit cleanly"
@@ -327,13 +389,23 @@ async fn pipe_and_pty_share_interface() -> anyhow::Result<()> {
 
     let pipe =
         spawn_pipe_process(&pipe_program, &pipe_args, Path::new("."), &env_map, &None).await?;
-    let pty = spawn_pty_process(&pty_program, &pty_args, Path::new("."), &env_map, &None).await?;
+    let pty = spawn_pty_process(
+        &pty_program,
+        &pty_args,
+        Path::new("."),
+        &env_map,
+        &None,
+        TerminalSize::default(),
+    )
+    .await?;
+    let (_pipe_session, pipe_output_rx, pipe_exit_rx) = combine_spawned_output(pipe);
+    let (_pty_session, pty_output_rx, pty_exit_rx) = combine_spawned_output(pty);
 
     let timeout_ms = if cfg!(windows) { 10_000 } else { 3_000 };
     let (pipe_out, pipe_code) =
-        collect_output_until_exit(pipe.output_rx, pipe.exit_rx, timeout_ms).await;
+        collect_output_until_exit(pipe_output_rx, pipe_exit_rx, timeout_ms).await;
     let (pty_out, pty_code) =
-        collect_output_until_exit(pty.output_rx, pty.exit_rx, timeout_ms).await;
+        collect_output_until_exit(pty_output_rx, pty_exit_rx, timeout_ms).await;
 
     assert_eq!(pipe_code, 0);
     assert_eq!(pty_code, 0);
@@ -360,12 +432,58 @@ async fn pipe_drains_stderr_without_stdout_activity() -> anyhow::Result<()> {
     let args = vec!["-c".to_string(), script.to_string()];
     let env_map: HashMap<String, String> = std::env::vars().collect();
     let spawned = spawn_pipe_process(&python, &args, Path::new("."), &env_map, &None).await?;
+    let (_session, output_rx, exit_rx) = combine_spawned_output(spawned);
 
-    let (output, code) =
-        collect_output_until_exit(spawned.output_rx, spawned.exit_rx, 10_000).await;
+    let (output, code) = collect_output_until_exit(output_rx, exit_rx, 10_000).await;
 
     assert_eq!(code, 0, "expected python to exit cleanly");
     assert!(!output.is_empty(), "expected stderr output to be drained");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipe_process_can_expose_split_stdout_and_stderr() -> anyhow::Result<()> {
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let (program, args) = shell_command(&split_stdout_stderr_command());
+    let spawned =
+        spawn_pipe_process_no_stdin(&program, &args, Path::new("."), &env_map, &None).await?;
+    let SpawnedProcess {
+        session: _session,
+        stdout_rx,
+        stderr_rx,
+        exit_rx,
+    } = spawned;
+
+    let timeout_ms = if cfg!(windows) { 10_000 } else { 2_000 };
+    let timeout = tokio::time::Duration::from_millis(timeout_ms);
+    let stdout_task = tokio::spawn(async move { collect_split_output(stdout_rx).await });
+    let stderr_task = tokio::spawn(async move { collect_split_output(stderr_rx).await });
+    let code = tokio::time::timeout(timeout, exit_rx)
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting for split process exit"))?
+        .unwrap_or(-1);
+    let stdout = tokio::time::timeout(timeout, stdout_task)
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting to drain split stdout"))??;
+    let stderr = tokio::time::timeout(timeout, stderr_task)
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting to drain split stderr"))??;
+
+    let expected_stdout = if cfg!(windows) {
+        b"split-out\r\n".to_vec()
+    } else {
+        b"split-out\n".to_vec()
+    };
+    let expected_stderr = if cfg!(windows) {
+        b"split-err\r\n".to_vec()
+    } else {
+        b"split-err\n".to_vec()
+    };
+
+    assert_eq!(stdout, expected_stdout);
+    assert_eq!(stderr, expected_stderr);
+    assert_eq!(code, 0);
 
     Ok(())
 }
@@ -381,17 +499,15 @@ async fn pipe_terminate_aborts_detached_readers() -> anyhow::Result<()> {
     let script =
         "setsid sh -c 'i=0; while [ $i -lt 200 ]; do echo tick; sleep 0.01; i=$((i+1)); done' &";
     let (program, args) = shell_command(script);
-    let mut spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None).await?;
+    let spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None).await?;
+    let (session, mut output_rx, _exit_rx) = combine_spawned_output(spawned);
 
-    let _ = tokio::time::timeout(
-        tokio::time::Duration::from_millis(500),
-        spawned.output_rx.recv(),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("expected detached output before terminate"))??;
+    let _ = tokio::time::timeout(tokio::time::Duration::from_millis(500), output_rx.recv())
+        .await
+        .map_err(|_| anyhow::anyhow!("expected detached output before terminate"))??;
 
-    spawned.session.terminate();
-    let mut post_rx = spawned.session.output_receiver();
+    session.terminate();
+    let mut post_rx = output_rx.resubscribe();
 
     let post_terminate =
         tokio::time::timeout(tokio::time::Duration::from_millis(200), post_rx.recv()).await;
@@ -416,12 +532,21 @@ async fn pty_terminate_kills_background_children_in_same_process_group() -> anyh
     let marker = "__codex_bg_pid:";
     let script = format!("sleep 1000 & bg=$!; echo {marker}$bg; wait");
     let (program, args) = shell_command(&script);
-    let mut spawned = spawn_pty_process(&program, &args, Path::new("."), &env_map, &None).await?;
+    let spawned = spawn_pty_process(
+        &program,
+        &args,
+        Path::new("."),
+        &env_map,
+        &None,
+        TerminalSize::default(),
+    )
+    .await?;
+    let (session, mut output_rx, _exit_rx) = combine_spawned_output(spawned);
 
-    let bg_pid = match wait_for_marker_pid(&mut spawned.output_rx, marker, 2_000).await {
+    let bg_pid = match wait_for_marker_pid(&mut output_rx, marker, 2_000).await {
         Ok(pid) => pid,
         Err(err) => {
-            spawned.session.terminate();
+            session.terminate();
             return Err(err);
         }
     };
@@ -430,7 +555,7 @@ async fn pty_terminate_kills_background_children_in_same_process_group() -> anyh
         "expected background child pid {bg_pid} to exist before terminate"
     );
 
-    spawned.session.terminate();
+    session.terminate();
 
     let exited = wait_for_process_exit(bg_pid, 3_000).await?;
     if !exited {

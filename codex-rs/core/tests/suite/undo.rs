@@ -29,7 +29,10 @@ use pretty_assertions::assert_eq;
 async fn undo_harness() -> Result<TestCodexHarness> {
     let builder = test_codex().with_model("gpt-5.1").with_config(|config| {
         config.include_apply_patch_tool = true;
-        config.features.enable(Feature::GhostCommit);
+        config
+            .features
+            .enable(Feature::GhostCommit)
+            .expect("test config should allow feature update");
     });
     TestCodexHarness::with_builder(builder).await
 }

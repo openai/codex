@@ -44,6 +44,7 @@ use codex_core::plugins::PluginsManager;
 use codex_core::web_search::web_search_detail;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::models::WebSearchAction;
@@ -374,14 +375,19 @@ impl HistoryCell for UserHistoryCell {
 pub(crate) struct ReasoningSummaryCell {
     _header: String,
     content: String,
+    /// Session cwd used to render local file links inside the reasoning body.
+    cwd: PathBuf,
     transcript_only: bool,
 }
 
 impl ReasoningSummaryCell {
-    pub(crate) fn new(header: String, content: String, transcript_only: bool) -> Self {
+    /// Create a reasoning summary cell that will render local file links relative to the session
+    /// cwd active when the summary was recorded.
+    pub(crate) fn new(header: String, content: String, cwd: &Path, transcript_only: bool) -> Self {
         Self {
             _header: header,
             content,
+            cwd: cwd.to_path_buf(),
             transcript_only,
         }
     }
@@ -391,6 +397,7 @@ impl ReasoningSummaryCell {
         append_markdown(
             &self.content,
             Some((width as usize).saturating_sub(2)),
+            Some(self.cwd.as_path()),
             &mut lines,
         );
         let summary_style = Style::default().dim().italic();
@@ -996,11 +1003,15 @@ pub(crate) fn padded_emoji(emoji: &str) -> String {
 #[derive(Debug)]
 struct TooltipHistoryCell {
     tip: String,
+    cwd: PathBuf,
 }
 
 impl TooltipHistoryCell {
-    fn new(tip: String) -> Self {
-        Self { tip }
+    fn new(tip: String, cwd: &Path) -> Self {
+        Self {
+            tip,
+            cwd: cwd.to_path_buf(),
+        }
     }
 }
 
@@ -1015,6 +1026,7 @@ impl HistoryCell for TooltipHistoryCell {
         append_markdown(
             &format!("**Tip:** {}", self.tip),
             Some(wrap_width),
+            Some(self.cwd.as_path()),
             &mut lines,
         );
 
@@ -1046,6 +1058,7 @@ pub(crate) fn new_session_info(
     is_first_event: bool,
     tooltip_override: Option<String>,
     auth_plan: Option<PlanType>,
+    show_fast_status: bool,
 ) -> SessionInfoCell {
     let SessionConfiguredEvent {
         model,
@@ -1056,6 +1069,7 @@ pub(crate) fn new_session_info(
     let header = SessionHeaderHistoryCell::new(
         model.clone(),
         reasoning_effort,
+        show_fast_status,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
     );
@@ -1099,8 +1113,13 @@ pub(crate) fn new_session_info(
     } else {
         if config.show_tooltips
             && let Some(tooltips) = tooltip_override
-                .or_else(|| tooltips::get_tooltip(auth_plan))
-                .map(TooltipHistoryCell::new)
+                .or_else(|| {
+                    tooltips::get_tooltip(
+                        auth_plan,
+                        matches!(config.service_tier, Some(ServiceTier::Fast)),
+                    )
+                })
+                .map(|tip| TooltipHistoryCell::new(tip, &config.cwd))
         {
             parts.push(Box::new(tooltips));
         }
@@ -1137,6 +1156,7 @@ pub(crate) struct SessionHeaderHistoryCell {
     model: String,
     model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
+    show_fast_status: bool,
     directory: PathBuf,
 }
 
@@ -1144,6 +1164,7 @@ impl SessionHeaderHistoryCell {
     pub(crate) fn new(
         model: String,
         reasoning_effort: Option<ReasoningEffortConfig>,
+        show_fast_status: bool,
         directory: PathBuf,
         version: &'static str,
     ) -> Self {
@@ -1151,6 +1172,7 @@ impl SessionHeaderHistoryCell {
             model,
             Style::default(),
             reasoning_effort,
+            show_fast_status,
             directory,
             version,
         )
@@ -1160,6 +1182,7 @@ impl SessionHeaderHistoryCell {
         model: String,
         model_style: Style,
         reasoning_effort: Option<ReasoningEffortConfig>,
+        show_fast_status: bool,
         directory: PathBuf,
         version: &'static str,
     ) -> Self {
@@ -1168,6 +1191,7 @@ impl SessionHeaderHistoryCell {
             model,
             model_style,
             reasoning_effort,
+            show_fast_status,
             directory,
         }
     }
@@ -1246,6 +1270,10 @@ impl HistoryCell for SessionHeaderHistoryCell {
             if let Some(reasoning) = reasoning_label {
                 spans.push(Span::from(" "));
                 spans.push(Span::from(reasoning));
+            }
+            if self.show_fast_status {
+                spans.push("   ".into());
+                spans.push(Span::styled("fast", self.model_style.magenta()));
             }
             spans.push("   ".dim());
             spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
@@ -2029,8 +2057,12 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     PlanUpdateCell { explanation, plan }
 }
 
-pub(crate) fn new_proposed_plan(plan_markdown: String) -> ProposedPlanCell {
-    ProposedPlanCell { plan_markdown }
+/// Create a proposed-plan cell that snapshots the session cwd for later markdown rendering.
+pub(crate) fn new_proposed_plan(plan_markdown: String, cwd: &Path) -> ProposedPlanCell {
+    ProposedPlanCell {
+        plan_markdown,
+        cwd: cwd.to_path_buf(),
+    }
 }
 
 pub(crate) fn new_proposed_plan_stream(
@@ -2046,6 +2078,8 @@ pub(crate) fn new_proposed_plan_stream(
 #[derive(Debug)]
 pub(crate) struct ProposedPlanCell {
     plan_markdown: String,
+    /// Session cwd used to keep local file-link display aligned with live streamed plan rendering.
+    cwd: PathBuf,
 }
 
 #[derive(Debug)]
@@ -2064,7 +2098,12 @@ impl HistoryCell for ProposedPlanCell {
         let plan_style = proposed_plan_style();
         let wrap_width = width.saturating_sub(4).max(1) as usize;
         let mut body: Vec<Line<'static>> = Vec::new();
-        append_markdown(&self.plan_markdown, Some(wrap_width), &mut body);
+        append_markdown(
+            &self.plan_markdown,
+            Some(wrap_width),
+            Some(self.cwd.as_path()),
+            &mut body,
+        );
         if body.is_empty() {
             body.push(Line::from("(empty)".dim().italic()));
         }
@@ -2196,7 +2235,33 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<dyn HistoryCell> {
+pub(crate) fn new_image_generation_call(
+    call_id: String,
+    revised_prompt: Option<String>,
+    saved_to: Option<String>,
+) -> PlainHistoryCell {
+    let detail = revised_prompt.unwrap_or_else(|| call_id.clone());
+
+    let mut lines: Vec<Line<'static>> = vec![
+        vec!["• ".dim(), "Generated Image:".bold()].into(),
+        vec!["  └ ".dim(), detail.dim()].into(),
+    ];
+    if let Some(saved_to) = saved_to {
+        lines.push(vec!["  └ ".dim(), format!("Saved to: {saved_to}").dim()].into());
+    }
+
+    PlainHistoryCell { lines }
+}
+
+/// Create the reasoning history cell emitted at the end of a reasoning block.
+///
+/// The helper snapshots `cwd` into the returned cell so local file links render the same way they
+/// did while the turn was live, even if rendering happens after other app state has advanced.
+pub(crate) fn new_reasoning_summary_block(
+    full_reasoning_buffer: String,
+    cwd: &Path,
+) -> Box<dyn HistoryCell> {
+    let cwd = cwd.to_path_buf();
     let full_reasoning_buffer = full_reasoning_buffer.trim();
     if let Some(open) = full_reasoning_buffer.find("**") {
         let after_open = &full_reasoning_buffer[(open + 2)..];
@@ -2207,9 +2272,12 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
             if after_close_idx < full_reasoning_buffer.len() {
                 let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
                 let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
+                // Preserve the session cwd so local file links render the same way in the
+                // collapsed reasoning block as they did while streaming live content.
                 return Box::new(ReasoningSummaryCell::new(
                     header_buffer,
                     summary_buffer,
+                    &cwd,
                     false,
                 ));
             }
@@ -2218,6 +2286,7 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
     Box::new(ReasoningSummaryCell::new(
         "".to_string(),
         full_reasoning_buffer.to_string(),
+        &cwd,
         true,
     ))
 }
@@ -2433,6 +2502,12 @@ mod tests {
             .expect("config")
     }
 
+    fn test_cwd() -> PathBuf {
+        // These tests only need a stable absolute cwd; using temp_dir() avoids baking Unix- or
+        // Windows-specific root semantics into the fixtures.
+        std::env::temp_dir()
+    }
+
     fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
         lines
             .iter()
@@ -2548,6 +2623,8 @@ mod tests {
             responses_api_engine_service_ttft_ms: 460,
             responses_api_engine_iapi_tbt_ms: 1_180,
             responses_api_engine_service_tbt_ms: 1_240,
+            turn_ttft_ms: 0,
+            turn_ttfm_ms: 0,
         };
         let cell = FinalMessageSeparator::new(Some(12), Some(summary));
         let rendered = render_lines(&cell.display_lines(600));
@@ -2591,6 +2668,7 @@ mod tests {
             false,
             Some("Model just became available".to_string()),
             Some(PlanType::Free),
+            false,
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -2608,6 +2686,7 @@ mod tests {
             false,
             Some("Model just became available".to_string()),
             Some(PlanType::Free),
+            false,
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -2624,6 +2703,7 @@ mod tests {
             true,
             Some("Model just became available".to_string()),
             Some(PlanType::Free),
+            false,
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -2642,6 +2722,7 @@ mod tests {
             false,
             Some("Model just became available".to_string()),
             Some(PlanType::Free),
+            false,
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -3274,18 +3355,39 @@ mod tests {
         let cell = SessionHeaderHistoryCell::new(
             "gpt-4o".to_string(),
             Some(ReasoningEffortConfig::High),
+            true,
             std::env::temp_dir(),
             "test",
         );
 
         let lines = render_lines(&cell.display_lines(80));
         let model_line = lines
-            .into_iter()
+            .iter()
+            .find(|line| line.contains("model:"))
+            .expect("model line");
+
+        assert!(model_line.contains("gpt-4o high   fast"));
+        assert!(model_line.contains("/model to change"));
+    }
+
+    #[test]
+    fn session_header_hides_fast_status_when_disabled() {
+        let cell = SessionHeaderHistoryCell::new(
+            "gpt-4o".to_string(),
+            Some(ReasoningEffortConfig::High),
+            false,
+            std::env::temp_dir(),
+            "test",
+        );
+
+        let lines = render_lines(&cell.display_lines(80));
+        let model_line = lines
+            .iter()
             .find(|line| line.contains("model:"))
             .expect("model line");
 
         assert!(model_line.contains("gpt-4o high"));
-        assert!(model_line.contains("/model to change"));
+        assert!(!model_line.contains("fast"));
     }
 
     #[test]
@@ -3937,6 +4039,7 @@ mod tests {
     fn reasoning_summary_block() {
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
+            &test_cwd(),
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -3952,6 +4055,7 @@ mod tests {
         let cell: Box<dyn HistoryCell> = Box::new(ReasoningSummaryCell::new(
             "High level reasoning".to_string(),
             summary.to_string(),
+            &test_cwd(),
             false,
         ));
         let width: u16 = 24;
@@ -3992,7 +4096,8 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
-        let cell = new_reasoning_summary_block("Detailed reasoning goes here.".to_string());
+        let cell =
+            new_reasoning_summary_block("Detailed reasoning goes here.".to_string(), &test_cwd());
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• Detailed reasoning goes here."]);
@@ -4005,6 +4110,7 @@ mod tests {
         config.model_supports_reasoning_summaries = Some(true);
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
+            &test_cwd(),
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -4013,8 +4119,10 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_falls_back_when_header_is_missing() {
-        let cell =
-            new_reasoning_summary_block("**High level reasoning without closing".to_string());
+        let cell = new_reasoning_summary_block(
+            "**High level reasoning without closing".to_string(),
+            &test_cwd(),
+        );
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• **High level reasoning without closing"]);
@@ -4022,14 +4130,17 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_falls_back_when_summary_is_missing() {
-        let cell =
-            new_reasoning_summary_block("**High level reasoning without closing**".to_string());
+        let cell = new_reasoning_summary_block(
+            "**High level reasoning without closing**".to_string(),
+            &test_cwd(),
+        );
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• High level reasoning without closing"]);
 
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**\n\n  ".to_string(),
+            &test_cwd(),
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -4040,6 +4151,7 @@ mod tests {
     fn reasoning_summary_block_splits_header_and_summary_when_present() {
         let cell = new_reasoning_summary_block(
             "**High level plan**\n\nWe should fix the bug next.".to_string(),
+            &test_cwd(),
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));

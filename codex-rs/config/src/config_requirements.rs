@@ -79,6 +79,7 @@ pub struct ConfigRequirements {
     pub approval_policy: ConstrainedWithSource<AskForApproval>,
     pub sandbox_policy: ConstrainedWithSource<SandboxPolicy>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
+    pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
@@ -101,6 +102,7 @@ impl Default for ConfigRequirements {
                 Constrained::allow_any(WebSearchMode::Cached),
                 None,
             ),
+            feature_requirements: None,
             mcp_servers: None,
             exec_policy: None,
             enforce_residency: ConstrainedWithSource::new(Constrained::allow_any(None), None),
@@ -134,9 +136,11 @@ pub struct NetworkRequirementsToml {
     pub socks_port: Option<u16>,
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
-    pub dangerously_allow_non_loopback_admin: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     pub allowed_domains: Option<Vec<String>>,
+    /// When true, only managed `allowed_domains` are respected while managed
+    /// network enforcement is active. User allowlist entries are ignored.
+    pub managed_allowed_domains_only: Option<bool>,
     pub denied_domains: Option<Vec<String>>,
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
@@ -150,9 +154,11 @@ pub struct NetworkConstraints {
     pub socks_port: Option<u16>,
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
-    pub dangerously_allow_non_loopback_admin: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     pub allowed_domains: Option<Vec<String>>,
+    /// When true, only managed `allowed_domains` are respected while managed
+    /// network enforcement is active. User allowlist entries are ignored.
+    pub managed_allowed_domains_only: Option<bool>,
     pub denied_domains: Option<Vec<String>>,
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
@@ -166,9 +172,9 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             socks_port,
             allow_upstream_proxy,
             dangerously_allow_non_loopback_proxy,
-            dangerously_allow_non_loopback_admin,
             dangerously_allow_all_unix_sockets,
             allowed_domains,
+            managed_allowed_domains_only,
             denied_domains,
             allow_unix_sockets,
             allow_local_binding,
@@ -179,9 +185,9 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             socks_port,
             allow_upstream_proxy,
             dangerously_allow_non_loopback_proxy,
-            dangerously_allow_non_loopback_admin,
             dangerously_allow_all_unix_sockets,
             allowed_domains,
+            managed_allowed_domains_only,
             denied_domains,
             allow_unix_sockets,
             allow_local_binding,
@@ -227,12 +233,26 @@ impl fmt::Display for WebSearchModeRequirement {
     }
 }
 
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct FeatureRequirementsToml {
+    #[serde(flatten)]
+    pub entries: BTreeMap<String, bool>,
+}
+
+impl FeatureRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 /// Base config deserialized from system `requirements.toml` or MDM.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
+    #[serde(rename = "features", alias = "feature_requirements")]
+    pub feature_requirements: Option<FeatureRequirementsToml>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
@@ -267,6 +287,7 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
+    pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
@@ -302,6 +323,7 @@ impl ConfigRequirementsWithSources {
                 allowed_approval_policies,
                 allowed_sandbox_modes,
                 allowed_web_search_modes,
+                feature_requirements,
                 mcp_servers,
                 rules,
                 enforce_residency,
@@ -315,6 +337,7 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies,
             allowed_sandbox_modes,
             allowed_web_search_modes,
+            feature_requirements,
             mcp_servers,
             rules,
             enforce_residency,
@@ -324,6 +347,7 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
+            feature_requirements: feature_requirements.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
@@ -370,6 +394,10 @@ impl ConfigRequirementsToml {
         self.allowed_approval_policies.is_none()
             && self.allowed_sandbox_modes.is_none()
             && self.allowed_web_search_modes.is_none()
+            && self
+                .feature_requirements
+                .as_ref()
+                .is_none_or(FeatureRequirementsToml::is_empty)
             && self.mcp_servers.is_none()
             && self.rules.is_none()
             && self.enforce_residency.is_none()
@@ -385,6 +413,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_approval_policies,
             allowed_sandbox_modes,
             allowed_web_search_modes,
+            feature_requirements,
             mcp_servers,
             rules,
             enforce_residency,
@@ -521,6 +550,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             }
             None => ConstrainedWithSource::new(Constrained::allow_any(WebSearchMode::Cached), None),
         };
+        let feature_requirements =
+            feature_requirements.filter(|requirements| !requirements.value.is_empty());
 
         let enforce_residency = match enforce_residency {
             Some(Sourced {
@@ -553,6 +584,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             approval_policy,
             sandbox_policy,
             web_search_mode,
+            feature_requirements,
             mcp_servers,
             exec_policy,
             enforce_residency,
@@ -588,6 +620,7 @@ mod tests {
             allowed_approval_policies,
             allowed_sandbox_modes,
             allowed_web_search_modes,
+            feature_requirements,
             mcp_servers,
             rules,
             enforce_residency,
@@ -599,6 +632,8 @@ mod tests {
             allowed_sandbox_modes: allowed_sandbox_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_web_search_modes: allowed_web_search_modes
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            feature_requirements: feature_requirements
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -622,6 +657,9 @@ mod tests {
             WebSearchModeRequirement::Cached,
             WebSearchModeRequirement::Live,
         ];
+        let feature_requirements = FeatureRequirementsToml {
+            entries: BTreeMap::from([("personality".to_string(), true)]),
+        };
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();
 
@@ -631,6 +669,7 @@ mod tests {
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
+            feature_requirements: Some(feature_requirements.clone()),
             mcp_servers: None,
             rules: None,
             enforce_residency: Some(enforce_residency),
@@ -649,6 +688,10 @@ mod tests {
                 allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source)),
                 allowed_web_search_modes: Some(Sourced::new(
                     allowed_web_search_modes,
+                    enforce_source.clone(),
+                )),
+                feature_requirements: Some(Sourced::new(
+                    feature_requirements,
                     enforce_source.clone(),
                 )),
                 mcp_servers: None,
@@ -683,6 +726,7 @@ mod tests {
                 )),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
+                feature_requirements: None,
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
@@ -723,6 +767,7 @@ mod tests {
                 )),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
+                feature_requirements: None,
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
@@ -809,6 +854,8 @@ mod tests {
                 allowed_sandbox_modes = ["read-only"]
                 allowed_web_search_modes = ["cached"]
                 enforce_residency = "us"
+                [features]
+                personality = true
             "#,
         )?;
 
@@ -827,6 +874,13 @@ mod tests {
         );
         assert_eq!(
             requirements.web_search_mode.source,
+            Some(source_location.clone())
+        );
+        assert_eq!(
+            requirements
+                .feature_requirements
+                .as_ref()
+                .map(|requirements| requirements.source.clone()),
             Some(source_location.clone())
         );
         assert_eq!(requirements.enforce_residency.source, Some(source_location));
@@ -1039,6 +1093,32 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_feature_requirements() -> Result<()> {
+        let toml_str = r#"
+            [features]
+            apps = false
+            personality = true
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(
+            requirements.feature_requirements,
+            Some(Sourced::new(
+                FeatureRequirementsToml {
+                    entries: BTreeMap::from([
+                        ("apps".to_string(), false),
+                        ("personality".to_string(), true),
+                    ]),
+                },
+                RequirementSource::Unknown,
+            ))
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn network_requirements_are_preserved_as_constraints_with_source() -> Result<()> {
         let toml_str = r#"
             [experimental_network]
@@ -1046,6 +1126,7 @@ mod tests {
             allow_upstream_proxy = false
             dangerously_allow_all_unix_sockets = true
             allowed_domains = ["api.example.com", "*.openai.com"]
+            managed_allowed_domains_only = true
             denied_domains = ["blocked.example.com"]
             allow_unix_sockets = ["/tmp/example.sock"]
             allow_local_binding = false
@@ -1073,6 +1154,10 @@ mod tests {
                 "api.example.com".to_string(),
                 "*.openai.com".to_string()
             ])
+        );
+        assert_eq!(
+            sourced_network.value.managed_allowed_domains_only,
+            Some(true)
         );
         assert_eq!(
             sourced_network.value.denied_domains.as_ref(),

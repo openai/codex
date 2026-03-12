@@ -292,6 +292,49 @@ LIMIT ?
             .collect::<Result<Vec<_>, _>>()
     }
 
+    /// Prunes stale stage-1 outputs while preserving the latest phase-2
+    /// baseline and stage-1 job watermarks.
+    ///
+    /// Query behavior:
+    /// - considers only rows with `selected_for_phase2 = 0`
+    /// - keeps recency as `COALESCE(last_usage, source_updated_at)`
+    /// - removes rows older than `max_unused_days`
+    /// - prunes at most `limit` rows ordered from stalest to newest
+    pub async fn prune_stage1_outputs_for_retention(
+        &self,
+        max_unused_days: i64,
+        limit: usize,
+    ) -> anyhow::Result<usize> {
+        if limit == 0 {
+            return Ok(0);
+        }
+
+        let cutoff = (Utc::now() - Duration::days(max_unused_days.max(0))).timestamp();
+        let rows_affected = sqlx::query(
+            r#"
+DELETE FROM stage1_outputs
+WHERE thread_id IN (
+    SELECT thread_id
+    FROM stage1_outputs
+    WHERE selected_for_phase2 = 0
+      AND COALESCE(last_usage, source_updated_at) < ?
+    ORDER BY
+      COALESCE(last_usage, source_updated_at) ASC,
+      source_updated_at ASC,
+      thread_id ASC
+    LIMIT ?
+)
+            "#,
+        )
+        .bind(cutoff)
+        .bind(limit as i64)
+        .execute(self.pool.as_ref())
+        .await?
+        .rows_affected();
+
+        Ok(rows_affected as usize)
+    }
+
     /// Returns the current phase-2 input set along with its diff against the
     /// last successful phase-2 selection.
     ///
@@ -1251,7 +1294,7 @@ mod tests {
     #[tokio::test]
     async fn stage1_claim_skips_when_up_to_date() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -1310,7 +1353,7 @@ mod tests {
     #[tokio::test]
     async fn stage1_running_stale_can_be_stolen_but_fresh_running_is_skipped() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -1356,7 +1399,7 @@ mod tests {
     #[tokio::test]
     async fn stage1_concurrent_claim_for_same_thread_is_conflict_safe() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -1421,7 +1464,7 @@ mod tests {
     #[tokio::test]
     async fn stage1_concurrent_claims_respect_running_cap() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -1483,7 +1526,7 @@ mod tests {
     #[tokio::test]
     async fn claim_stage1_jobs_filters_by_age_idle_and_current_thread() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -1573,7 +1616,7 @@ mod tests {
     #[tokio::test]
     async fn claim_stage1_jobs_prefilters_threads_with_up_to_date_memory() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -1672,7 +1715,7 @@ mod tests {
     #[tokio::test]
     async fn claim_stage1_jobs_skips_threads_with_disabled_memory_mode() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -1743,7 +1786,7 @@ mod tests {
     #[tokio::test]
     async fn reset_memory_data_for_fresh_start_clears_rows_and_disables_threads() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -1852,7 +1895,7 @@ mod tests {
     #[tokio::test]
     async fn claim_stage1_jobs_enforces_global_running_cap() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -1979,7 +2022,7 @@ WHERE kind = 'memory_stage1'
     #[tokio::test]
     async fn claim_stage1_jobs_processes_two_full_batches_across_startup_passes() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -2066,7 +2109,7 @@ WHERE kind = 'memory_stage1'
     #[tokio::test]
     async fn stage1_output_cascades_on_thread_delete() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -2133,7 +2176,7 @@ WHERE kind = 'memory_stage1'
     #[tokio::test]
     async fn mark_stage1_job_succeeded_no_output_skips_phase2_when_output_was_already_absent() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -2212,7 +2255,7 @@ WHERE kind = 'memory_stage1'
     #[tokio::test]
     async fn mark_stage1_job_succeeded_no_output_enqueues_phase2_when_deleting_output() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -2323,7 +2366,7 @@ WHERE kind = 'memory_stage1'
     #[tokio::test]
     async fn stage1_retry_exhaustion_does_not_block_newer_watermark() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -2405,7 +2448,7 @@ WHERE kind = 'memory_stage1'
     #[tokio::test]
     async fn phase2_global_consolidation_reruns_when_watermark_advances() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -2461,7 +2504,7 @@ WHERE kind = 'memory_stage1'
     #[tokio::test]
     async fn list_stage1_outputs_for_global_returns_latest_outputs() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -2552,7 +2595,7 @@ WHERE kind = 'memory_stage1'
     #[tokio::test]
     async fn list_stage1_outputs_for_global_skips_empty_payloads() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -2621,7 +2664,7 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn list_stage1_outputs_for_global_skips_polluted_threads() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -2686,7 +2729,7 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn get_phase2_input_selection_reports_added_retained_and_removed_rows() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -2798,7 +2841,7 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn get_phase2_input_selection_marks_polluted_previous_selection_as_removed() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -2904,7 +2947,7 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn mark_thread_memory_mode_polluted_enqueues_phase2_for_selected_threads() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -2989,7 +3032,7 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn get_phase2_input_selection_treats_regenerated_selected_rows_as_added() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -3105,7 +3148,7 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn get_phase2_input_selection_reports_regenerated_previous_selection_as_removed() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -3260,7 +3303,7 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn mark_global_phase2_job_succeeded_updates_selected_snapshot_timestamp() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -3402,7 +3445,7 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn mark_global_phase2_job_succeeded_only_marks_exact_selected_snapshots() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -3517,7 +3560,7 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn record_stage1_output_usage_updates_usage_metadata() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -3616,7 +3659,7 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn get_phase2_input_selection_prioritizes_usage_count_then_recent_usage() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -3707,7 +3750,7 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn get_phase2_input_selection_excludes_stale_used_memories_but_keeps_fresh_never_used() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -3798,7 +3841,7 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn get_phase2_input_selection_prefers_recent_thread_updates_over_recent_generation() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -3876,9 +3919,217 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
+    async fn prune_stage1_outputs_for_retention_prunes_stale_unselected_rows_only() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let stale_unused =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("stale unused");
+        let stale_used = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("stale used");
+        let stale_selected =
+            ThreadId::from_string(&Uuid::new_v4().to_string()).expect("stale selected");
+        let fresh_used = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("fresh used");
+
+        for (thread_id, workspace) in [
+            (stale_unused, "workspace-stale-unused"),
+            (stale_used, "workspace-stale-used"),
+            (stale_selected, "workspace-stale-selected"),
+            (fresh_used, "workspace-fresh-used"),
+        ] {
+            runtime
+                .upsert_thread(&test_thread_metadata(
+                    &codex_home,
+                    thread_id,
+                    codex_home.join(workspace),
+                ))
+                .await
+                .expect("upsert thread");
+        }
+
+        let now = Utc::now().timestamp();
+        for (thread_id, source_updated_at, summary) in [
+            (
+                stale_unused,
+                now - Duration::days(60).num_seconds(),
+                "stale-unused",
+            ),
+            (
+                stale_used,
+                now - Duration::days(50).num_seconds(),
+                "stale-used",
+            ),
+            (
+                stale_selected,
+                now - Duration::days(45).num_seconds(),
+                "stale-selected",
+            ),
+            (
+                fresh_used,
+                now - Duration::days(10).num_seconds(),
+                "fresh-used",
+            ),
+        ] {
+            let claim = runtime
+                .try_claim_stage1_job(thread_id, owner, source_updated_at, 3600, 64)
+                .await
+                .expect("claim stage1");
+            let ownership_token = match claim {
+                Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+                other => panic!("unexpected stage1 claim outcome: {other:?}"),
+            };
+            assert!(
+                runtime
+                    .mark_stage1_job_succeeded(
+                        thread_id,
+                        ownership_token.as_str(),
+                        source_updated_at,
+                        &format!("raw-{summary}"),
+                        summary,
+                        None,
+                    )
+                    .await
+                    .expect("mark stage1 success"),
+                "stage1 success should persist output"
+            );
+        }
+
+        sqlx::query(
+            "UPDATE stage1_outputs SET usage_count = ?, last_usage = ? WHERE thread_id = ?",
+        )
+        .bind(3_i64)
+        .bind(now - Duration::days(40).num_seconds())
+        .bind(stale_used.to_string())
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("set stale used metadata");
+        sqlx::query(
+            "UPDATE stage1_outputs SET selected_for_phase2 = 1, selected_for_phase2_source_updated_at = source_updated_at WHERE thread_id = ?",
+        )
+        .bind(stale_selected.to_string())
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("mark selected for phase2");
+        sqlx::query(
+            "UPDATE stage1_outputs SET usage_count = ?, last_usage = ? WHERE thread_id = ?",
+        )
+        .bind(8_i64)
+        .bind(now - Duration::days(2).num_seconds())
+        .bind(fresh_used.to_string())
+        .execute(runtime.pool.as_ref())
+        .await
+        .expect("set fresh used metadata");
+
+        let before_jobs_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM jobs WHERE kind = 'memory_stage1'")
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("count stage1 jobs before prune");
+
+        let pruned = runtime
+            .prune_stage1_outputs_for_retention(30, 100)
+            .await
+            .expect("prune stage1 outputs");
+        assert_eq!(pruned, 2);
+
+        let remaining = sqlx::query_scalar::<_, String>(
+            "SELECT thread_id FROM stage1_outputs ORDER BY thread_id",
+        )
+        .fetch_all(runtime.pool.as_ref())
+        .await
+        .expect("load remaining stage1 outputs");
+        let mut expected_remaining = vec![fresh_used.to_string(), stale_selected.to_string()];
+        expected_remaining.sort();
+        assert_eq!(remaining, expected_remaining);
+
+        let after_jobs_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM jobs WHERE kind = 'memory_stage1'")
+                .fetch_one(runtime.pool.as_ref())
+                .await
+                .expect("count stage1 jobs after prune");
+        assert_eq!(after_jobs_count, before_jobs_count);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn prune_stage1_outputs_for_retention_respects_batch_limit() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        let thread_a = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread a");
+        let thread_b = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread b");
+        let thread_c = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread c");
+
+        for (thread_id, workspace) in [
+            (thread_a, "workspace-a"),
+            (thread_b, "workspace-b"),
+            (thread_c, "workspace-c"),
+        ] {
+            runtime
+                .upsert_thread(&test_thread_metadata(
+                    &codex_home,
+                    thread_id,
+                    codex_home.join(workspace),
+                ))
+                .await
+                .expect("upsert thread");
+        }
+
+        let now = Utc::now().timestamp();
+        for (thread_id, source_updated_at, summary) in [
+            (thread_a, now - Duration::days(60).num_seconds(), "stale-a"),
+            (thread_b, now - Duration::days(50).num_seconds(), "stale-b"),
+            (thread_c, now - Duration::days(40).num_seconds(), "stale-c"),
+        ] {
+            let claim = runtime
+                .try_claim_stage1_job(thread_id, owner, source_updated_at, 3600, 64)
+                .await
+                .expect("claim stage1");
+            let ownership_token = match claim {
+                Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+                other => panic!("unexpected stage1 claim outcome: {other:?}"),
+            };
+            assert!(
+                runtime
+                    .mark_stage1_job_succeeded(
+                        thread_id,
+                        ownership_token.as_str(),
+                        source_updated_at,
+                        &format!("raw-{summary}"),
+                        summary,
+                        None,
+                    )
+                    .await
+                    .expect("mark stage1 success"),
+                "stage1 success should persist output"
+            );
+        }
+
+        let pruned = runtime
+            .prune_stage1_outputs_for_retention(30, 2)
+            .await
+            .expect("prune stage1 outputs with limit");
+        assert_eq!(pruned, 2);
+
+        let remaining_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stage1_outputs")
+            .fetch_one(runtime.pool.as_ref())
+            .await
+            .expect("count remaining stage1 outputs");
+        assert_eq!(remaining_count, 1);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
     async fn mark_stage1_job_succeeded_enqueues_global_consolidation() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -3967,7 +4218,7 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn phase2_global_lock_allows_only_one_fresh_runner() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -4000,7 +4251,7 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn phase2_global_lock_stale_lease_allows_takeover() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -4067,7 +4318,7 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn phase2_backfilled_inputs_below_last_success_still_become_dirty() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 
@@ -4126,7 +4377,7 @@ VALUES (?, ?, ?, ?, ?)
     #[tokio::test]
     async fn phase2_failure_fallback_updates_unowned_running_job() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
 

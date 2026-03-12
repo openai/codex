@@ -201,6 +201,13 @@
         },
         "name": {
           "type": "string"
+        },
+        "pluginDisplayNames": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -663,6 +670,57 @@
         }
       ]
     },
+    "CommandExecOutputDeltaNotification": {
+      "description": "Base64-encoded output chunk emitted for a streaming `command/exec` request.\n\nThese notifications are connection-scoped. If the originating connection closes, the server terminates the process.",
+      "properties": {
+        "capReached": {
+          "description": "`true` on the final streamed chunk for a stream when `outputBytesCap` truncated later output on that stream.",
+          "type": "boolean"
+        },
+        "deltaBase64": {
+          "description": "Base64-encoded output bytes.",
+          "type": "string"
+        },
+        "processId": {
+          "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+          "type": "string"
+        },
+        "stream": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/CommandExecOutputStream"
+            }
+          ],
+          "description": "Output stream for this chunk."
+        }
+      },
+      "required": [
+        "capReached",
+        "deltaBase64",
+        "processId",
+        "stream"
+      ],
+      "type": "object"
+    },
+    "CommandExecOutputStream": {
+      "description": "Stream label for `command/exec/outputDelta` notifications.",
+      "oneOf": [
+        {
+          "description": "stdout stream. PTY mode multiplexes terminal output here.",
+          "enum": [
+            "stdout"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "stderr stream.",
+          "enum": [
+            "stderr"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "CommandExecutionOutputDeltaNotification": {
       "properties": {
         "delta": {
@@ -996,6 +1054,184 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "HookCompletedNotification": {
+      "properties": {
+        "run": {
+          "$ref": "#/definitions/HookRunSummary"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "HookEventName": {
+      "enum": [
+        "sessionStart",
+        "stop"
+      ],
+      "type": "string"
+    },
+    "HookExecutionMode": {
+      "enum": [
+        "sync",
+        "async"
+      ],
+      "type": "string"
+    },
+    "HookHandlerType": {
+      "enum": [
+        "command",
+        "prompt",
+        "agent"
+      ],
+      "type": "string"
+    },
+    "HookOutputEntry": {
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/HookOutputEntryKind"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "type": "object"
+    },
+    "HookOutputEntryKind": {
+      "enum": [
+        "warning",
+        "stop",
+        "feedback",
+        "context",
+        "error"
+      ],
+      "type": "string"
+    },
+    "HookRunStatus": {
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "blocked",
+        "stopped"
+      ],
+      "type": "string"
+    },
+    "HookRunSummary": {
+      "properties": {
+        "completedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "displayOrder": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "durationMs": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/definitions/HookOutputEntry"
+          },
+          "type": "array"
+        },
+        "eventName": {
+          "$ref": "#/definitions/HookEventName"
+        },
+        "executionMode": {
+          "$ref": "#/definitions/HookExecutionMode"
+        },
+        "handlerType": {
+          "$ref": "#/definitions/HookHandlerType"
+        },
+        "id": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/definitions/HookScope"
+        },
+        "sourcePath": {
+          "type": "string"
+        },
+        "startedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/definitions/HookRunStatus"
+        },
+        "statusMessage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "displayOrder",
+        "entries",
+        "eventName",
+        "executionMode",
+        "handlerType",
+        "id",
+        "scope",
+        "sourcePath",
+        "startedAt",
+        "status"
+      ],
+      "type": "object"
+    },
+    "HookScope": {
+      "enum": [
+        "thread",
+        "turn"
+      ],
+      "type": "string"
+    },
+    "HookStartedNotification": {
+      "properties": {
+        "run": {
+          "$ref": "#/definitions/HookRunSummary"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run",
+        "threadId"
+      ],
       "type": "object"
     },
     "ItemCompletedNotification": {
@@ -1352,6 +1588,18 @@
       ],
       "type": "object"
     },
+    "ReasoningEffort": {
+      "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
+      "enum": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "type": "string"
+    },
     "ReasoningSummaryPartAddedNotification": {
       "properties": {
         "itemId": {
@@ -1484,6 +1732,10 @@
           "type": "object"
         }
       ]
+    },
+    "SkillsChangedNotification": {
+      "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+      "type": "object"
     },
     "SubAgentSource": {
       "oneOf": [
@@ -2135,12 +2387,30 @@
               "description": "Unique identifier for this collab tool call.",
               "type": "string"
             },
+            "model": {
+              "description": "Model requested for the spawned agent, when applicable.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "prompt": {
               "description": "Prompt text sent as part of the collab tool call, when available.",
               "type": [
                 "string",
                 "null"
               ]
+            },
+            "reasoningEffort": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningEffort"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reasoning effort requested for the spawned agent, when applicable."
             },
             "receiverThreadIds": {
               "description": "Thread ID of the receiving agent, when applicable. In case of spawn operation, this corresponds to the newly spawned agent.",
@@ -2245,6 +2515,40 @@
             "type"
           ],
           "title": "ImageViewThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revisedPrompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "imageGeneration"
+              ],
+              "title": "ImageGenerationThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "title": "ImageGenerationThreadItem",
           "type": "object"
         },
         {
@@ -3206,6 +3510,26 @@
       "properties": {
         "method": {
           "enum": [
+            "skills/changed"
+          ],
+          "title": "Skills/changedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SkillsChangedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Skills/changedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
             "thread/name/updated"
           ],
           "title": "Thread/name/updatedNotificationMethod",
@@ -3266,6 +3590,26 @@
       "properties": {
         "method": {
           "enum": [
+            "hook/started"
+          ],
+          "title": "Hook/startedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/HookStartedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Hook/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
             "turn/completed"
           ],
           "title": "Turn/completedNotificationMethod",
@@ -3280,6 +3624,26 @@
         "params"
       ],
       "title": "Turn/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "hook/completed"
+          ],
+          "title": "Hook/completedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/HookCompletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Hook/completedNotification",
       "type": "object"
     },
     {
@@ -3401,6 +3765,27 @@
         "params"
       ],
       "title": "Item/plan/deltaNotification",
+      "type": "object"
+    },
+    {
+      "description": "Stream base64-encoded stdout/stderr chunks for a running `command/exec` session.",
+      "properties": {
+        "method": {
+          "enum": [
+            "command/exec/outputDelta"
+          ],
+          "title": "Command/exec/outputDeltaNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/CommandExecOutputDeltaNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Command/exec/outputDeltaNotification",
       "type": "object"
     },
     {

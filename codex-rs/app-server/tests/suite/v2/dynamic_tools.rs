@@ -281,11 +281,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
         .iter()
         .find_map(|body| function_call_output_payload(body, call_id))
         .context("expected function_call_output in follow-up request")?;
-    let expected_payload = FunctionCallOutputPayload::from_content_items(vec![
-        FunctionCallOutputContentItem::InputText {
-            text: "dynamic-ok".to_string(),
-        },
-    ]);
+    let expected_payload = FunctionCallOutputPayload::from_text("dynamic-ok".to_string());
     assert_eq!(payload, expected_payload);
 
     Ok(())
@@ -399,7 +395,10 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
                 FunctionCallOutputContentItem::InputText { text }
             }
             DynamicToolCallOutputContentItem::InputImage { image_url } => {
-                FunctionCallOutputContentItem::InputImage { image_url }
+                FunctionCallOutputContentItem::InputImage {
+                    image_url,
+                    detail: None,
+                }
             }
         })
         .collect::<Vec<FunctionCallOutputContentItem>>();

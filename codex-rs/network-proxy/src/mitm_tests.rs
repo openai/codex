@@ -83,7 +83,7 @@ async fn mitm_policy_rejects_host_mismatch() {
 #[tokio::test]
 async fn mitm_policy_rechecks_local_private_target_after_connect() {
     let app_state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
-        allowed_domains: vec!["*".to_string()],
+        allowed_domains: vec!["example.com".to_string()],
         allow_local_binding: false,
         ..NetworkProxySettings::default()
     }));

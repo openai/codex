@@ -14,6 +14,7 @@ use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
 use codex_chatgpt::connectors::AppInfo;
 use codex_core::connectors::connector_mention_slug;
+use codex_core::mention_syntax::TOOL_MENTION_SIGIL;
 use codex_core::skills::model::SkillDependencies;
 use codex_core::skills::model::SkillInterface;
 use codex_core::skills::model::SkillMetadata;
@@ -297,6 +298,10 @@ pub(crate) struct ToolMentions {
 }
 
 fn extract_tool_mentions_from_text(text: &str) -> ToolMentions {
+    extract_tool_mentions_from_text_with_sigil(text, TOOL_MENTION_SIGIL)
+}
+
+fn extract_tool_mentions_from_text_with_sigil(text: &str, sigil: char) -> ToolMentions {
     let text_bytes = text.as_bytes();
     let mut names: HashSet<String> = HashSet::new();
     let mut linked_paths: HashMap<String, String> = HashMap::new();
@@ -306,10 +311,10 @@ fn extract_tool_mentions_from_text(text: &str) -> ToolMentions {
         let byte = text_bytes[index];
         if byte == b'['
             && let Some((name, path, end_index)) =
-                parse_linked_tool_mention(text, text_bytes, index)
+                parse_linked_tool_mention(text, text_bytes, index, sigil)
         {
             if !is_common_env_var(name) {
-                if !is_app_or_mcp_path(path) {
+                if is_skill_path(path) {
                     names.insert(name.to_string());
                 }
                 linked_paths
@@ -320,7 +325,7 @@ fn extract_tool_mentions_from_text(text: &str) -> ToolMentions {
             continue;
         }
 
-        if byte != b'$' {
+        if byte != sigil as u8 {
             index += 1;
             continue;
         }
@@ -359,13 +364,14 @@ fn parse_linked_tool_mention<'a>(
     text: &'a str,
     text_bytes: &[u8],
     start: usize,
+    sigil: char,
 ) -> Option<(&'a str, &'a str, usize)> {
-    let dollar_index = start + 1;
-    if text_bytes.get(dollar_index) != Some(&b'$') {
+    let sigil_index = start + 1;
+    if text_bytes.get(sigil_index) != Some(&(sigil as u8)) {
         return None;
     }
 
-    let name_start = dollar_index + 1;
+    let name_start = sigil_index + 1;
     let first_name_byte = text_bytes.get(name_start)?;
     if !is_mention_name_char(*first_name_byte) {
         return None;
@@ -434,7 +440,7 @@ fn is_mention_name_char(byte: u8) -> bool {
 }
 
 fn is_skill_path(path: &str) -> bool {
-    !is_app_or_mcp_path(path)
+    !path.starts_with("app://") && !path.starts_with("mcp://") && !path.starts_with("plugin://")
 }
 
 fn normalize_skill_path(path: &str) -> &str {
@@ -444,8 +450,4 @@ fn normalize_skill_path(path: &str) -> &str {
 fn app_id_from_path(path: &str) -> Option<&str> {
     path.strip_prefix("app://")
         .filter(|value| !value.is_empty())
-}
-
-fn is_app_or_mcp_path(path: &str) -> bool {
-    path.starts_with("app://") || path.starts_with("mcp://")
 }

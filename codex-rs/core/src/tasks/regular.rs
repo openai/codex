@@ -41,7 +41,7 @@ impl RegularTask {
             .prewarm_websocket(
                 &prompt,
                 &turn_context.model_info,
-                &turn_context.otel_manager,
+                &turn_context.session_telemetry,
                 turn_context.reasoning_effort,
                 turn_context.reasoning_summary,
                 turn_context.config.service_tier,
@@ -68,6 +68,10 @@ impl SessionTask for RegularTask {
         TaskKind::Regular
     }
 
+    fn span_name(&self) -> &'static str {
+        "session_task.turn"
+    }
+
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
@@ -78,9 +82,6 @@ impl SessionTask for RegularTask {
         let sess = session.clone_session();
         let run_turn_span = trace_span!("run_turn");
         sess.set_server_reasoning_included(false).await;
-        sess.services
-            .otel_manager
-            .apply_traceparent_parent(&run_turn_span);
         let prewarmed_client_session = self.take_prewarmed_session().await;
         run_turn(
             sess,

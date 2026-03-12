@@ -36,6 +36,7 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 
 #[tokio::test]
 async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
@@ -114,6 +115,18 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     assert_eq!(started.thread_id, thread_start.thread.id);
     assert!(started.session_id.is_some());
 
+    let startup_context_request = realtime_server.wait_for_request(0, 0).await;
+    assert_eq!(
+        startup_context_request.body_json()["type"].as_str(),
+        Some("session.update")
+    );
+    assert!(
+        startup_context_request.body_json()["session"]["instructions"]
+            .as_str()
+            .context("expected startup context instructions")?
+            .contains(STARTUP_CONTEXT_HEADER)
+    );
+
     let audio_append_request_id = mcp
         .send_thread_realtime_append_audio_request(ThreadRealtimeAppendAudioParams {
             thread_id: started.thread_id.clone(),
@@ -182,6 +195,12 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     assert_eq!(
         connection[0].body_json()["type"].as_str(),
         Some("session.update")
+    );
+    assert!(
+        connection[0].body_json()["session"]["instructions"]
+            .as_str()
+            .context("expected startup context instructions")?
+            .contains(STARTUP_CONTEXT_HEADER)
     );
     let mut request_types = [
         connection[1].body_json()["type"]

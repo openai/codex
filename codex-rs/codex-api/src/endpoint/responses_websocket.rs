@@ -53,9 +53,6 @@ enum WsCommand {
         message: Message,
         tx_result: oneshot::Sender<Result<(), WsError>>,
     },
-    Close {
-        tx_result: oneshot::Sender<Result<(), WsError>>,
-    },
 }
 
 impl WsStream {
@@ -79,11 +76,6 @@ impl WsStream {
                                 if should_break {
                                     break;
                                 }
-                            }
-                            WsCommand::Close { tx_result } => {
-                                let result = inner.close(None).await;
-                                let _ = tx_result.send(result);
-                                break;
                             }
                         }
                     }
@@ -141,11 +133,6 @@ impl WsStream {
 
     async fn send(&self, message: Message) -> Result<(), WsError> {
         self.request(|tx_result| WsCommand::Send { message, tx_result })
-            .await
-    }
-
-    async fn close(&self) -> Result<(), WsError> {
-        self.request(|tx_result| WsCommand::Close { tx_result })
             .await
     }
 
@@ -242,26 +229,32 @@ impl ResponsesWebsocketConnection {
                     .await;
             }
             let mut guard = stream.lock().await;
-            let Some(ws_stream) = guard.as_mut() else {
-                let _ = tx_event
-                    .send(Err(ApiError::Stream(
-                        "websocket connection is closed".to_string(),
-                    )))
-                    .await;
-                return;
+            let result = {
+                let Some(ws_stream) = guard.as_mut() else {
+                    let _ = tx_event
+                        .send(Err(ApiError::Stream(
+                            "websocket connection is closed".to_string(),
+                        )))
+                        .await;
+                    return;
+                };
+
+                run_websocket_response_stream(
+                    ws_stream,
+                    tx_event.clone(),
+                    request_body,
+                    idle_timeout,
+                    telemetry,
+                )
+                .await
             };
 
-            if let Err(err) = run_websocket_response_stream(
-                ws_stream,
-                tx_event.clone(),
-                request_body,
-                idle_timeout,
-                telemetry,
-            )
-            .await
-            {
-                let _ = ws_stream.close().await;
-                *guard = None;
+            if let Err(err) = result {
+                // A terminal stream error should reach the caller immediately. Waiting for a
+                // graceful close handshake here can stall indefinitely and mask the error.
+                let failed_stream = guard.take();
+                drop(guard);
+                drop(failed_stream);
                 let _ = tx_event.send(Err(err)).await;
             }
         });

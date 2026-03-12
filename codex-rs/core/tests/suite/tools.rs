@@ -293,9 +293,15 @@ async fn collect_tools(use_unified_exec: bool) -> Result<Vec<String>> {
 
     let mut builder = test_codex().with_config(move |config| {
         if use_unified_exec {
-            config.features.enable(Feature::UnifiedExec);
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
         } else {
-            config.features.disable(Feature::UnifiedExec);
+            config
+                .features
+                .disable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
         }
     });
     let test = builder.build(&server).await?;

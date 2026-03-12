@@ -156,6 +156,7 @@ rollout_summaries/2026-02-17T21-23-02-LN3m-weekly_memory_report_pivot_from_git_h
   - an empty `<rollout_ids>` section is allowed if no rollout ids are available
   - you can find rollout ids in rollout summary files and MEMORY.md
   - do not include file paths or notes in this section
+  - For every `citation_entries`, try to find and cite the corresponding rollout id if possible
 - Never include memory citations inside pull-request messages.
 - Never cite blank lines; double-check ranges.
 

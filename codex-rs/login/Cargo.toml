@@ -26,6 +26,7 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "signal",
 ] }
+tracing = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
 webbrowser = { workspace = true }
@@ -33,5 +34,6 @@ webbrowser = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 core_test_support = { workspace = true }
+pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 wiremock = { workspace = true }

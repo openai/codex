@@ -7,6 +7,7 @@
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
+#[cfg(test)]
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
@@ -17,6 +18,9 @@ use crate::tools::network_approval::NetworkApprovalSpec;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkApprovalContext;
+use codex_protocol::permissions::FileSystemSandboxKind;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use futures::Future;
@@ -88,7 +92,7 @@ where
 
     let decision = fetch().await;
 
-    services.otel_manager.counter(
+    services.session_telemetry.counter(
         "codex.approval.requested",
         1,
         &[
@@ -109,8 +113,8 @@ where
 
 #[derive(Clone)]
 pub(crate) struct ApprovalCtx<'a> {
-    pub session: &'a Session,
-    pub turn: &'a TurnContext,
+    pub session: &'a Arc<Session>,
+    pub turn: &'a Arc<TurnContext>,
     pub call_id: &'a str,
     pub retry_reason: Option<String>,
     pub network_approval_context: Option<NetworkApprovalContext>,
@@ -156,20 +160,22 @@ impl ExecApprovalRequirement {
 }
 
 /// - Never, OnFailure: do not ask
-/// - OnRequest: ask unless sandbox policy is DangerFullAccess
-/// - Reject: ask unless sandbox policy is DangerFullAccess, but auto-reject
+/// - OnRequest: ask unless filesystem access is unrestricted
+/// - Reject: ask unless filesystem access is unrestricted, but auto-reject
 ///   when `sandbox_approval` rejection is enabled.
 /// - UnlessTrusted: always ask
 pub(crate) fn default_exec_approval_requirement(
     policy: AskForApproval,
-    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
 ) -> ExecApprovalRequirement {
     let needs_approval = match policy {
         AskForApproval::Never | AskForApproval::OnFailure => false,
-        AskForApproval::OnRequest | AskForApproval::Reject(_) => !matches!(
-            sandbox_policy,
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-        ),
+        AskForApproval::OnRequest | AskForApproval::Reject(_) => {
+            matches!(
+                file_system_sandbox_policy.kind,
+                FileSystemSandboxKind::Restricted
+            )
+        }
         AskForApproval::UnlessTrusted => true,
     };
 
@@ -227,7 +233,7 @@ pub(crate) trait Approvable<Req> {
 
     // In most cases (shell, unified_exec), a request will have a single approval key.
     //
-    // However, apply_patch needs session "approve once, don't ask again" semantics that
+    // However, apply_patch needs session "Allow, don't ask again" semantics that
     // apply to multiple atomic targets (e.g., apply_patch approves per file path). Returning
     // a list of keys lets the runtime treat the request as approved-for-session only if
     // *all* keys are already approved, while still caching approvals per-key so future
@@ -318,11 +324,13 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
 pub(crate) struct SandboxAttempt<'a> {
     pub sandbox: crate::exec::SandboxType,
     pub policy: &'a crate::protocol::SandboxPolicy,
+    pub file_system_policy: &'a FileSystemSandboxPolicy,
+    pub network_policy: NetworkSandboxPolicy,
     pub enforce_managed_network: bool,
     pub(crate) manager: &'a SandboxManager,
     pub(crate) sandbox_cwd: &'a Path,
     pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
-    pub use_linux_sandbox_bwrap: bool,
+    pub use_legacy_landlock: bool,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
 }
 
@@ -336,6 +344,8 @@ impl<'a> SandboxAttempt<'a> {
             .transform(crate::sandboxing::SandboxTransformRequest {
                 spec,
                 policy: self.policy,
+                file_system_policy: self.file_system_policy,
+                network_policy: self.network_policy,
                 sandbox: self.sandbox,
                 enforce_managed_network: self.enforce_managed_network,
                 network,
@@ -343,100 +353,12 @@ impl<'a> SandboxAttempt<'a> {
                 #[cfg(target_os = "macos")]
                 macos_seatbelt_profile_extensions: None,
                 codex_linux_sandbox_exe: self.codex_linux_sandbox_exe,
-                use_linux_sandbox_bwrap: self.use_linux_sandbox_bwrap,
+                use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
             })
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::sandboxing::SandboxPermissions;
-    use codex_protocol::protocol::NetworkAccess;
-    use codex_protocol::protocol::RejectConfig;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn external_sandbox_skips_exec_approval_on_request() {
-        assert_eq!(
-            default_exec_approval_requirement(
-                AskForApproval::OnRequest,
-                &SandboxPolicy::ExternalSandbox {
-                    network_access: NetworkAccess::Restricted,
-                },
-            ),
-            ExecApprovalRequirement::Skip {
-                bypass_sandbox: false,
-                proposed_execpolicy_amendment: None,
-            }
-        );
-    }
-
-    #[test]
-    fn restricted_sandbox_requires_exec_approval_on_request() {
-        assert_eq!(
-            default_exec_approval_requirement(
-                AskForApproval::OnRequest,
-                &SandboxPolicy::new_read_only_policy()
-            ),
-            ExecApprovalRequirement::NeedsApproval {
-                reason: None,
-                proposed_execpolicy_amendment: None,
-            }
-        );
-    }
-
-    #[test]
-    fn default_exec_approval_requirement_rejects_sandbox_prompt_when_configured() {
-        let policy = AskForApproval::Reject(RejectConfig {
-            sandbox_approval: true,
-            rules: false,
-            mcp_elicitations: false,
-        });
-
-        let requirement =
-            default_exec_approval_requirement(policy, &SandboxPolicy::new_read_only_policy());
-
-        assert_eq!(
-            requirement,
-            ExecApprovalRequirement::Forbidden {
-                reason: "approval policy rejected sandbox approval prompt".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn default_exec_approval_requirement_keeps_prompt_when_sandbox_rejection_is_disabled() {
-        let policy = AskForApproval::Reject(RejectConfig {
-            sandbox_approval: false,
-            rules: true,
-            mcp_elicitations: true,
-        });
-
-        let requirement =
-            default_exec_approval_requirement(policy, &SandboxPolicy::new_read_only_policy());
-
-        assert_eq!(
-            requirement,
-            ExecApprovalRequirement::NeedsApproval {
-                reason: None,
-                proposed_execpolicy_amendment: None,
-            }
-        );
-    }
-
-    #[test]
-    fn additional_permissions_allow_bypass_sandbox_first_attempt_when_execpolicy_skips() {
-        assert_eq!(
-            sandbox_override_for_first_attempt(
-                SandboxPermissions::WithAdditionalPermissions,
-                &ExecApprovalRequirement::Skip {
-                    bypass_sandbox: true,
-                    proposed_execpolicy_amendment: None,
-                },
-            ),
-            SandboxOverride::BypassSandboxFirstAttempt
-        );
-    }
-}
+#[path = "sandboxing_tests.rs"]
+mod tests;

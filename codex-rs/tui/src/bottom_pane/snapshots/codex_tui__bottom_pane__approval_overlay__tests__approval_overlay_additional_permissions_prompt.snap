@@ -7,7 +7,7 @@ expression: "render_overlay_lines(&view, 120)"
 
   Reason: need filesystem access
 
-  Permission rule: read `/tmp/readme.txt`; write `/tmp/out.txt`
+  Permission rule: network; read `/tmp/readme.txt`; write `/tmp/out.txt`
 
   $ cat /tmp/readme.txt
 

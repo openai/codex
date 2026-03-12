@@ -21,6 +21,7 @@ use std::sync::Arc;
 pub struct NetworkProxySpec {
     config: NetworkProxyConfig,
     constraints: NetworkProxyConstraints,
+    hard_deny_allowlist_misses: bool,
 }
 
 pub struct StartedNetworkProxy {
@@ -83,9 +84,18 @@ impl NetworkProxySpec {
     pub(crate) fn from_config_and_constraints(
         config: NetworkProxyConfig,
         requirements: Option<NetworkConstraints>,
+        sandbox_policy: &SandboxPolicy,
     ) -> std::io::Result<Self> {
+        let hard_deny_allowlist_misses = requirements
+            .as_ref()
+            .is_some_and(Self::managed_allowed_domains_only);
         let (config, constraints) = if let Some(requirements) = requirements {
-            Self::apply_requirements(config, &requirements)
+            Self::apply_requirements(
+                config,
+                &requirements,
+                sandbox_policy,
+                hard_deny_allowlist_misses,
+            )
         } else {
             (config, NetworkProxyConstraints::default())
         };
@@ -98,6 +108,7 @@ impl NetworkProxySpec {
         Ok(Self {
             config,
             constraints,
+            hard_deny_allowlist_misses,
         })
     }
 
@@ -112,6 +123,7 @@ impl NetworkProxySpec {
         let state = self.build_state_with_audit_metadata(audit_metadata)?;
         let mut builder = NetworkProxy::builder().state(Arc::new(state));
         if enable_network_approval_flow
+            && !self.hard_deny_allowlist_misses
             && matches!(
                 sandbox_policy,
                 SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
@@ -158,8 +170,13 @@ impl NetworkProxySpec {
     fn apply_requirements(
         mut config: NetworkProxyConfig,
         requirements: &NetworkConstraints,
+        sandbox_policy: &SandboxPolicy,
+        hard_deny_allowlist_misses: bool,
     ) -> (NetworkProxyConfig, NetworkProxyConstraints) {
         let mut constraints = NetworkProxyConstraints::default();
+        let allowlist_expansion_enabled =
+            Self::allowlist_expansion_enabled(sandbox_policy, hard_deny_allowlist_misses);
+        let denylist_expansion_enabled = Self::denylist_expansion_enabled(sandbox_policy);
 
         if let Some(enabled) = requirements.enabled {
             config.network.enabled = enabled;
@@ -183,14 +200,6 @@ impl NetworkProxySpec {
             constraints.dangerously_allow_non_loopback_proxy =
                 Some(dangerously_allow_non_loopback_proxy);
         }
-        if let Some(dangerously_allow_non_loopback_admin) =
-            requirements.dangerously_allow_non_loopback_admin
-        {
-            config.network.dangerously_allow_non_loopback_admin =
-                dangerously_allow_non_loopback_admin;
-            constraints.dangerously_allow_non_loopback_admin =
-                Some(dangerously_allow_non_loopback_admin);
-        }
         if let Some(dangerously_allow_all_unix_sockets) =
             requirements.dangerously_allow_all_unix_sockets
         {
@@ -198,13 +207,31 @@ impl NetworkProxySpec {
             constraints.dangerously_allow_all_unix_sockets =
                 Some(dangerously_allow_all_unix_sockets);
         }
-        if let Some(allowed_domains) = requirements.allowed_domains.clone() {
-            config.network.allowed_domains = allowed_domains.clone();
+        let managed_allowed_domains = if hard_deny_allowlist_misses {
+            Some(requirements.allowed_domains.clone().unwrap_or_default())
+        } else {
+            requirements.allowed_domains.clone()
+        };
+        if let Some(allowed_domains) = managed_allowed_domains {
+            // Managed requirements seed the baseline allowlist. User additions
+            // can extend that baseline unless managed-only mode pins the
+            // effective allowlist to the managed set.
+            config.network.allowed_domains = if allowlist_expansion_enabled {
+                Self::merge_domain_lists(allowed_domains.clone(), &config.network.allowed_domains)
+            } else {
+                allowed_domains.clone()
+            };
             constraints.allowed_domains = Some(allowed_domains);
+            constraints.allowlist_expansion_enabled = Some(allowlist_expansion_enabled);
         }
         if let Some(denied_domains) = requirements.denied_domains.clone() {
-            config.network.denied_domains = denied_domains.clone();
+            config.network.denied_domains = if denylist_expansion_enabled {
+                Self::merge_domain_lists(denied_domains.clone(), &config.network.denied_domains)
+            } else {
+                denied_domains.clone()
+            };
             constraints.denied_domains = Some(denied_domains);
+            constraints.denylist_expansion_enabled = Some(denylist_expansion_enabled);
         }
         if let Some(allow_unix_sockets) = requirements.allow_unix_sockets.clone() {
             config.network.allow_unix_sockets = allow_unix_sockets.clone();
@@ -217,29 +244,41 @@ impl NetworkProxySpec {
 
         (config, constraints)
     }
+
+    fn allowlist_expansion_enabled(
+        sandbox_policy: &SandboxPolicy,
+        hard_deny_allowlist_misses: bool,
+    ) -> bool {
+        matches!(
+            sandbox_policy,
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+        ) && !hard_deny_allowlist_misses
+    }
+
+    fn managed_allowed_domains_only(requirements: &NetworkConstraints) -> bool {
+        requirements.managed_allowed_domains_only.unwrap_or(false)
+    }
+
+    fn denylist_expansion_enabled(sandbox_policy: &SandboxPolicy) -> bool {
+        matches!(
+            sandbox_policy,
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+        )
+    }
+
+    fn merge_domain_lists(mut managed: Vec<String>, user_entries: &[String]) -> Vec<String> {
+        for entry in user_entries {
+            if !managed
+                .iter()
+                .any(|managed_entry| managed_entry.eq_ignore_ascii_case(entry))
+            {
+                managed.push(entry.clone());
+            }
+        }
+        managed
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn build_state_with_audit_metadata_threads_metadata_to_state() {
-        let spec = NetworkProxySpec {
-            config: NetworkProxyConfig::default(),
-            constraints: NetworkProxyConstraints::default(),
-        };
-        let metadata = NetworkProxyAuditMetadata {
-            conversation_id: Some("conversation-1".to_string()),
-            app_version: Some("1.2.3".to_string()),
-            user_account_id: Some("acct-1".to_string()),
-            ..NetworkProxyAuditMetadata::default()
-        };
-
-        let state = spec
-            .build_state_with_audit_metadata(metadata.clone())
-            .expect("state should build");
-        assert_eq!(state.audit_metadata(), &metadata);
-    }
-}
+#[path = "network_proxy_spec_tests.rs"]
+mod tests;

@@ -7,6 +7,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use chrono::SecondsFormat;
+use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
@@ -255,7 +256,7 @@ impl RolloutRecorder {
             .await?
         };
 
-        let state_db_ctx = state_db::get_state_db(config, None).await;
+        let state_db_ctx = state_db::get_state_db(config).await;
         if state_db_ctx.is_none() {
             // Keep legacy behavior when SQLite is unavailable: return filesystem results
             // at the requested page size.
@@ -290,7 +291,7 @@ impl RolloutRecorder {
         }
         // If SQLite listing still fails, return the filesystem page rather than failing the list.
         tracing::error!("Falling back on rollout system");
-        state_db::record_discrepancy("list_threads_with_db_fallback", "falling_back");
+        tracing::warn!("state db discrepancy during list_threads_with_db_fallback: falling_back");
         Ok(truncate_fs_page(fs_page, page_size, sort_key))
     }
 
@@ -307,7 +308,7 @@ impl RolloutRecorder {
         filter_cwd: Option<&Path>,
     ) -> std::io::Result<Option<PathBuf>> {
         let codex_home = config.codex_home.as_path();
-        let state_db_ctx = state_db::get_state_db(config, None).await;
+        let state_db_ctx = state_db::get_state_db(config).await;
         if state_db_ctx.is_some() {
             let mut db_cursor = cursor.cloned();
             loop {
@@ -448,7 +449,6 @@ impl RolloutRecorder {
         // future will yield, which is fine – we only need to ensure we do not
         // perform *blocking* I/O on the caller's thread.
         let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
-
         // Spawn a Tokio task that owns the file handle and performs async
         // writes. Using `tokio::fs::File` keeps everything on the async I/O
         // driver instead of blocking the runtime.
@@ -614,14 +614,15 @@ impl RolloutRecorder {
         match self.tx.send(RolloutCmd::Shutdown { ack: tx_done }).await {
             Ok(_) => rx_done
                 .await
-                .map_err(|e| IoError::other(format!("failed waiting for rollout shutdown: {e}"))),
+                .map_err(|e| IoError::other(format!("failed waiting for rollout shutdown: {e}")))?,
             Err(e) => {
                 warn!("failed to send rollout shutdown command: {e}");
-                Err(IoError::other(format!(
+                return Err(IoError::other(format!(
                     "failed to send rollout shutdown command: {e}"
-                )))
+                )));
             }
-        }
+        };
+        Ok(())
     }
 }
 
@@ -744,25 +745,21 @@ async fn rollout_writer(
     while let Some(cmd) = rx.recv().await {
         match cmd {
             RolloutCmd::AddItems(items) => {
-                let mut persisted_items = Vec::new();
-                for item in items {
-                    persisted_items.push(item);
-                }
-                if persisted_items.is_empty() {
+                if items.is_empty() {
                     continue;
                 }
 
                 if writer.is_none() {
-                    buffered_items.extend(persisted_items);
+                    buffered_items.extend(items);
                     continue;
                 }
 
                 write_and_reconcile_items(
                     writer.as_mut(),
-                    persisted_items.as_slice(),
+                    items.as_slice(),
                     &rollout_path,
                     state_db_ctx.as_deref(),
-                    &mut state_builder,
+                    state_builder.as_ref(),
                     default_provider.as_str(),
                 )
                 .await?;
@@ -800,7 +797,7 @@ async fn rollout_writer(
                                 buffered_items.as_slice(),
                                 &rollout_path,
                                 state_db_ctx.as_deref(),
-                                &mut state_builder,
+                                state_builder.as_ref(),
                                 default_provider.as_str(),
                             )
                             .await?;
@@ -861,13 +858,12 @@ async fn write_session_meta(
     if let Some(writer) = writer.as_mut() {
         writer.write_rollout_item(&rollout_item).await?;
     }
-    state_db::reconcile_rollout(
+    sync_thread_state_after_write(
         state_db_ctx,
         rollout_path,
-        default_provider,
         state_builder.as_ref(),
         std::slice::from_ref(&rollout_item),
-        None,
+        default_provider,
         (!generate_memories).then_some("disabled"),
     )
     .await;
@@ -879,7 +875,7 @@ async fn write_and_reconcile_items(
     items: &[RolloutItem],
     rollout_path: &Path,
     state_db_ctx: Option<&StateRuntime>,
-    state_builder: &mut Option<ThreadMetadataBuilder>,
+    state_builder: Option<&ThreadMetadataBuilder>,
     default_provider: &str,
 ) -> std::io::Result<()> {
     if let Some(writer) = writer.as_mut() {
@@ -887,20 +883,65 @@ async fn write_and_reconcile_items(
             writer.write_rollout_item(item).await?;
         }
     }
-    if let Some(builder) = state_builder.as_mut() {
-        builder.rollout_path = rollout_path.to_path_buf();
+    sync_thread_state_after_write(
+        state_db_ctx,
+        rollout_path,
+        state_builder,
+        items,
+        default_provider,
+        None,
+    )
+    .await;
+    Ok(())
+}
+
+async fn sync_thread_state_after_write(
+    state_db_ctx: Option<&StateRuntime>,
+    rollout_path: &Path,
+    state_builder: Option<&ThreadMetadataBuilder>,
+    items: &[RolloutItem],
+    default_provider: &str,
+    new_thread_memory_mode: Option<&str>,
+) {
+    let updated_at = Utc::now();
+    if new_thread_memory_mode.is_some()
+        || items
+            .iter()
+            .any(codex_state::rollout_item_affects_thread_metadata)
+    {
+        state_db::apply_rollout_items(
+            state_db_ctx,
+            rollout_path,
+            default_provider,
+            state_builder,
+            items,
+            "rollout_writer",
+            new_thread_memory_mode,
+            Some(updated_at),
+        )
+        .await;
+        return;
+    }
+
+    let thread_id = state_builder
+        .map(|builder| builder.id)
+        .or_else(|| metadata::builder_from_items(items, rollout_path).map(|builder| builder.id));
+    if state_db::touch_thread_updated_at(state_db_ctx, thread_id, updated_at, "rollout_writer")
+        .await
+    {
+        return;
     }
     state_db::apply_rollout_items(
         state_db_ctx,
         rollout_path,
         default_provider,
-        state_builder.as_ref(),
+        state_builder,
         items,
         "rollout_writer",
-        None,
+        new_thread_memory_mode,
+        Some(updated_at),
     )
     .await;
-    Ok(())
 }
 
 struct JsonlWriter {
@@ -1020,7 +1061,7 @@ async fn resume_candidate_matches_cwd(
         return cwd_matches(latest_turn_context_cwd, cwd);
     }
 
-    metadata::extract_metadata_from_rollout(rollout_path, default_provider, None)
+    metadata::extract_metadata_from_rollout(rollout_path, default_provider)
         .await
         .is_ok_and(|outcome| cwd_matches(outcome.metadata.cwd.as_path(), cwd))
 }
@@ -1061,369 +1102,5 @@ fn cwd_matches(session_cwd: &Path, cwd: &Path) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::ConfigBuilder;
-    use crate::features::Feature;
-    use chrono::TimeZone;
-    use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-    use codex_protocol::protocol::AgentMessageEvent;
-    use codex_protocol::protocol::AskForApproval;
-    use codex_protocol::protocol::EventMsg;
-    use codex_protocol::protocol::SandboxPolicy;
-    use codex_protocol::protocol::TurnContextItem;
-    use codex_protocol::protocol::UserMessageEvent;
-    use pretty_assertions::assert_eq;
-    use std::fs::File;
-    use std::fs::{self};
-    use std::io::Write;
-    use std::path::Path;
-    use std::path::PathBuf;
-    use tempfile::TempDir;
-    use uuid::Uuid;
-
-    fn write_session_file(root: &Path, ts: &str, uuid: Uuid) -> std::io::Result<PathBuf> {
-        let day_dir = root.join("sessions/2025/01/03");
-        fs::create_dir_all(&day_dir)?;
-        let path = day_dir.join(format!("rollout-{ts}-{uuid}.jsonl"));
-        let mut file = File::create(&path)?;
-        let meta = serde_json::json!({
-            "timestamp": ts,
-            "type": "session_meta",
-            "payload": {
-                "id": uuid,
-                "timestamp": ts,
-                "cwd": ".",
-                "originator": "test_originator",
-                "cli_version": "test_version",
-                "source": "cli",
-                "model_provider": "test-provider",
-            },
-        });
-        writeln!(file, "{meta}")?;
-        let user_event = serde_json::json!({
-            "timestamp": ts,
-            "type": "event_msg",
-            "payload": {
-                "type": "user_message",
-                "message": "Hello from user",
-                "kind": "plain",
-            },
-        });
-        writeln!(file, "{user_event}")?;
-        Ok(path)
-    }
-
-    #[tokio::test]
-    async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<()> {
-        let home = TempDir::new().expect("temp dir");
-        let config = ConfigBuilder::default()
-            .codex_home(home.path().to_path_buf())
-            .build()
-            .await?;
-        let thread_id = ThreadId::new();
-        let recorder = RolloutRecorder::new(
-            &config,
-            RolloutRecorderParams::new(
-                thread_id,
-                None,
-                SessionSource::Exec,
-                BaseInstructions::default(),
-                Vec::new(),
-                EventPersistenceMode::Limited,
-            ),
-            None,
-            None,
-        )
-        .await?;
-
-        let rollout_path = recorder.rollout_path().to_path_buf();
-        assert!(
-            !rollout_path.exists(),
-            "rollout file should not exist before first user message"
-        );
-
-        recorder
-            .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
-                AgentMessageEvent {
-                    message: "buffered-event".to_string(),
-                    phase: None,
-                },
-            ))])
-            .await?;
-        recorder.flush().await?;
-        assert!(
-            !rollout_path.exists(),
-            "rollout file should remain deferred before first user message"
-        );
-
-        recorder
-            .record_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
-                UserMessageEvent {
-                    message: "first-user-message".to_string(),
-                    images: None,
-                    local_images: Vec::new(),
-                    text_elements: Vec::new(),
-                },
-            ))])
-            .await?;
-        recorder.flush().await?;
-        assert!(
-            !rollout_path.exists(),
-            "user-message-like items should not materialize without explicit persist"
-        );
-
-        recorder.persist().await?;
-        // Second call verifies `persist()` is idempotent after materialization.
-        recorder.persist().await?;
-        assert!(rollout_path.exists(), "rollout file should be materialized");
-
-        let text = std::fs::read_to_string(&rollout_path)?;
-        assert!(
-            text.contains("\"type\":\"session_meta\""),
-            "expected session metadata in rollout"
-        );
-        let buffered_idx = text
-            .find("buffered-event")
-            .expect("buffered event in rollout");
-        let user_idx = text
-            .find("first-user-message")
-            .expect("first user message in rollout");
-        assert!(
-            buffered_idx < user_idx,
-            "buffered items should preserve ordering"
-        );
-        let text_after_second_persist = std::fs::read_to_string(&rollout_path)?;
-        assert_eq!(text_after_second_persist, text);
-
-        recorder.shutdown().await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn list_threads_db_disabled_does_not_skip_paginated_items() -> std::io::Result<()> {
-        let home = TempDir::new().expect("temp dir");
-        let mut config = ConfigBuilder::default()
-            .codex_home(home.path().to_path_buf())
-            .build()
-            .await?;
-        config.features.disable(Feature::Sqlite);
-
-        let newest = write_session_file(home.path(), "2025-01-03T12-00-00", Uuid::from_u128(9001))?;
-        let middle = write_session_file(home.path(), "2025-01-02T12-00-00", Uuid::from_u128(9002))?;
-        let _oldest =
-            write_session_file(home.path(), "2025-01-01T12-00-00", Uuid::from_u128(9003))?;
-
-        let default_provider = config.model_provider_id.clone();
-        let page1 = RolloutRecorder::list_threads(
-            &config,
-            1,
-            None,
-            ThreadSortKey::CreatedAt,
-            &[],
-            None,
-            default_provider.as_str(),
-            None,
-        )
-        .await?;
-        assert_eq!(page1.items.len(), 1);
-        assert_eq!(page1.items[0].path, newest);
-        let cursor = page1.next_cursor.clone().expect("cursor should be present");
-
-        let page2 = RolloutRecorder::list_threads(
-            &config,
-            1,
-            Some(&cursor),
-            ThreadSortKey::CreatedAt,
-            &[],
-            None,
-            default_provider.as_str(),
-            None,
-        )
-        .await?;
-        assert_eq!(page2.items.len(), 1);
-        assert_eq!(page2.items[0].path, middle);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn list_threads_db_enabled_drops_missing_rollout_paths() -> std::io::Result<()> {
-        let home = TempDir::new().expect("temp dir");
-        let mut config = ConfigBuilder::default()
-            .codex_home(home.path().to_path_buf())
-            .build()
-            .await?;
-        config.features.enable(Feature::Sqlite);
-
-        let uuid = Uuid::from_u128(9010);
-        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
-        let stale_path = home.path().join(format!(
-            "sessions/2099/01/01/rollout-2099-01-01T00-00-00-{uuid}.jsonl"
-        ));
-
-        let runtime = codex_state::StateRuntime::init(
-            home.path().to_path_buf(),
-            config.model_provider_id.clone(),
-            None,
-        )
-        .await
-        .expect("state db should initialize");
-        runtime
-            .mark_backfill_complete(None)
-            .await
-            .expect("backfill should be complete");
-        let created_at = chrono::Utc
-            .with_ymd_and_hms(2025, 1, 3, 13, 0, 0)
-            .single()
-            .expect("valid datetime");
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
-            thread_id,
-            stale_path,
-            created_at,
-            SessionSource::Cli,
-        );
-        builder.model_provider = Some(config.model_provider_id.clone());
-        builder.cwd = home.path().to_path_buf();
-        let mut metadata = builder.build(config.model_provider_id.as_str());
-        metadata.first_user_message = Some("Hello from user".to_string());
-        runtime
-            .upsert_thread(&metadata)
-            .await
-            .expect("state db upsert should succeed");
-
-        let default_provider = config.model_provider_id.clone();
-        let page = RolloutRecorder::list_threads(
-            &config,
-            10,
-            None,
-            ThreadSortKey::CreatedAt,
-            &[],
-            None,
-            default_provider.as_str(),
-            None,
-        )
-        .await?;
-        assert_eq!(page.items.len(), 0);
-        let stored_path = runtime
-            .find_rollout_path_by_id(thread_id, Some(false))
-            .await
-            .expect("state db lookup should succeed");
-        assert_eq!(stored_path, None);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn list_threads_db_enabled_repairs_stale_rollout_paths() -> std::io::Result<()> {
-        let home = TempDir::new().expect("temp dir");
-        let mut config = ConfigBuilder::default()
-            .codex_home(home.path().to_path_buf())
-            .build()
-            .await?;
-        config.features.enable(Feature::Sqlite);
-
-        let uuid = Uuid::from_u128(9011);
-        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
-        let real_path = write_session_file(home.path(), "2025-01-03T13-00-00", uuid)?;
-        let stale_path = home.path().join(format!(
-            "sessions/2099/01/01/rollout-2099-01-01T00-00-00-{uuid}.jsonl"
-        ));
-
-        let runtime = codex_state::StateRuntime::init(
-            home.path().to_path_buf(),
-            config.model_provider_id.clone(),
-            None,
-        )
-        .await
-        .expect("state db should initialize");
-        runtime
-            .mark_backfill_complete(None)
-            .await
-            .expect("backfill should be complete");
-        let created_at = chrono::Utc
-            .with_ymd_and_hms(2025, 1, 3, 13, 0, 0)
-            .single()
-            .expect("valid datetime");
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
-            thread_id,
-            stale_path,
-            created_at,
-            SessionSource::Cli,
-        );
-        builder.model_provider = Some(config.model_provider_id.clone());
-        builder.cwd = home.path().to_path_buf();
-        let mut metadata = builder.build(config.model_provider_id.as_str());
-        metadata.first_user_message = Some("Hello from user".to_string());
-        runtime
-            .upsert_thread(&metadata)
-            .await
-            .expect("state db upsert should succeed");
-
-        let default_provider = config.model_provider_id.clone();
-        let page = RolloutRecorder::list_threads(
-            &config,
-            1,
-            None,
-            ThreadSortKey::CreatedAt,
-            &[],
-            None,
-            default_provider.as_str(),
-            None,
-        )
-        .await?;
-        assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].path, real_path);
-
-        let repaired_path = runtime
-            .find_rollout_path_by_id(thread_id, Some(false))
-            .await
-            .expect("state db lookup should succeed");
-        assert_eq!(repaired_path, Some(real_path));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Result<()> {
-        let home = TempDir::new().expect("temp dir");
-        let stale_cwd = home.path().join("stale");
-        let latest_cwd = home.path().join("latest");
-        fs::create_dir_all(&stale_cwd)?;
-        fs::create_dir_all(&latest_cwd)?;
-
-        let path = write_session_file(home.path(), "2025-01-03T13-00-00", Uuid::from_u128(9012))?;
-        let mut file = std::fs::OpenOptions::new().append(true).open(&path)?;
-        let turn_context = RolloutLine {
-            timestamp: "2025-01-03T13:00:01Z".to_string(),
-            item: RolloutItem::TurnContext(TurnContextItem {
-                turn_id: Some("turn-1".to_string()),
-                cwd: latest_cwd.clone(),
-                current_date: None,
-                timezone: None,
-                approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                network: None,
-                model: "test-model".to_string(),
-                personality: None,
-                collaboration_mode: None,
-                realtime_active: None,
-                effort: None,
-                summary: ReasoningSummaryConfig::Auto,
-                user_instructions: None,
-                developer_instructions: None,
-                final_output_json_schema: None,
-                truncation_policy: None,
-            }),
-        };
-        writeln!(file, "{}", serde_json::to_string(&turn_context)?)?;
-
-        assert!(
-            resume_candidate_matches_cwd(
-                path.as_path(),
-                Some(stale_cwd.as_path()),
-                latest_cwd.as_path(),
-                "test-provider",
-            )
-            .await
-        );
-        Ok(())
-    }
-}
+#[path = "recorder_tests.rs"]
+mod tests;

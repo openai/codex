@@ -71,12 +71,19 @@ async fn run_codex_cli(
         cwd.as_ref(),
         &env,
         &None,
+        codex_utils_pty::TerminalSize::default(),
     )
     .await?;
     let mut output = Vec::new();
-    let mut output_rx = spawned.output_rx;
-    let mut exit_rx = spawned.exit_rx;
-    let writer_tx = spawned.session.writer_sender();
+    let codex_utils_pty::SpawnedProcess {
+        session,
+        stdout_rx,
+        stderr_rx,
+        exit_rx,
+    } = spawned;
+    let mut output_rx = codex_utils_pty::combine_output_receivers(stdout_rx, stderr_rx);
+    let mut exit_rx = exit_rx;
+    let writer_tx = session.writer_sender();
     let exit_code_result = timeout(Duration::from_secs(10), async {
         // Read PTY output until the process exits while replying to cursor
         // position queries so the TUI can initialize without a real terminal.
@@ -103,7 +110,7 @@ async fn run_codex_cli(
         Ok(Ok(code)) => code,
         Ok(Err(err)) => return Err(err.into()),
         Err(_) => {
-            spawned.session.terminate();
+            session.terminate();
             anyhow::bail!("timed out waiting for codex CLI to exit");
         }
     };

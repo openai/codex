@@ -11,6 +11,7 @@ windows_modules!(
     cap,
     dpapi,
     env,
+    helper_materialization,
     hide_users,
     identity,
     logging,
@@ -59,6 +60,8 @@ pub use dpapi::unprotect as dpapi_unprotect;
 #[cfg(target_os = "windows")]
 pub use elevated_impl::run_windows_sandbox_capture as run_windows_sandbox_capture_elevated;
 #[cfg(target_os = "windows")]
+pub use helper_materialization::resolve_current_exe_for_launch;
+#[cfg(target_os = "windows")]
 pub use hide_users::hide_current_user_profile_dir;
 #[cfg(target_os = "windows")]
 pub use hide_users::hide_newly_created_users;
@@ -84,6 +87,8 @@ pub use setup::run_elevated_setup;
 pub use setup::run_setup_refresh;
 #[cfg(target_os = "windows")]
 pub use setup::run_setup_refresh_with_extra_read_roots;
+#[cfg(target_os = "windows")]
+pub use setup::sandbox_bin_dir;
 #[cfg(target_os = "windows")]
 pub use setup::sandbox_dir;
 #[cfg(target_os = "windows")]

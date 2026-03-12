@@ -1203,7 +1203,9 @@ async fn find_thread_path_by_id_str_in_subdir(
             "state db returned stale rollout path for thread {id_str}: {}",
             db_path.display()
         );
-        state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "stale_db_path");
+        tracing::warn!(
+            "state db discrepancy during find_thread_path_by_id_str_in_subdir: stale_db_path"
+        );
     }
 
     let mut root = codex_home.to_path_buf();
@@ -1227,7 +1229,9 @@ async fn find_thread_path_by_id_str_in_subdir(
     let found = results.matches.into_iter().next().map(|m| m.full_path());
     if let Some(found_path) = found.as_ref() {
         tracing::debug!("state db missing rollout path for thread {id_str}");
-        state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "falling_back");
+        tracing::warn!(
+            "state db discrepancy during find_thread_path_by_id_str_in_subdir: falling_back"
+        );
         state_db::read_repair_rollout_path(
             state_db_ctx.as_deref(),
             thread_id,

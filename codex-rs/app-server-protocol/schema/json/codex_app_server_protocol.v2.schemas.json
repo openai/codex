@@ -114,30 +114,6 @@
       "title": "AccountUpdatedNotification",
       "type": "object"
     },
-    "AgentMessageContent": {
-      "oneOf": [
-        {
-          "properties": {
-            "text": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "Text"
-              ],
-              "title": "TextAgentMessageContentType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "text",
-            "type"
-          ],
-          "title": "TextAgentMessageContent",
-          "type": "object"
-        }
-      ]
-    },
     "AgentMessageDeltaNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -162,70 +138,6 @@
       ],
       "title": "AgentMessageDeltaNotification",
       "type": "object"
-    },
-    "AgentStatus": {
-      "description": "Agent lifecycle status, derived from emitted events.",
-      "oneOf": [
-        {
-          "description": "Agent is waiting for initialization.",
-          "enum": [
-            "pending_init"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Agent is currently running.",
-          "enum": [
-            "running"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Agent is done. Contains the final assistant message.",
-          "properties": {
-            "completed": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "completed"
-          ],
-          "title": "CompletedAgentStatus",
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Agent encountered an error.",
-          "properties": {
-            "errored": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "errored"
-          ],
-          "title": "ErroredAgentStatus",
-          "type": "object"
-        },
-        {
-          "description": "Agent has been shutdown.",
-          "enum": [
-            "shutdown"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Agent is not found.",
-          "enum": [
-            "not_found"
-          ],
-          "type": "string"
-        }
-      ]
     },
     "AnalyticsConfig": {
       "additionalProperties": true,
@@ -404,6 +316,13 @@
         },
         "name": {
           "type": "string"
+        },
+        "pluginDisplayNames": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -553,6 +472,34 @@
       ],
       "type": "object"
     },
+    "AppSummary": {
+      "description": "EXPERIMENTAL - app metadata summary for plugin-install responses.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "installUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "type": "object"
+    },
     "AppToolApproval": {
       "enum": [
         "auto",
@@ -696,10 +643,18 @@
                 "mcp_elicitations": {
                   "type": "boolean"
                 },
+                "request_permissions": {
+                  "default": false,
+                  "type": "boolean"
+                },
                 "rules": {
                   "type": "boolean"
                 },
                 "sandbox_approval": {
+                  "type": "boolean"
+                },
+                "skill_approval": {
+                  "default": false,
                   "type": "boolean"
                 }
               },
@@ -761,27 +716,6 @@
       "required": [
         "end",
         "start"
-      ],
-      "type": "object"
-    },
-    "CallToolResult": {
-      "description": "The server's response to a tool call.",
-      "properties": {
-        "_meta": true,
-        "content": {
-          "items": true,
-          "type": "array"
-        },
-        "isError": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "structuredContent": true
-      },
-      "required": [
-        "content"
       ],
       "type": "object"
     },
@@ -1019,6 +953,30 @@
             },
             "method": {
               "enum": [
+                "thread/metadata/update"
+              ],
+              "title": "Thread/metadata/updateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadMetadataUpdateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/metadata/updateRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/unarchive"
               ],
               "title": "Thread/unarchiveRequestMethod",
@@ -1187,6 +1145,30 @@
             },
             "method": {
               "enum": [
+                "plugin/list"
+              ],
+              "title": "Plugin/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PluginListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "skills/remote/list"
               ],
               "title": "Skills/remote/listRequestMethod",
@@ -1274,6 +1256,54 @@
             "params"
           ],
           "title": "Skills/config/writeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "plugin/install"
+              ],
+              "title": "Plugin/installRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PluginInstallParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/installRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "plugin/uninstall"
+              ],
+              "title": "Plugin/uninstallRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PluginUninstallParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/uninstallRequest",
           "type": "object"
         },
         {
@@ -1634,7 +1664,7 @@
           "type": "object"
         },
         {
-          "description": "Execute a command (argv vector) under the server's sandbox.",
+          "description": "Execute a standalone command (argv vector) under the server's sandbox.",
           "properties": {
             "id": {
               "$ref": "#/definitions/RequestId"
@@ -1656,6 +1686,81 @@
             "params"
           ],
           "title": "Command/execRequest",
+          "type": "object"
+        },
+        {
+          "description": "Write stdin bytes to a running `command/exec` session or close stdin.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "command/exec/write"
+              ],
+              "title": "Command/exec/writeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CommandExecWriteParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Command/exec/writeRequest",
+          "type": "object"
+        },
+        {
+          "description": "Terminate a running `command/exec` session by client-supplied `processId`.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "command/exec/terminate"
+              ],
+              "title": "Command/exec/terminateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CommandExecTerminateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Command/exec/terminateRequest",
+          "type": "object"
+        },
+        {
+          "description": "Resize a running PTY-backed `command/exec` session by client-supplied `processId`.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "command/exec/resize"
+              ],
+              "title": "Command/exec/resizeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CommandExecResizeParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Command/exec/resizeRequest",
           "type": "object"
         },
         {
@@ -1966,36 +2071,6 @@
         }
       ]
     },
-    "CollabAgentRef": {
-      "properties": {
-        "agent_nickname": {
-          "description": "Optional nickname assigned to an AgentControl-spawned sub-agent.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "agent_role": {
-          "description": "Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "thread_id": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ThreadId"
-            }
-          ],
-          "description": "Thread ID of the receiver/new agent."
-        }
-      },
-      "required": [
-        "thread_id"
-      ],
-      "type": "object"
-    },
     "CollabAgentState": {
       "properties": {
         "message": {
@@ -2023,45 +2098,6 @@
         "notFound"
       ],
       "type": "string"
-    },
-    "CollabAgentStatusEntry": {
-      "properties": {
-        "agent_nickname": {
-          "description": "Optional nickname assigned to an AgentControl-spawned sub-agent.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "agent_role": {
-          "description": "Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "status": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/AgentStatus"
-            }
-          ],
-          "description": "Last known status of the agent."
-        },
-        "thread_id": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ThreadId"
-            }
-          ],
-          "description": "Thread ID of the receiver/new agent."
-        }
-      },
-      "required": [
-        "status",
-        "thread_id"
-      ],
-      "type": "object"
     },
     "CollabAgentTool": {
       "enum": [
@@ -2252,16 +2288,109 @@
         }
       ]
     },
+    "CommandExecOutputDeltaNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Base64-encoded output chunk emitted for a streaming `command/exec` request.\n\nThese notifications are connection-scoped. If the originating connection closes, the server terminates the process.",
+      "properties": {
+        "capReached": {
+          "description": "`true` on the final streamed chunk for a stream when `outputBytesCap` truncated later output on that stream.",
+          "type": "boolean"
+        },
+        "deltaBase64": {
+          "description": "Base64-encoded output bytes.",
+          "type": "string"
+        },
+        "processId": {
+          "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+          "type": "string"
+        },
+        "stream": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/CommandExecOutputStream"
+            }
+          ],
+          "description": "Output stream for this chunk."
+        }
+      },
+      "required": [
+        "capReached",
+        "deltaBase64",
+        "processId",
+        "stream"
+      ],
+      "title": "CommandExecOutputDeltaNotification",
+      "type": "object"
+    },
+    "CommandExecOutputStream": {
+      "description": "Stream label for `command/exec/outputDelta` notifications.",
+      "oneOf": [
+        {
+          "description": "stdout stream. PTY mode multiplexes terminal output here.",
+          "enum": [
+            "stdout"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "stderr stream.",
+          "enum": [
+            "stderr"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "CommandExecParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Run a standalone command (argv vector) in the server sandbox without creating a thread or turn.\n\nThe final `command/exec` response is deferred until the process exits and is sent only after all `command/exec/outputDelta` notifications for that connection have been emitted.",
       "properties": {
         "command": {
+          "description": "Command argv vector. Empty arrays are rejected.",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "cwd": {
+          "description": "Optional working directory. Defaults to the server cwd.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disableOutputCap": {
+          "description": "Disable stdout/stderr capture truncation for this request.\n\nCannot be combined with `outputBytesCap`.",
+          "type": "boolean"
+        },
+        "disableTimeout": {
+          "description": "Disable the timeout entirely for this request.\n\nCannot be combined with `timeoutMs`.",
+          "type": "boolean"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": "Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "outputBytesCap": {
+          "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with `disableOutputCap`.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "processId": {
+          "description": "Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
           "type": [
             "string",
             "null"
@@ -2275,14 +2404,39 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted."
+        },
+        "size": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CommandExecTerminalSize"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional initial PTY size in character cells. Only valid when `tty` is true."
+        },
+        "streamStdin": {
+          "description": "Allow follow-up `command/exec/write` requests to write stdin bytes.\n\nRequires a client-supplied `processId`.",
+          "type": "boolean"
+        },
+        "streamStdoutStderr": {
+          "description": "Stream stdout/stderr via `command/exec/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the final response and require a client-supplied `processId`.",
+          "type": "boolean"
         },
         "timeoutMs": {
+          "description": "Optional timeout in milliseconds.\n\nWhen omitted, the server default applies. Cannot be combined with `disableTimeout`.",
           "format": "int64",
           "type": [
             "integer",
             "null"
           ]
+        },
+        "tty": {
+          "description": "Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -2291,17 +2445,51 @@
       "title": "CommandExecParams",
       "type": "object"
     },
+    "CommandExecResizeParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Resize a running PTY-backed `command/exec` session.",
+      "properties": {
+        "processId": {
+          "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+          "type": "string"
+        },
+        "size": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/CommandExecTerminalSize"
+            }
+          ],
+          "description": "New PTY size in character cells."
+        }
+      },
+      "required": [
+        "processId",
+        "size"
+      ],
+      "title": "CommandExecResizeParams",
+      "type": "object"
+    },
+    "CommandExecResizeResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Empty success response for `command/exec/resize`.",
+      "title": "CommandExecResizeResponse",
+      "type": "object"
+    },
     "CommandExecResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Final buffered result for `command/exec`.",
       "properties": {
         "exitCode": {
+          "description": "Process exit code.",
           "format": "int32",
           "type": "integer"
         },
         "stderr": {
+          "description": "Buffered stderr capture.\n\nEmpty when stderr was streamed via `command/exec/outputDelta`.",
           "type": "string"
         },
         "stdout": {
+          "description": "Buffered stdout capture.\n\nEmpty when stdout was streamed via `command/exec/outputDelta`.",
           "type": "string"
         }
       },
@@ -2311,6 +2499,81 @@
         "stdout"
       ],
       "title": "CommandExecResponse",
+      "type": "object"
+    },
+    "CommandExecTerminalSize": {
+      "description": "PTY size in character cells for `command/exec` PTY sessions.",
+      "properties": {
+        "cols": {
+          "description": "Terminal width in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "rows": {
+          "description": "Terminal height in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "type": "object"
+    },
+    "CommandExecTerminateParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Terminate a running `command/exec` session.",
+      "properties": {
+        "processId": {
+          "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "processId"
+      ],
+      "title": "CommandExecTerminateParams",
+      "type": "object"
+    },
+    "CommandExecTerminateResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Empty success response for `command/exec/terminate`.",
+      "title": "CommandExecTerminateResponse",
+      "type": "object"
+    },
+    "CommandExecWriteParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Write stdin bytes to a running `command/exec` session, close stdin, or both.",
+      "properties": {
+        "closeStdin": {
+          "description": "Close stdin after writing `deltaBase64`, if present.",
+          "type": "boolean"
+        },
+        "deltaBase64": {
+          "description": "Optional base64-encoded stdin bytes to write.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "processId": {
+          "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "processId"
+      ],
+      "title": "CommandExecWriteParams",
+      "type": "object"
+    },
+    "CommandExecWriteResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Empty success response for `command/exec/write`.",
+      "title": "CommandExecWriteResponse",
       "type": "object"
     },
     "CommandExecutionOutputDeltaNotification": {
@@ -2553,6 +2816,10 @@
             "string",
             "null"
           ]
+        },
+        "reloadUserConfig": {
+          "description": "When true, hot-reload the updated user config into all loaded threads after writing.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -2857,6 +3124,15 @@
               "type": "null"
             }
           ]
+        },
+        "featureRequirements": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -3089,37 +3365,6 @@
       ],
       "type": "object"
     },
-    "CustomPrompt": {
-      "properties": {
-        "argument_hint": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "content": {
-          "type": "string"
-        },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "content",
-        "name",
-        "path"
-      ],
-      "type": "object"
-    },
     "DeprecationNoticeNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -3139,25 +3384,6 @@
         "summary"
       ],
       "title": "DeprecationNoticeNotification",
-      "type": "object"
-    },
-    "Duration": {
-      "properties": {
-        "nanos": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "secs": {
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "nanos",
-        "secs"
-      ],
       "type": "object"
     },
     "DynamicToolCallOutputContentItem": {
@@ -3253,2811 +3479,6 @@
       ],
       "title": "ErrorNotification",
       "type": "object"
-    },
-    "EventMsg": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",
-      "oneOf": [
-        {
-          "description": "Error while executing a submission",
-          "properties": {
-            "codex_error_info": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/CodexErrorInfo"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "message": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "error"
-              ],
-              "title": "ErrorEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "message",
-            "type"
-          ],
-          "title": "ErrorEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Warning issued while processing a submission. Unlike `Error`, this indicates the turn continued but the user should still be notified.",
-          "properties": {
-            "message": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "warning"
-              ],
-              "title": "WarningEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "message",
-            "type"
-          ],
-          "title": "WarningEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Realtime conversation lifecycle start event.",
-          "properties": {
-            "session_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "realtime_conversation_started"
-              ],
-              "title": "RealtimeConversationStartedEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "RealtimeConversationStartedEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Realtime conversation streaming payload event.",
-          "properties": {
-            "payload": {
-              "$ref": "#/definitions/RealtimeEvent"
-            },
-            "type": {
-              "enum": [
-                "realtime_conversation_realtime"
-              ],
-              "title": "RealtimeConversationRealtimeEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "payload",
-            "type"
-          ],
-          "title": "RealtimeConversationRealtimeEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Realtime conversation lifecycle close event.",
-          "properties": {
-            "reason": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "realtime_conversation_closed"
-              ],
-              "title": "RealtimeConversationClosedEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "RealtimeConversationClosedEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Model routing changed from the requested model to a different model.",
-          "properties": {
-            "from_model": {
-              "type": "string"
-            },
-            "reason": {
-              "$ref": "#/definitions/ModelRerouteReason"
-            },
-            "to_model": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "model_reroute"
-              ],
-              "title": "ModelRerouteEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "from_model",
-            "reason",
-            "to_model",
-            "type"
-          ],
-          "title": "ModelRerouteEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Conversation history was compacted (either automatically or manually).",
-          "properties": {
-            "type": {
-              "enum": [
-                "context_compacted"
-              ],
-              "title": "ContextCompactedEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "ContextCompactedEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Conversation history was rolled back by dropping the last N user turns.",
-          "properties": {
-            "num_turns": {
-              "description": "Number of user turns that were removed from context.",
-              "format": "uint32",
-              "minimum": 0.0,
-              "type": "integer"
-            },
-            "type": {
-              "enum": [
-                "thread_rolled_back"
-              ],
-              "title": "ThreadRolledBackEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "num_turns",
-            "type"
-          ],
-          "title": "ThreadRolledBackEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Agent has started a turn. v1 wire format uses `task_started`; accept `turn_started` for v2 interop.",
-          "properties": {
-            "collaboration_mode_kind": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ModeKind"
-                }
-              ],
-              "default": "default"
-            },
-            "model_context_window": {
-              "format": "int64",
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "turn_id": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "task_started"
-              ],
-              "title": "TaskStartedEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "turn_id",
-            "type"
-          ],
-          "title": "TaskStartedEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Agent has completed all actions. v1 wire format uses `task_complete`; accept `turn_complete` for v2 interop.",
-          "properties": {
-            "last_agent_message": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "turn_id": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "task_complete"
-              ],
-              "title": "TaskCompleteEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "turn_id",
-            "type"
-          ],
-          "title": "TaskCompleteEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Usage update for the current session, including totals and last turn. Optional means unknown — UIs should not display when `None`.",
-          "properties": {
-            "info": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/TokenUsageInfo"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "rate_limits": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/RateLimitSnapshot"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "type": {
-              "enum": [
-                "token_count"
-              ],
-              "title": "TokenCountEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "TokenCountEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Agent text output message",
-          "properties": {
-            "message": {
-              "type": "string"
-            },
-            "phase": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/MessagePhase"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "type": {
-              "enum": [
-                "agent_message"
-              ],
-              "title": "AgentMessageEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "message",
-            "type"
-          ],
-          "title": "AgentMessageEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "User/system input message (what was sent to the model)",
-          "properties": {
-            "images": {
-              "description": "Image URLs sourced from `UserInput::Image`. These are safe to replay in legacy UI history events and correspond to images sent to the model.",
-              "items": {
-                "type": "string"
-              },
-              "type": [
-                "array",
-                "null"
-              ]
-            },
-            "local_images": {
-              "default": [],
-              "description": "Local file paths sourced from `UserInput::LocalImage`. These are kept so the UI can reattach images when editing history, and should not be sent to the model or treated as API-ready URLs.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "message": {
-              "type": "string"
-            },
-            "text_elements": {
-              "default": [],
-              "description": "UI-defined spans within `message` used to render or persist special elements.",
-              "items": {
-                "$ref": "#/definitions/TextElement"
-              },
-              "type": "array"
-            },
-            "type": {
-              "enum": [
-                "user_message"
-              ],
-              "title": "UserMessageEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "message",
-            "type"
-          ],
-          "title": "UserMessageEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Agent text output delta message",
-          "properties": {
-            "delta": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "agent_message_delta"
-              ],
-              "title": "AgentMessageDeltaEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "delta",
-            "type"
-          ],
-          "title": "AgentMessageDeltaEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Reasoning event from agent.",
-          "properties": {
-            "text": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "agent_reasoning"
-              ],
-              "title": "AgentReasoningEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "text",
-            "type"
-          ],
-          "title": "AgentReasoningEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Agent reasoning delta event from agent.",
-          "properties": {
-            "delta": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "agent_reasoning_delta"
-              ],
-              "title": "AgentReasoningDeltaEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "delta",
-            "type"
-          ],
-          "title": "AgentReasoningDeltaEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Raw chain-of-thought from agent.",
-          "properties": {
-            "text": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "agent_reasoning_raw_content"
-              ],
-              "title": "AgentReasoningRawContentEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "text",
-            "type"
-          ],
-          "title": "AgentReasoningRawContentEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Agent reasoning content delta event from agent.",
-          "properties": {
-            "delta": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "agent_reasoning_raw_content_delta"
-              ],
-              "title": "AgentReasoningRawContentDeltaEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "delta",
-            "type"
-          ],
-          "title": "AgentReasoningRawContentDeltaEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Signaled when the model begins a new reasoning summary section (e.g., a new titled block).",
-          "properties": {
-            "item_id": {
-              "default": "",
-              "type": "string"
-            },
-            "summary_index": {
-              "default": 0,
-              "format": "int64",
-              "type": "integer"
-            },
-            "type": {
-              "enum": [
-                "agent_reasoning_section_break"
-              ],
-              "title": "AgentReasoningSectionBreakEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "AgentReasoningSectionBreakEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Ack the client's configure message.",
-          "properties": {
-            "approval_policy": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/AskForApproval"
-                }
-              ],
-              "description": "When to escalate for approval for execution"
-            },
-            "cwd": {
-              "description": "Working directory that should be treated as the *root* of the session.",
-              "type": "string"
-            },
-            "forked_from_id": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "history_entry_count": {
-              "description": "Current number of entries in the history log.",
-              "format": "uint",
-              "minimum": 0.0,
-              "type": "integer"
-            },
-            "history_log_id": {
-              "description": "Identifier of the history log file (inode on Unix, 0 otherwise).",
-              "format": "uint64",
-              "minimum": 0.0,
-              "type": "integer"
-            },
-            "initial_messages": {
-              "description": "Optional initial messages (as events) for resumed sessions. When present, UIs can use these to seed the history.",
-              "items": {
-                "$ref": "#/definitions/EventMsg"
-              },
-              "type": [
-                "array",
-                "null"
-              ]
-            },
-            "model": {
-              "description": "Tell the client what model is being queried.",
-              "type": "string"
-            },
-            "model_provider_id": {
-              "type": "string"
-            },
-            "network_proxy": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/SessionNetworkProxyRuntime"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Runtime proxy bind addresses, when the managed proxy was started for this session."
-            },
-            "reasoning_effort": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ReasoningEffort"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The effort the model is putting into reasoning about the user's request."
-            },
-            "rollout_path": {
-              "description": "Path in which the rollout is stored. Can be `None` for ephemeral threads",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "sandbox_policy": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/SandboxPolicy"
-                }
-              ],
-              "description": "How to sandbox commands executed in the system"
-            },
-            "service_tier": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ServiceTier"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "session_id": {
-              "$ref": "#/definitions/ThreadId"
-            },
-            "thread_name": {
-              "description": "Optional user-facing thread name (may be unset).",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "session_configured"
-              ],
-              "title": "SessionConfiguredEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "approval_policy",
-            "cwd",
-            "history_entry_count",
-            "history_log_id",
-            "model",
-            "model_provider_id",
-            "sandbox_policy",
-            "session_id",
-            "type"
-          ],
-          "title": "SessionConfiguredEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Updated session metadata (e.g., thread name changes).",
-          "properties": {
-            "thread_id": {
-              "$ref": "#/definitions/ThreadId"
-            },
-            "thread_name": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "thread_name_updated"
-              ],
-              "title": "ThreadNameUpdatedEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "thread_id",
-            "type"
-          ],
-          "title": "ThreadNameUpdatedEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Incremental MCP startup progress updates.",
-          "properties": {
-            "server": {
-              "description": "Server name being started.",
-              "type": "string"
-            },
-            "status": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/McpStartupStatus"
-                }
-              ],
-              "description": "Current startup status."
-            },
-            "type": {
-              "enum": [
-                "mcp_startup_update"
-              ],
-              "title": "McpStartupUpdateEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "server",
-            "status",
-            "type"
-          ],
-          "title": "McpStartupUpdateEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Aggregate MCP startup completion summary.",
-          "properties": {
-            "cancelled": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "failed": {
-              "items": {
-                "$ref": "#/definitions/McpStartupFailure"
-              },
-              "type": "array"
-            },
-            "ready": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "type": {
-              "enum": [
-                "mcp_startup_complete"
-              ],
-              "title": "McpStartupCompleteEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "cancelled",
-            "failed",
-            "ready",
-            "type"
-          ],
-          "title": "McpStartupCompleteEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "call_id": {
-              "description": "Identifier so this can be paired with the McpToolCallEnd event.",
-              "type": "string"
-            },
-            "invocation": {
-              "$ref": "#/definitions/McpInvocation"
-            },
-            "type": {
-              "enum": [
-                "mcp_tool_call_begin"
-              ],
-              "title": "McpToolCallBeginEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "invocation",
-            "type"
-          ],
-          "title": "McpToolCallBeginEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the corresponding McpToolCallBegin that finished.",
-              "type": "string"
-            },
-            "duration": {
-              "$ref": "#/definitions/Duration"
-            },
-            "invocation": {
-              "$ref": "#/definitions/McpInvocation"
-            },
-            "result": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/Result_of_CallToolResult_or_String"
-                }
-              ],
-              "description": "Result of the tool call. Note this could be an error."
-            },
-            "type": {
-              "enum": [
-                "mcp_tool_call_end"
-              ],
-              "title": "McpToolCallEndEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "duration",
-            "invocation",
-            "result",
-            "type"
-          ],
-          "title": "McpToolCallEndEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "call_id": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "web_search_begin"
-              ],
-              "title": "WebSearchBeginEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "type"
-          ],
-          "title": "WebSearchBeginEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "action": {
-              "$ref": "#/definitions/WebSearchAction"
-            },
-            "call_id": {
-              "type": "string"
-            },
-            "query": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "web_search_end"
-              ],
-              "title": "WebSearchEndEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "action",
-            "call_id",
-            "query",
-            "type"
-          ],
-          "title": "WebSearchEndEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Notification that the server is about to execute a command.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier so this can be paired with the ExecCommandEnd event.",
-              "type": "string"
-            },
-            "command": {
-              "description": "The command to be executed.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "cwd": {
-              "description": "The command's working directory if not the default cwd for the agent.",
-              "type": "string"
-            },
-            "interaction_input": {
-              "description": "Raw input sent to a unified exec session (if this is an interaction event).",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "parsed_cmd": {
-              "items": {
-                "$ref": "#/definitions/ParsedCommand"
-              },
-              "type": "array"
-            },
-            "process_id": {
-              "description": "Identifier for the underlying PTY process (when available).",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "source": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ExecCommandSource"
-                }
-              ],
-              "default": "agent",
-              "description": "Where the command originated. Defaults to Agent for backward compatibility."
-            },
-            "turn_id": {
-              "description": "Turn ID that this command belongs to.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "exec_command_begin"
-              ],
-              "title": "ExecCommandBeginEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "command",
-            "cwd",
-            "parsed_cmd",
-            "turn_id",
-            "type"
-          ],
-          "title": "ExecCommandBeginEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Incremental chunk of output from a running command.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the ExecCommandBegin that produced this chunk.",
-              "type": "string"
-            },
-            "chunk": {
-              "description": "Raw bytes from the stream (may not be valid UTF-8).",
-              "type": "string"
-            },
-            "stream": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ExecOutputStream"
-                }
-              ],
-              "description": "Which stream produced this chunk."
-            },
-            "type": {
-              "enum": [
-                "exec_command_output_delta"
-              ],
-              "title": "ExecCommandOutputDeltaEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "chunk",
-            "stream",
-            "type"
-          ],
-          "title": "ExecCommandOutputDeltaEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Terminal interaction for an in-progress command (stdin sent and stdout observed).",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the ExecCommandBegin that produced this chunk.",
-              "type": "string"
-            },
-            "process_id": {
-              "description": "Process id associated with the running command.",
-              "type": "string"
-            },
-            "stdin": {
-              "description": "Stdin sent to the running session.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "terminal_interaction"
-              ],
-              "title": "TerminalInteractionEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "process_id",
-            "stdin",
-            "type"
-          ],
-          "title": "TerminalInteractionEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "aggregated_output": {
-              "default": "",
-              "description": "Captured aggregated output",
-              "type": "string"
-            },
-            "call_id": {
-              "description": "Identifier for the ExecCommandBegin that finished.",
-              "type": "string"
-            },
-            "command": {
-              "description": "The command that was executed.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "cwd": {
-              "description": "The command's working directory if not the default cwd for the agent.",
-              "type": "string"
-            },
-            "duration": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/Duration"
-                }
-              ],
-              "description": "The duration of the command execution."
-            },
-            "exit_code": {
-              "description": "The command's exit code.",
-              "format": "int32",
-              "type": "integer"
-            },
-            "formatted_output": {
-              "description": "Formatted output from the command, as seen by the model.",
-              "type": "string"
-            },
-            "interaction_input": {
-              "description": "Raw input sent to a unified exec session (if this is an interaction event).",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "parsed_cmd": {
-              "items": {
-                "$ref": "#/definitions/ParsedCommand"
-              },
-              "type": "array"
-            },
-            "process_id": {
-              "description": "Identifier for the underlying PTY process (when available).",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "source": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ExecCommandSource"
-                }
-              ],
-              "default": "agent",
-              "description": "Where the command originated. Defaults to Agent for backward compatibility."
-            },
-            "status": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ExecCommandStatus"
-                }
-              ],
-              "description": "Completion status for this command execution."
-            },
-            "stderr": {
-              "description": "Captured stderr",
-              "type": "string"
-            },
-            "stdout": {
-              "description": "Captured stdout",
-              "type": "string"
-            },
-            "turn_id": {
-              "description": "Turn ID that this command belongs to.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "exec_command_end"
-              ],
-              "title": "ExecCommandEndEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "command",
-            "cwd",
-            "duration",
-            "exit_code",
-            "formatted_output",
-            "parsed_cmd",
-            "status",
-            "stderr",
-            "stdout",
-            "turn_id",
-            "type"
-          ],
-          "title": "ExecCommandEndEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Notification that the agent attached a local image via the view_image tool.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the originating tool call.",
-              "type": "string"
-            },
-            "path": {
-              "description": "Local filesystem path provided to the tool.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "view_image_tool_call"
-              ],
-              "title": "ViewImageToolCallEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "path",
-            "type"
-          ],
-          "title": "ViewImageToolCallEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "additional_permissions": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/PermissionProfile"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Optional additional filesystem permissions requested for this command."
-            },
-            "approval_id": {
-              "description": "Identifier for this specific approval callback.\n\nWhen absent, the approval is for the command item itself (`call_id`). This is present for subcommand approvals (via execve intercept).",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "available_decisions": {
-              "description": "Ordered list of decisions the client may present for this prompt.\n\nWhen absent, clients should derive the legacy default set from the other fields on this request.",
-              "items": {
-                "$ref": "#/definitions/ReviewDecision"
-              },
-              "type": [
-                "array",
-                "null"
-              ]
-            },
-            "call_id": {
-              "description": "Identifier for the associated command execution item.",
-              "type": "string"
-            },
-            "command": {
-              "description": "The command to be executed.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "cwd": {
-              "description": "The command's working directory.",
-              "type": "string"
-            },
-            "network_approval_context": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/NetworkApprovalContext"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Optional network context for a blocked request that can be approved."
-            },
-            "parsed_cmd": {
-              "items": {
-                "$ref": "#/definitions/ParsedCommand"
-              },
-              "type": "array"
-            },
-            "proposed_execpolicy_amendment": {
-              "description": "Proposed execpolicy amendment that can be applied to allow future runs.",
-              "items": {
-                "type": "string"
-              },
-              "type": [
-                "array",
-                "null"
-              ]
-            },
-            "proposed_network_policy_amendments": {
-              "description": "Proposed network policy amendments (for example allow/deny this host in future).",
-              "items": {
-                "$ref": "#/definitions/NetworkPolicyAmendment"
-              },
-              "type": [
-                "array",
-                "null"
-              ]
-            },
-            "reason": {
-              "description": "Optional human-readable reason for the approval (e.g. retry without sandbox).",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "turn_id": {
-              "default": "",
-              "description": "Turn ID that this command belongs to. Uses `#[serde(default)]` for backwards compatibility.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "exec_approval_request"
-              ],
-              "title": "ExecApprovalRequestEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "command",
-            "cwd",
-            "parsed_cmd",
-            "type"
-          ],
-          "title": "ExecApprovalRequestEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "call_id": {
-              "description": "Responses API call id for the associated tool call, if available.",
-              "type": "string"
-            },
-            "questions": {
-              "items": {
-                "$ref": "#/definitions/RequestUserInputQuestion"
-              },
-              "type": "array"
-            },
-            "turn_id": {
-              "default": "",
-              "description": "Turn ID that this request belongs to. Uses `#[serde(default)]` for backwards compatibility.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "request_user_input"
-              ],
-              "title": "RequestUserInputEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "questions",
-            "type"
-          ],
-          "title": "RequestUserInputEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "arguments": true,
-            "callId": {
-              "type": "string"
-            },
-            "tool": {
-              "type": "string"
-            },
-            "turnId": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "dynamic_tool_call_request"
-              ],
-              "title": "DynamicToolCallRequestEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "arguments",
-            "callId",
-            "tool",
-            "turnId",
-            "type"
-          ],
-          "title": "DynamicToolCallRequestEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "arguments": {
-              "description": "Dynamic tool call arguments."
-            },
-            "call_id": {
-              "description": "Identifier for the corresponding DynamicToolCallRequest.",
-              "type": "string"
-            },
-            "content_items": {
-              "description": "Dynamic tool response content items.",
-              "items": {
-                "$ref": "#/definitions/DynamicToolCallOutputContentItem"
-              },
-              "type": "array"
-            },
-            "duration": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/Duration"
-                }
-              ],
-              "description": "The duration of the dynamic tool call."
-            },
-            "error": {
-              "description": "Optional error text when the tool call failed before producing a response.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "success": {
-              "description": "Whether the tool call succeeded.",
-              "type": "boolean"
-            },
-            "tool": {
-              "description": "Dynamic tool name.",
-              "type": "string"
-            },
-            "turn_id": {
-              "description": "Turn ID that this dynamic tool call belongs to.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "dynamic_tool_call_response"
-              ],
-              "title": "DynamicToolCallResponseEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "arguments",
-            "call_id",
-            "content_items",
-            "duration",
-            "success",
-            "tool",
-            "turn_id",
-            "type"
-          ],
-          "title": "DynamicToolCallResponseEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "message": {
-              "type": "string"
-            },
-            "server_name": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "elicitation_request"
-              ],
-              "title": "ElicitationRequestEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "message",
-            "server_name",
-            "type"
-          ],
-          "title": "ElicitationRequestEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "call_id": {
-              "description": "Responses API call id for the associated patch apply call, if available.",
-              "type": "string"
-            },
-            "changes": {
-              "additionalProperties": {
-                "$ref": "#/definitions/FileChange"
-              },
-              "type": "object"
-            },
-            "grant_root": {
-              "description": "When set, the agent is asking the user to allow writes under this root for the remainder of the session.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "reason": {
-              "description": "Optional explanatory reason (e.g. request for extra write access).",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "turn_id": {
-              "default": "",
-              "description": "Turn ID that this patch belongs to. Uses `#[serde(default)]` for backwards compatibility with older senders.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "apply_patch_approval_request"
-              ],
-              "title": "ApplyPatchApprovalRequestEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "changes",
-            "type"
-          ],
-          "title": "ApplyPatchApprovalRequestEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Notification advising the user that something they are using has been deprecated and should be phased out.",
-          "properties": {
-            "details": {
-              "description": "Optional extra guidance, such as migration steps or rationale.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "summary": {
-              "description": "Concise summary of what is deprecated.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "deprecation_notice"
-              ],
-              "title": "DeprecationNoticeEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "summary",
-            "type"
-          ],
-          "title": "DeprecationNoticeEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "message": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "background_event"
-              ],
-              "title": "BackgroundEventEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "message",
-            "type"
-          ],
-          "title": "BackgroundEventEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "message": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "undo_started"
-              ],
-              "title": "UndoStartedEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "UndoStartedEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "message": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "success": {
-              "type": "boolean"
-            },
-            "type": {
-              "enum": [
-                "undo_completed"
-              ],
-              "title": "UndoCompletedEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "success",
-            "type"
-          ],
-          "title": "UndoCompletedEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Notification that a model stream experienced an error or disconnect and the system is handling it (e.g., retrying with backoff).",
-          "properties": {
-            "additional_details": {
-              "default": null,
-              "description": "Optional details about the underlying stream failure (often the same human-readable message that is surfaced as the terminal error if retries are exhausted).",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "codex_error_info": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/CodexErrorInfo"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "message": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "stream_error"
-              ],
-              "title": "StreamErrorEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "message",
-            "type"
-          ],
-          "title": "StreamErrorEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Notification that the agent is about to apply a code patch. Mirrors `ExecCommandBegin` so front‑ends can show progress indicators.",
-          "properties": {
-            "auto_approved": {
-              "description": "If true, there was no ApplyPatchApprovalRequest for this patch.",
-              "type": "boolean"
-            },
-            "call_id": {
-              "description": "Identifier so this can be paired with the PatchApplyEnd event.",
-              "type": "string"
-            },
-            "changes": {
-              "additionalProperties": {
-                "$ref": "#/definitions/FileChange"
-              },
-              "description": "The changes to be applied.",
-              "type": "object"
-            },
-            "turn_id": {
-              "default": "",
-              "description": "Turn ID that this patch belongs to. Uses `#[serde(default)]` for backwards compatibility.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "patch_apply_begin"
-              ],
-              "title": "PatchApplyBeginEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "auto_approved",
-            "call_id",
-            "changes",
-            "type"
-          ],
-          "title": "PatchApplyBeginEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Notification that a patch application has finished.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the PatchApplyBegin that finished.",
-              "type": "string"
-            },
-            "changes": {
-              "additionalProperties": {
-                "$ref": "#/definitions/FileChange"
-              },
-              "default": {},
-              "description": "The changes that were applied (mirrors PatchApplyBeginEvent::changes).",
-              "type": "object"
-            },
-            "status": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/PatchApplyStatus"
-                }
-              ],
-              "description": "Completion status for this patch application."
-            },
-            "stderr": {
-              "description": "Captured stderr (parser errors, IO failures, etc.).",
-              "type": "string"
-            },
-            "stdout": {
-              "description": "Captured stdout (summary printed by apply_patch).",
-              "type": "string"
-            },
-            "success": {
-              "description": "Whether the patch was applied successfully.",
-              "type": "boolean"
-            },
-            "turn_id": {
-              "default": "",
-              "description": "Turn ID that this patch belongs to. Uses `#[serde(default)]` for backwards compatibility.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "patch_apply_end"
-              ],
-              "title": "PatchApplyEndEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "status",
-            "stderr",
-            "stdout",
-            "success",
-            "type"
-          ],
-          "title": "PatchApplyEndEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "turn_diff"
-              ],
-              "title": "TurnDiffEventMsgType",
-              "type": "string"
-            },
-            "unified_diff": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "unified_diff"
-          ],
-          "title": "TurnDiffEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Response to GetHistoryEntryRequest.",
-          "properties": {
-            "entry": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/HistoryEntry"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The entry at the requested offset, if available and parseable."
-            },
-            "log_id": {
-              "format": "uint64",
-              "minimum": 0.0,
-              "type": "integer"
-            },
-            "offset": {
-              "format": "uint",
-              "minimum": 0.0,
-              "type": "integer"
-            },
-            "type": {
-              "enum": [
-                "get_history_entry_response"
-              ],
-              "title": "GetHistoryEntryResponseEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "log_id",
-            "offset",
-            "type"
-          ],
-          "title": "GetHistoryEntryResponseEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "List of MCP tools available to the agent.",
-          "properties": {
-            "auth_statuses": {
-              "additionalProperties": {
-                "$ref": "#/definitions/McpAuthStatus"
-              },
-              "description": "Authentication status for each configured MCP server.",
-              "type": "object"
-            },
-            "resource_templates": {
-              "additionalProperties": {
-                "items": {
-                  "$ref": "#/definitions/ResourceTemplate"
-                },
-                "type": "array"
-              },
-              "description": "Known resource templates grouped by server name.",
-              "type": "object"
-            },
-            "resources": {
-              "additionalProperties": {
-                "items": {
-                  "$ref": "#/definitions/Resource"
-                },
-                "type": "array"
-              },
-              "description": "Known resources grouped by server name.",
-              "type": "object"
-            },
-            "tools": {
-              "additionalProperties": {
-                "$ref": "#/definitions/Tool"
-              },
-              "description": "Fully qualified tool name -> tool definition.",
-              "type": "object"
-            },
-            "type": {
-              "enum": [
-                "mcp_list_tools_response"
-              ],
-              "title": "McpListToolsResponseEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "auth_statuses",
-            "resource_templates",
-            "resources",
-            "tools",
-            "type"
-          ],
-          "title": "McpListToolsResponseEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "List of custom prompts available to the agent.",
-          "properties": {
-            "custom_prompts": {
-              "items": {
-                "$ref": "#/definitions/CustomPrompt"
-              },
-              "type": "array"
-            },
-            "type": {
-              "enum": [
-                "list_custom_prompts_response"
-              ],
-              "title": "ListCustomPromptsResponseEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "custom_prompts",
-            "type"
-          ],
-          "title": "ListCustomPromptsResponseEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "List of skills available to the agent.",
-          "properties": {
-            "skills": {
-              "items": {
-                "$ref": "#/definitions/SkillsListEntry"
-              },
-              "type": "array"
-            },
-            "type": {
-              "enum": [
-                "list_skills_response"
-              ],
-              "title": "ListSkillsResponseEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "skills",
-            "type"
-          ],
-          "title": "ListSkillsResponseEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "List of remote skills available to the agent.",
-          "properties": {
-            "skills": {
-              "items": {
-                "$ref": "#/definitions/RemoteSkillSummary"
-              },
-              "type": "array"
-            },
-            "type": {
-              "enum": [
-                "list_remote_skills_response"
-              ],
-              "title": "ListRemoteSkillsResponseEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "skills",
-            "type"
-          ],
-          "title": "ListRemoteSkillsResponseEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Remote skill downloaded to local cache.",
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "name": {
-              "type": "string"
-            },
-            "path": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "remote_skill_downloaded"
-              ],
-              "title": "RemoteSkillDownloadedEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "name",
-            "path",
-            "type"
-          ],
-          "title": "RemoteSkillDownloadedEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Notification that skill data may have been updated and clients may want to reload.",
-          "properties": {
-            "type": {
-              "enum": [
-                "skills_update_available"
-              ],
-              "title": "SkillsUpdateAvailableEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "SkillsUpdateAvailableEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "explanation": {
-              "default": null,
-              "description": "Arguments for the `update_plan` todo/checklist tool (not plan mode).",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "plan": {
-              "items": {
-                "$ref": "#/definitions/PlanItemArg"
-              },
-              "type": "array"
-            },
-            "type": {
-              "enum": [
-                "plan_update"
-              ],
-              "title": "PlanUpdateEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "plan",
-            "type"
-          ],
-          "title": "PlanUpdateEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "reason": {
-              "$ref": "#/definitions/TurnAbortReason"
-            },
-            "turn_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "turn_aborted"
-              ],
-              "title": "TurnAbortedEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "reason",
-            "type"
-          ],
-          "title": "TurnAbortedEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Notification that the agent is shutting down.",
-          "properties": {
-            "type": {
-              "enum": [
-                "shutdown_complete"
-              ],
-              "title": "ShutdownCompleteEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "ShutdownCompleteEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Entered review mode.",
-          "properties": {
-            "target": {
-              "$ref": "#/definitions/ReviewTarget"
-            },
-            "type": {
-              "enum": [
-                "entered_review_mode"
-              ],
-              "title": "EnteredReviewModeEventMsgType",
-              "type": "string"
-            },
-            "user_facing_hint": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "target",
-            "type"
-          ],
-          "title": "EnteredReviewModeEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Exited review mode with an optional final result to apply.",
-          "properties": {
-            "review_output": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ReviewOutputEvent"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "type": {
-              "enum": [
-                "exited_review_mode"
-              ],
-              "title": "ExitedReviewModeEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "ExitedReviewModeEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "item": {
-              "$ref": "#/definitions/ResponseItem"
-            },
-            "type": {
-              "enum": [
-                "raw_response_item"
-              ],
-              "title": "RawResponseItemEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "item",
-            "type"
-          ],
-          "title": "RawResponseItemEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "item": {
-              "$ref": "#/definitions/TurnItem"
-            },
-            "thread_id": {
-              "$ref": "#/definitions/ThreadId"
-            },
-            "turn_id": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "item_started"
-              ],
-              "title": "ItemStartedEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "item",
-            "thread_id",
-            "turn_id",
-            "type"
-          ],
-          "title": "ItemStartedEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "item": {
-              "$ref": "#/definitions/TurnItem"
-            },
-            "thread_id": {
-              "$ref": "#/definitions/ThreadId"
-            },
-            "turn_id": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "item_completed"
-              ],
-              "title": "ItemCompletedEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "item",
-            "thread_id",
-            "turn_id",
-            "type"
-          ],
-          "title": "ItemCompletedEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "delta": {
-              "type": "string"
-            },
-            "item_id": {
-              "type": "string"
-            },
-            "thread_id": {
-              "type": "string"
-            },
-            "turn_id": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "agent_message_content_delta"
-              ],
-              "title": "AgentMessageContentDeltaEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "delta",
-            "item_id",
-            "thread_id",
-            "turn_id",
-            "type"
-          ],
-          "title": "AgentMessageContentDeltaEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "delta": {
-              "type": "string"
-            },
-            "item_id": {
-              "type": "string"
-            },
-            "thread_id": {
-              "type": "string"
-            },
-            "turn_id": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "plan_delta"
-              ],
-              "title": "PlanDeltaEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "delta",
-            "item_id",
-            "thread_id",
-            "turn_id",
-            "type"
-          ],
-          "title": "PlanDeltaEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "delta": {
-              "type": "string"
-            },
-            "item_id": {
-              "type": "string"
-            },
-            "summary_index": {
-              "default": 0,
-              "format": "int64",
-              "type": "integer"
-            },
-            "thread_id": {
-              "type": "string"
-            },
-            "turn_id": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "reasoning_content_delta"
-              ],
-              "title": "ReasoningContentDeltaEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "delta",
-            "item_id",
-            "thread_id",
-            "turn_id",
-            "type"
-          ],
-          "title": "ReasoningContentDeltaEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "content_index": {
-              "default": 0,
-              "format": "int64",
-              "type": "integer"
-            },
-            "delta": {
-              "type": "string"
-            },
-            "item_id": {
-              "type": "string"
-            },
-            "thread_id": {
-              "type": "string"
-            },
-            "turn_id": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "reasoning_raw_content_delta"
-              ],
-              "title": "ReasoningRawContentDeltaEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "delta",
-            "item_id",
-            "thread_id",
-            "turn_id",
-            "type"
-          ],
-          "title": "ReasoningRawContentDeltaEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: agent spawn begin.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the collab tool call.",
-              "type": "string"
-            },
-            "prompt": {
-              "description": "Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
-              "type": "string"
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "type": {
-              "enum": [
-                "collab_agent_spawn_begin"
-              ],
-              "title": "CollabAgentSpawnBeginEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "prompt",
-            "sender_thread_id",
-            "type"
-          ],
-          "title": "CollabAgentSpawnBeginEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: agent spawn end.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the collab tool call.",
-              "type": "string"
-            },
-            "new_agent_nickname": {
-              "description": "Optional nickname assigned to the new agent.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "new_agent_role": {
-              "description": "Optional role assigned to the new agent.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "new_thread_id": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Thread ID of the newly spawned agent, if it was created."
-            },
-            "prompt": {
-              "description": "Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
-              "type": "string"
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "status": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/AgentStatus"
-                }
-              ],
-              "description": "Last known status of the new agent reported to the sender agent."
-            },
-            "type": {
-              "enum": [
-                "collab_agent_spawn_end"
-              ],
-              "title": "CollabAgentSpawnEndEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "prompt",
-            "sender_thread_id",
-            "status",
-            "type"
-          ],
-          "title": "CollabAgentSpawnEndEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: agent interaction begin.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the collab tool call.",
-              "type": "string"
-            },
-            "prompt": {
-              "description": "Prompt sent from the sender to the receiver. Can be empty to prevent CoT leaking at the beginning.",
-              "type": "string"
-            },
-            "receiver_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the receiver."
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "type": {
-              "enum": [
-                "collab_agent_interaction_begin"
-              ],
-              "title": "CollabAgentInteractionBeginEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "prompt",
-            "receiver_thread_id",
-            "sender_thread_id",
-            "type"
-          ],
-          "title": "CollabAgentInteractionBeginEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: agent interaction end.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the collab tool call.",
-              "type": "string"
-            },
-            "prompt": {
-              "description": "Prompt sent from the sender to the receiver. Can be empty to prevent CoT leaking at the beginning.",
-              "type": "string"
-            },
-            "receiver_agent_nickname": {
-              "description": "Optional nickname assigned to the receiver agent.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiver_agent_role": {
-              "description": "Optional role assigned to the receiver agent.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiver_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the receiver."
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "status": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/AgentStatus"
-                }
-              ],
-              "description": "Last known status of the receiver agent reported to the sender agent."
-            },
-            "type": {
-              "enum": [
-                "collab_agent_interaction_end"
-              ],
-              "title": "CollabAgentInteractionEndEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "prompt",
-            "receiver_thread_id",
-            "sender_thread_id",
-            "status",
-            "type"
-          ],
-          "title": "CollabAgentInteractionEndEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: waiting begin.",
-          "properties": {
-            "call_id": {
-              "description": "ID of the waiting call.",
-              "type": "string"
-            },
-            "receiver_agents": {
-              "description": "Optional nicknames/roles for receivers.",
-              "items": {
-                "$ref": "#/definitions/CollabAgentRef"
-              },
-              "type": "array"
-            },
-            "receiver_thread_ids": {
-              "description": "Thread ID of the receivers.",
-              "items": {
-                "$ref": "#/definitions/ThreadId"
-              },
-              "type": "array"
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "type": {
-              "enum": [
-                "collab_waiting_begin"
-              ],
-              "title": "CollabWaitingBeginEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "receiver_thread_ids",
-            "sender_thread_id",
-            "type"
-          ],
-          "title": "CollabWaitingBeginEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: waiting end.",
-          "properties": {
-            "agent_statuses": {
-              "description": "Optional receiver metadata paired with final statuses.",
-              "items": {
-                "$ref": "#/definitions/CollabAgentStatusEntry"
-              },
-              "type": "array"
-            },
-            "call_id": {
-              "description": "ID of the waiting call.",
-              "type": "string"
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "statuses": {
-              "additionalProperties": {
-                "$ref": "#/definitions/AgentStatus"
-              },
-              "description": "Last known status of the receiver agents reported to the sender agent.",
-              "type": "object"
-            },
-            "type": {
-              "enum": [
-                "collab_waiting_end"
-              ],
-              "title": "CollabWaitingEndEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "sender_thread_id",
-            "statuses",
-            "type"
-          ],
-          "title": "CollabWaitingEndEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: close begin.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the collab tool call.",
-              "type": "string"
-            },
-            "receiver_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the receiver."
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "type": {
-              "enum": [
-                "collab_close_begin"
-              ],
-              "title": "CollabCloseBeginEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "receiver_thread_id",
-            "sender_thread_id",
-            "type"
-          ],
-          "title": "CollabCloseBeginEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: close end.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the collab tool call.",
-              "type": "string"
-            },
-            "receiver_agent_nickname": {
-              "description": "Optional nickname assigned to the receiver agent.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiver_agent_role": {
-              "description": "Optional role assigned to the receiver agent.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiver_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the receiver."
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "status": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/AgentStatus"
-                }
-              ],
-              "description": "Last known status of the receiver agent reported to the sender agent before the close."
-            },
-            "type": {
-              "enum": [
-                "collab_close_end"
-              ],
-              "title": "CollabCloseEndEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "receiver_thread_id",
-            "sender_thread_id",
-            "status",
-            "type"
-          ],
-          "title": "CollabCloseEndEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: resume begin.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the collab tool call.",
-              "type": "string"
-            },
-            "receiver_agent_nickname": {
-              "description": "Optional nickname assigned to the receiver agent.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiver_agent_role": {
-              "description": "Optional role assigned to the receiver agent.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiver_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the receiver."
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "type": {
-              "enum": [
-                "collab_resume_begin"
-              ],
-              "title": "CollabResumeBeginEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "receiver_thread_id",
-            "sender_thread_id",
-            "type"
-          ],
-          "title": "CollabResumeBeginEventMsg",
-          "type": "object"
-        },
-        {
-          "description": "Collab interaction: resume end.",
-          "properties": {
-            "call_id": {
-              "description": "Identifier for the collab tool call.",
-              "type": "string"
-            },
-            "receiver_agent_nickname": {
-              "description": "Optional nickname assigned to the receiver agent.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiver_agent_role": {
-              "description": "Optional role assigned to the receiver agent.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "receiver_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the receiver."
-            },
-            "sender_thread_id": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/ThreadId"
-                }
-              ],
-              "description": "Thread ID of the sender."
-            },
-            "status": {
-              "allOf": [
-                {
-                  "$ref": "#/definitions/AgentStatus"
-                }
-              ],
-              "description": "Last known status of the receiver agent reported to the sender agent after resume."
-            },
-            "type": {
-              "enum": [
-                "collab_resume_end"
-              ],
-              "title": "CollabResumeEndEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "call_id",
-            "receiver_thread_id",
-            "sender_thread_id",
-            "status",
-            "type"
-          ],
-          "title": "CollabResumeEndEventMsg",
-          "type": "object"
-        }
-      ],
-      "title": "EventMsg"
-    },
-    "ExecCommandSource": {
-      "enum": [
-        "agent",
-        "user_shell",
-        "unified_exec_startup",
-        "unified_exec_interaction"
-      ],
-      "type": "string"
-    },
-    "ExecCommandStatus": {
-      "enum": [
-        "completed",
-        "failed",
-        "declined"
-      ],
-      "type": "string"
-    },
-    "ExecOutputStream": {
-      "enum": [
-        "stdout",
-        "stderr"
-      ],
-      "type": "string"
     },
     "ExperimentalFeature": {
       "properties": {
@@ -6336,76 +3757,6 @@
       "title": "FeedbackUploadResponse",
       "type": "object"
     },
-    "FileChange": {
-      "oneOf": [
-        {
-          "properties": {
-            "content": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "add"
-              ],
-              "title": "AddFileChangeType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "content",
-            "type"
-          ],
-          "title": "AddFileChange",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "content": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "delete"
-              ],
-              "title": "DeleteFileChangeType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "content",
-            "type"
-          ],
-          "title": "DeleteFileChange",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "move_path": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "update"
-              ],
-              "title": "UpdateFileChangeType",
-              "type": "string"
-            },
-            "unified_diff": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "unified_diff"
-          ],
-          "title": "UpdateFileChange",
-          "type": "object"
-        }
-      ]
-    },
     "FileChangeOutputDeltaNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -6429,29 +3780,6 @@
         "turnId"
       ],
       "title": "FileChangeOutputDeltaNotification",
-      "type": "object"
-    },
-    "FileSystemPermissions": {
-      "properties": {
-        "read": {
-          "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "write": {
-          "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        }
-      },
       "type": "object"
     },
     "FileUpdateChange": {
@@ -6518,6 +3846,16 @@
         },
         {
           "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "image_url": {
               "type": "string"
             },
@@ -6783,26 +4121,196 @@
       ],
       "type": "string"
     },
-    "HistoryEntry": {
+    "HookCompletedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
-        "conversation_id": {
+        "run": {
+          "$ref": "#/definitions/HookRunSummary"
+        },
+        "threadId": {
           "type": "string"
         },
-        "text": {
-          "type": "string"
-        },
-        "ts": {
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
-        "conversation_id",
-        "text",
-        "ts"
+        "run",
+        "threadId"
+      ],
+      "title": "HookCompletedNotification",
+      "type": "object"
+    },
+    "HookEventName": {
+      "enum": [
+        "sessionStart",
+        "stop"
+      ],
+      "type": "string"
+    },
+    "HookExecutionMode": {
+      "enum": [
+        "sync",
+        "async"
+      ],
+      "type": "string"
+    },
+    "HookHandlerType": {
+      "enum": [
+        "command",
+        "prompt",
+        "agent"
+      ],
+      "type": "string"
+    },
+    "HookOutputEntry": {
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/HookOutputEntryKind"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
       ],
       "type": "object"
+    },
+    "HookOutputEntryKind": {
+      "enum": [
+        "warning",
+        "stop",
+        "feedback",
+        "context",
+        "error"
+      ],
+      "type": "string"
+    },
+    "HookRunStatus": {
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "blocked",
+        "stopped"
+      ],
+      "type": "string"
+    },
+    "HookRunSummary": {
+      "properties": {
+        "completedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "displayOrder": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "durationMs": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/definitions/HookOutputEntry"
+          },
+          "type": "array"
+        },
+        "eventName": {
+          "$ref": "#/definitions/HookEventName"
+        },
+        "executionMode": {
+          "$ref": "#/definitions/HookExecutionMode"
+        },
+        "handlerType": {
+          "$ref": "#/definitions/HookHandlerType"
+        },
+        "id": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/definitions/HookScope"
+        },
+        "sourcePath": {
+          "type": "string"
+        },
+        "startedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/definitions/HookRunStatus"
+        },
+        "statusMessage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "displayOrder",
+        "entries",
+        "eventName",
+        "executionMode",
+        "handlerType",
+        "id",
+        "scope",
+        "sourcePath",
+        "startedAt",
+        "status"
+      ],
+      "type": "object"
+    },
+    "HookScope": {
+      "enum": [
+        "thread",
+        "turn"
+      ],
+      "type": "string"
+    },
+    "HookStartedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "run": {
+          "$ref": "#/definitions/HookRunSummary"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run",
+        "threadId"
+      ],
+      "title": "HookStartedNotification",
+      "type": "object"
+    },
+    "ImageDetail": {
+      "enum": [
+        "auto",
+        "low",
+        "high",
+        "original"
+      ],
+      "type": "string"
     },
     "InitializeCapabilities": {
       "description": "Client-declared capabilities negotiated during initialize.",
@@ -6813,7 +4321,7 @@
           "type": "boolean"
         },
         "optOutNotificationMethods": {
-          "description": "Exact notification method names that should be suppressed for this connection (for example `codex/event/session_configured`).",
+          "description": "Exact notification method names that should be suppressed for this connection (for example `thread/started`).",
           "items": {
             "type": "string"
           },
@@ -7163,66 +4671,6 @@
       "title": "LogoutAccountResponse",
       "type": "object"
     },
-    "MacOsAutomationValue": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      ]
-    },
-    "MacOsPermissions": {
-      "properties": {
-        "accessibility": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "automations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsAutomationValue"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "calendar": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "preferences": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsPreferencesValue"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "MacOsPreferencesValue": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "string"
-        }
-      ]
-    },
     "McpAuthStatus": {
       "enum": [
         "unsupported",
@@ -7231,26 +4679,6 @@
         "oAuth"
       ],
       "type": "string"
-    },
-    "McpInvocation": {
-      "properties": {
-        "arguments": {
-          "description": "Arguments to the tool call."
-        },
-        "server": {
-          "description": "Name of the MCP server as defined in the config.",
-          "type": "string"
-        },
-        "tool": {
-          "description": "Name of the tool as given by the MCP server.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "server",
-        "tool"
-      ],
-      "type": "object"
     },
     "McpServerOauthLoginCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -7357,88 +4785,6 @@
         "tools"
       ],
       "type": "object"
-    },
-    "McpStartupFailure": {
-      "properties": {
-        "error": {
-          "type": "string"
-        },
-        "server": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "error",
-        "server"
-      ],
-      "type": "object"
-    },
-    "McpStartupStatus": {
-      "oneOf": [
-        {
-          "properties": {
-            "state": {
-              "enum": [
-                "starting"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "state"
-          ],
-          "title": "StartingMcpStartupStatus",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "state": {
-              "enum": [
-                "ready"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "state"
-          ],
-          "title": "ReadyMcpStartupStatus",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "error": {
-              "type": "string"
-            },
-            "state": {
-              "enum": [
-                "failed"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "error",
-            "state"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "state": {
-              "enum": [
-                "cancelled"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "state"
-          ],
-          "title": "CancelledMcpStartupStatus",
-          "type": "object"
-        }
-      ]
     },
     "McpToolCallError": {
       "properties": {
@@ -7748,52 +5094,6 @@
       ],
       "type": "string"
     },
-    "NetworkApprovalContext": {
-      "properties": {
-        "host": {
-          "type": "string"
-        },
-        "protocol": {
-          "$ref": "#/definitions/NetworkApprovalProtocol"
-        }
-      },
-      "required": [
-        "host",
-        "protocol"
-      ],
-      "type": "object"
-    },
-    "NetworkApprovalProtocol": {
-      "enum": [
-        "http",
-        "https",
-        "socks5Tcp",
-        "socks5Udp"
-      ],
-      "type": "string"
-    },
-    "NetworkPolicyAmendment": {
-      "properties": {
-        "action": {
-          "$ref": "#/definitions/NetworkPolicyRuleAction"
-        },
-        "host": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "action",
-        "host"
-      ],
-      "type": "object"
-    },
-    "NetworkPolicyRuleAction": {
-      "enum": [
-        "allow",
-        "deny"
-      ],
-      "type": "string"
-    },
     "NetworkRequirements": {
       "properties": {
         "allowLocalBinding": {
@@ -7827,12 +5127,6 @@
           ]
         },
         "dangerouslyAllowAllUnixSockets": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "dangerouslyAllowNonLoopbackAdmin": {
           "type": [
             "boolean",
             "null"
@@ -7894,117 +5188,6 @@
         "overridingLayer"
       ],
       "type": "object"
-    },
-    "ParsedCommand": {
-      "oneOf": [
-        {
-          "properties": {
-            "cmd": {
-              "type": "string"
-            },
-            "name": {
-              "type": "string"
-            },
-            "path": {
-              "description": "(Best effort) Path to the file being read by the command. When possible, this is an absolute path, though when relative, it should be resolved against the `cwd`` that will be used to run the command to derive the absolute path.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "read"
-              ],
-              "title": "ReadParsedCommandType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "cmd",
-            "name",
-            "path",
-            "type"
-          ],
-          "title": "ReadParsedCommand",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "cmd": {
-              "type": "string"
-            },
-            "path": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "list_files"
-              ],
-              "title": "ListFilesParsedCommandType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "cmd",
-            "type"
-          ],
-          "title": "ListFilesParsedCommand",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "cmd": {
-              "type": "string"
-            },
-            "path": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "query": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "search"
-              ],
-              "title": "SearchParsedCommandType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "cmd",
-            "type"
-          ],
-          "title": "SearchParsedCommand",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "cmd": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "unknown"
-              ],
-              "title": "UnknownParsedCommandType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "cmd",
-            "type"
-          ],
-          "title": "UnknownParsedCommand",
-          "type": "object"
-        }
-      ]
     },
     "PatchApplyStatus": {
       "enum": [
@@ -8073,37 +5256,6 @@
         }
       ]
     },
-    "PermissionProfile": {
-      "properties": {
-        "file_system": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/FileSystemPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "macos": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "network": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "Personality": {
       "enum": [
         "none",
@@ -8138,22 +5290,6 @@
       "title": "PlanDeltaNotification",
       "type": "object"
     },
-    "PlanItemArg": {
-      "additionalProperties": false,
-      "properties": {
-        "status": {
-          "$ref": "#/definitions/StepStatus"
-        },
-        "step": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "status",
-        "step"
-      ],
-      "type": "object"
-    },
     "PlanType": {
       "enum": [
         "free",
@@ -8167,6 +5303,311 @@
         "unknown"
       ],
       "type": "string"
+    },
+    "PluginAuthPolicy": {
+      "enum": [
+        "ON_INSTALL",
+        "ON_USE"
+      ],
+      "type": "string"
+    },
+    "PluginInstallParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "marketplacePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "pluginName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "marketplacePath",
+        "pluginName"
+      ],
+      "title": "PluginInstallParams",
+      "type": "object"
+    },
+    "PluginInstallPolicy": {
+      "enum": [
+        "NOT_AVAILABLE",
+        "AVAILABLE",
+        "INSTALLED_BY_DEFAULT"
+      ],
+      "type": "string"
+    },
+    "PluginInstallResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "appsNeedingAuth": {
+          "items": {
+            "$ref": "#/definitions/AppSummary"
+          },
+          "type": "array"
+        },
+        "authPolicy": {
+          "$ref": "#/definitions/PluginAuthPolicy"
+        }
+      },
+      "required": [
+        "appsNeedingAuth",
+        "authPolicy"
+      ],
+      "title": "PluginInstallResponse",
+      "type": "object"
+    },
+    "PluginInterface": {
+      "properties": {
+        "brandColor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "composerIcon": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultPrompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "developerName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "displayName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "logo": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "longDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "privacyPolicyUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "screenshots": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        },
+        "shortDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "termsOfServiceUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "websiteUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "capabilities",
+        "screenshots"
+      ],
+      "type": "object"
+    },
+    "PluginListParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "cwds": {
+          "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "forceRemoteSync": {
+          "description": "When true, reconcile the official curated marketplace against the remote plugin state before listing marketplaces.",
+          "type": "boolean"
+        }
+      },
+      "title": "PluginListParams",
+      "type": "object"
+    },
+    "PluginListResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "marketplaces": {
+          "items": {
+            "$ref": "#/definitions/PluginMarketplaceEntry"
+          },
+          "type": "array"
+        },
+        "remoteSyncError": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "marketplaces"
+      ],
+      "title": "PluginListResponse",
+      "type": "object"
+    },
+    "PluginMarketplaceEntry": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "plugins": {
+          "items": {
+            "$ref": "#/definitions/PluginSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "plugins"
+      ],
+      "type": "object"
+    },
+    "PluginSource": {
+      "oneOf": [
+        {
+          "properties": {
+            "path": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "local"
+              ],
+              "title": "LocalPluginSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "LocalPluginSource",
+          "type": "object"
+        }
+      ]
+    },
+    "PluginSummary": {
+      "properties": {
+        "authPolicy": {
+          "$ref": "#/definitions/PluginAuthPolicy"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "installPolicy": {
+          "$ref": "#/definitions/PluginInstallPolicy"
+        },
+        "installed": {
+          "type": "boolean"
+        },
+        "interface": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PluginInterface"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/definitions/PluginSource"
+        }
+      },
+      "required": [
+        "authPolicy",
+        "enabled",
+        "id",
+        "installPolicy",
+        "installed",
+        "name",
+        "source"
+      ],
+      "type": "object"
+    },
+    "PluginUninstallParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "pluginId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId"
+      ],
+      "title": "PluginUninstallParams",
+      "type": "object"
+    },
+    "PluginUninstallResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "PluginUninstallResponse",
+      "type": "object"
     },
     "ProductSurface": {
       "enum": [
@@ -8242,6 +5683,16 @@
           "anyOf": [
             {
               "$ref": "#/definitions/ServiceTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolsV2"
             },
             {
               "type": "null"
@@ -8411,180 +5862,6 @@
           "type": "object"
         }
       ]
-    },
-    "RealtimeAudioFrame": {
-      "properties": {
-        "data": {
-          "type": "string"
-        },
-        "num_channels": {
-          "format": "uint16",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "sample_rate": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "samples_per_channel": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "data",
-        "num_channels",
-        "sample_rate"
-      ],
-      "type": "object"
-    },
-    "RealtimeEvent": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "SessionUpdated": {
-              "properties": {
-                "instructions": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "session_id": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "session_id"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "SessionUpdated"
-          ],
-          "title": "SessionUpdatedRealtimeEvent",
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "AudioOut": {
-              "$ref": "#/definitions/RealtimeAudioFrame"
-            }
-          },
-          "required": [
-            "AudioOut"
-          ],
-          "title": "AudioOutRealtimeEvent",
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "ConversationItemAdded": true
-          },
-          "required": [
-            "ConversationItemAdded"
-          ],
-          "title": "ConversationItemAddedRealtimeEvent",
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "ConversationItemDone": {
-              "properties": {
-                "item_id": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "item_id"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "ConversationItemDone"
-          ],
-          "title": "ConversationItemDoneRealtimeEvent",
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "HandoffRequested": {
-              "$ref": "#/definitions/RealtimeHandoffRequested"
-            }
-          },
-          "required": [
-            "HandoffRequested"
-          ],
-          "title": "HandoffRequestedRealtimeEvent",
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Error": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "Error"
-          ],
-          "title": "ErrorRealtimeEvent",
-          "type": "object"
-        }
-      ]
-    },
-    "RealtimeHandoffMessage": {
-      "properties": {
-        "role": {
-          "type": "string"
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "role",
-        "text"
-      ],
-      "type": "object"
-    },
-    "RealtimeHandoffRequested": {
-      "properties": {
-        "handoff_id": {
-          "type": "string"
-        },
-        "input_transcript": {
-          "type": "string"
-        },
-        "item_id": {
-          "type": "string"
-        },
-        "messages": {
-          "items": {
-            "$ref": "#/definitions/RealtimeHandoffMessage"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "handoff_id",
-        "input_transcript",
-        "item_id",
-        "messages"
-      ],
-      "type": "object"
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
@@ -8816,57 +6093,6 @@
           "type": "integer"
         }
       ]
-    },
-    "RequestUserInputQuestion": {
-      "properties": {
-        "header": {
-          "type": "string"
-        },
-        "id": {
-          "type": "string"
-        },
-        "isOther": {
-          "default": false,
-          "type": "boolean"
-        },
-        "isSecret": {
-          "default": false,
-          "type": "boolean"
-        },
-        "options": {
-          "items": {
-            "$ref": "#/definitions/RequestUserInputQuestionOption"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "question": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "header",
-        "id",
-        "question"
-      ],
-      "type": "object"
-    },
-    "RequestUserInputQuestionOption": {
-      "properties": {
-        "description": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "description",
-        "label"
-      ],
-      "type": "object"
     },
     "ResidencyRequirement": {
       "enum": [
@@ -9112,6 +6338,12 @@
             "name": {
               "type": "string"
             },
+            "namespace": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "function_call"
@@ -9127,6 +6359,47 @@
             "type"
           ],
           "title": "FunctionCallResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "arguments": true,
+            "call_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "execution": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "tool_search_call"
+              ],
+              "title": "ToolSearchCallResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "execution",
+            "type"
+          ],
+          "title": "ToolSearchCallResponseItem",
           "type": "object"
         },
         {
@@ -9220,10 +6493,45 @@
         },
         {
           "properties": {
+            "call_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "execution": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tools": {
+              "items": true,
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "tool_search_output"
+              ],
+              "title": "ToolSearchOutputResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "execution",
+            "status",
+            "tools",
+            "type"
+          ],
+          "title": "ToolSearchOutputResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "action": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/WebSearchAction"
+                  "$ref": "#/definitions/ResponsesApiWebSearchAction"
                 },
                 {
                   "type": "null"
@@ -9255,6 +6563,40 @@
             "type"
           ],
           "title": "WebSearchCallResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "image_generation_call"
+              ],
+              "title": "ImageGenerationCallResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "title": "ImageGenerationCallResponseItem",
           "type": "object"
         },
         {
@@ -9315,127 +6657,104 @@
         }
       ]
     },
-    "Result_of_CallToolResult_or_String": {
+    "ResponsesApiWebSearchAction": {
       "oneOf": [
         {
           "properties": {
-            "Ok": {
-              "$ref": "#/definitions/CallToolResult"
-            }
-          },
-          "required": [
-            "Ok"
-          ],
-          "title": "OkResult_of_CallToolResult_or_String",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "Err": {
+            "queries": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "search"
+              ],
+              "title": "SearchResponsesApiWebSearchActionType",
               "type": "string"
             }
           },
           "required": [
-            "Err"
+            "type"
           ],
-          "title": "ErrResult_of_CallToolResult_or_String",
+          "title": "SearchResponsesApiWebSearchAction",
           "type": "object"
-        }
-      ]
-    },
-    "ReviewCodeLocation": {
-      "description": "Location of the code related to a review finding.",
-      "properties": {
-        "absolute_file_path": {
-          "type": "string"
-        },
-        "line_range": {
-          "$ref": "#/definitions/ReviewLineRange"
-        }
-      },
-      "required": [
-        "absolute_file_path",
-        "line_range"
-      ],
-      "type": "object"
-    },
-    "ReviewDecision": {
-      "description": "User's decision in response to an ExecApprovalRequest.",
-      "oneOf": [
-        {
-          "description": "User has approved this command and the agent should execute it.",
-          "enum": [
-            "approved"
-          ],
-          "type": "string"
         },
         {
-          "additionalProperties": false,
-          "description": "User has approved this command and wants to apply the proposed execpolicy amendment so future matching commands are permitted.",
           "properties": {
-            "approved_execpolicy_amendment": {
-              "properties": {
-                "proposed_execpolicy_amendment": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                }
-              },
-              "required": [
-                "proposed_execpolicy_amendment"
+            "type": {
+              "enum": [
+                "open_page"
               ],
-              "type": "object"
+              "title": "OpenPageResponsesApiWebSearchActionType",
+              "type": "string"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [
-            "approved_execpolicy_amendment"
+            "type"
           ],
-          "title": "ApprovedExecpolicyAmendmentReviewDecision",
+          "title": "OpenPageResponsesApiWebSearchAction",
           "type": "object"
         },
         {
-          "description": "User has approved this request and wants future prompts in the same session-scoped approval cache to be automatically approved for the remainder of the session.",
-          "enum": [
-            "approved_for_session"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "description": "User chose to persist a network policy rule (allow/deny) for future requests to the same host.",
           "properties": {
-            "network_policy_amendment": {
-              "properties": {
-                "network_policy_amendment": {
-                  "$ref": "#/definitions/NetworkPolicyAmendment"
-                }
-              },
-              "required": [
-                "network_policy_amendment"
+            "pattern": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "find_in_page"
               ],
-              "type": "object"
+              "title": "FindInPageResponsesApiWebSearchActionType",
+              "type": "string"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [
-            "network_policy_amendment"
+            "type"
           ],
-          "title": "NetworkPolicyAmendmentReviewDecision",
+          "title": "FindInPageResponsesApiWebSearchAction",
           "type": "object"
         },
         {
-          "description": "User has denied this command and the agent should not execute it, but it should continue the session and try something else.",
-          "enum": [
-            "denied"
+          "properties": {
+            "type": {
+              "enum": [
+                "other"
+              ],
+              "title": "OtherResponsesApiWebSearchActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
           ],
-          "type": "string"
-        },
-        {
-          "description": "User has denied this command and the agent should not do anything until the user's next command.",
-          "enum": [
-            "abort"
-          ],
-          "type": "string"
+          "title": "OtherResponsesApiWebSearchAction",
+          "type": "object"
         }
       ]
     },
@@ -9445,84 +6764,6 @@
         "detached"
       ],
       "type": "string"
-    },
-    "ReviewFinding": {
-      "description": "A single review finding describing an observed issue or recommendation.",
-      "properties": {
-        "body": {
-          "type": "string"
-        },
-        "code_location": {
-          "$ref": "#/definitions/ReviewCodeLocation"
-        },
-        "confidence_score": {
-          "format": "float",
-          "type": "number"
-        },
-        "priority": {
-          "format": "int32",
-          "type": "integer"
-        },
-        "title": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "body",
-        "code_location",
-        "confidence_score",
-        "priority",
-        "title"
-      ],
-      "type": "object"
-    },
-    "ReviewLineRange": {
-      "description": "Inclusive line range in a file associated with the finding.",
-      "properties": {
-        "end": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "start": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "end",
-        "start"
-      ],
-      "type": "object"
-    },
-    "ReviewOutputEvent": {
-      "description": "Structured review result produced by a child review session.",
-      "properties": {
-        "findings": {
-          "items": {
-            "$ref": "#/definitions/ReviewFinding"
-          },
-          "type": "array"
-        },
-        "overall_confidence_score": {
-          "format": "float",
-          "type": "number"
-        },
-        "overall_correctness": {
-          "type": "string"
-        },
-        "overall_explanation": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "findings",
-        "overall_confidence_score",
-        "overall_correctness",
-        "overall_explanation"
-      ],
-      "type": "object"
     },
     "ReviewStartParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -9699,6 +6940,10 @@
               "default": {
                 "type": "fullAccess"
               }
+            },
+            "networkAccess": {
+              "default": false,
+              "type": "boolean"
             },
             "type": {
               "enum": [
@@ -9938,6 +7183,26 @@
           "properties": {
             "method": {
               "enum": [
+                "skills/changed"
+              ],
+              "title": "Skills/changedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SkillsChangedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Skills/changedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/name/updated"
               ],
               "title": "Thread/name/updatedNotificationMethod",
@@ -9998,6 +7263,26 @@
           "properties": {
             "method": {
               "enum": [
+                "hook/started"
+              ],
+              "title": "Hook/startedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/HookStartedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Hook/startedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "turn/completed"
               ],
               "title": "Turn/completedNotificationMethod",
@@ -10012,6 +7297,26 @@
             "params"
           ],
           "title": "Turn/completedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "hook/completed"
+              ],
+              "title": "Hook/completedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/HookCompletedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Hook/completedNotification",
           "type": "object"
         },
         {
@@ -10133,6 +7438,27 @@
             "params"
           ],
           "title": "Item/plan/deltaNotification",
+          "type": "object"
+        },
+        {
+          "description": "Stream base64-encoded stdout/stderr chunks for a running `command/exec` session.",
+          "properties": {
+            "method": {
+              "enum": [
+                "command/exec/outputDelta"
+              ],
+              "title": "Command/exec/outputDeltaNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/CommandExecOutputDeltaNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Command/exec/outputDeltaNotification",
           "type": "object"
         },
         {
@@ -10679,28 +8005,10 @@
     },
     "ServiceTier": {
       "enum": [
-        "fast"
+        "fast",
+        "flex"
       ],
       "type": "string"
-    },
-    "SessionNetworkProxyRuntime": {
-      "properties": {
-        "admin_addr": {
-          "type": "string"
-        },
-        "http_addr": {
-          "type": "string"
-        },
-        "socks_addr": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "admin_addr",
-        "http_addr",
-        "socks_addr"
-      ],
-      "type": "object"
     },
     "SessionSource": {
       "oneOf": [
@@ -10929,6 +8237,12 @@
       ],
       "type": "object"
     },
+    "SkillsChangedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+      "title": "SkillsChangedNotification",
+      "type": "object"
+    },
     "SkillsConfigWriteParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -11119,14 +8433,6 @@
       ],
       "title": "SkillsRemoteWriteResponse",
       "type": "object"
-    },
-    "StepStatus": {
-      "enum": [
-        "pending",
-        "in_progress",
-        "completed"
-      ],
-      "type": "string"
     },
     "SubAgentSource": {
       "oneOf": [
@@ -11501,6 +8807,9 @@
             "string",
             "null"
           ]
+        },
+        "ephemeral": {
+          "type": "boolean"
         },
         "model": {
           "description": "Configuration overrides for the forked thread, if any.",
@@ -11962,12 +9271,30 @@
               "description": "Unique identifier for this collab tool call.",
               "type": "string"
             },
+            "model": {
+              "description": "Model requested for the spawned agent, when applicable.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "prompt": {
               "description": "Prompt text sent as part of the collab tool call, when available.",
               "type": [
                 "string",
                 "null"
               ]
+            },
+            "reasoningEffort": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningEffort"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reasoning effort requested for the spawned agent, when applicable."
             },
             "receiverThreadIds": {
               "description": "Thread ID of the receiving agent, when applicable. In case of spawn operation, this corresponds to the newly spawned agent.",
@@ -12072,6 +9399,40 @@
             "type"
           ],
           "title": "ImageViewThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revisedPrompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "imageGeneration"
+              ],
+              "title": "ImageGenerationThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "title": "ImageGenerationThreadItem",
           "type": "object"
         },
         {
@@ -12287,6 +9648,69 @@
         "data"
       ],
       "title": "ThreadLoadedListResponse",
+      "type": "object"
+    },
+    "ThreadMetadataGitInfoUpdateParams": {
+      "properties": {
+        "branch": {
+          "description": "Omit to leave the stored branch unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "originUrl": {
+          "description": "Omit to leave the stored origin URL unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha": {
+          "description": "Omit to leave the stored commit unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ThreadMetadataUpdateParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "gitInfo": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadMetadataGitInfoUpdateParams"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value."
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadMetadataUpdateParams",
+      "type": "object"
+    },
+    "ThreadMetadataUpdateResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "thread": {
+          "$ref": "#/definitions/Thread"
+        }
+      },
+      "required": [
+        "thread"
+      ],
+      "title": "ThreadMetadataUpdateResponse",
       "type": "object"
     },
     "ThreadNameUpdatedNotification": {
@@ -13074,38 +10498,6 @@
       ],
       "type": "string"
     },
-    "TokenUsage": {
-      "properties": {
-        "cached_input_tokens": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "input_tokens": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "output_tokens": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "reasoning_output_tokens": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "total_tokens": {
-          "format": "int64",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "cached_input_tokens",
-        "input_tokens",
-        "output_tokens",
-        "reasoning_output_tokens",
-        "total_tokens"
-      ],
-      "type": "object"
-    },
     "TokenUsageBreakdown": {
       "properties": {
         "cachedInputTokens": {
@@ -13135,28 +10527,6 @@
         "outputTokens",
         "reasoningOutputTokens",
         "totalTokens"
-      ],
-      "type": "object"
-    },
-    "TokenUsageInfo": {
-      "properties": {
-        "last_token_usage": {
-          "$ref": "#/definitions/TokenUsage"
-        },
-        "model_context_window": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "total_token_usage": {
-          "$ref": "#/definitions/TokenUsage"
-        }
-      },
-      "required": [
-        "last_token_usage",
-        "total_token_usage"
       ],
       "type": "object"
     },
@@ -13205,9 +10575,13 @@
           ]
         },
         "web_search": {
-          "type": [
-            "boolean",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchToolConfig"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -13246,14 +10620,6 @@
         "status"
       ],
       "type": "object"
-    },
-    "TurnAbortReason": {
-      "enum": [
-        "interrupted",
-        "replaced",
-        "review_ended"
-      ],
-      "type": "string"
     },
     "TurnCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -13343,182 +10709,6 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "TurnInterruptResponse",
       "type": "object"
-    },
-    "TurnItem": {
-      "oneOf": [
-        {
-          "properties": {
-            "content": {
-              "items": {
-                "$ref": "#/definitions/UserInput"
-              },
-              "type": "array"
-            },
-            "id": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "UserMessage"
-              ],
-              "title": "UserMessageTurnItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "content",
-            "id",
-            "type"
-          ],
-          "title": "UserMessageTurnItem",
-          "type": "object"
-        },
-        {
-          "description": "Assistant-authored message payload used in turn-item streams.\n\n`phase` is optional because not all providers/models emit it. Consumers should use it when present, but retain legacy completion semantics when it is `None`.",
-          "properties": {
-            "content": {
-              "items": {
-                "$ref": "#/definitions/AgentMessageContent"
-              },
-              "type": "array"
-            },
-            "id": {
-              "type": "string"
-            },
-            "phase": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/MessagePhase"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Optional phase metadata carried through from `ResponseItem::Message`.\n\nThis is currently used by TUI rendering to distinguish mid-turn commentary from a final answer and avoid status-indicator jitter."
-            },
-            "type": {
-              "enum": [
-                "AgentMessage"
-              ],
-              "title": "AgentMessageTurnItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "content",
-            "id",
-            "type"
-          ],
-          "title": "AgentMessageTurnItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "text": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "Plan"
-              ],
-              "title": "PlanTurnItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "text",
-            "type"
-          ],
-          "title": "PlanTurnItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "raw_content": {
-              "default": [],
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "summary_text": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "type": {
-              "enum": [
-                "Reasoning"
-              ],
-              "title": "ReasoningTurnItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "summary_text",
-            "type"
-          ],
-          "title": "ReasoningTurnItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "action": {
-              "$ref": "#/definitions/WebSearchAction"
-            },
-            "id": {
-              "type": "string"
-            },
-            "query": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "WebSearch"
-              ],
-              "title": "WebSearchTurnItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "action",
-            "id",
-            "query",
-            "type"
-          ],
-          "title": "WebSearchTurnItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "ContextCompaction"
-              ],
-              "title": "ContextCompactionTurnItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "type"
-          ],
-          "title": "ContextCompactionTurnItem",
-          "type": "object"
-        }
-      ]
     },
     "TurnPlanStep": {
       "properties": {
@@ -13926,7 +11116,7 @@
           "properties": {
             "type": {
               "enum": [
-                "open_page"
+                "openPage"
               ],
               "title": "OpenPageWebSearchActionType",
               "type": "string"
@@ -13954,7 +11144,7 @@
             },
             "type": {
               "enum": [
-                "find_in_page"
+                "findInPage"
               ],
               "title": "FindInPageWebSearchActionType",
               "type": "string"
@@ -13990,6 +11180,44 @@
         }
       ]
     },
+    "WebSearchContextSize": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "WebSearchLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "city": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "country": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "region": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timezone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "WebSearchMode": {
       "enum": [
         "disabled",
@@ -13997,6 +11225,41 @@
         "live"
       ],
       "type": "string"
+    },
+    "WebSearchToolConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "context_size": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchContextSize"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchLocation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "WindowsSandboxSetupCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -14031,6 +11294,16 @@
     "WindowsSandboxSetupStartParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "cwd": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "mode": {
           "$ref": "#/definitions/WindowsSandboxSetupMode"
         }

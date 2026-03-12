@@ -36,6 +36,9 @@ codex_rust_crate(
     ],
     test_data_extra = [
         "config.schema.json",
+    ] + glob([
+        "src/**/snapshots/**",
+    ]) + [
         # This is a bit of a hack, but empirically, some of our integration tests
         # are relying on the presence of this file as a repo root marker. When
         # running tests locally, this "just works," but in remote execution,
@@ -46,7 +49,6 @@ codex_rust_crate(
         # succeeds without this workaround.
         "//:AGENTS.md",
     ],
-    integration_deps_extra = ["//codex-rs/core/tests/common:common"],
     test_tags = ["no-sandbox"],
     extra_binaries = [
         "//codex-rs/linux-sandbox:codex-linux-sandbox",

@@ -30,6 +30,26 @@ struct ActiveAgents {
     used_agent_nicknames: HashSet<String>,
     nickname_reset_count: usize,
 }
+
+fn format_agent_nickname(name: &str, nickname_reset_count: usize) -> String {
+    match nickname_reset_count {
+        0 => name.to_string(),
+        reset_count => {
+            let value = reset_count + 1;
+            let suffix = match value % 100 {
+                11..=13 => "th",
+                _ => match value % 10 {
+                    1 => "st", // codespell:ignore
+                    2 => "nd", // codespell:ignore
+                    3 => "rd", // codespell:ignore
+                    _ => "th", // codespell:ignore
+                },
+            };
+            format!("{name} the {value}{suffix}")
+        }
+    }
+}
+
 fn session_depth(session_source: &SessionSource) -> i32 {
     match session_source {
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) => *depth,
@@ -107,20 +127,23 @@ impl Guards {
             if names.is_empty() {
                 return None;
             }
-            let available_names: Vec<&str> = names
+            let available_names: Vec<String> = names
                 .iter()
-                .copied()
-                .filter(|name| !active_agents.used_agent_nicknames.contains(*name))
+                .map(|name| format_agent_nickname(name, active_agents.nickname_reset_count))
+                .filter(|name| !active_agents.used_agent_nicknames.contains(name))
                 .collect();
             if let Some(name) = available_names.choose(&mut rand::rng()) {
-                (*name).to_string()
+                name.clone()
             } else {
                 active_agents.used_agent_nicknames.clear();
                 active_agents.nickname_reset_count += 1;
                 if let Some(metrics) = codex_otel::metrics::global() {
                     let _ = metrics.counter("codex.multi_agent.nickname_pool_reset", 1, &[]);
                 }
-                names.choose(&mut rand::rng())?.to_string()
+                format_agent_nickname(
+                    names.choose(&mut rand::rng())?,
+                    active_agents.nickname_reset_count,
+                )
             }
         };
         active_agents
@@ -199,201 +222,5 @@ impl Drop for SpawnReservation {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn session_depth_defaults_to_zero_for_root_sources() {
-        assert_eq!(session_depth(&SessionSource::Cli), 0);
-    }
-
-    #[test]
-    fn thread_spawn_depth_increments_and_enforces_limit() {
-        let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id: ThreadId::new(),
-            depth: 1,
-            agent_nickname: None,
-            agent_role: None,
-        });
-        let child_depth = next_thread_spawn_depth(&session_source);
-        assert_eq!(child_depth, 2);
-        assert!(exceeds_thread_spawn_depth_limit(child_depth, 1));
-    }
-
-    #[test]
-    fn non_thread_spawn_subagents_default_to_depth_zero() {
-        let session_source = SessionSource::SubAgent(SubAgentSource::Review);
-        assert_eq!(session_depth(&session_source), 0);
-        assert_eq!(next_thread_spawn_depth(&session_source), 1);
-        assert!(!exceeds_thread_spawn_depth_limit(1, 1));
-    }
-
-    #[test]
-    fn reservation_drop_releases_slot() {
-        let guards = Arc::new(Guards::default());
-        let reservation = guards.reserve_spawn_slot(Some(1)).expect("reserve slot");
-        drop(reservation);
-
-        let reservation = guards.reserve_spawn_slot(Some(1)).expect("slot released");
-        drop(reservation);
-    }
-
-    #[test]
-    fn commit_holds_slot_until_release() {
-        let guards = Arc::new(Guards::default());
-        let reservation = guards.reserve_spawn_slot(Some(1)).expect("reserve slot");
-        let thread_id = ThreadId::new();
-        reservation.commit(thread_id);
-
-        let err = match guards.reserve_spawn_slot(Some(1)) {
-            Ok(_) => panic!("limit should be enforced"),
-            Err(err) => err,
-        };
-        let CodexErr::AgentLimitReached { max_threads } = err else {
-            panic!("expected CodexErr::AgentLimitReached");
-        };
-        assert_eq!(max_threads, 1);
-
-        guards.release_spawned_thread(thread_id);
-        let reservation = guards
-            .reserve_spawn_slot(Some(1))
-            .expect("slot released after thread removal");
-        drop(reservation);
-    }
-
-    #[test]
-    fn release_ignores_unknown_thread_id() {
-        let guards = Arc::new(Guards::default());
-        let reservation = guards.reserve_spawn_slot(Some(1)).expect("reserve slot");
-        let thread_id = ThreadId::new();
-        reservation.commit(thread_id);
-
-        guards.release_spawned_thread(ThreadId::new());
-
-        let err = match guards.reserve_spawn_slot(Some(1)) {
-            Ok(_) => panic!("limit should still be enforced"),
-            Err(err) => err,
-        };
-        let CodexErr::AgentLimitReached { max_threads } = err else {
-            panic!("expected CodexErr::AgentLimitReached");
-        };
-        assert_eq!(max_threads, 1);
-
-        guards.release_spawned_thread(thread_id);
-        let reservation = guards
-            .reserve_spawn_slot(Some(1))
-            .expect("slot released after real thread removal");
-        drop(reservation);
-    }
-
-    #[test]
-    fn release_is_idempotent_for_registered_threads() {
-        let guards = Arc::new(Guards::default());
-        let reservation = guards.reserve_spawn_slot(Some(1)).expect("reserve slot");
-        let first_id = ThreadId::new();
-        reservation.commit(first_id);
-
-        guards.release_spawned_thread(first_id);
-
-        let reservation = guards.reserve_spawn_slot(Some(1)).expect("slot reused");
-        let second_id = ThreadId::new();
-        reservation.commit(second_id);
-
-        guards.release_spawned_thread(first_id);
-
-        let err = match guards.reserve_spawn_slot(Some(1)) {
-            Ok(_) => panic!("limit should still be enforced"),
-            Err(err) => err,
-        };
-        let CodexErr::AgentLimitReached { max_threads } = err else {
-            panic!("expected CodexErr::AgentLimitReached");
-        };
-        assert_eq!(max_threads, 1);
-
-        guards.release_spawned_thread(second_id);
-        let reservation = guards
-            .reserve_spawn_slot(Some(1))
-            .expect("slot released after second thread removal");
-        drop(reservation);
-    }
-
-    #[test]
-    fn failed_spawn_keeps_nickname_marked_used() {
-        let guards = Arc::new(Guards::default());
-        let mut reservation = guards.reserve_spawn_slot(None).expect("reserve slot");
-        let agent_nickname = reservation
-            .reserve_agent_nickname(&["alpha"])
-            .expect("reserve agent name");
-        assert_eq!(agent_nickname, "alpha");
-        drop(reservation);
-
-        let mut reservation = guards.reserve_spawn_slot(None).expect("reserve slot");
-        let agent_nickname = reservation
-            .reserve_agent_nickname(&["alpha", "beta"])
-            .expect("unused name should still be preferred");
-        assert_eq!(agent_nickname, "beta");
-    }
-
-    #[test]
-    fn agent_nickname_resets_used_pool_when_exhausted() {
-        let guards = Arc::new(Guards::default());
-        let mut first = guards.reserve_spawn_slot(None).expect("reserve first slot");
-        let first_name = first
-            .reserve_agent_nickname(&["alpha"])
-            .expect("reserve first agent name");
-        let first_id = ThreadId::new();
-        first.commit(first_id);
-        assert_eq!(first_name, "alpha");
-
-        let mut second = guards
-            .reserve_spawn_slot(None)
-            .expect("reserve second slot");
-        let second_name = second
-            .reserve_agent_nickname(&["alpha"])
-            .expect("name should be reused after pool reset");
-        assert_eq!(second_name, "alpha");
-        let active_agents = guards
-            .active_agents
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        assert_eq!(active_agents.nickname_reset_count, 1);
-    }
-
-    #[test]
-    fn released_nickname_stays_used_until_pool_reset() {
-        let guards = Arc::new(Guards::default());
-
-        let mut first = guards.reserve_spawn_slot(None).expect("reserve first slot");
-        let first_name = first
-            .reserve_agent_nickname(&["alpha"])
-            .expect("reserve first agent name");
-        let first_id = ThreadId::new();
-        first.commit(first_id);
-        assert_eq!(first_name, "alpha");
-
-        guards.release_spawned_thread(first_id);
-
-        let mut second = guards
-            .reserve_spawn_slot(None)
-            .expect("reserve second slot");
-        let second_name = second
-            .reserve_agent_nickname(&["alpha", "beta"])
-            .expect("released name should still be marked used");
-        assert_eq!(second_name, "beta");
-        let second_id = ThreadId::new();
-        second.commit(second_id);
-        guards.release_spawned_thread(second_id);
-
-        let mut third = guards.reserve_spawn_slot(None).expect("reserve third slot");
-        let third_name = third
-            .reserve_agent_nickname(&["alpha", "beta"])
-            .expect("pool reset should permit a duplicate");
-        assert!(third_name == "alpha" || third_name == "beta");
-        let active_agents = guards
-            .active_agents
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        assert_eq!(active_agents.nickname_reset_count, 1);
-    }
-}
+#[path = "guards_tests.rs"]
+mod tests;

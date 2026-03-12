@@ -4,6 +4,8 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeAudioFrame;
 use crate::endpoint::realtime_websocket::protocol::RealtimeEvent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
+use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptDelta;
+use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
 use crate::endpoint::realtime_websocket::protocol::SessionAudio;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioFormat;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioInput;
@@ -198,7 +200,13 @@ pub struct RealtimeWebsocketWriter {
 #[derive(Clone)]
 pub struct RealtimeWebsocketEvents {
     rx_message: Arc<Mutex<mpsc::UnboundedReceiver<Result<Message, WsError>>>>,
+    active_transcript: Arc<Mutex<ActiveTranscriptState>>,
     is_closed: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct ActiveTranscriptState {
+    entries: Vec<RealtimeTranscriptEntry>,
 }
 
 impl RealtimeWebsocketConnection {
@@ -249,6 +257,7 @@ impl RealtimeWebsocketConnection {
             },
             events: RealtimeWebsocketEvents {
                 rx_message: Arc::new(Mutex::new(rx_message)),
+                active_transcript: Arc::new(Mutex::new(ActiveTranscriptState::default())),
                 is_closed,
             },
         }
@@ -300,7 +309,7 @@ impl RealtimeWebsocketWriter {
                         },
                     },
                     output: SessionAudioOutput {
-                        voice: "mundo".to_string(),
+                        voice: "fathom".to_string(),
                     },
                 },
             },
@@ -366,7 +375,8 @@ impl RealtimeWebsocketEvents {
 
             match msg {
                 Message::Text(text) => {
-                    if let Some(event) = parse_realtime_event(&text) {
+                    if let Some(mut event) = parse_realtime_event(&text) {
+                        self.update_active_transcript(&mut event).await;
                         debug!(?event, "realtime websocket parsed event");
                         return Ok(Some(event));
                     }
@@ -390,6 +400,44 @@ impl RealtimeWebsocketEvents {
             }
         }
     }
+
+    async fn update_active_transcript(&self, event: &mut RealtimeEvent) {
+        let mut active_transcript = self.active_transcript.lock().await;
+        match event {
+            RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta { delta }) => {
+                append_transcript_delta(&mut active_transcript.entries, "user", delta);
+            }
+            RealtimeEvent::OutputTranscriptDelta(RealtimeTranscriptDelta { delta }) => {
+                append_transcript_delta(&mut active_transcript.entries, "assistant", delta);
+            }
+            RealtimeEvent::HandoffRequested(handoff) => {
+                handoff.active_transcript = std::mem::take(&mut active_transcript.entries);
+            }
+            RealtimeEvent::SessionUpdated { .. }
+            | RealtimeEvent::AudioOut(_)
+            | RealtimeEvent::ConversationItemAdded(_)
+            | RealtimeEvent::ConversationItemDone { .. }
+            | RealtimeEvent::Error(_) => {}
+        }
+    }
+}
+
+fn append_transcript_delta(entries: &mut Vec<RealtimeTranscriptEntry>, role: &str, delta: &str) {
+    if delta.is_empty() {
+        return;
+    }
+
+    if let Some(last_entry) = entries.last_mut()
+        && last_entry.role == role
+    {
+        last_entry.text.push_str(delta);
+        return;
+    }
+
+    entries.push(RealtimeTranscriptEntry {
+        role: role.to_string(),
+        text: delta.to_string(),
+    });
 }
 
 pub struct RealtimeWebsocketClient {
@@ -558,8 +606,9 @@ fn normalize_realtime_path(url: &mut Url) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::endpoint::realtime_websocket::protocol::RealtimeHandoffMessage;
     use crate::endpoint::realtime_websocket::protocol::RealtimeHandoffRequested;
+    use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptDelta;
+    use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
     use serde_json::Value;
@@ -644,10 +693,7 @@ mod tests {
             "type": "conversation.handoff.requested",
             "handoff_id": "handoff_123",
             "item_id": "item_123",
-            "input_transcript": "delegate this",
-            "messages": [
-                {"role": "user", "text": "delegate this"}
-            ]
+            "input_transcript": "delegate this"
         })
         .to_string();
 
@@ -657,11 +703,44 @@ mod tests {
                 handoff_id: "handoff_123".to_string(),
                 item_id: "item_123".to_string(),
                 input_transcript: "delegate this".to_string(),
-                messages: vec![RealtimeHandoffMessage {
-                    role: "user".to_string(),
-                    text: "delegate this".to_string(),
-                }],
+                active_transcript: Vec::new(),
             }))
+        );
+    }
+
+    #[test]
+    fn parse_input_transcript_delta_event() {
+        let payload = json!({
+            "type": "conversation.input_transcript.delta",
+            "delta": "hello "
+        })
+        .to_string();
+
+        assert_eq!(
+            parse_realtime_event(payload.as_str()),
+            Some(RealtimeEvent::InputTranscriptDelta(
+                RealtimeTranscriptDelta {
+                    delta: "hello ".to_string(),
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_output_transcript_delta_event() {
+        let payload = json!({
+            "type": "conversation.output_transcript.delta",
+            "delta": "hi"
+        })
+        .to_string();
+
+        assert_eq!(
+            parse_realtime_event(payload.as_str()),
+            Some(RealtimeEvent::OutputTranscriptDelta(
+                RealtimeTranscriptDelta {
+                    delta: "hi".to_string(),
+                }
+            ))
         );
     }
 
@@ -793,7 +872,7 @@ mod tests {
             );
             assert_eq!(
                 first_json["session"]["audio"]["output"]["voice"],
-                Value::String("mundo".to_string())
+                Value::String("fathom".to_string())
             );
 
             ws.send(Message::Text(
@@ -855,11 +934,43 @@ mod tests {
 
             ws.send(Message::Text(
                 json!({
+                    "type": "conversation.input_transcript.delta",
+                    "delta": "delegate "
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("send input transcript delta");
+
+            ws.send(Message::Text(
+                json!({
+                    "type": "conversation.input_transcript.delta",
+                    "delta": "now"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("send input transcript delta");
+
+            ws.send(Message::Text(
+                json!({
+                    "type": "conversation.output_transcript.delta",
+                    "delta": "working"
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .expect("send output transcript delta");
+
+            ws.send(Message::Text(
+                json!({
                     "type": "conversation.handoff.requested",
                     "handoff_id": "handoff_1",
                     "item_id": "item_2",
-                    "input_transcript": "delegate now",
-                    "messages": [{"role": "user", "text": "delegate now"}]
+                    "input_transcript": "delegate now"
                 })
                 .to_string()
                 .into(),
@@ -945,6 +1056,42 @@ mod tests {
             })
         );
 
+        let input_delta_event = connection
+            .next_event()
+            .await
+            .expect("next event")
+            .expect("event");
+        assert_eq!(
+            input_delta_event,
+            RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta {
+                delta: "delegate ".to_string(),
+            })
+        );
+
+        let input_delta_event = connection
+            .next_event()
+            .await
+            .expect("next event")
+            .expect("event");
+        assert_eq!(
+            input_delta_event,
+            RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta {
+                delta: "now".to_string(),
+            })
+        );
+
+        let output_delta_event = connection
+            .next_event()
+            .await
+            .expect("next event")
+            .expect("event");
+        assert_eq!(
+            output_delta_event,
+            RealtimeEvent::OutputTranscriptDelta(RealtimeTranscriptDelta {
+                delta: "working".to_string(),
+            })
+        );
+
         let added_event = connection
             .next_event()
             .await
@@ -956,10 +1103,16 @@ mod tests {
                 handoff_id: "handoff_1".to_string(),
                 item_id: "item_2".to_string(),
                 input_transcript: "delegate now".to_string(),
-                messages: vec![RealtimeHandoffMessage {
-                    role: "user".to_string(),
-                    text: "delegate now".to_string(),
-                }],
+                active_transcript: vec![
+                    RealtimeTranscriptEntry {
+                        role: "user".to_string(),
+                        text: "delegate now".to_string(),
+                    },
+                    RealtimeTranscriptEntry {
+                        role: "assistant".to_string(),
+                        text: "working".to_string(),
+                    },
+                ],
             })
         );
 

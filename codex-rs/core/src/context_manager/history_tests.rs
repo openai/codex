@@ -1,12 +1,15 @@
 use super::*;
 use crate::truncate;
 use crate::truncate::TruncationPolicy;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_git::GhostCommit;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
@@ -14,6 +17,9 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::default_input_modalities;
+use image::ImageBuffer;
+use image::ImageFormat;
+use image::Rgba;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 
@@ -265,6 +271,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
         ResponseItem::FunctionCall {
             id: None,
             name: "view_image".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
         },
@@ -276,6 +283,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                 },
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "https://example.com/result.png".to_string(),
+                    detail: None,
                 },
             ]),
         },
@@ -294,6 +302,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                 },
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "https://example.com/js-repl-result.png".to_string(),
+                    detail: None,
                 },
             ]),
         },
@@ -324,6 +333,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
         ResponseItem::FunctionCall {
             id: None,
             name: "view_image".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
         },
@@ -388,6 +398,119 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
 }
 
 #[test]
+fn for_prompt_rewrites_image_generation_calls_when_images_are_supported() {
+    let history = create_history_with_items(vec![
+        ResponseItem::ImageGenerationCall {
+            id: "ig_123".to_string(),
+            status: "generating".to_string(),
+            revised_prompt: Some("lobster".to_string()),
+            result: "Zm9v".to_string(),
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hi".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+    ]);
+
+    assert_eq!(
+        history.for_prompt(&default_input_modalities()),
+        vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![
+                    ContentItem::InputText {
+                        text: "Image Generation Call".to_string(),
+                    },
+                    ContentItem::InputText {
+                        text: "Image ID: ig_123".to_string(),
+                    },
+                    ContentItem::InputText {
+                        text: "Prompt: lobster".to_string(),
+                    },
+                    ContentItem::InputImage {
+                        image_url: "data:image/png;base64,Zm9v".to_string(),
+                    },
+                ],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "hi".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            }
+        ]
+    );
+}
+
+#[test]
+fn for_prompt_rewrites_image_generation_calls_when_images_are_unsupported() {
+    let history = create_history_with_items(vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "generate a lobster".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::ImageGenerationCall {
+            id: "ig_123".to_string(),
+            status: "completed".to_string(),
+            revised_prompt: Some("lobster".to_string()),
+            result: "Zm9v".to_string(),
+        },
+    ]);
+
+    assert_eq!(
+        history.for_prompt(&[InputModality::Text]),
+        vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "generate a lobster".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![
+                    ContentItem::InputText {
+                        text: "Image Generation Call".to_string(),
+                    },
+                    ContentItem::InputText {
+                        text: "Image ID: ig_123".to_string(),
+                    },
+                    ContentItem::InputText {
+                        text: "Prompt: lobster".to_string(),
+                    },
+                    ContentItem::InputText {
+                        text: "image content omitted because you do not support image input"
+                            .to_string(),
+                    },
+                ],
+                end_turn: None,
+                phase: None,
+            },
+        ]
+    );
+}
+
+#[test]
 fn get_history_for_prompt_drops_ghost_commits() {
     let items = vec![ResponseItem::GhostSnapshot {
         ghost_commit: GhostCommit::new("ghost-1".to_string(), None, Vec::new(), Vec::new()),
@@ -426,6 +549,7 @@ fn remove_first_item_removes_matching_output_for_function_call() {
         ResponseItem::FunctionCall {
             id: None,
             name: "do_it".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
         },
@@ -449,6 +573,7 @@ fn remove_first_item_removes_matching_call_for_output() {
         ResponseItem::FunctionCall {
             id: None,
             name: "do_it".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-2".to_string(),
         },
@@ -465,6 +590,7 @@ fn remove_last_item_removes_matching_call_for_output() {
         ResponseItem::FunctionCall {
             id: None,
             name: "do_it".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-delete-last".to_string(),
         },
@@ -489,6 +615,7 @@ fn replace_last_turn_images_replaces_tool_output_images() {
                 body: FunctionCallOutputBody::ContentItems(vec![
                     FunctionCallOutputContentItem::InputImage {
                         image_url: "data:image/png;base64,AAA".to_string(),
+                        detail: None,
                     },
                 ]),
                 success: Some(true),
@@ -937,6 +1064,7 @@ fn normalize_adds_missing_output_for_function_call() {
     let items = vec![ResponseItem::FunctionCall {
         id: None,
         name: "do_it".to_string(),
+        namespace: None,
         arguments: "{}".to_string(),
         call_id: "call-x".to_string(),
     }];
@@ -950,6 +1078,7 @@ fn normalize_adds_missing_output_for_function_call() {
             ResponseItem::FunctionCall {
                 id: None,
                 name: "do_it".to_string(),
+                namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
             },
@@ -1071,6 +1200,7 @@ fn normalize_mixed_inserts_and_removals() {
         ResponseItem::FunctionCall {
             id: None,
             name: "f1".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
         },
@@ -1111,6 +1241,7 @@ fn normalize_mixed_inserts_and_removals() {
             ResponseItem::FunctionCall {
                 id: None,
                 name: "f1".to_string(),
+                namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "c1".to_string(),
             },
@@ -1154,6 +1285,7 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
     let items = vec![ResponseItem::FunctionCall {
         id: None,
         name: "do_it".to_string(),
+        namespace: None,
         arguments: "{}".to_string(),
         call_id: "call-x".to_string(),
     }];
@@ -1165,12 +1297,46 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
             ResponseItem::FunctionCall {
                 id: None,
                 name: "do_it".to_string(),
+                namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "call-x".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+            },
+        ]
+    );
+}
+
+#[test]
+fn normalize_adds_missing_output_for_tool_search_call() {
+    let items = vec![ResponseItem::ToolSearchCall {
+        id: None,
+        call_id: Some("search-call-x".to_string()),
+        status: Some("completed".to_string()),
+        execution: "client".to_string(),
+        arguments: "{}".into(),
+    }];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(
+        h.raw_items(),
+        vec![
+            ResponseItem::ToolSearchCall {
+                id: None,
+                call_id: Some("search-call-x".to_string()),
+                status: Some("completed".to_string()),
+                execution: "client".to_string(),
+                arguments: "{}".into(),
+            },
+            ResponseItem::ToolSearchOutput {
+                call_id: Some("search-call-x".to_string()),
+                status: "completed".to_string(),
+                execution: "client".to_string(),
+                tools: Vec::new(),
             },
         ]
     );
@@ -1235,6 +1401,59 @@ fn normalize_removes_orphan_custom_tool_call_output_panics_in_debug() {
     h.normalize_history(&default_input_modalities());
 }
 
+#[cfg(not(debug_assertions))]
+#[test]
+fn normalize_removes_orphan_client_tool_search_output() {
+    let items = vec![ResponseItem::ToolSearchOutput {
+        call_id: Some("orphan-search".to_string()),
+        status: "completed".to_string(),
+        execution: "client".to_string(),
+        tools: Vec::new(),
+    }];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(h.raw_items(), vec![]);
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic]
+fn normalize_removes_orphan_client_tool_search_output_panics_in_debug() {
+    let items = vec![ResponseItem::ToolSearchOutput {
+        call_id: Some("orphan-search".to_string()),
+        status: "completed".to_string(),
+        execution: "client".to_string(),
+        tools: Vec::new(),
+    }];
+    let mut h = create_history_with_items(items);
+    h.normalize_history(&default_input_modalities());
+}
+
+#[test]
+fn normalize_keeps_server_tool_search_output_without_matching_call() {
+    let items = vec![ResponseItem::ToolSearchOutput {
+        call_id: Some("server-search".to_string()),
+        status: "completed".to_string(),
+        execution: "server".to_string(),
+        tools: Vec::new(),
+    }];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(
+        h.raw_items(),
+        vec![ResponseItem::ToolSearchOutput {
+            call_id: Some("server-search".to_string()),
+            status: "completed".to_string(),
+            execution: "server".to_string(),
+            tools: Vec::new(),
+        }]
+    );
+}
+
 #[cfg(debug_assertions)]
 #[test]
 #[should_panic]
@@ -1243,6 +1462,7 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
         ResponseItem::FunctionCall {
             id: None,
             name: "f1".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
         },
@@ -1302,7 +1522,7 @@ fn image_data_url_payload_does_not_dominate_message_estimate() {
 
     let raw_len = serde_json::to_string(&image_item).unwrap().len() as i64;
     let estimated = estimate_response_item_model_visible_bytes(&image_item);
-    let expected = raw_len - payload.len() as i64 + IMAGE_BYTES_ESTIMATE;
+    let expected = raw_len - payload.len() as i64 + RESIZED_IMAGE_BYTES_ESTIMATE;
     let text_only_estimated = estimate_response_item_model_visible_bytes(&text_only_item);
 
     assert_eq!(estimated, expected);
@@ -1320,13 +1540,16 @@ fn image_data_url_payload_does_not_dominate_function_call_output_estimate() {
             FunctionCallOutputContentItem::InputText {
                 text: "Screenshot captured".to_string(),
             },
-            FunctionCallOutputContentItem::InputImage { image_url },
+            FunctionCallOutputContentItem::InputImage {
+                image_url,
+                detail: None,
+            },
         ]),
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
     let estimated = estimate_response_item_model_visible_bytes(&item);
-    let expected = raw_len - payload.len() as i64 + IMAGE_BYTES_ESTIMATE;
+    let expected = raw_len - payload.len() as i64 + RESIZED_IMAGE_BYTES_ESTIMATE;
 
     assert_eq!(estimated, expected);
     assert!(estimated < raw_len);
@@ -1342,13 +1565,16 @@ fn image_data_url_payload_does_not_dominate_custom_tool_call_output_estimate() {
             FunctionCallOutputContentItem::InputText {
                 text: "Screenshot captured".to_string(),
             },
-            FunctionCallOutputContentItem::InputImage { image_url },
+            FunctionCallOutputContentItem::InputImage {
+                image_url,
+                detail: None,
+            },
         ]),
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
     let estimated = estimate_response_item_model_visible_bytes(&item);
-    let expected = raw_len - payload.len() as i64 + IMAGE_BYTES_ESTIMATE;
+    let expected = raw_len - payload.len() as i64 + RESIZED_IMAGE_BYTES_ESTIMATE;
 
     assert_eq!(estimated, expected);
     assert!(estimated < raw_len);
@@ -1370,6 +1596,7 @@ fn non_base64_image_urls_are_unchanged() {
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
                 image_url: "file:///tmp/foo.png".to_string(),
+                detail: None,
             },
         ]),
     };
@@ -1409,7 +1636,10 @@ fn non_image_base64_data_url_is_unchanged() {
     let item = ResponseItem::FunctionCallOutput {
         call_id: "call-octet".to_string(),
         output: FunctionCallOutputPayload::from_content_items(vec![
-            FunctionCallOutputContentItem::InputImage { image_url },
+            FunctionCallOutputContentItem::InputImage {
+                image_url,
+                detail: None,
+            },
         ]),
     };
 
@@ -1433,7 +1663,7 @@ fn mixed_case_data_url_markers_are_adjusted() {
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
     let estimated = estimate_response_item_model_visible_bytes(&item);
-    let expected = raw_len - payload.len() as i64 + IMAGE_BYTES_ESTIMATE;
+    let expected = raw_len - payload.len() as i64 + RESIZED_IMAGE_BYTES_ESTIMATE;
 
     assert_eq!(estimated, expected);
 }
@@ -1465,7 +1695,70 @@ fn multiple_inline_images_apply_multiple_fixed_costs() {
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
     let payload_sum = (payload_one.len() + payload_two.len()) as i64;
     let estimated = estimate_response_item_model_visible_bytes(&item);
-    let expected = raw_len - payload_sum + (2 * IMAGE_BYTES_ESTIMATE);
+    let expected = raw_len - payload_sum + (2 * RESIZED_IMAGE_BYTES_ESTIMATE);
+
+    assert_eq!(estimated, expected);
+}
+
+#[test]
+fn original_detail_images_scale_with_dimensions() {
+    // 2304x864 at 32px patches yields 72 * 27 = 1,944 patches.
+    // The byte heuristic uses 4 bytes per token, so the replacement cost is 7,776 bytes.
+    const EXPECTED_ORIGINAL_DETAIL_IMAGE_BYTES: i64 = 7_776;
+
+    let width = 2304;
+    let height = 864;
+    let image = ImageBuffer::from_pixel(width, height, Rgba([12u8, 34, 56, 255]));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut bytes, ImageFormat::Png)
+        .expect("encode png");
+    let payload = BASE64_STANDARD.encode(bytes.get_ref());
+    let image_url = format!("data:image/png;base64,{payload}");
+    let item = ResponseItem::FunctionCallOutput {
+        call_id: "call-original".to_string(),
+        output: FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputImage {
+                image_url,
+                detail: Some(ImageDetail::Original),
+            },
+        ]),
+    };
+
+    let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
+    let estimated = estimate_response_item_model_visible_bytes(&item);
+    let expected = raw_len - payload.len() as i64 + EXPECTED_ORIGINAL_DETAIL_IMAGE_BYTES;
+
+    assert_eq!(estimated, expected);
+}
+
+#[test]
+fn original_detail_webp_images_scale_with_dimensions() {
+    // Same dimensions as the PNG case above, so the patch-based replacement cost is the same.
+    const EXPECTED_ORIGINAL_DETAIL_IMAGE_BYTES: i64 = 7_776;
+
+    let width = 2304;
+    let height = 864;
+    let image = ImageBuffer::from_pixel(width, height, Rgba([12u8, 34, 56, 255]));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut bytes, ImageFormat::WebP)
+        .expect("encode webp");
+    let payload = BASE64_STANDARD.encode(bytes.get_ref());
+    let image_url = format!("data:image/webp;base64,{payload}");
+    let item = ResponseItem::FunctionCallOutput {
+        call_id: "call-original-webp".to_string(),
+        output: FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputImage {
+                image_url,
+                detail: Some(ImageDetail::Original),
+            },
+        ]),
+    };
+
+    let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
+    let estimated = estimate_response_item_model_visible_bytes(&item);
+    let expected = raw_len - payload.len() as i64 + EXPECTED_ORIGINAL_DETAIL_IMAGE_BYTES;
 
     assert_eq!(estimated, expected);
 }

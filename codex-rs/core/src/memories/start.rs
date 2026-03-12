@@ -34,6 +34,8 @@ pub(crate) fn start_memories_startup_task(
             return;
         };
 
+        // Clean memories to make preserve DB size
+        phase1::prune(&session, &config).await;
         // Run phase 1.
         phase1::run(&session, &config).await;
         // Run phase 2.

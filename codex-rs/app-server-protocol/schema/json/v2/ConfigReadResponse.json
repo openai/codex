@@ -148,10 +148,18 @@
                 "mcp_elicitations": {
                   "type": "boolean"
                 },
+                "request_permissions": {
+                  "default": false,
+                  "type": "boolean"
+                },
                 "rules": {
                   "type": "boolean"
                 },
                 "sandbox_approval": {
+                  "type": "boolean"
+                },
+                "skill_approval": {
+                  "default": false,
                   "type": "boolean"
                 }
               },
@@ -628,6 +636,16 @@
             }
           ]
         },
+        "tools": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolsV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "web_search": {
           "anyOf": [
             {
@@ -707,7 +725,8 @@
     },
     "ServiceTier": {
       "enum": [
-        "fast"
+        "fast",
+        "flex"
       ],
       "type": "string"
     },
@@ -720,9 +739,13 @@
           ]
         },
         "web_search": {
-          "type": [
-            "boolean",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchToolConfig"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       },
@@ -737,6 +760,44 @@
       ],
       "type": "string"
     },
+    "WebSearchContextSize": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "WebSearchLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "city": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "country": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "region": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timezone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "WebSearchMode": {
       "enum": [
         "disabled",
@@ -744,6 +805,41 @@
         "live"
       ],
       "type": "string"
+    },
+    "WebSearchToolConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "context_size": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchContextSize"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchLocation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     }
   },
   "properties": {

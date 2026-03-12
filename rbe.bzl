@@ -18,7 +18,7 @@ platform(
         "@platforms//cpu:{cpu}",
         "@platforms//os:linux",
         "@bazel_tools//tools/cpp:clang",
-        "@toolchains_llvm_bootstrapped//constraints/libc:gnu.2.28",
+        "@llvm//constraints/libc:gnu.2.28",
     ],
     exec_properties = {{
         # Ubuntu-based image that includes git, python3, dotslash, and other

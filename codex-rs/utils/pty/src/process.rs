@@ -4,7 +4,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
+use anyhow::anyhow;
 use portable_pty::MasterPty;
+use portable_pty::PtySize;
 use portable_pty::SlavePty;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
@@ -14,6 +16,29 @@ use tokio::task::JoinHandle;
 
 pub(crate) trait ChildTerminator: Send + Sync {
     fn kill(&mut self) -> io::Result<()>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerminalSize {
+    pub rows: u16,
+    pub cols: u16,
+}
+
+impl Default for TerminalSize {
+    fn default() -> Self {
+        Self { rows: 24, cols: 80 }
+    }
+}
+
+impl From<TerminalSize> for PtySize {
+    fn from(value: TerminalSize) -> Self {
+        Self {
+            rows: value.rows,
+            cols: value.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        }
+    }
 }
 
 pub struct PtyHandles {
@@ -29,8 +54,7 @@ impl fmt::Debug for PtyHandles {
 
 /// Handle for driving an interactive process (PTY or pipe).
 pub struct ProcessHandle {
-    writer_tx: mpsc::Sender<Vec<u8>>,
-    output_tx: broadcast::Sender<Vec<u8>>,
+    writer_tx: StdMutex<Option<mpsc::Sender<Vec<u8>>>>,
     killer: StdMutex<Option<Box<dyn ChildTerminator>>>,
     reader_handle: StdMutex<Option<JoinHandle<()>>>,
     reader_abort_handles: StdMutex<Vec<AbortHandle>>,
@@ -53,8 +77,6 @@ impl ProcessHandle {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         writer_tx: mpsc::Sender<Vec<u8>>,
-        output_tx: broadcast::Sender<Vec<u8>>,
-        initial_output_rx: broadcast::Receiver<Vec<u8>>,
         killer: Box<dyn ChildTerminator>,
         reader_handle: JoinHandle<()>,
         reader_abort_handles: Vec<AbortHandle>,
@@ -63,32 +85,31 @@ impl ProcessHandle {
         exit_status: Arc<AtomicBool>,
         exit_code: Arc<StdMutex<Option<i32>>>,
         pty_handles: Option<PtyHandles>,
-    ) -> (Self, broadcast::Receiver<Vec<u8>>) {
-        (
-            Self {
-                writer_tx,
-                output_tx,
-                killer: StdMutex::new(Some(killer)),
-                reader_handle: StdMutex::new(Some(reader_handle)),
-                reader_abort_handles: StdMutex::new(reader_abort_handles),
-                writer_handle: StdMutex::new(Some(writer_handle)),
-                wait_handle: StdMutex::new(Some(wait_handle)),
-                exit_status,
-                exit_code,
-                _pty_handles: StdMutex::new(pty_handles),
-            },
-            initial_output_rx,
-        )
+    ) -> Self {
+        Self {
+            writer_tx: StdMutex::new(Some(writer_tx)),
+            killer: StdMutex::new(Some(killer)),
+            reader_handle: StdMutex::new(Some(reader_handle)),
+            reader_abort_handles: StdMutex::new(reader_abort_handles),
+            writer_handle: StdMutex::new(Some(writer_handle)),
+            wait_handle: StdMutex::new(Some(wait_handle)),
+            exit_status,
+            exit_code,
+            _pty_handles: StdMutex::new(pty_handles),
+        }
     }
 
     /// Returns a channel sender for writing raw bytes to the child stdin.
     pub fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
-        self.writer_tx.clone()
-    }
+        if let Ok(writer_tx) = self.writer_tx.lock() {
+            if let Some(writer_tx) = writer_tx.as_ref() {
+                return writer_tx.clone();
+            }
+        }
 
-    /// Returns a broadcast receiver that yields stdout/stderr chunks.
-    pub fn output_receiver(&self) -> broadcast::Receiver<Vec<u8>> {
-        self.output_tx.subscribe()
+        let (writer_tx, writer_rx) = mpsc::channel(1);
+        drop(writer_rx);
+        writer_tx
     }
 
     /// True if the child process has exited.
@@ -101,13 +122,38 @@ impl ProcessHandle {
         self.exit_code.lock().ok().and_then(|guard| *guard)
     }
 
-    /// Attempts to kill the child and abort helper tasks.
-    pub fn terminate(&self) {
+    /// Resize the PTY in character cells.
+    pub fn resize(&self, size: TerminalSize) -> anyhow::Result<()> {
+        let handles = self
+            ._pty_handles
+            .lock()
+            .map_err(|_| anyhow!("failed to lock PTY handles"))?;
+        let handles = handles
+            .as_ref()
+            .ok_or_else(|| anyhow!("process is not attached to a PTY"))?;
+        handles._master.resize(size.into())
+    }
+
+    /// Close the child's stdin channel.
+    pub fn close_stdin(&self) {
+        if let Ok(mut writer_tx) = self.writer_tx.lock() {
+            writer_tx.take();
+        }
+    }
+
+    /// Attempts to kill the child while leaving the reader/writer tasks alive
+    /// so callers can still drain output until EOF.
+    pub fn request_terminate(&self) {
         if let Ok(mut killer_opt) = self.killer.lock() {
             if let Some(mut killer) = killer_opt.take() {
                 let _ = killer.kill();
             }
         }
+    }
+
+    /// Attempts to kill the child and abort helper tasks.
+    pub fn terminate(&self) {
+        self.request_terminate();
 
         if let Ok(mut h) = self.reader_handle.lock() {
             if let Some(handle) = h.take() {
@@ -138,10 +184,46 @@ impl Drop for ProcessHandle {
     }
 }
 
-/// Return value from spawn helpers (PTY or pipe).
+/// Combine split stdout/stderr receivers into a single broadcast receiver.
+pub fn combine_output_receivers(
+    mut stdout_rx: mpsc::Receiver<Vec<u8>>,
+    mut stderr_rx: mpsc::Receiver<Vec<u8>>,
+) -> broadcast::Receiver<Vec<u8>> {
+    let (combined_tx, combined_rx) = broadcast::channel(256);
+    tokio::spawn(async move {
+        let mut stdout_open = true;
+        let mut stderr_open = true;
+
+        loop {
+            tokio::select! {
+                stdout = stdout_rx.recv(), if stdout_open => match stdout {
+                    Some(chunk) => {
+                        let _ = combined_tx.send(chunk);
+                    }
+                    None => {
+                        stdout_open = false;
+                    }
+                },
+                stderr = stderr_rx.recv(), if stderr_open => match stderr {
+                    Some(chunk) => {
+                        let _ = combined_tx.send(chunk);
+                    }
+                    None => {
+                        stderr_open = false;
+                    }
+                },
+                else => break,
+            }
+        }
+    });
+    combined_rx
+}
+
+/// Return value from PTY or pipe spawn helpers.
 #[derive(Debug)]
 pub struct SpawnedProcess {
     pub session: ProcessHandle,
-    pub output_rx: broadcast::Receiver<Vec<u8>>,
+    pub stdout_rx: mpsc::Receiver<Vec<u8>>,
+    pub stderr_rx: mpsc::Receiver<Vec<u8>>,
     pub exit_rx: oneshot::Receiver<i32>,
 }

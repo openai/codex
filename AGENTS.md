@@ -20,6 +20,17 @@ In the codex-rs folder where the rust code lives:
 - After dependency changes, run `just bazel-lock-check` from the repo root so lockfile drift is caught
   locally before CI.
 - Do not create small helper methods that are referenced only once.
+- Avoid large modules:
+  - Prefer adding new modules instead of growing existing ones.
+  - Target Rust modules under 500 LoC, excluding tests.
+  - If a file exceeds roughly 800 LoC, add new functionality in a new module instead of extending
+    the existing file unless there is a strong documented reason not to.
+  - This rule applies especially to high-touch files that already attract unrelated changes, such
+    as `codex-rs/tui/src/app.rs`, `codex-rs/tui/src/bottom_pane/chat_composer.rs`,
+    `codex-rs/tui/src/bottom_pane/footer.rs`, `codex-rs/tui/src/chatwidget.rs`,
+    `codex-rs/tui/src/bottom_pane/mod.rs`, and similarly central orchestration modules.
+  - When extracting code from a large module, move the related tests and module/type docs toward
+    the new implementation so the invariants stay close to the code that owns them.
 
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 

@@ -103,6 +103,16 @@
         },
         {
           "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "image_url": {
               "type": "string"
             },
@@ -172,6 +182,15 @@
         "preexisting_untracked_files"
       ],
       "type": "object"
+    },
+    "ImageDetail": {
+      "enum": [
+        "auto",
+        "low",
+        "high",
+        "original"
+      ],
+      "type": "string"
     },
     "LocalShellAction": {
       "oneOf": [
@@ -477,6 +496,12 @@
             "name": {
               "type": "string"
             },
+            "namespace": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "function_call"
@@ -492,6 +517,47 @@
             "type"
           ],
           "title": "FunctionCallResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "arguments": true,
+            "call_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "execution": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "tool_search_call"
+              ],
+              "title": "ToolSearchCallResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "execution",
+            "type"
+          ],
+          "title": "ToolSearchCallResponseItem",
           "type": "object"
         },
         {
@@ -585,10 +651,45 @@
         },
         {
           "properties": {
+            "call_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "execution": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tools": {
+              "items": true,
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "tool_search_output"
+              ],
+              "title": "ToolSearchOutputResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "execution",
+            "status",
+            "tools",
+            "type"
+          ],
+          "title": "ToolSearchOutputResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "action": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/WebSearchAction"
+                  "$ref": "#/definitions/ResponsesApiWebSearchAction"
                 },
                 {
                   "type": "null"
@@ -620,6 +721,40 @@
             "type"
           ],
           "title": "WebSearchCallResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "image_generation_call"
+              ],
+              "title": "ImageGenerationCallResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "title": "ImageGenerationCallResponseItem",
           "type": "object"
         },
         {
@@ -680,7 +815,7 @@
         }
       ]
     },
-    "WebSearchAction": {
+    "ResponsesApiWebSearchAction": {
       "oneOf": [
         {
           "properties": {
@@ -703,14 +838,14 @@
               "enum": [
                 "search"
               ],
-              "title": "SearchWebSearchActionType",
+              "title": "SearchResponsesApiWebSearchActionType",
               "type": "string"
             }
           },
           "required": [
             "type"
           ],
-          "title": "SearchWebSearchAction",
+          "title": "SearchResponsesApiWebSearchAction",
           "type": "object"
         },
         {
@@ -719,7 +854,7 @@
               "enum": [
                 "open_page"
               ],
-              "title": "OpenPageWebSearchActionType",
+              "title": "OpenPageResponsesApiWebSearchActionType",
               "type": "string"
             },
             "url": {
@@ -732,7 +867,7 @@
           "required": [
             "type"
           ],
-          "title": "OpenPageWebSearchAction",
+          "title": "OpenPageResponsesApiWebSearchAction",
           "type": "object"
         },
         {
@@ -747,7 +882,7 @@
               "enum": [
                 "find_in_page"
               ],
-              "title": "FindInPageWebSearchActionType",
+              "title": "FindInPageResponsesApiWebSearchActionType",
               "type": "string"
             },
             "url": {
@@ -760,7 +895,7 @@
           "required": [
             "type"
           ],
-          "title": "FindInPageWebSearchAction",
+          "title": "FindInPageResponsesApiWebSearchAction",
           "type": "object"
         },
         {
@@ -769,14 +904,14 @@
               "enum": [
                 "other"
               ],
-              "title": "OtherWebSearchActionType",
+              "title": "OtherResponsesApiWebSearchActionType",
               "type": "string"
             }
           },
           "required": [
             "type"
           ],
-          "title": "OtherWebSearchAction",
+          "title": "OtherResponsesApiWebSearchAction",
           "type": "object"
         }
       ]

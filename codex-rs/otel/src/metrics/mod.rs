@@ -1,8 +1,9 @@
 mod client;
 mod config;
 mod error;
-pub(crate) mod names;
+pub mod names;
 pub(crate) mod runtime_metrics;
+pub mod tags;
 pub(crate) mod timer;
 pub(crate) mod validation;
 

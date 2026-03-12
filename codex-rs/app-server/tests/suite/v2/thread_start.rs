@@ -12,6 +12,7 @@ use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_core::config::set_project_trust_level;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
@@ -177,6 +178,34 @@ model_reasoning_effort = "high"
     } = to_response::<ThreadStartResponse>(resp)?;
 
     assert_eq!(reasoning_effort, Some(ReasoningEffort::High));
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_accepts_flex_service_tier() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            service_tier: Some(Some(ServiceTier::Flex)),
+            ..Default::default()
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { service_tier, .. } = to_response::<ThreadStartResponse>(resp)?;
+
+    assert_eq!(service_tier, Some(ServiceTier::Flex));
     Ok(())
 }
 

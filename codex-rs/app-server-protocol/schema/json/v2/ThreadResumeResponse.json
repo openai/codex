@@ -24,10 +24,18 @@
                 "mcp_elicitations": {
                   "type": "boolean"
                 },
+                "request_permissions": {
+                  "default": false,
+                  "type": "boolean"
+                },
                 "rules": {
                   "type": "boolean"
                 },
                 "sandbox_approval": {
+                  "type": "boolean"
+                },
+                "skill_approval": {
+                  "default": false,
                   "type": "boolean"
                 }
               },
@@ -653,6 +661,10 @@
                 "type": "fullAccess"
               }
             },
+            "networkAccess": {
+              "default": false,
+              "type": "boolean"
+            },
             "type": {
               "enum": [
                 "readOnly"
@@ -740,7 +752,8 @@
     },
     "ServiceTier": {
       "enum": [
-        "fast"
+        "fast",
+        "flex"
       ],
       "type": "string"
     },
@@ -1336,12 +1349,30 @@
               "description": "Unique identifier for this collab tool call.",
               "type": "string"
             },
+            "model": {
+              "description": "Model requested for the spawned agent, when applicable.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "prompt": {
               "description": "Prompt text sent as part of the collab tool call, when available.",
               "type": [
                 "string",
                 "null"
               ]
+            },
+            "reasoningEffort": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningEffort"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reasoning effort requested for the spawned agent, when applicable."
             },
             "receiverThreadIds": {
               "description": "Thread ID of the receiving agent, when applicable. In case of spawn operation, this corresponds to the newly spawned agent.",
@@ -1446,6 +1477,40 @@
             "type"
           ],
           "title": "ImageViewThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revisedPrompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "imageGeneration"
+              ],
+              "title": "ImageGenerationThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "title": "ImageGenerationThreadItem",
           "type": "object"
         },
         {

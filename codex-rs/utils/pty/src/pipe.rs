@@ -13,7 +13,6 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
-use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -73,7 +72,7 @@ fn kill_process(pid: u32) -> io::Result<()> {
     }
 }
 
-async fn read_output_stream<R>(mut reader: R, output_tx: broadcast::Sender<Vec<u8>>)
+async fn read_output_stream<R>(mut reader: R, output_tx: mpsc::Sender<Vec<u8>>)
 where
     R: AsyncRead + Unpin,
 {
@@ -82,7 +81,7 @@ where
         match reader.read(&mut buf).await {
             Ok(0) => break,
             Ok(n) => {
-                let _ = output_tx.send(buf[..n].to_vec());
+                let _ = output_tx.send(buf[..n].to_vec()).await;
             }
             Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
             Err(_) => break,
@@ -157,9 +156,8 @@ async fn spawn_process_with_stdin_mode(
     let stderr = child.stderr.take();
 
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
-    let (output_tx, _) = broadcast::channel::<Vec<u8>>(256);
-    let initial_output_rx = output_tx.subscribe();
-
+    let (stdout_tx, stdout_rx) = mpsc::channel::<Vec<u8>>(128);
+    let (stderr_tx, stderr_rx) = mpsc::channel::<Vec<u8>>(128);
     let writer_handle = if let Some(stdin) = stdin {
         let writer = Arc::new(tokio::sync::Mutex::new(stdin));
         tokio::spawn(async move {
@@ -175,15 +173,15 @@ async fn spawn_process_with_stdin_mode(
     };
 
     let stdout_handle = stdout.map(|stdout| {
-        let output_tx = output_tx.clone();
+        let stdout_tx = stdout_tx.clone();
         tokio::spawn(async move {
-            read_output_stream(BufReader::new(stdout), output_tx).await;
+            read_output_stream(BufReader::new(stdout), stdout_tx).await;
         })
     });
     let stderr_handle = stderr.map(|stderr| {
-        let output_tx = output_tx.clone();
+        let stderr_tx = stderr_tx.clone();
         tokio::spawn(async move {
-            read_output_stream(BufReader::new(stderr), output_tx).await;
+            read_output_stream(BufReader::new(stderr), stderr_tx).await;
         })
     });
     let mut reader_abort_handles = Vec::new();
@@ -219,10 +217,8 @@ async fn spawn_process_with_stdin_mode(
         let _ = exit_tx.send(code);
     });
 
-    let (handle, output_rx) = ProcessHandle::new(
+    let handle = ProcessHandle::new(
         writer_tx,
-        output_tx,
-        initial_output_rx,
         Box::new(PipeChildTerminator {
             #[cfg(windows)]
             pid,
@@ -240,12 +236,13 @@ async fn spawn_process_with_stdin_mode(
 
     Ok(SpawnedProcess {
         session: handle,
-        output_rx,
+        stdout_rx,
+        stderr_rx,
         exit_rx,
     })
 }
 
-/// Spawn a process using regular pipes (no PTY), returning handles for stdin, output, and exit.
+/// Spawn a process using regular pipes (no PTY), returning handles for stdin, split output, and exit.
 pub async fn spawn_process(
     program: &str,
     args: &[String],

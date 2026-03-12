@@ -207,6 +207,10 @@ impl ResponsesRequest {
         self.call_output(call_id, "custom_tool_call_output")
     }
 
+    pub fn tool_search_output(&self, call_id: &str) -> Value {
+        self.call_output(call_id, "tool_search_output")
+    }
+
     pub fn call_output(&self, call_id: &str, call_type: &str) -> Value {
         self.input()
             .iter()
@@ -416,6 +420,11 @@ pub struct WebSocketConnectionConfig {
     /// Tests use this to force websocket setup into an in-flight state so first-turn warmup paths
     /// can be exercised deterministically.
     pub accept_delay: Option<Duration>,
+    /// Whether the server should send a websocket close frame after all scripted responses.
+    ///
+    /// Tests can disable this to simulate a peer that surfaces a terminal event but never
+    /// completes the close handshake.
+    pub close_after_requests: bool,
 }
 
 pub struct WebSocketTestServer {
@@ -739,6 +748,24 @@ pub fn ev_web_search_call_done(id: &str, status: &str, query: &str) -> Value {
     })
 }
 
+pub fn ev_image_generation_call(
+    id: &str,
+    status: &str,
+    revised_prompt: &str,
+    result: &str,
+) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "image_generation_call",
+            "id": id,
+            "status": status,
+            "revised_prompt": revised_prompt,
+            "result": result,
+        }
+    })
+}
+
 pub fn ev_function_call(call_id: &str, name: &str, arguments: &str) -> Value {
     serde_json::json!({
         "type": "response.output_item.done",
@@ -747,6 +774,18 @@ pub fn ev_function_call(call_id: &str, name: &str, arguments: &str) -> Value {
             "call_id": call_id,
             "name": name,
             "arguments": arguments
+        }
+    })
+}
+
+pub fn ev_tool_search_call(call_id: &str, arguments: &serde_json::Value) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "tool_search_call",
+            "call_id": call_id,
+            "execution": "client",
+            "arguments": arguments,
         }
     })
 }
@@ -1150,6 +1189,7 @@ pub async fn start_websocket_server(connections: Vec<Vec<Vec<Value>>>) -> WebSoc
             requests,
             response_headers: Vec::new(),
             accept_delay: None,
+            close_after_requests: true,
         })
         .collect();
     start_websocket_server_with_headers(connections).await
@@ -1243,6 +1283,7 @@ pub async fn start_websocket_server_with_headers(
                 log.push(Vec::new());
                 log.len() - 1
             };
+            let close_after_requests = connection.close_after_requests;
             for request_events in connection.requests {
                 let Some(Ok(message)) = ws_stream.next().await else {
                     break;
@@ -1306,7 +1347,12 @@ pub async fn start_websocket_server_with_headers(
                 }
             }
 
-            let _ = ws_stream.close(None).await;
+            if close_after_requests {
+                let _ = ws_stream.close(None).await;
+            } else {
+                let _ = shutdown_rx.await;
+                return;
+            }
 
             if connections.lock().unwrap().is_empty() {
                 return;
@@ -1454,11 +1500,13 @@ pub async fn mount_response_sequence(
 /// Validate invariants on the request body sent to `/v1/responses`.
 ///
 /// - No `function_call_output`/`custom_tool_call_output` with missing/empty `call_id`.
+/// - `tool_search_output` must have a `call_id` unless it is a server-executed legacy item.
 /// - Every `function_call_output` must match a prior `function_call` or
 ///   `local_shell_call` with the same `call_id` in the same `input`.
 /// - Every `custom_tool_call_output` must match a prior `custom_tool_call`.
-/// - Additionally, enforce symmetry: every `function_call`/`custom_tool_call`
-///   in the `input` must have a matching output entry.
+/// - Every `tool_search_output` must match a prior `tool_search_call`.
+/// - Additionally, enforce symmetry: every `function_call`/`custom_tool_call`/
+///   `tool_search_call` in the `input` must have a matching output entry.
 fn validate_request_body_invariants(request: &wiremock::Request) {
     // Skip GET requests (e.g., /models)
     if request.method != "POST" || !request.url.path().ends_with("/responses") {
@@ -1508,7 +1556,24 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
             .collect()
     }
 
+    fn gather_tool_search_output_ids(items: &[Value]) -> HashSet<String> {
+        items
+            .iter()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some("tool_search_output"))
+            .filter_map(|item| {
+                if let Some(id) = get_call_id(item) {
+                    return Some(id.to_string());
+                }
+                if item.get("execution").and_then(Value::as_str) == Some("server") {
+                    return None;
+                }
+                panic!("orphan tool_search_output with empty call_id should be dropped");
+            })
+            .collect()
+    }
+
     let function_calls = gather_ids(items, "function_call");
+    let tool_search_calls = gather_ids(items, "tool_search_call");
     let custom_tool_calls = gather_ids(items, "custom_tool_call");
     let local_shell_calls = gather_ids(items, "local_shell_call");
     let function_call_outputs = gather_output_ids(
@@ -1516,6 +1581,7 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
         "function_call_output",
         "orphan function_call_output with empty call_id should be dropped",
     );
+    let tool_search_outputs = gather_tool_search_output_ids(items);
     let custom_tool_call_outputs = gather_output_ids(
         items,
         "custom_tool_call_output",
@@ -1534,6 +1600,12 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
             "custom_tool_call_output without matching call in input: {cid}",
         );
     }
+    for cid in &tool_search_outputs {
+        assert!(
+            tool_search_calls.contains(cid),
+            "tool_search_output without matching call in input: {cid}",
+        );
+    }
 
     for cid in &function_calls {
         assert!(
@@ -1545,6 +1617,12 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
         assert!(
             custom_tool_call_outputs.contains(cid),
             "Custom tool call output is missing for call id: {cid}",
+        );
+    }
+    for cid in &tool_search_calls {
+        assert!(
+            tool_search_outputs.contains(cid),
+            "Tool search output is missing for call id: {cid}",
         );
     }
 }

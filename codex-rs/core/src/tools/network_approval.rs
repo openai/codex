@@ -1,4 +1,8 @@
 use crate::codex::Session;
+use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
+use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::review_approval_request;
+use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::denied_network_policy_message;
 use crate::tools::sandboxing::ToolError;
 use codex_network_proxy::BlockedRequest;
@@ -109,7 +113,8 @@ enum NetworkApprovalOutcome {
     DeniedByPolicy(String),
 }
 
-fn allows_network_prompt(policy: AskForApproval) -> bool {
+/// Whether an allowlist miss may be reviewed instead of hard-denied.
+fn allows_network_approval_flow(policy: AskForApproval) -> bool {
     !matches!(policy, AskForApproval::Never)
 }
 
@@ -179,6 +184,12 @@ impl Default for NetworkApprovalService {
 }
 
 impl NetworkApprovalService {
+    pub(crate) async fn copy_session_approved_hosts_to(&self, other: &Self) {
+        let approved_hosts = self.session_approved_hosts.lock().await;
+        let mut other_approved_hosts = other.session_approved_hosts.lock().await;
+        other_approved_hosts.extend(approved_hosts.iter().cloned());
+    }
+
     async fn register_call(&self, registration_id: String) {
         let mut active_calls = self.active_calls.lock().await;
         let key = registration_id.clone();
@@ -266,7 +277,7 @@ impl NetworkApprovalService {
 
     pub(crate) async fn handle_inline_policy_request(
         &self,
-        session: &Session,
+        session: Arc<Session>,
         request: NetworkPolicyRequest,
     ) -> NetworkDecision {
         const REASON_NOT_ALLOWED: &str = "not_allowed";
@@ -303,7 +314,7 @@ impl NetworkApprovalService {
             format!("Network access to \"{target}\" was blocked by policy.");
         let prompt_reason = format!("{} is not in the allowed_domains", request.host);
 
-        let Some(turn_context) = Self::active_turn_context(session).await else {
+        let Some(turn_context) = Self::active_turn_context(session.as_ref()).await else {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             let mut pending_approvals = self.pending_host_approvals.lock().await;
             pending_approvals.remove(&key);
@@ -313,7 +324,7 @@ impl NetworkApprovalService {
             .await;
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
-        if !allows_network_prompt(turn_context.approval_policy.value()) {
+        if !allows_network_approval_flow(turn_context.approval_policy.value()) {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             let mut pending_approvals = self.pending_host_approvals.lock().await;
             pending_approvals.remove(&key);
@@ -324,28 +335,43 @@ impl NetworkApprovalService {
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         }
 
-        let approval_id = Self::approval_id_for_key(&key);
-        let prompt_command = vec!["network-access".to_string(), target.clone()];
         let network_approval_context = NetworkApprovalContext {
             host: request.host.clone(),
             protocol,
         };
-
-        let available_decisions = None;
-        let approval_decision = session
-            .request_command_approval(
-                turn_context.as_ref(),
-                approval_id,
-                None,
-                prompt_command,
-                turn_context.cwd.clone(),
-                Some(prompt_reason),
-                Some(network_approval_context.clone()),
-                None,
-                None,
-                available_decisions,
+        let approval_decision = if routes_approval_to_guardian(&turn_context) {
+            review_approval_request(
+                &session,
+                &turn_context,
+                GuardianApprovalRequest::NetworkAccess {
+                    target,
+                    host: request.host,
+                    protocol,
+                    port: key.port,
+                },
+                Some(policy_denial_message.clone()),
             )
-            .await;
+            .await
+        } else {
+            let approval_id = Self::approval_id_for_key(&key);
+            let prompt_command = vec!["network-access".to_string(), target.clone()];
+            let available_decisions = None;
+            session
+                .request_command_approval(
+                    turn_context.as_ref(),
+                    approval_id,
+                    None,
+                    prompt_command,
+                    turn_context.cwd.clone(),
+                    Some(prompt_reason),
+                    Some(network_approval_context.clone()),
+                    None,
+                    None,
+                    None,
+                    available_decisions,
+                )
+                .await
+        };
 
         let mut cache_session_deny = false;
         let resolved = match approval_decision {
@@ -423,8 +449,19 @@ impl NetworkApprovalService {
                 }
             },
             ReviewDecision::Denied | ReviewDecision::Abort => {
-                self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByUser)
+                if routes_approval_to_guardian(&turn_context) {
+                    self.record_outcome_for_single_active_call(
+                        NetworkApprovalOutcome::DeniedByPolicy(
+                            GUARDIAN_REJECTION_MESSAGE.to_string(),
+                        ),
+                    )
                     .await;
+                } else {
+                    self.record_outcome_for_single_active_call(
+                        NetworkApprovalOutcome::DeniedByUser,
+                    )
+                    .await;
+                }
                 PendingApprovalDecision::Deny
             }
         };
@@ -478,7 +515,7 @@ pub(crate) fn build_network_policy_decider(
                 return NetworkDecision::ask("not_allowed");
             };
             network_approval
-                .handle_inline_policy_request(session.as_ref(), request)
+                .handle_inline_policy_request(session, request)
                 .await
         }
     })
@@ -553,148 +590,5 @@ pub(crate) async fn finish_deferred_network_approval(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use codex_network_proxy::BlockedRequestArgs;
-    use codex_protocol::protocol::AskForApproval;
-    use pretty_assertions::assert_eq;
-
-    #[tokio::test]
-    async fn pending_approvals_are_deduped_per_host_protocol_and_port() {
-        let service = NetworkApprovalService::default();
-        let key = HostApprovalKey {
-            host: "example.com".to_string(),
-            protocol: "http",
-            port: 443,
-        };
-
-        let (first, first_is_owner) = service.get_or_create_pending_approval(key.clone()).await;
-        let (second, second_is_owner) = service.get_or_create_pending_approval(key).await;
-
-        assert!(first_is_owner);
-        assert!(!second_is_owner);
-        assert!(Arc::ptr_eq(&first, &second));
-    }
-
-    #[tokio::test]
-    async fn pending_approvals_do_not_dedupe_across_ports() {
-        let service = NetworkApprovalService::default();
-        let first_key = HostApprovalKey {
-            host: "example.com".to_string(),
-            protocol: "https",
-            port: 443,
-        };
-        let second_key = HostApprovalKey {
-            host: "example.com".to_string(),
-            protocol: "https",
-            port: 8443,
-        };
-
-        let (first, first_is_owner) = service.get_or_create_pending_approval(first_key).await;
-        let (second, second_is_owner) = service.get_or_create_pending_approval(second_key).await;
-
-        assert!(first_is_owner);
-        assert!(second_is_owner);
-        assert!(!Arc::ptr_eq(&first, &second));
-    }
-
-    #[tokio::test]
-    async fn pending_waiters_receive_owner_decision() {
-        let pending = Arc::new(PendingHostApproval::new());
-
-        let waiter = {
-            let pending = Arc::clone(&pending);
-            tokio::spawn(async move { pending.wait_for_decision().await })
-        };
-
-        pending
-            .set_decision(PendingApprovalDecision::AllowOnce)
-            .await;
-
-        let decision = waiter.await.expect("waiter should complete");
-        assert_eq!(decision, PendingApprovalDecision::AllowOnce);
-    }
-
-    #[test]
-    fn allow_once_and_allow_for_session_both_allow_network() {
-        assert_eq!(
-            PendingApprovalDecision::AllowOnce.to_network_decision(),
-            NetworkDecision::Allow
-        );
-        assert_eq!(
-            PendingApprovalDecision::AllowForSession.to_network_decision(),
-            NetworkDecision::Allow
-        );
-    }
-
-    #[test]
-    fn never_policy_disables_network_prompts() {
-        assert!(!allows_network_prompt(AskForApproval::Never));
-        assert!(allows_network_prompt(AskForApproval::OnRequest));
-        assert!(allows_network_prompt(AskForApproval::OnFailure));
-        assert!(allows_network_prompt(AskForApproval::UnlessTrusted));
-    }
-
-    fn denied_blocked_request(host: &str) -> BlockedRequest {
-        BlockedRequest::new(BlockedRequestArgs {
-            host: host.to_string(),
-            reason: "not_allowed".to_string(),
-            client: None,
-            method: None,
-            mode: None,
-            protocol: "http".to_string(),
-            decision: Some("deny".to_string()),
-            source: Some("decider".to_string()),
-            port: Some(80),
-        })
-    }
-
-    #[tokio::test]
-    async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
-        let service = NetworkApprovalService::default();
-        service.register_call("registration-1".to_string()).await;
-
-        service
-            .record_blocked_request(denied_blocked_request("example.com"))
-            .await;
-
-        assert_eq!(
-            service.take_call_outcome("registration-1").await,
-            Some(NetworkApprovalOutcome::DeniedByPolicy(
-                "Network access to \"example.com\" was blocked: domain is not on the allowlist for the current sandbox mode.".to_string()
-            ))
-        );
-    }
-
-    #[tokio::test]
-    async fn blocked_request_policy_does_not_override_user_denial_outcome() {
-        let service = NetworkApprovalService::default();
-        service.register_call("registration-1".to_string()).await;
-
-        service
-            .record_call_outcome("registration-1", NetworkApprovalOutcome::DeniedByUser)
-            .await;
-        service
-            .record_blocked_request(denied_blocked_request("example.com"))
-            .await;
-
-        assert_eq!(
-            service.take_call_outcome("registration-1").await,
-            Some(NetworkApprovalOutcome::DeniedByUser)
-        );
-    }
-
-    #[tokio::test]
-    async fn record_blocked_request_ignores_ambiguous_unattributed_blocked_requests() {
-        let service = NetworkApprovalService::default();
-        service.register_call("registration-1".to_string()).await;
-        service.register_call("registration-2".to_string()).await;
-
-        service
-            .record_blocked_request(denied_blocked_request("example.com"))
-            .await;
-
-        assert_eq!(service.take_call_outcome("registration-1").await, None);
-        assert_eq!(service.take_call_outcome("registration-2").await, None);
-    }
-}
+#[path = "network_approval_tests.rs"]
+mod tests;

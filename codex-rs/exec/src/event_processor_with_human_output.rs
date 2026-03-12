@@ -21,6 +21,11 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::HookCompletedEvent;
+use codex_protocol::protocol::HookEventName;
+use codex_protocol::protocol::HookOutputEntryKind;
+use codex_protocol::protocol::HookRunStatus;
+use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::McpToolCallBeginEvent;
@@ -448,6 +453,37 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_msg!(self, "🌐 Searched: {detail}");
                 }
             }
+            EventMsg::ImageGenerationBegin(generated) => {
+                ts_msg!(
+                    self,
+                    "{} {}",
+                    "image generation started".style(self.magenta),
+                    generated.call_id
+                );
+            }
+            EventMsg::ImageGenerationEnd(generated) => {
+                if !generated.result.is_empty()
+                    && !generated.result.starts_with("data:")
+                    && !generated.result.starts_with("http://")
+                    && !generated.result.starts_with("https://")
+                    && !generated.result.starts_with("file://")
+                {
+                    ts_msg!(
+                        self,
+                        "{} {} {}",
+                        "generated image".style(self.magenta),
+                        generated.call_id,
+                        generated.result.style(self.dimmed)
+                    );
+                } else {
+                    ts_msg!(
+                        self,
+                        "{} {}",
+                        "generated image".style(self.magenta),
+                        generated.call_id
+                    );
+                }
+            }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id,
                 auto_approved,
@@ -662,6 +698,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 call_id,
                 sender_thread_id: _,
                 prompt,
+                ..
             }) => {
                 ts_msg!(
                     self,
@@ -819,6 +856,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     receiver_thread_id.to_string().style(self.dimmed)
                 );
             }
+            EventMsg::HookStarted(event) => self.render_hook_started(event),
+            EventMsg::HookCompleted(event) => self.render_hook_completed(event),
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
             EventMsg::ThreadNameUpdated(_)
             | EventMsg::ExecApprovalRequest(_)
@@ -849,6 +888,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::UndoStarted(_)
             | EventMsg::ThreadRolledBack(_)
             | EventMsg::RequestUserInput(_)
+            | EventMsg::RequestPermissions(_)
             | EventMsg::CollabResumeBegin(_)
             | EventMsg::CollabResumeEnd(_)
             | EventMsg::RealtimeConversationStarted(_)
@@ -896,46 +936,131 @@ impl EventProcessorWithHumanOutput {
         serde_json::from_str::<AgentJobProgressMessage>(payload).ok()
     }
 
+    fn render_hook_started(&self, event: HookStartedEvent) {
+        if !Self::should_print_hook_started(&event) {
+            return;
+        }
+        let event_name = Self::hook_event_name(event.run.event_name);
+        if let Some(status_message) = event.run.status_message
+            && !status_message.trim().is_empty()
+        {
+            ts_msg!(
+                self,
+                "{} {}: {}",
+                "hook".style(self.magenta),
+                event_name,
+                status_message
+            );
+        }
+    }
+
+    fn render_hook_completed(&self, event: HookCompletedEvent) {
+        if !Self::should_print_hook_completed(&event) {
+            return;
+        }
+
+        let event_name = Self::hook_event_name(event.run.event_name);
+        let status = Self::hook_status_name(event.run.status);
+        ts_msg!(
+            self,
+            "{} {} ({status})",
+            "hook".style(self.magenta),
+            event_name
+        );
+
+        for entry in event.run.entries {
+            let prefix = Self::hook_entry_prefix(entry.kind);
+            eprintln!("  {prefix} {}", entry.text);
+        }
+    }
+
+    fn should_print_hook_started(event: &HookStartedEvent) -> bool {
+        event
+            .run
+            .status_message
+            .as_deref()
+            .is_some_and(|status_message| !status_message.trim().is_empty())
+    }
+
+    fn should_print_hook_completed(event: &HookCompletedEvent) -> bool {
+        event.run.status != HookRunStatus::Completed || !event.run.entries.is_empty()
+    }
+
+    fn hook_event_name(event_name: HookEventName) -> &'static str {
+        match event_name {
+            HookEventName::SessionStart => "SessionStart",
+            HookEventName::Stop => "Stop",
+        }
+    }
+
+    fn hook_status_name(status: HookRunStatus) -> &'static str {
+        match status {
+            HookRunStatus::Running => "running",
+            HookRunStatus::Completed => "completed",
+            HookRunStatus::Failed => "failed",
+            HookRunStatus::Blocked => "blocked",
+            HookRunStatus::Stopped => "stopped",
+        }
+    }
+
+    fn hook_entry_prefix(kind: HookOutputEntryKind) -> &'static str {
+        match kind {
+            HookOutputEntryKind::Warning => "warning:",
+            HookOutputEntryKind::Stop => "stop:",
+            HookOutputEntryKind::Feedback => "feedback:",
+            HookOutputEntryKind::Context => "context:",
+            HookOutputEntryKind::Error => "error:",
+        }
+    }
+
     fn is_silent_event(msg: &EventMsg) -> bool {
-        matches!(
-            msg,
-            EventMsg::ThreadNameUpdated(_)
-                | EventMsg::TokenCount(_)
-                | EventMsg::TurnStarted(_)
-                | EventMsg::ExecApprovalRequest(_)
-                | EventMsg::ApplyPatchApprovalRequest(_)
-                | EventMsg::TerminalInteraction(_)
-                | EventMsg::ExecCommandOutputDelta(_)
-                | EventMsg::GetHistoryEntryResponse(_)
-                | EventMsg::McpListToolsResponse(_)
-                | EventMsg::ListCustomPromptsResponse(_)
-                | EventMsg::ListSkillsResponse(_)
-                | EventMsg::ListRemoteSkillsResponse(_)
-                | EventMsg::RemoteSkillDownloaded(_)
-                | EventMsg::RawResponseItem(_)
-                | EventMsg::UserMessage(_)
-                | EventMsg::EnteredReviewMode(_)
-                | EventMsg::ExitedReviewMode(_)
-                | EventMsg::AgentMessageDelta(_)
-                | EventMsg::AgentReasoningDelta(_)
-                | EventMsg::AgentReasoningRawContentDelta(_)
-                | EventMsg::ItemStarted(_)
-                | EventMsg::ItemCompleted(_)
-                | EventMsg::AgentMessageContentDelta(_)
-                | EventMsg::PlanDelta(_)
-                | EventMsg::ReasoningContentDelta(_)
-                | EventMsg::ReasoningRawContentDelta(_)
-                | EventMsg::SkillsUpdateAvailable
-                | EventMsg::UndoCompleted(_)
-                | EventMsg::UndoStarted(_)
-                | EventMsg::ThreadRolledBack(_)
-                | EventMsg::RequestUserInput(_)
-                | EventMsg::DynamicToolCallRequest(_)
-                | EventMsg::DynamicToolCallResponse(_)
-        )
+        match msg {
+            EventMsg::HookStarted(event) => !Self::should_print_hook_started(event),
+            EventMsg::HookCompleted(event) => !Self::should_print_hook_completed(event),
+            _ => matches!(
+                msg,
+                EventMsg::ThreadNameUpdated(_)
+                    | EventMsg::TokenCount(_)
+                    | EventMsg::TurnStarted(_)
+                    | EventMsg::ExecApprovalRequest(_)
+                    | EventMsg::ApplyPatchApprovalRequest(_)
+                    | EventMsg::TerminalInteraction(_)
+                    | EventMsg::ExecCommandOutputDelta(_)
+                    | EventMsg::GetHistoryEntryResponse(_)
+                    | EventMsg::McpListToolsResponse(_)
+                    | EventMsg::ListCustomPromptsResponse(_)
+                    | EventMsg::ListSkillsResponse(_)
+                    | EventMsg::ListRemoteSkillsResponse(_)
+                    | EventMsg::RemoteSkillDownloaded(_)
+                    | EventMsg::RawResponseItem(_)
+                    | EventMsg::UserMessage(_)
+                    | EventMsg::EnteredReviewMode(_)
+                    | EventMsg::ExitedReviewMode(_)
+                    | EventMsg::AgentMessageDelta(_)
+                    | EventMsg::AgentReasoningDelta(_)
+                    | EventMsg::AgentReasoningRawContentDelta(_)
+                    | EventMsg::ItemStarted(_)
+                    | EventMsg::ItemCompleted(_)
+                    | EventMsg::AgentMessageContentDelta(_)
+                    | EventMsg::PlanDelta(_)
+                    | EventMsg::ReasoningContentDelta(_)
+                    | EventMsg::ReasoningRawContentDelta(_)
+                    | EventMsg::SkillsUpdateAvailable
+                    | EventMsg::UndoCompleted(_)
+                    | EventMsg::UndoStarted(_)
+                    | EventMsg::ThreadRolledBack(_)
+                    | EventMsg::RequestUserInput(_)
+                    | EventMsg::RequestPermissions(_)
+                    | EventMsg::DynamicToolCallRequest(_)
+                    | EventMsg::DynamicToolCallResponse(_)
+            ),
+        }
     }
 
     fn should_interrupt_progress(msg: &EventMsg) -> bool {
+        if let EventMsg::HookCompleted(event) = msg {
+            return Self::should_print_hook_completed(event);
+        }
         matches!(
             msg,
             EventMsg::Error(_)
@@ -1209,6 +1334,20 @@ fn format_mcp_invocation(invocation: &McpInvocation) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::HookCompletedEvent;
+    use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookExecutionMode;
+    use codex_protocol::protocol::HookHandlerType;
+    use codex_protocol::protocol::HookOutputEntry;
+    use codex_protocol::protocol::HookRunStatus;
+    use codex_protocol::protocol::HookRunSummary;
+    use codex_protocol::protocol::HookScope;
+    use codex_protocol::protocol::HookStartedEvent;
+
+    use super::EventProcessorWithHumanOutput;
     use super::should_print_final_message_to_stdout;
     use pretty_assertions::assert_eq;
 
@@ -1242,5 +1381,74 @@ mod tests {
             should_print_final_message_to_stdout(None, false, false),
             false
         );
+    }
+
+    #[test]
+    fn hook_started_with_status_message_is_not_silent() {
+        let event = HookStartedEvent {
+            turn_id: Some("turn-1".to_string()),
+            run: hook_run(
+                HookRunStatus::Running,
+                Some("running hook"),
+                Vec::new(),
+                HookEventName::Stop,
+            ),
+        };
+
+        assert!(!EventProcessorWithHumanOutput::is_silent_event(
+            &EventMsg::HookStarted(event)
+        ));
+    }
+
+    #[test]
+    fn hook_completed_failure_interrupts_progress() {
+        let event = HookCompletedEvent {
+            turn_id: Some("turn-1".to_string()),
+            run: hook_run(HookRunStatus::Failed, None, Vec::new(), HookEventName::Stop),
+        };
+
+        assert!(EventProcessorWithHumanOutput::should_interrupt_progress(
+            &EventMsg::HookCompleted(event)
+        ));
+    }
+
+    #[test]
+    fn hook_completed_success_without_entries_stays_silent() {
+        let event = HookCompletedEvent {
+            turn_id: Some("turn-1".to_string()),
+            run: hook_run(
+                HookRunStatus::Completed,
+                None,
+                Vec::new(),
+                HookEventName::Stop,
+            ),
+        };
+
+        assert!(EventProcessorWithHumanOutput::is_silent_event(
+            &EventMsg::HookCompleted(event)
+        ));
+    }
+
+    fn hook_run(
+        status: HookRunStatus,
+        status_message: Option<&str>,
+        entries: Vec<HookOutputEntry>,
+        event_name: HookEventName,
+    ) -> HookRunSummary {
+        HookRunSummary {
+            id: "hook-run-1".to_string(),
+            event_name,
+            handler_type: HookHandlerType::Command,
+            execution_mode: HookExecutionMode::Sync,
+            scope: HookScope::Turn,
+            source_path: PathBuf::from("/tmp/hooks.json"),
+            display_order: 0,
+            status,
+            status_message: status_message.map(ToOwned::to_owned),
+            started_at: 0,
+            completed_at: Some(1),
+            duration_ms: Some(1),
+            entries,
+        }
     }
 }

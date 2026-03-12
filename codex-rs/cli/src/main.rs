@@ -239,7 +239,7 @@ enum SandboxCommand {
     #[clap(visible_alias = "seatbelt")]
     Macos(SeatbeltCommand),
 
-    /// Run a command under Landlock+seccomp (Linux only).
+    /// Run a command under the Linux sandbox (bubblewrap by default).
     #[clap(visible_alias = "landlock")]
     Linux(LandlockCommand),
 
@@ -473,11 +473,12 @@ fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
     cmd.run()
 }
 
-fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Result<()> {
+async fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Result<()> {
     match cmd.subcommand {
         DebugAppServerSubcommand::SendMessageV2(cmd) => {
             let codex_bin = std::env::current_exe()?;
             codex_app_server_test_client::send_message_v2(&codex_bin, &[], cmd.user_message, &None)
+                .await
         }
     }
 }
@@ -755,7 +756,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         },
         Some(Subcommand::Debug(DebugCommand { subcommand })) => match subcommand {
             DebugSubcommand::AppServer(cmd) => {
-                run_debug_app_server_command(cmd)?;
+                run_debug_app_server_command(cmd).await?;
             }
             DebugSubcommand::ClearMemories => {
                 run_debug_clear_memories_command(&root_config_overrides, &interactive).await?;
@@ -903,12 +904,9 @@ async fn run_debug_clear_memories_command(
     let state_path = state_db_path(config.sqlite_home.as_path());
     let mut cleared_state_db = false;
     if tokio::fs::try_exists(&state_path).await? {
-        let state_db = StateRuntime::init(
-            config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
-            None,
-        )
-        .await?;
+        let state_db =
+            StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone())
+                .await?;
         state_db.reset_memory_data_for_fresh_start().await?;
         cleared_state_db = true;
     }
@@ -1515,6 +1513,19 @@ mod tests {
                 "features.web_search_request=true".to_string(),
                 "features.unified_exec=false".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn feature_toggles_accept_legacy_linux_sandbox_flag() {
+        let toggles = FeatureToggles {
+            enable: vec!["use_linux_sandbox_bwrap".to_string()],
+            disable: Vec::new(),
+        };
+        let overrides = toggles.to_overrides().expect("valid features");
+        assert_eq!(
+            overrides,
+            vec!["features.use_linux_sandbox_bwrap=true".to_string(),]
         );
     }
 

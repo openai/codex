@@ -4,7 +4,7 @@ use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
-use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
@@ -23,6 +23,10 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
+use codex_app_server_protocol::ThreadMetadataUpdateParams;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -32,22 +36,63 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::SessionSource as RolloutSessionSource;
+use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
+use codex_state::StateRuntime;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::fs::FileTimes;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use uuid::Uuid;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
+
+async fn wait_for_responses_request_count(
+    server: &wiremock::MockServer,
+    expected_count: usize,
+) -> Result<()> {
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let Some(requests) = server.received_requests().await else {
+                anyhow::bail!("wiremock did not record requests");
+            };
+            let responses_request_count = requests
+                .iter()
+                .filter(|request| {
+                    request.method == "POST" && request.url.path().ends_with("/responses")
+                })
+                .count();
+            if responses_request_count == expected_count {
+                return Ok::<(), anyhow::Error>(());
+            }
+            if responses_request_count > expected_count {
+                anyhow::bail!(
+                    "expected exactly {expected_count} /responses requests, got {responses_request_count}"
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    Ok(())
+}
 
 #[tokio::test]
 async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
@@ -166,6 +211,308 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
         }
         other => panic!("expected user message item, got {other:?}"),
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    let config_toml = codex_home.path().join("config.toml");
+    std::fs::write(
+        &config_toml,
+        format!(
+            r#"
+model = "gpt-5.2-codex"
+approval_policy = "never"
+sandbox_mode = "read-only"
+
+model_provider = "mock_provider"
+
+[features]
+personality = true
+sqlite = true
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#,
+            server.uri()
+        ),
+    )?;
+
+    let repo_path = codex_home.path().join("repo");
+    std::fs::create_dir_all(&repo_path)?;
+    assert!(
+        Command::new("git")
+            .args(["init"])
+            .arg(&repo_path)
+            .status()?
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["checkout", "-B", "master"])
+            .status()?
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["config", "user.name", "Test User"])
+            .status()?
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["config", "user.email", "test@example.com"])
+            .status()?
+            .success()
+    );
+    std::fs::write(repo_path.join("README.md"), "test\n")?;
+    assert!(
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["add", "README.md"])
+            .status()?
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["commit", "-m", "initial"])
+            .status()?
+            .success()
+    );
+    let head_branch = Command::new("git")
+        .current_dir(&repo_path)
+        .args(["branch", "--show-current"])
+        .output()?;
+    assert_eq!(
+        String::from_utf8(head_branch.stdout)?.trim(),
+        "master",
+        "test repo should stay on master to verify resume ignores live HEAD"
+    );
+
+    let thread_id = Uuid::new_v4().to_string();
+    let conversation_id = ThreadId::from_string(&thread_id)?;
+    let rollout_path = rollout_path(codex_home.path(), "2025-01-05T12-00-00", &thread_id);
+    let rollout_dir = rollout_path.parent().expect("rollout parent directory");
+    std::fs::create_dir_all(rollout_dir)?;
+    let session_meta = SessionMeta {
+        id: conversation_id,
+        forked_from_id: None,
+        timestamp: "2025-01-05T12:00:00Z".to_string(),
+        cwd: repo_path.clone(),
+        originator: "codex".to_string(),
+        cli_version: "0.0.0".to_string(),
+        source: RolloutSessionSource::Cli,
+        agent_nickname: None,
+        agent_role: None,
+        model_provider: Some("mock_provider".to_string()),
+        base_instructions: None,
+        dynamic_tools: None,
+        memory_mode: None,
+    };
+    std::fs::write(
+        &rollout_path,
+        [
+            json!({
+                "timestamp": "2025-01-05T12:00:00Z",
+                "type": "session_meta",
+                "payload": serde_json::to_value(SessionMetaLine {
+                    meta: session_meta,
+                    git: None,
+                })?,
+            })
+            .to_string(),
+            json!({
+                "timestamp": "2025-01-05T12:00:00Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Saved user message"}]
+                }
+            })
+            .to_string(),
+            json!({
+                "timestamp": "2025-01-05T12:00:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "Saved user message",
+                    "kind": "plain"
+                }
+            })
+            .to_string(),
+        ]
+        .join("\n")
+            + "\n",
+    )?;
+    let state_db =
+        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
+    state_db.mark_backfill_complete(None).await?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let update_id = mcp
+        .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
+            thread_id: thread_id.clone(),
+            git_info: Some(ThreadMetadataGitInfoUpdateParams {
+                sha: None,
+                branch: Some(Some("feature/pr-branch".to_string())),
+                origin_url: None,
+            }),
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(update_id)),
+    )
+    .await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(
+        thread
+            .git_info
+            .as_ref()
+            .and_then(|git| git.branch.as_deref()),
+        Some("feature/pr-branch")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is_idle() -> Result<()>
+{
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let filename_ts = "2025-01-05T12-00-00";
+    let meta_rfc3339 = "2025-01-05T12:00:00Z";
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        filename_ts,
+        meta_rfc3339,
+        "Saved user message",
+        Vec::new(),
+        Some("mock_provider"),
+        None,
+    )?;
+    let rollout_file_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    let persisted_rollout = std::fs::read_to_string(&rollout_file_path)?;
+    let turn_id = "incomplete-turn";
+    let appended_rollout = [
+        json!({
+            "timestamp": meta_rfc3339,
+            "type": "event_msg",
+            "payload": serde_json::to_value(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: turn_id.to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }))?,
+        })
+        .to_string(),
+        json!({
+            "timestamp": meta_rfc3339,
+            "type": "event_msg",
+            "payload": serde_json::to_value(EventMsg::AgentMessage(AgentMessageEvent {
+                message: "Still running".to_string(),
+                phase: None,
+            }))?,
+        })
+        .to_string(),
+    ]
+    .join("\n");
+    std::fs::write(
+        &rollout_file_path,
+        format!("{persisted_rollout}{appended_rollout}\n"),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(thread.status, ThreadStatus::Idle);
+    assert_eq!(thread.turns.len(), 2);
+    assert_eq!(thread.turns[0].status, TurnStatus::Completed);
+    assert_eq!(thread.turns[1].id, turn_id);
+    assert_eq!(thread.turns[1].status, TurnStatus::Interrupted);
+
+    let second_resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let second_resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(second_resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        thread: resumed_again,
+        ..
+    } = to_response::<ThreadResumeResponse>(second_resume_resp)?;
+
+    assert_eq!(resumed_again.status, ThreadStatus::Idle);
+    assert_eq!(resumed_again.turns.len(), 2);
+    assert_eq!(resumed_again.turns[1].id, turn_id);
+    assert_eq!(resumed_again.turns[1].status, TurnStatus::Interrupted);
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: resumed_again.id,
+            include_turns: true,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadReadResponse {
+        thread: read_thread,
+    } = to_response::<ThreadReadResponse>(read_resp)?;
+
+    assert_eq!(read_thread.status, ThreadStatus::Idle);
+    assert_eq!(read_thread.turns.len(), 2);
+    assert_eq!(read_thread.turns[1].id, turn_id);
+    assert_eq!(read_thread.turns[1].status, TurnStatus::Interrupted);
 
     Ok(())
 }
@@ -636,12 +983,14 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
     let ThreadResumeResponse { thread, model, .. } =
         to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(model, "gpt-5.1-codex-max");
-    assert_eq!(
-        thread.status,
-        ThreadStatus::Active {
-            active_flags: vec![],
-        }
-    );
+    // The running-thread resume response is queued onto the thread listener task.
+    // If the in-flight turn completes before that queued command runs, the response
+    // can legitimately observe the thread as idle.
+    match &thread.status {
+        ThreadStatus::Active { active_flags } => assert!(active_flags.is_empty()),
+        ThreadStatus::Idle => {}
+        status => panic!("unexpected thread status after running resume: {status:?}"),
+    }
 
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -668,7 +1017,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
         )?,
         create_final_assistant_message_sse_response("done")?,
     ];
-    let server = create_mock_responses_server_sequence(responses).await;
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
@@ -783,6 +1132,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
         primary.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    wait_for_responses_request_count(&server, 3).await?;
 
     Ok(())
 }
@@ -805,7 +1155,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
         create_apply_patch_sse_response(patch, "patch-call")?,
         create_final_assistant_message_sse_response("done")?,
     ];
-    let server = create_mock_responses_server_sequence(responses).await;
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
     create_config_toml(&codex_home, &server.uri())?;
 
     let mut primary = McpProcess::new(&codex_home).await?;
@@ -948,6 +1298,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
         primary.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    wait_for_responses_request_count(&server, 3).await?;
 
     Ok(())
 }

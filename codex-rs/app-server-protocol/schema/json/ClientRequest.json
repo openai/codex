@@ -57,10 +57,18 @@
                 "mcp_elicitations": {
                   "type": "boolean"
                 },
+                "request_permissions": {
+                  "default": false,
+                  "type": "boolean"
+                },
                 "rules": {
                   "type": "boolean"
                 },
                 "sandbox_approval": {
+                  "type": "boolean"
+                },
+                "skill_approval": {
+                  "default": false,
                   "type": "boolean"
                 }
               },
@@ -148,14 +156,54 @@
       "type": "object"
     },
     "CommandExecParams": {
+      "description": "Run a standalone command (argv vector) in the server sandbox without creating a thread or turn.\n\nThe final `command/exec` response is deferred until the process exits and is sent only after all `command/exec/outputDelta` notifications for that connection have been emitted.",
       "properties": {
         "command": {
+          "description": "Command argv vector. Empty arrays are rejected.",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "cwd": {
+          "description": "Optional working directory. Defaults to the server cwd.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disableOutputCap": {
+          "description": "Disable stdout/stderr capture truncation for this request.\n\nCannot be combined with `outputBytesCap`.",
+          "type": "boolean"
+        },
+        "disableTimeout": {
+          "description": "Disable the timeout entirely for this request.\n\nCannot be combined with `timeoutMs`.",
+          "type": "boolean"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": "Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "outputBytesCap": {
+          "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with `disableOutputCap`.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "processId": {
+          "description": "Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
           "type": [
             "string",
             "null"
@@ -169,18 +217,124 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted."
+        },
+        "size": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CommandExecTerminalSize"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional initial PTY size in character cells. Only valid when `tty` is true."
+        },
+        "streamStdin": {
+          "description": "Allow follow-up `command/exec/write` requests to write stdin bytes.\n\nRequires a client-supplied `processId`.",
+          "type": "boolean"
+        },
+        "streamStdoutStderr": {
+          "description": "Stream stdout/stderr via `command/exec/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the final response and require a client-supplied `processId`.",
+          "type": "boolean"
         },
         "timeoutMs": {
+          "description": "Optional timeout in milliseconds.\n\nWhen omitted, the server default applies. Cannot be combined with `disableTimeout`.",
           "format": "int64",
           "type": [
             "integer",
             "null"
           ]
+        },
+        "tty": {
+          "description": "Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`.",
+          "type": "boolean"
         }
       },
       "required": [
         "command"
+      ],
+      "type": "object"
+    },
+    "CommandExecResizeParams": {
+      "description": "Resize a running PTY-backed `command/exec` session.",
+      "properties": {
+        "processId": {
+          "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+          "type": "string"
+        },
+        "size": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/CommandExecTerminalSize"
+            }
+          ],
+          "description": "New PTY size in character cells."
+        }
+      },
+      "required": [
+        "processId",
+        "size"
+      ],
+      "type": "object"
+    },
+    "CommandExecTerminalSize": {
+      "description": "PTY size in character cells for `command/exec` PTY sessions.",
+      "properties": {
+        "cols": {
+          "description": "Terminal width in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "rows": {
+          "description": "Terminal height in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "type": "object"
+    },
+    "CommandExecTerminateParams": {
+      "description": "Terminate a running `command/exec` session.",
+      "properties": {
+        "processId": {
+          "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "processId"
+      ],
+      "type": "object"
+    },
+    "CommandExecWriteParams": {
+      "description": "Write stdin bytes to a running `command/exec` session, close stdin, or both.",
+      "properties": {
+        "closeStdin": {
+          "description": "Close stdin after writing `deltaBase64`, if present.",
+          "type": "boolean"
+        },
+        "deltaBase64": {
+          "description": "Optional base64-encoded stdin bytes to write.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "processId": {
+          "description": "Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "processId"
       ],
       "type": "object"
     },
@@ -204,6 +358,10 @@
             "string",
             "null"
           ]
+        },
+        "reloadUserConfig": {
+          "description": "When true, hot-reload the updated user config into all loaded threads after writing.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -514,6 +672,16 @@
         },
         {
           "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "image_url": {
               "type": "string"
             },
@@ -627,6 +795,15 @@
       ],
       "type": "string"
     },
+    "ImageDetail": {
+      "enum": [
+        "auto",
+        "low",
+        "high",
+        "original"
+      ],
+      "type": "string"
+    },
     "InitializeCapabilities": {
       "description": "Client-declared capabilities negotiated during initialize.",
       "properties": {
@@ -636,7 +813,7 @@
           "type": "boolean"
         },
         "optOutNotificationMethods": {
-          "description": "Exact notification method names that should be suppressed for this connection (for example `codex/event/session_configured`).",
+          "description": "Exact notification method names that should be suppressed for this connection (for example `thread/started`).",
           "items": {
             "type": "string"
           },
@@ -931,6 +1108,51 @@
         "pragmatic"
       ],
       "type": "string"
+    },
+    "PluginInstallParams": {
+      "properties": {
+        "marketplacePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "pluginName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "marketplacePath",
+        "pluginName"
+      ],
+      "type": "object"
+    },
+    "PluginListParams": {
+      "properties": {
+        "cwds": {
+          "description": "Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "forceRemoteSync": {
+          "description": "When true, reconcile the official curated marketplace against the remote plugin state before listing marketplaces.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "PluginUninstallParams": {
+      "properties": {
+        "pluginId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId"
+      ],
+      "type": "object"
     },
     "ProductSurface": {
       "enum": [
@@ -1252,6 +1474,12 @@
             "name": {
               "type": "string"
             },
+            "namespace": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "function_call"
@@ -1267,6 +1495,47 @@
             "type"
           ],
           "title": "FunctionCallResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "arguments": true,
+            "call_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "execution": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "tool_search_call"
+              ],
+              "title": "ToolSearchCallResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "execution",
+            "type"
+          ],
+          "title": "ToolSearchCallResponseItem",
           "type": "object"
         },
         {
@@ -1360,10 +1629,45 @@
         },
         {
           "properties": {
+            "call_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "execution": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tools": {
+              "items": true,
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "tool_search_output"
+              ],
+              "title": "ToolSearchOutputResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "execution",
+            "status",
+            "tools",
+            "type"
+          ],
+          "title": "ToolSearchOutputResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "action": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/WebSearchAction"
+                  "$ref": "#/definitions/ResponsesApiWebSearchAction"
                 },
                 {
                   "type": "null"
@@ -1395,6 +1699,40 @@
             "type"
           ],
           "title": "WebSearchCallResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "revised_prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "image_generation_call"
+              ],
+              "title": "ImageGenerationCallResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "result",
+            "status",
+            "type"
+          ],
+          "title": "ImageGenerationCallResponseItem",
           "type": "object"
         },
         {
@@ -1451,6 +1789,107 @@
             "type"
           ],
           "title": "OtherResponseItem",
+          "type": "object"
+        }
+      ]
+    },
+    "ResponsesApiWebSearchAction": {
+      "oneOf": [
+        {
+          "properties": {
+            "queries": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "search"
+              ],
+              "title": "SearchResponsesApiWebSearchActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "SearchResponsesApiWebSearchAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "open_page"
+              ],
+              "title": "OpenPageResponsesApiWebSearchActionType",
+              "type": "string"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "OpenPageResponsesApiWebSearchAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "pattern": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "find_in_page"
+              ],
+              "title": "FindInPageResponsesApiWebSearchActionType",
+              "type": "string"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "FindInPageResponsesApiWebSearchAction",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "other"
+              ],
+              "title": "OtherResponsesApiWebSearchActionType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "OtherResponsesApiWebSearchAction",
           "type": "object"
         }
       ]
@@ -1618,6 +2057,10 @@
                 "type": "fullAccess"
               }
             },
+            "networkAccess": {
+              "default": false,
+              "type": "boolean"
+            },
             "type": {
               "enum": [
                 "readOnly"
@@ -1705,7 +2148,8 @@
     },
     "ServiceTier": {
       "enum": [
-        "fast"
+        "fast",
+        "flex"
       ],
       "type": "string"
     },
@@ -1916,6 +2360,9 @@
             "null"
           ]
         },
+        "ephemeral": {
+          "type": "boolean"
+        },
         "model": {
           "description": "Configuration overrides for the forked thread, if any.",
           "type": [
@@ -2057,6 +2504,54 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "ThreadMetadataGitInfoUpdateParams": {
+      "properties": {
+        "branch": {
+          "description": "Omit to leave the stored branch unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "originUrl": {
+          "description": "Omit to leave the stored origin URL unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha": {
+          "description": "Omit to leave the stored commit unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ThreadMetadataUpdateParams": {
+      "properties": {
+        "gitInfo": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadMetadataGitInfoUpdateParams"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value."
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
       "type": "object"
     },
     "ThreadReadParams": {
@@ -2648,107 +3143,6 @@
         }
       ]
     },
-    "WebSearchAction": {
-      "oneOf": [
-        {
-          "properties": {
-            "queries": {
-              "items": {
-                "type": "string"
-              },
-              "type": [
-                "array",
-                "null"
-              ]
-            },
-            "query": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "search"
-              ],
-              "title": "SearchWebSearchActionType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "SearchWebSearchAction",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "open_page"
-              ],
-              "title": "OpenPageWebSearchActionType",
-              "type": "string"
-            },
-            "url": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "OpenPageWebSearchAction",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "pattern": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "find_in_page"
-              ],
-              "title": "FindInPageWebSearchActionType",
-              "type": "string"
-            },
-            "url": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "FindInPageWebSearchAction",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "other"
-              ],
-              "title": "OtherWebSearchActionType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "OtherWebSearchAction",
-          "type": "object"
-        }
-      ]
-    },
     "WindowsSandboxSetupMode": {
       "enum": [
         "elevated",
@@ -2758,6 +3152,16 @@
     },
     "WindowsSandboxSetupStartParams": {
       "properties": {
+        "cwd": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "mode": {
           "$ref": "#/definitions/WindowsSandboxSetupMode"
         }
@@ -2946,6 +3350,30 @@
         },
         "method": {
           "enum": [
+            "thread/metadata/update"
+          ],
+          "title": "Thread/metadata/updateRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadMetadataUpdateParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/metadata/updateRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "thread/unarchive"
           ],
           "title": "Thread/unarchiveRequestMethod",
@@ -3114,6 +3542,30 @@
         },
         "method": {
           "enum": [
+            "plugin/list"
+          ],
+          "title": "Plugin/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "skills/remote/list"
           ],
           "title": "Skills/remote/listRequestMethod",
@@ -3201,6 +3653,54 @@
         "params"
       ],
       "title": "Skills/config/writeRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/install"
+          ],
+          "title": "Plugin/installRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginInstallParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/installRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/uninstall"
+          ],
+          "title": "Plugin/uninstallRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginUninstallParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/uninstallRequest",
       "type": "object"
     },
     {
@@ -3561,7 +4061,7 @@
       "type": "object"
     },
     {
-      "description": "Execute a command (argv vector) under the server's sandbox.",
+      "description": "Execute a standalone command (argv vector) under the server's sandbox.",
       "properties": {
         "id": {
           "$ref": "#/definitions/RequestId"
@@ -3583,6 +4083,81 @@
         "params"
       ],
       "title": "Command/execRequest",
+      "type": "object"
+    },
+    {
+      "description": "Write stdin bytes to a running `command/exec` session or close stdin.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "command/exec/write"
+          ],
+          "title": "Command/exec/writeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/CommandExecWriteParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Command/exec/writeRequest",
+      "type": "object"
+    },
+    {
+      "description": "Terminate a running `command/exec` session by client-supplied `processId`.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "command/exec/terminate"
+          ],
+          "title": "Command/exec/terminateRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/CommandExecTerminateParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Command/exec/terminateRequest",
+      "type": "object"
+    },
+    {
+      "description": "Resize a running PTY-backed `command/exec` session by client-supplied `processId`.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "command/exec/resize"
+          ],
+          "title": "Command/exec/resizeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/CommandExecResizeParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Command/exec/resizeRequest",
       "type": "object"
     },
     {

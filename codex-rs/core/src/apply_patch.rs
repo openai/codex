@@ -1,6 +1,7 @@
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::FileChange;
+use crate::protocol::FileSystemSandboxPolicy;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_patch_safety;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -34,12 +35,14 @@ pub(crate) struct ApplyPatchExec {
 
 pub(crate) async fn apply_patch(
     turn_context: &TurnContext,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
     match assess_patch_safety(
         &action,
         turn_context.approval_policy.value(),
         turn_context.sandbox_policy.get(),
+        file_system_sandbox_policy,
         &turn_context.cwd,
         turn_context.windows_sandbox_level,
     ) {
@@ -101,26 +104,5 @@ pub(crate) fn convert_apply_patch_to_protocol(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    use tempfile::tempdir;
-
-    #[test]
-    fn convert_apply_patch_maps_add_variant() {
-        let tmp = tempdir().expect("tmp");
-        let p = tmp.path().join("a.txt");
-        // Create an action with a single Add change
-        let action = ApplyPatchAction::new_add_for_test(&p, "hello".to_string());
-
-        let got = convert_apply_patch_to_protocol(&action);
-
-        assert_eq!(
-            got.get(&p),
-            Some(&FileChange::Add {
-                content: "hello".to_string()
-            })
-        );
-    }
-}
+#[path = "apply_patch_tests.rs"]
+mod tests;

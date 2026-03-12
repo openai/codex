@@ -1,6 +1,5 @@
 ---
 source: tui/src/history_cell.rs
-assertion_line: 2608
 expression: rendered
 ---
 ╭─────────────────────────────────────╮

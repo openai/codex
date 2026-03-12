@@ -296,7 +296,7 @@ fn theme_picker_subtitle(codex_home: Option<&Path>, terminal_width: Option<u16>)
 ///
 /// `current_name` should be the value of `Config::tui_theme` (the persisted
 /// preference).  When it names a theme that is currently available the picker
-/// pre-selects it; otherwise the picker falls back to the configured name (or
+/// preselects it; otherwise the picker falls back to the configured name (or
 /// adaptive default) so opening the picker without a persisted preference still
 /// highlights the most likely intended entry.
 pub(crate) fn build_theme_picker_params(
@@ -321,7 +321,7 @@ pub(crate) fn build_theme_picker_params(
         highlight::configured_theme_name()
     };
 
-    // Track the index of the current theme so we can pre-select it.
+    // Track the index of the current theme so we can preselect it.
     let mut initial_idx = None;
 
     let items: Vec<SelectionItem> = entries
