@@ -50,6 +50,7 @@ use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
+use codex_protocol::protocol::GranularApprovalConfig as CoreGranularApprovalConfig;
 use codex_protocol::protocol::HookEventName as CoreHookEventName;
 use codex_protocol::protocol::HookExecutionMode as CoreHookExecutionMode;
 use codex_protocol::protocol::HookHandlerType as CoreHookHandlerType;
@@ -65,7 +66,6 @@ use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
-use codex_protocol::protocol::RejectConfig as CoreRejectConfig;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
@@ -201,8 +201,8 @@ pub enum AskForApproval {
     UnlessTrusted,
     OnFailure,
     OnRequest,
-    #[experimental("askForApproval.reject")]
-    Reject {
+    #[experimental("askForApproval.granular")]
+    Granular {
         sandbox_approval: bool,
         rules: bool,
         #[serde(default)]
@@ -220,13 +220,13 @@ impl AskForApproval {
             AskForApproval::UnlessTrusted => CoreAskForApproval::UnlessTrusted,
             AskForApproval::OnFailure => CoreAskForApproval::OnFailure,
             AskForApproval::OnRequest => CoreAskForApproval::OnRequest,
-            AskForApproval::Reject {
+            AskForApproval::Granular {
                 sandbox_approval,
                 rules,
                 skill_approval,
                 request_permissions,
                 mcp_elicitations,
-            } => CoreAskForApproval::Reject(CoreRejectConfig {
+            } => CoreAskForApproval::Granular(CoreGranularApprovalConfig {
                 sandbox_approval,
                 rules,
                 skill_approval,
@@ -244,12 +244,12 @@ impl From<CoreAskForApproval> for AskForApproval {
             CoreAskForApproval::UnlessTrusted => AskForApproval::UnlessTrusted,
             CoreAskForApproval::OnFailure => AskForApproval::OnFailure,
             CoreAskForApproval::OnRequest => AskForApproval::OnRequest,
-            CoreAskForApproval::Reject(reject_config) => AskForApproval::Reject {
-                sandbox_approval: reject_config.sandbox_approval,
-                rules: reject_config.rules,
-                skill_approval: reject_config.skill_approval,
-                request_permissions: reject_config.request_permissions,
-                mcp_elicitations: reject_config.mcp_elicitations,
+            CoreAskForApproval::Granular(granular_config) => AskForApproval::Granular {
+                sandbox_approval: granular_config.sandbox_approval,
+                rules: granular_config.rules,
+                skill_approval: granular_config.skill_approval,
+                request_permissions: granular_config.request_permissions,
+                mcp_elicitations: granular_config.mcp_elicitations,
             },
             CoreAskForApproval::Never => AskForApproval::Never,
         }
@@ -6192,8 +6192,8 @@ mod tests {
     }
 
     #[test]
-    fn ask_for_approval_reject_round_trips_request_permissions_flag() {
-        let v2_policy = AskForApproval::Reject {
+    fn ask_for_approval_granular_round_trips_request_permissions_flag() {
+        let v2_policy = AskForApproval::Granular {
             sandbox_approval: true,
             rules: false,
             skill_approval: false,
@@ -6204,7 +6204,7 @@ mod tests {
         let core_policy = v2_policy.to_core();
         assert_eq!(
             core_policy,
-            CoreAskForApproval::Reject(CoreRejectConfig {
+            CoreAskForApproval::Granular(CoreGranularApprovalConfig {
                 sandbox_approval: true,
                 rules: false,
                 skill_approval: false,
@@ -6218,19 +6218,19 @@ mod tests {
     }
 
     #[test]
-    fn ask_for_approval_reject_defaults_missing_optional_flags_to_false() {
+    fn ask_for_approval_granular_defaults_missing_optional_flags_to_false() {
         let decoded = serde_json::from_value::<AskForApproval>(serde_json::json!({
-            "reject": {
+            "granular": {
                 "sandbox_approval": true,
                 "rules": false,
                 "mcp_elicitations": true,
             }
         }))
-        .expect("legacy reject approval policy should deserialize");
+        .expect("granular approval policy should deserialize");
 
         assert_eq!(
             decoded,
-            AskForApproval::Reject {
+            AskForApproval::Granular {
                 sandbox_approval: true,
                 rules: false,
                 skill_approval: false,
@@ -6241,9 +6241,9 @@ mod tests {
     }
 
     #[test]
-    fn ask_for_approval_reject_is_marked_experimental() {
+    fn ask_for_approval_granular_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
-            &AskForApproval::Reject {
+            &AskForApproval::Granular {
                 sandbox_approval: true,
                 rules: false,
                 skill_approval: false,
@@ -6252,7 +6252,7 @@ mod tests {
             },
         );
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
         assert_eq!(
             crate::experimental_api::ExperimentalApi::experimental_reason(
                 &AskForApproval::OnRequest,
@@ -6262,11 +6262,11 @@ mod tests {
     }
 
     #[test]
-    fn profile_v2_reject_approval_policy_is_marked_experimental() {
+    fn profile_v2_granular_approval_policy_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&ProfileV2 {
             model: None,
             model_provider: None,
-            approval_policy: Some(AskForApproval::Reject {
+            approval_policy: Some(AskForApproval::Granular {
                 sandbox_approval: true,
                 rules: false,
                 skill_approval: false,
@@ -6283,18 +6283,18 @@ mod tests {
             additional: HashMap::new(),
         });
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
     }
 
     #[test]
-    fn config_reject_approval_policy_is_marked_experimental() {
+    fn config_granular_approval_policy_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
             model: None,
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
             model_provider: None,
-            approval_policy: Some(AskForApproval::Reject {
+            approval_policy: Some(AskForApproval::Granular {
                 sandbox_approval: false,
                 rules: true,
                 skill_approval: false,
@@ -6321,11 +6321,11 @@ mod tests {
             additional: HashMap::new(),
         });
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
     }
 
     #[test]
-    fn config_nested_profile_reject_approval_policy_is_marked_experimental() {
+    fn config_nested_profile_granular_approval_policy_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
             model: None,
             review_model: None,
@@ -6345,7 +6345,7 @@ mod tests {
                 ProfileV2 {
                     model: None,
                     model_provider: None,
-                    approval_policy: Some(AskForApproval::Reject {
+                    approval_policy: Some(AskForApproval::Granular {
                         sandbox_approval: true,
                         rules: false,
                         skill_approval: false,
@@ -6374,14 +6374,14 @@ mod tests {
             additional: HashMap::new(),
         });
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
     }
 
     #[test]
-    fn config_requirements_reject_allowed_approval_policy_is_marked_experimental() {
+    fn config_requirements_granular_allowed_approval_policy_is_marked_experimental() {
         let reason =
             crate::experimental_api::ExperimentalApi::experimental_reason(&ConfigRequirements {
-                allowed_approval_policies: Some(vec![AskForApproval::Reject {
+                allowed_approval_policies: Some(vec![AskForApproval::Granular {
                     sandbox_approval: true,
                     rules: true,
                     skill_approval: false,
@@ -6395,16 +6395,16 @@ mod tests {
                 network: None,
             });
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
     }
 
     #[test]
-    fn client_request_thread_start_reject_approval_policy_is_marked_experimental() {
+    fn client_request_thread_start_granular_approval_policy_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
             &crate::ClientRequest::ThreadStart {
                 request_id: crate::RequestId::Integer(1),
                 params: ThreadStartParams {
-                    approval_policy: Some(AskForApproval::Reject {
+                    approval_policy: Some(AskForApproval::Granular {
                         sandbox_approval: true,
                         rules: false,
                         skill_approval: false,
@@ -6416,17 +6416,17 @@ mod tests {
             },
         );
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
     }
 
     #[test]
-    fn client_request_thread_resume_reject_approval_policy_is_marked_experimental() {
+    fn client_request_thread_resume_granular_approval_policy_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
             &crate::ClientRequest::ThreadResume {
                 request_id: crate::RequestId::Integer(2),
                 params: ThreadResumeParams {
                     thread_id: "thr_123".to_string(),
-                    approval_policy: Some(AskForApproval::Reject {
+                    approval_policy: Some(AskForApproval::Granular {
                         sandbox_approval: false,
                         rules: true,
                         skill_approval: false,
@@ -6438,17 +6438,17 @@ mod tests {
             },
         );
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
     }
 
     #[test]
-    fn client_request_thread_fork_reject_approval_policy_is_marked_experimental() {
+    fn client_request_thread_fork_granular_approval_policy_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
             &crate::ClientRequest::ThreadFork {
                 request_id: crate::RequestId::Integer(3),
                 params: ThreadForkParams {
                     thread_id: "thr_456".to_string(),
-                    approval_policy: Some(AskForApproval::Reject {
+                    approval_policy: Some(AskForApproval::Granular {
                         sandbox_approval: true,
                         rules: false,
                         skill_approval: false,
@@ -6460,18 +6460,18 @@ mod tests {
             },
         );
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
     }
 
     #[test]
-    fn client_request_turn_start_reject_approval_policy_is_marked_experimental() {
+    fn client_request_turn_start_granular_approval_policy_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
             &crate::ClientRequest::TurnStart {
                 request_id: crate::RequestId::Integer(4),
                 params: TurnStartParams {
                     thread_id: "thr_123".to_string(),
                     input: Vec::new(),
-                    approval_policy: Some(AskForApproval::Reject {
+                    approval_policy: Some(AskForApproval::Granular {
                         sandbox_approval: false,
                         rules: true,
                         skill_approval: false,
@@ -6483,7 +6483,7 @@ mod tests {
             },
         );
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
     }
 
     #[test]

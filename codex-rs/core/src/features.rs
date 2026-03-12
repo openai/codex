@@ -95,8 +95,8 @@ pub enum Feature {
     ShellZshFork,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
-    /// Allow requesting additional filesystem permissions while staying sandboxed.
-    RequestPermissions,
+    /// Allow exec tools to request additional permissions while staying sandboxed.
+    ExecPermissionApprovals,
     /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
     CodexHooks,
     /// Expose the built-in request_permissions tool.
@@ -626,8 +626,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::RequestPermissions,
-        key: "request_permissions",
+        id: Feature::ExecPermissionApprovals,
+        key: "exec_permission_approvals",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

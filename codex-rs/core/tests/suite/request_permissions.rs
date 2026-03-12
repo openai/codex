@@ -9,8 +9,8 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RejectConfig;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::PermissionGrantScope;
@@ -323,7 +323,7 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         config
             .features
-            .enable(Feature::RequestPermissions)
+            .enable(Feature::ExecPermissionApprovals)
             .expect("test config should allow feature update");
         config
             .features
@@ -397,18 +397,18 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn request_permissions_tool_is_auto_denied_when_reject_request_permissions_is_enabled()
+async fn request_permissions_tool_is_auto_denied_when_granular_request_permissions_is_disabled()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
     let server = start_mock_server().await;
-    let approval_policy = AskForApproval::Reject(RejectConfig {
-        sandbox_approval: false,
-        rules: false,
-        skill_approval: false,
-        request_permissions: true,
-        mcp_elicitations: false,
+    let approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: true,
+        rules: true,
+        skill_approval: true,
+        request_permissions: false,
+        mcp_elicitations: true,
     });
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let sandbox_policy_for_config = sandbox_policy.clone();
@@ -453,7 +453,7 @@ async fn request_permissions_tool_is_auto_denied_when_reject_request_permissions
 
     submit_turn(
         &test,
-        "request permissions under reject.request_permissions",
+        "request permissions under granular.request_permissions = false",
         approval_policy,
         sandbox_policy,
     )
@@ -468,7 +468,7 @@ async fn request_permissions_tool_is_auto_denied_when_reject_request_permissions
     .await;
     assert!(
         matches!(event, EventMsg::TurnComplete(_)),
-        "request_permissions should not emit a prompt when reject.request_permissions is set: {event:?}"
+        "request_permissions should not emit a prompt when granular.request_permissions is false: {event:?}"
     );
 
     let call_output = results.single_request().function_call_output(call_id);
@@ -500,7 +500,7 @@ async fn relative_additional_permissions_resolve_against_tool_workdir() -> Resul
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         config
             .features
-            .enable(Feature::RequestPermissions)
+            .enable(Feature::ExecPermissionApprovals)
             .expect("test config should allow feature update");
         config
             .features
@@ -601,7 +601,7 @@ async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_cwd
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         config
             .features
-            .enable(Feature::RequestPermissions)
+            .enable(Feature::ExecPermissionApprovals)
             .expect("test config should allow feature update");
         config
             .features
@@ -701,7 +701,7 @@ async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_tmp
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         config
             .features
-            .enable(Feature::RequestPermissions)
+            .enable(Feature::ExecPermissionApprovals)
             .expect("test config should allow feature update");
         config
             .features
@@ -800,7 +800,7 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         config
             .features
-            .enable(Feature::RequestPermissions)
+            .enable(Feature::ExecPermissionApprovals)
             .expect("test config should allow feature update");
         config
             .features
@@ -904,7 +904,7 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         config
             .features
-            .enable(Feature::RequestPermissions)
+            .enable(Feature::ExecPermissionApprovals)
             .expect("test config should allow feature update");
         config
             .features
@@ -1009,7 +1009,7 @@ async fn request_permissions_grants_apply_to_later_exec_command_calls() -> Resul
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         config
             .features
-            .enable(Feature::RequestPermissions)
+            .enable(Feature::ExecPermissionApprovals)
             .expect("test config should allow feature update");
         config
             .features
@@ -1132,7 +1132,7 @@ async fn request_permissions_preapprove_explicit_exec_permissions_outside_on_req
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         config
             .features
-            .enable(Feature::RequestPermissions)
+            .enable(Feature::ExecPermissionApprovals)
             .expect("test config should allow feature update");
         config
             .features
@@ -1249,7 +1249,7 @@ async fn request_permissions_grants_apply_to_later_shell_command_calls() -> Resu
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         config
             .features
-            .enable(Feature::RequestPermissions)
+            .enable(Feature::ExecPermissionApprovals)
             .expect("test config should allow feature update");
         config
             .features
@@ -1471,7 +1471,7 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         config
             .features
-            .enable(Feature::RequestPermissions)
+            .enable(Feature::ExecPermissionApprovals)
             .expect("test config should allow feature update");
         config
             .features
@@ -1631,7 +1631,7 @@ async fn request_permissions_grants_do_not_carry_across_turns() -> Result<()> {
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         config
             .features
-            .enable(Feature::RequestPermissions)
+            .enable(Feature::ExecPermissionApprovals)
             .expect("test config should allow feature update");
         config
             .features
@@ -1743,7 +1743,7 @@ async fn request_permissions_session_grants_carry_across_turns() -> Result<()> {
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         config
             .features
-            .enable(Feature::RequestPermissions)
+            .enable(Feature::ExecPermissionApprovals)
             .expect("test config should allow feature update");
         config
             .features

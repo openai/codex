@@ -5192,7 +5192,7 @@
           {
             "additionalProperties": false,
             "properties": {
-              "reject": {
+              "granular": {
                 "properties": {
                   "mcp_elicitations": {
                     "type": "boolean"
@@ -5221,9 +5221,9 @@
               }
             },
             "required": [
-              "reject"
+              "granular"
             ],
-            "title": "RejectAskForApproval",
+            "title": "GranularAskForApproval",
             "type": "object"
           }
         ]

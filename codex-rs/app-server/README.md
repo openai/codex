@@ -928,7 +928,7 @@ Only the granted subset matters on the wire. Any permissions omitted from `resul
 
 Within the same turn, granted permissions are sticky: later shell-like tool calls can automatically reuse the granted subset without reissuing a separate permission request.
 
-If the session approval policy uses `Reject` with `request_permissions: true`, standalone `request_permissions` tool calls are auto-denied and no `item/permissions/requestApproval` prompt is sent. Inline `with_additional_permissions` command requests remain controlled by `sandbox_approval`, and any previously granted permissions remain sticky for later shell-like calls in the same turn.
+If the session approval policy uses `Granular` with `request_permissions: false`, standalone `request_permissions` tool calls are auto-denied and no `item/permissions/requestApproval` prompt is sent. Inline `with_additional_permissions` command requests remain controlled by `sandbox_approval`, and any previously granted permissions remain sticky for later shell-like calls in the same turn.
 
 ### Dynamic tool calls (experimental)
 
@@ -1319,7 +1319,7 @@ Examples of descriptor strings:
 
 - `mock/experimentalMethod` (method-level gate)
 - `thread/start.mockExperimentalField` (field-level gate)
-- `askForApproval.reject` (enum-variant gate, for `approvalPolicy: { "reject": ... }`)
+- `askForApproval.granular` (enum-variant gate, for `approvalPolicy: { "granular": ... }`)
 
 ### For maintainers: Adding experimental fields and methods
 
@@ -1341,8 +1341,8 @@ Enum variants can be gated too:
 ```rust
 #[derive(ExperimentalApi)]
 enum AskForApproval {
-    #[experimental("askForApproval.reject")]
-    Reject { /* ... */ },
+    #[experimental("askForApproval.granular")]
+    Granular { /* ... */ },
 }
 ```
 

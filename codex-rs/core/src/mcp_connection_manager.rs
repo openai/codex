@@ -254,7 +254,7 @@ fn elicitation_is_rejected_by_policy(approval_policy: AskForApproval) -> bool {
         AskForApproval::OnFailure => false,
         AskForApproval::OnRequest => false,
         AskForApproval::UnlessTrusted => false,
-        AskForApproval::Reject(reject_config) => reject_config.rejects_mcp_elicitations(),
+        AskForApproval::Granular(granular_config) => !granular_config.allows_mcp_elicitations(),
     }
 }
 

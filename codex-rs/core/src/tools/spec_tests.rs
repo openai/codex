@@ -453,7 +453,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         expected.insert(tool_name(&spec).to_string(), spec);
     }
 
-    if config.request_permission_enabled {
+    if config.exec_permission_approvals_enabled {
         let spec = create_request_permissions_tool();
         expected.insert(tool_name(&spec).to_string(), spec);
     }
@@ -736,7 +736,7 @@ fn request_permissions_tool_is_independent_from_additional_permissions() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     let mut features = Features::with_defaults();
-    features.enable(Feature::RequestPermissions);
+    features.enable(Feature::ExecPermissionApprovals);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,

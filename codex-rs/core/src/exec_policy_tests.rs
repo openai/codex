@@ -9,7 +9,7 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::RejectConfig;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -766,18 +766,18 @@ async fn exec_approval_requirement_respects_approval_policy() {
 }
 
 #[test]
-fn unmatched_reject_policy_still_prompts_for_restricted_sandbox_escalation() {
+fn unmatched_granular_policy_still_prompts_for_restricted_sandbox_escalation() {
     let command = vec!["madeup-cmd".to_string()];
 
     assert_eq!(
         Decision::Prompt,
         render_decision_for_unmatched_command(
-            AskForApproval::Reject(RejectConfig {
-                sandbox_approval: false,
-                rules: false,
-                skill_approval: false,
-                request_permissions: false,
-                mcp_elicitations: false,
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
             }),
             &SandboxPolicy::new_read_only_policy(),
             &read_only_file_system_sandbox_policy(),
@@ -807,19 +807,19 @@ fn unmatched_on_request_uses_split_filesystem_policy_for_escalation_prompts() {
 }
 
 #[tokio::test]
-async fn exec_approval_requirement_rejects_unmatched_sandbox_escalation_when_sandbox_rejection_enabled()
+async fn exec_approval_requirement_rejects_unmatched_sandbox_escalation_when_granular_sandbox_is_disabled()
  {
     let command = vec!["madeup-cmd".to_string()];
 
     let requirement = ExecPolicyManager::default()
         .create_exec_approval_requirement_for_command(ExecApprovalRequest {
             command: &command,
-            approval_policy: AskForApproval::Reject(RejectConfig {
-                sandbox_approval: true,
-                rules: false,
-                skill_approval: false,
-                request_permissions: false,
-                mcp_elicitations: false,
+            approval_policy: AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: false,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
             }),
             sandbox_policy: &SandboxPolicy::new_read_only_policy(),
             file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
@@ -853,12 +853,12 @@ async fn mixed_rule_and_sandbox_prompt_prioritizes_rule_for_rejection_decision()
     let requirement = manager
         .create_exec_approval_requirement_for_command(ExecApprovalRequest {
             command: &command,
-            approval_policy: AskForApproval::Reject(RejectConfig {
+            approval_policy: AskForApproval::Granular(GranularApprovalConfig {
                 sandbox_approval: true,
-                rules: false,
-                skill_approval: false,
-                request_permissions: false,
-                mcp_elicitations: false,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
             }),
             sandbox_policy: &SandboxPolicy::new_read_only_policy(),
             file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
@@ -874,7 +874,7 @@ async fn mixed_rule_and_sandbox_prompt_prioritizes_rule_for_rejection_decision()
 }
 
 #[tokio::test]
-async fn mixed_rule_and_sandbox_prompt_rejects_when_rules_rejection_enabled() {
+async fn mixed_rule_and_sandbox_prompt_rejects_when_granular_rules_are_disabled() {
     let policy_src = r#"prefix_rule(pattern=["git"], decision="prompt")"#;
     let mut parser = PolicyParser::new();
     parser
@@ -890,12 +890,12 @@ async fn mixed_rule_and_sandbox_prompt_rejects_when_rules_rejection_enabled() {
     let requirement = manager
         .create_exec_approval_requirement_for_command(ExecApprovalRequest {
             command: &command,
-            approval_policy: AskForApproval::Reject(RejectConfig {
-                sandbox_approval: false,
-                rules: true,
-                skill_approval: false,
-                request_permissions: false,
-                mcp_elicitations: false,
+            approval_policy: AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: false,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
             }),
             sandbox_policy: &SandboxPolicy::new_read_only_policy(),
             file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),

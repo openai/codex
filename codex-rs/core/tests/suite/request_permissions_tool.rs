@@ -196,7 +196,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         config
             .features
-            .enable(Feature::RequestPermissions)
+            .enable(Feature::ExecPermissionApprovals)
             .expect("test config should allow feature update");
         config
             .features
@@ -318,7 +318,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_apply_patch_wi
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
         config
             .features
-            .enable(Feature::RequestPermissions)
+            .enable(Feature::ExecPermissionApprovals)
             .expect("test config should allow feature update");
         config
             .features
