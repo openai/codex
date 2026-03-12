@@ -1,19 +1,18 @@
 ## exec
-- Use `exec` for JavaScript execution in a Node-backed `node:vm` context.
-- `exec` is a freeform/custom tool. Send raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
-- Direct tool calls remain available while `exec` is enabled.
-- `exec` uses the same Node runtime resolution as `js_repl`. If needed, point `js_repl_node_path` at the Node binary you want Codex to use.
-- Import nested tools from `tools.js`, for example `import { exec_command } from "tools.js"` or `import { ALL_TOOLS } from "tools.js"` to inspect the available `{ module, name, description }` entries.
-- Namespaced tools are available from `tools/<namespace...>.js`. MCP tools use `tools/mcp/<server>.js`, and those modules export the short tool names for that server. For example, `mcp__ologs__append_notebook_logs_chart` becomes `import { append_notebook_logs_chart } from "tools/mcp/ologs.js"`.
-- Nested tool calls resolve to their code-mode result values.
-- Import `{ output_text, output_image, set_max_output_tokens_per_exec_call, set_yield_time, store, load, yield_control }` from `@openai/code_mode` (or `"openai/code_mode"`).
-- `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible.
-- `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs.
-- `store(key, value)` persists JSON-serializable values across `exec` calls in the current session, and `load(key)` returns a cloned stored value or `undefined`.
-- `set_max_output_tokens_per_exec_call(value)` sets the token budget for direct `exec` results. By default the result is truncated to 10000 tokens.
-- `set_yield_time(value)` asks `exec` to yield early after that many milliseconds if the script is still running.
-- `yield_control()` returns a yielded `exec` response immediately while the script keeps running.
-- If `exec` returns `Script running with session ID ...`, call `exec_wait` with that `session_id` to keep waiting for more output, completion, or termination.
-- Function tools require JSON object arguments. Freeform tools require raw strings.
-- `add_content(value)` remains available for compatibility with a content item, a content-item array, or a string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`.
-- Only content passed to `output_text(...)`, `output_image(...)`, or `add_content(value)` is surfaced back to the model.
+- Runs raw JavaScript in an isolated context (no Node, no file system, or network access, no console).
+- Send raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
+- You have a set of tools provided to you. They are imported either from `tools.js` or `/mcp/server.js`
+- Tool methods take either string or object as parameter.
+- They return either a structured value or a string based on the description above.
+
+- Surface text back to the model with `output_text(v: string | number | boolean | undefined | null)`. A string representation of the value is returned to the model. Manually serialize complex values.
+
+- Methods available in `@openai/code_mode` module:
+- `output_text(value: string | number | boolean | undefined | null)`: A string representation of the value is returned to the model. Manually serialize complex values.
+- `output_image(imageUrl: string)`: An image is returned to the model. `image_url` can be an HTTPS URL or a base64-encoded `data:` URL.
+- `store(key: string, value: any)`: stores a serializeable value under a string key for later `exec` calls in the same session.
+- `load(key: string)`: returns the stored value for a string key, or `undefined` if it is missing.
+
+- `set_max_output_tokens_per_exec_call(value)`: sets the token budget for direct `exec` results. By default the result is truncated to 10000 tokens.
+- `set_yield_time(value)`: asks `exec` to yield early after that many milliseconds if the script is still running.
+- `yield_control()`: yields the accumulated output to the model immediately while the script keeps running.
