@@ -4,7 +4,7 @@ expression: "render_snapshot(&overlay, Rect::new(0, 0, 120, 16))"
 ---
                                                                                                                         
   Field 1/1                                                                                                             
-  Allow Calendar to create an event?                                                                                     
+  Allow Calendar to create an event                                                                                     
                                                                                                                         
   Calendar:primary                                                                                                      
   Title:Roadmap review                                                                                                  

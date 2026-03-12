@@ -1376,7 +1376,7 @@ mod tests {
             request,
             McpServerElicitationRequestParams {
                 thread_id: session.conversation_id.to_string(),
-                turn_id: Some(turn_context.sub_id.clone()),
+                turn_id: Some(turn_context.sub_id),
                 server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 request: McpServerElicitationRequest::Form {
                     meta: Some(serde_json::json!({
