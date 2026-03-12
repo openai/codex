@@ -304,7 +304,7 @@ fn create_filesystem_args(
         // target parents before binding the narrower writable descendant.
         if let Some(masking_root) = unreadable_roots
             .iter()
-            .map(|path| path.as_path())
+            .map(AbsolutePathBuf::as_path)
             .filter(|unreadable_root| root.starts_with(unreadable_root))
             .max_by_key(|unreadable_root| path_depth(unreadable_root))
         {
@@ -738,7 +738,7 @@ mod tests {
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
-                    path: writable_root.clone(),
+                    path: writable_root,
                 },
                 access: FileSystemAccessMode::Write,
             },
