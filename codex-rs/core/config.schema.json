@@ -1500,12 +1500,36 @@
       },
       "type": "object"
     },
+    "ToolExecutionMode": {
+      "enum": [
+        "auto",
+        "manual"
+      ],
+      "type": "string"
+    },
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
+        "capabilities": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "default": null,
+          "description": "Additive capability overrides keyed by canonical capability name.",
+          "type": "object"
+        },
+        "execution_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolExecutionMode"
+            }
+          ],
+          "default": null,
+          "description": "Execution policy for approval-capable tools."
+        },
         "view_image": {
           "default": null,
-          "description": "Enable the `view_image` tool that lets the agent attach local images.",
+          "description": "Legacy enablement for the `view_image` capability.",
           "type": "boolean"
         },
         "web_search": {

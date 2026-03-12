@@ -108,3 +108,33 @@ fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
         SandboxOverride::BypassSandboxFirstAttempt
     );
 }
+
+#[test]
+fn force_manual_approval_converts_skip_to_needs_approval() {
+    let requirement = ExecApprovalRequirement::Skip {
+        bypass_sandbox: false,
+        proposed_execpolicy_amendment: None,
+    };
+
+    assert_eq!(
+        requirement.force_manual_approval(),
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
+#[test]
+fn force_manual_approval_preserves_forbidden() {
+    let requirement = ExecApprovalRequirement::Forbidden {
+        reason: "denied".to_string(),
+    };
+
+    assert_eq!(
+        requirement.force_manual_approval(),
+        ExecApprovalRequirement::Forbidden {
+            reason: "denied".to_string(),
+        }
+    );
+}

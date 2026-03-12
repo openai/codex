@@ -192,6 +192,8 @@ web_search = true
         Some(ToolsToml {
             web_search: None,
             view_image: None,
+            capabilities: None,
+            execution_mode: None,
         })
     );
 }
@@ -211,6 +213,36 @@ web_search = false
         Some(ToolsToml {
             web_search: None,
             view_image: None,
+            capabilities: None,
+            execution_mode: None,
+        })
+    );
+}
+
+#[test]
+fn tools_capabilities_deserialize_with_execution_mode() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tools]
+execution_mode = "manual"
+
+[tools.capabilities]
+command_execution = true
+apply_patch = false
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.tools,
+        Some(ToolsToml {
+            web_search: None,
+            view_image: None,
+            capabilities: Some(BTreeMap::from([
+                ("command_execution".to_string(), true),
+                ("apply_patch".to_string(), false),
+            ])),
+            execution_mode: Some(ToolExecutionMode::Manual),
         })
     );
 }
@@ -1449,7 +1481,10 @@ fn web_search_mode_defaults_to_none_if_unset() {
     let profile = ConfigProfile::default();
     let features = Features::with_defaults();
 
-    assert_eq!(resolve_web_search_mode(&cfg, &profile, &features), None);
+    assert_eq!(
+        resolve_web_search_mode(&cfg, &profile, &features, None),
+        None
+    );
 }
 
 #[test]
@@ -1463,7 +1498,7 @@ fn web_search_mode_prefers_profile_over_legacy_flags() {
     features.enable(Feature::WebSearchCached);
 
     assert_eq!(
-        resolve_web_search_mode(&cfg, &profile, &features),
+        resolve_web_search_mode(&cfg, &profile, &features, None),
         Some(WebSearchMode::Live)
     );
 }
@@ -1479,8 +1514,38 @@ fn web_search_mode_disabled_overrides_legacy_request() {
     features.enable(Feature::WebSearchRequest);
 
     assert_eq!(
-        resolve_web_search_mode(&cfg, &profile, &features),
+        resolve_web_search_mode(&cfg, &profile, &features, None),
         Some(WebSearchMode::Disabled)
+    );
+}
+
+#[test]
+fn web_search_mode_capability_override_false_disables_tool() {
+    let cfg = ConfigToml::default();
+    let profile = ConfigProfile::default();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::WebSearchCached);
+    let capabilities = BTreeMap::from([("web_search".to_string(), false)]);
+
+    assert_eq!(
+        resolve_web_search_mode(&cfg, &profile, &features, Some(&capabilities)),
+        Some(WebSearchMode::Disabled)
+    );
+}
+
+#[test]
+fn tool_capability_overrides_include_legacy_view_image_fallback() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tools]
+view_image = false
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        resolve_tool_capability_overrides(&cfg, &ConfigProfile::default()),
+        Ok(Some(BTreeMap::from([("view_image".to_string(), false)])))
     );
 }
 
@@ -4140,6 +4205,8 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             web_search_config: None,
+            tool_capability_overrides: None,
+            tool_execution_mode: ToolExecutionMode::Auto,
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
@@ -4276,6 +4343,8 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
+        tool_capability_overrides: None,
+        tool_execution_mode: ToolExecutionMode::Auto,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
@@ -4410,6 +4479,8 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
+        tool_capability_overrides: None,
+        tool_execution_mode: ToolExecutionMode::Auto,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
@@ -4530,6 +4601,8 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
+        tool_capability_overrides: None,
+        tool_execution_mode: ToolExecutionMode::Auto,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
