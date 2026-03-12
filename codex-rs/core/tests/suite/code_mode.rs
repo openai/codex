@@ -834,7 +834,7 @@ async fn code_mode_exec_wait_returns_error_for_unknown_session() -> Result<()> {
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_wait_terminate_returns_completed_session_if_it_finished_in_background()
+async fn code_mode_exec_wait_terminate_returns_completed_session_if_it_finished_after_yield_control()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1051,11 +1051,11 @@ async fn code_mode_background_keeps_running_on_later_turn_without_exec_wait() ->
         format!("while [ ! -f {resumed_file_quoted} ]; do sleep 0.01; done; printf ready");
     let code = format!(
         r#"
-import {{ background, output_text }} from "@openai/code_mode";
+import {{ yield_control, output_text }} from "@openai/code_mode";
 import {{ exec_command }} from "tools.js";
 
 output_text("before yield");
-background();
+yield_control();
 await exec_command({{ cmd: {write_file_command:?} }});
 output_text("after yield");
 "#

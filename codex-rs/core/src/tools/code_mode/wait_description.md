@@ -1,0 +1,8 @@
+- Use `exec_wait` only after `exec` returns `Script running with session ID ...`.
+- `session_id` identifies the running `exec` session to resume.
+- `yield_time_ms` controls how long to wait for more output before yielding again. If omitted, `exec_wait` uses its default wait timeout.
+- `max_tokens` limits how much new output this wait call returns.
+- `terminate: true` stops the running session instead of waiting for more output.
+- `exec_wait` returns only the new output since the last yield, or the final completion or termination result for that session.
+- If the session is still running, `exec_wait` may yield again with the same `session_id`.
+- If the session has already finished, `exec_wait` returns the completed result and closes the session.

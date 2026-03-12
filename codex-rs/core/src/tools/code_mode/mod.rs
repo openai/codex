@@ -14,8 +14,6 @@ use serde_json::Value as JsonValue;
 use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::config::Config;
-use crate::features::Feature;
 use crate::tools::ToolRouter;
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::code_mode_description::code_mode_tool_reference;
@@ -32,6 +30,8 @@ use crate::unified_exec::resolve_max_tokens;
 
 const CODE_MODE_RUNNER_SOURCE: &str = include_str!("runner.cjs");
 const CODE_MODE_BRIDGE_SOURCE: &str = include_str!("bridge.js");
+const CODE_MODE_DESCRIPTION_TEMPLATE: &str = include_str!("description.md");
+const CODE_MODE_WAIT_DESCRIPTION_TEMPLATE: &str = include_str!("wait_description.md");
 
 pub(crate) const PUBLIC_TOOL_NAME: &str = "exec";
 pub(crate) const WAIT_TOOL_NAME: &str = "exec_wait";
@@ -60,38 +60,20 @@ enum CodeModeExecutionStatus {
     Terminated,
 }
 
-pub(crate) fn instructions(config: &Config) -> Option<String> {
-    if !config.features.enabled(Feature::CodeMode) {
-        return None;
-    }
+pub(crate) fn tool_description(enabled_tool_names: &[String]) -> String {
+    let enabled_list = if enabled_tool_names.is_empty() {
+        "none".to_string()
+    } else {
+        enabled_tool_names.join(", ")
+    };
+    format!(
+        "{}\n- Enabled nested tools: {enabled_list}.",
+        CODE_MODE_DESCRIPTION_TEMPLATE.trim_end()
+    )
+}
 
-    let mut section = String::from("## Exec\n");
-    section.push_str(&format!(
-        "- Use `{PUBLIC_TOOL_NAME}` for JavaScript execution in a Node-backed `node:vm` context.\n",
-    ));
-    section.push_str(&format!(
-        "- `{PUBLIC_TOOL_NAME}` is a freeform/custom tool. Direct `{PUBLIC_TOOL_NAME}` calls must send raw JavaScript tool input. Do not wrap code in JSON, quotes, or markdown code fences.\n",
-    ));
-    section.push_str(&format!(
-        "- Direct tool calls remain available while `{PUBLIC_TOOL_NAME}` is enabled.\n",
-    ));
-    section.push_str(&format!(
-        "- `{PUBLIC_TOOL_NAME}` uses the same Node runtime resolution as `js_repl`. If needed, point `js_repl_node_path` at the Node binary you want Codex to use.\n",
-    ));
-    section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { ALL_TOOLS } from \"tools.js\"` to inspect the available `{ module, name, description }` entries. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. Nested tool calls resolve to their code-mode result values.\n");
-    section.push_str(&format!(
-        "- Import `{{ background, output_text, output_image, set_max_output_tokens_per_exec_call, set_yield_time, store, load }}` from `@openai/code_mode` (or `\"openai/code_mode\"`). `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs. `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, and `load(key)` returns a cloned stored value or `undefined`. `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate direct `{PUBLIC_TOOL_NAME}` returns; `{WAIT_TOOL_NAME}` uses its own `max_tokens` argument instead and defaults to `10000`. `set_yield_time(value)` asks `{PUBLIC_TOOL_NAME}` to return early if the script is still running after that many milliseconds so `{WAIT_TOOL_NAME}` can resume it later. `background()` returns a yielded `{PUBLIC_TOOL_NAME}` response immediately while the script keeps running in the background. The returned content starts with a separate `Script completed`, `Script failed`, or `Script running with session ID …` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker.\n",
-    ));
-    section.push_str(&format!(
-        "- If `{PUBLIC_TOOL_NAME}` returns `Script running with session ID …`, call `{WAIT_TOOL_NAME}` with that `session_id` to keep waiting for more output, completion, or termination.\n",
-    ));
-    section.push_str(
-        "- Function tools require JSON object arguments. Freeform tools require raw strings.\n",
-    );
-    section.push_str("- `add_content(value)` remains available for compatibility. It is synchronous and accepts a content item, an array of content items, or a string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`.\n");
-    section
-        .push_str("- Only content passed to `output_text(...)`, `output_image(...)`, or `add_content(value)` is surfaced back to the model.");
-    Some(section)
+pub(crate) fn wait_tool_description() -> &'static str {
+    CODE_MODE_WAIT_DESCRIPTION_TEMPLATE
 }
 
 async fn handle_node_message(
