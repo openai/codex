@@ -14,6 +14,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -85,10 +86,10 @@ fn parse_result(item: &Value) -> CommandResult {
     }
 }
 
-fn shell_event_with_request_permissions(
+fn shell_event_with_request_permissions<S: serde::Serialize>(
     call_id: &str,
     command: &str,
-    additional_permissions: &PermissionProfile,
+    additional_permissions: &S,
 ) -> Result<Value> {
     let args = json!({
         "command": command,
@@ -100,10 +101,10 @@ fn shell_event_with_request_permissions(
     Ok(ev_function_call(call_id, "shell_command", &args_str))
 }
 
-fn request_permissions_tool_event(
+fn request_permissions_tool_event<S: serde::Serialize>(
     call_id: &str,
     reason: &str,
-    permissions: &PermissionProfile,
+    permissions: &S,
 ) -> Result<Value> {
     let args = json!({
         "reason": reason,
@@ -131,10 +132,10 @@ fn exec_command_event(call_id: &str, command: &str) -> Result<Value> {
     Ok(ev_function_call(call_id, "exec_command", &args_str))
 }
 
-fn exec_command_event_with_request_permissions(
+fn exec_command_event_with_request_permissions<S: serde::Serialize>(
     call_id: &str,
     command: &str,
-    additional_permissions: &PermissionProfile,
+    additional_permissions: &S,
 ) -> Result<Value> {
     let args = json!({
         "cmd": command,
@@ -259,7 +260,7 @@ async fn wait_for_exec_approval_or_completion(
 async fn expect_request_permissions_event(
     test: &TestCodex,
     expected_call_id: &str,
-) -> PermissionProfile {
+) -> RequestPermissionProfile {
     let event = wait_for_event(&test.codex, |event| {
         matches!(
             event,
@@ -288,23 +289,23 @@ fn workspace_write_excluding_tmp() -> SandboxPolicy {
     }
 }
 
-fn requested_directory_write_permissions(path: &Path) -> PermissionProfile {
-    PermissionProfile {
+fn requested_directory_write_permissions(path: &Path) -> RequestPermissionProfile {
+    RequestPermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
             write: Some(vec![absolute_path(path)]),
         }),
-        ..Default::default()
+        ..RequestPermissionProfile::default()
     }
 }
 
-fn normalized_directory_write_permissions(path: &Path) -> Result<PermissionProfile> {
-    Ok(PermissionProfile {
+fn normalized_directory_write_permissions(path: &Path) -> Result<RequestPermissionProfile> {
+    Ok(RequestPermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
             write: Some(vec![AbsolutePathBuf::try_from(path.canonicalize()?)?]),
         }),
-        ..Default::default()
+        ..RequestPermissionProfile::default()
     })
 }
 
@@ -477,7 +478,7 @@ async fn request_permissions_tool_is_auto_denied_when_granular_request_permissio
     assert_eq!(
         result,
         RequestPermissionsResponse {
-            permissions: PermissionProfile::default(),
+            permissions: RequestPermissionProfile::default(),
             scope: PermissionGrantScope::Turn,
         }
     );
@@ -820,21 +821,21 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
         "printf {:?} > {:?} && cat {:?}",
         "outside-cwd-ok", outside_write, outside_write
     );
-    let requested_permissions = PermissionProfile {
+    let requested_permissions = RequestPermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
             write: Some(vec![absolute_path(outside_dir.path())]),
         }),
-        ..Default::default()
+        ..RequestPermissionProfile::default()
     };
-    let normalized_requested_permissions = PermissionProfile {
+    let normalized_requested_permissions = RequestPermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
             write: Some(vec![AbsolutePathBuf::try_from(
                 outside_dir.path().canonicalize()?,
             )?]),
         }),
-        ..Default::default()
+        ..RequestPermissionProfile::default()
     };
     let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
 
@@ -861,7 +862,7 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
     let approval = expect_exec_approval(&test, &command).await;
     assert_eq!(
         approval.additional_permissions,
-        Some(normalized_requested_permissions)
+        Some(normalized_requested_permissions.into())
     );
     test.codex
         .submit(Op::ExecApproval {
@@ -1077,13 +1078,13 @@ async fn request_permissions_grants_apply_to_later_exec_command_calls() -> Resul
     let granted_permissions = expect_request_permissions_event(&test, "permissions-call").await;
     assert_eq!(
         granted_permissions,
-        normalized_requested_permissions.clone()
+        normalized_requested_permissions.clone().into()
     );
     test.codex
         .submit(Op::RequestPermissionsResponse {
             id: "permissions-call".to_string(),
             response: RequestPermissionsResponse {
-                permissions: normalized_requested_permissions.clone(),
+                permissions: normalized_requested_permissions.clone().into(),
                 scope: PermissionGrantScope::Turn,
             },
         })
@@ -1488,7 +1489,7 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
         "partial-grant-ok", second_write, second_write
     );
 
-    let requested_permissions = PermissionProfile {
+    let requested_permissions = RequestPermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
             write: Some(vec![
@@ -1496,9 +1497,9 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
                 absolute_path(second_dir.path()),
             ]),
         }),
-        ..Default::default()
+        ..RequestPermissionProfile::default()
     };
-    let normalized_requested_permissions = PermissionProfile {
+    let normalized_requested_permissions = RequestPermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
             write: Some(vec![
@@ -1506,7 +1507,7 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
                 AbsolutePathBuf::try_from(second_dir.path().canonicalize()?)?,
             ]),
         }),
-        ..Default::default()
+        ..RequestPermissionProfile::default()
     };
     let granted_permissions = normalized_directory_write_permissions(first_dir.path())?;
     let second_dir_permissions = requested_directory_write_permissions(second_dir.path());

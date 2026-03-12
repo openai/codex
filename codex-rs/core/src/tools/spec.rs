@@ -426,7 +426,7 @@ fn create_macos_permissions_schema() -> JsonSchema {
     }
 }
 
-fn create_permissions_schema() -> JsonSchema {
+fn create_additional_permissions_schema() -> JsonSchema {
     JsonSchema::Object {
         properties: BTreeMap::from([
             ("network".to_string(), create_network_permissions_schema()),
@@ -435,6 +435,20 @@ fn create_permissions_schema() -> JsonSchema {
                 create_file_system_permissions_schema(),
             ),
             ("macos".to_string(), create_macos_permissions_schema()),
+        ]),
+        required: None,
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn create_request_permissions_schema() -> JsonSchema {
+    JsonSchema::Object {
+        properties: BTreeMap::from([
+            ("network".to_string(), create_network_permissions_schema()),
+            (
+                "file_system".to_string(),
+                create_file_system_permissions_schema(),
+            ),
         ]),
         required: None,
         additional_properties: Some(false.into()),
@@ -487,7 +501,7 @@ fn create_approval_parameters(
     if exec_permission_approvals_enabled {
         properties.insert(
             "additional_permissions".to_string(),
-            create_permissions_schema(),
+            create_additional_permissions_schema(),
         );
     }
 
@@ -1350,7 +1364,10 @@ fn create_request_permissions_tool() -> ToolSpec {
             ),
         },
     );
-    properties.insert("permissions".to_string(), create_permissions_schema());
+    properties.insert(
+        "permissions".to_string(),
+        create_request_permissions_schema(),
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "request_permissions".to_string(),
