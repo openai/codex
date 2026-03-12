@@ -3010,7 +3010,8 @@ nickname_candidates = ["Noether"]
 }
 
 #[tokio::test]
-async fn agent_role_file_requires_developer_instructions() -> std::io::Result<()> {
+async fn agent_role_file_without_developer_instructions_is_dropped_with_warning()
+-> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
     let nested_cwd = repo_root.path().join("packages").join("app");
@@ -3039,20 +3040,38 @@ model = "gpt-5"
 "#,
     )
     .await?;
+    tokio::fs::write(
+        standalone_agents_dir.join("reviewer.toml"),
+        r#"
+name = "reviewer"
+description = "Review role"
+developer_instructions = "Review carefully"
+model = "gpt-5"
+"#,
+    )
+    .await?;
 
-    let err = ConfigBuilder::default()
+    let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             cwd: Some(nested_cwd),
             ..Default::default()
         })
         .build()
-        .await
-        .expect_err("agent role file without developer instructions should fail");
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        .await?;
+    assert!(!config.agent_roles.contains_key("researcher"));
+    assert_eq!(
+        config
+            .agent_roles
+            .get("reviewer")
+            .and_then(|role| role.description.as_deref()),
+        Some("Review role")
+    );
     assert!(
-        err.to_string()
-            .contains("must define `developer_instructions`")
+        config
+            .startup_warnings
+            .iter()
+            .any(|warning| warning.contains("must define `developer_instructions`"))
     );
 
     Ok(())
@@ -3110,7 +3129,8 @@ config_file = "./agents/researcher.toml"
 }
 
 #[tokio::test]
-async fn agent_role_requires_description_after_merge() -> std::io::Result<()> {
+async fn agent_role_without_description_after_merge_is_dropped_with_warning() -> std::io::Result<()>
+{
     let codex_home = TempDir::new()?;
     let role_config_path = codex_home.path().join("agents").join("researcher.toml");
     tokio::fs::create_dir_all(
@@ -3131,27 +3151,38 @@ model = "gpt-5"
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"[agents.researcher]
 config_file = "./agents/researcher.toml"
+
+[agents.reviewer]
+description = "Review role"
 "#,
     )
     .await?;
 
-    let err = ConfigBuilder::default()
+    let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
-        .await
-        .expect_err("agent role without description should fail");
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        .await?;
+    assert!(!config.agent_roles.contains_key("researcher"));
+    assert_eq!(
+        config
+            .agent_roles
+            .get("reviewer")
+            .and_then(|role| role.description.as_deref()),
+        Some("Review role")
+    );
     assert!(
-        err.to_string()
-            .contains("agent role `researcher` must define a description")
+        config
+            .startup_warnings
+            .iter()
+            .any(|warning| warning.contains("agent role `researcher` must define a description"))
     );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn discovered_agent_role_file_requires_name() -> std::io::Result<()> {
+async fn discovered_agent_role_file_without_name_is_dropped_with_warning() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
     let nested_cwd = repo_root.path().join("packages").join("app");
@@ -3179,18 +3210,38 @@ developer_instructions = "Research carefully"
 "#,
     )
     .await?;
+    tokio::fs::write(
+        standalone_agents_dir.join("reviewer.toml"),
+        r#"
+name = "reviewer"
+description = "Review role"
+developer_instructions = "Review carefully"
+"#,
+    )
+    .await?;
 
-    let err = ConfigBuilder::default()
+    let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             cwd: Some(nested_cwd),
             ..Default::default()
         })
         .build()
-        .await
-        .expect_err("discovered agent role file without name should fail");
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-    assert!(err.to_string().contains("must define a non-empty `name`"));
+        .await?;
+    assert!(!config.agent_roles.contains_key("researcher"));
+    assert_eq!(
+        config
+            .agent_roles
+            .get("reviewer")
+            .and_then(|role| role.description.as_deref()),
+        Some("Review role")
+    );
+    assert!(
+        config
+            .startup_warnings
+            .iter()
+            .any(|warning| warning.contains("must define a non-empty `name`"))
+    );
 
     Ok(())
 }
