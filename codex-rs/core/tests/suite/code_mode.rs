@@ -63,7 +63,7 @@ fn wait_for_file_source(path: &Path) -> Result<String> {
     let quoted_path = shlex::try_join([path.to_string_lossy().as_ref()])?;
     let command = format!("if [ -f {quoted_path} ]; then printf ready; fi");
     Ok(format!(
-        r#"while ((await tools.exec_command({{ cmd: {command:?} }})).output !== "ready") {{
+        r#"while ((await exec_command({{ cmd: {command:?} }})).output !== "ready") {{
 }}"#
     ))
 }
@@ -197,7 +197,9 @@ async fn code_mode_can_return_exec_command_output() -> Result<()> {
         &server,
         "use exec to run exec_command",
         r#"
-text(JSON.stringify(await tools.exec_command({ cmd: "printf code_mode_exec_marker" })));
+import { exec_command } from "tools.js";
+
+add_content(JSON.stringify(await exec_command({ cmd: "printf code_mode_exec_marker" })));
 "#,
         false,
     )
@@ -245,6 +247,8 @@ async fn code_mode_nested_tool_calls_can_run_in_parallel() -> Result<()> {
     let test = builder.build(&server).await?;
 
     let warmup_code = r#"
+import { test_sync_tool } from "tools.js";
+
 const args = {
   sleep_after_ms: 10,
   barrier: {
@@ -255,11 +259,13 @@ const args = {
 };
 
 await Promise.all([
-  tools.test_sync_tool(args),
-  tools.test_sync_tool(args),
+  test_sync_tool(args),
+  test_sync_tool(args),
 ]);
 "#;
     let code = r#"
+import { test_sync_tool } from "tools.js";
+
 const args = {
   sleep_after_ms: 300,
   barrier: {
@@ -270,11 +276,11 @@ const args = {
 };
 
 const results = await Promise.all([
-  tools.test_sync_tool(args),
-  tools.test_sync_tool(args),
+  test_sync_tool(args),
+  test_sync_tool(args),
 ]);
 
-text(JSON.stringify(results));
+add_content(JSON.stringify(results));
 "#;
 
     let response_mock = responses::mount_sse_sequence(
@@ -332,10 +338,10 @@ async fn code_mode_can_truncate_final_result_with_configured_budget() -> Result<
     let (_test, second_mock) = run_code_mode_turn(
         &server,
         "use exec to truncate the final result",
-        r#"
-set_max_output_tokens_per_exec_call(6);
+        r#"// @exec: {"max_output_tokens": 6}
+import { exec_command } from "tools.js";
 
-text(JSON.stringify(await tools.exec_command({
+add_content(JSON.stringify(await exec_command({
   cmd: "printf 'token one token two token three token four token five token six token seven'",
   max_output_tokens: 100
 })));
@@ -375,8 +381,8 @@ async fn code_mode_returns_accumulated_output_when_script_fails() -> Result<()> 
         &server,
         "use code_mode to surface script failures",
         r#"
-text("before crash");
-text("still before crash");
+add_content("before crash");
+add_content("still before crash");
 throw new Error("boom");
 "#,
         false,
@@ -425,13 +431,15 @@ async fn code_mode_can_yield_and_resume_with_exec_wait() -> Result<()> {
     let phase_3_wait = wait_for_file_source(&phase_3_gate)?;
 
     let code = format!(
-        r#"
-text("phase 1");
-set_yield_time(10);
+        r#"// @exec: {{"yield_time_ms": 10}}
+import {{ output_text }} from "@openai/code_mode";
+import {{ exec_command }} from "tools.js";
+
+output_text("phase 1");
 {phase_2_wait}
-text("phase 2");
+output_text("phase 2");
 {phase_3_wait}
-text("phase 3");
+output_text("phase 3");
 "#
     );
 
@@ -566,9 +574,10 @@ async fn code_mode_yield_timeout_works_for_busy_loop() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let code = r#"
-text("phase 1");
-set_yield_time(10);
+    let code = r#"// @exec: {"yield_time_ms": 10}
+import { output_text } from "@openai/code_mode";
+
+output_text("phase 1");
 while (true) {}
 "#;
 
@@ -666,19 +675,23 @@ async fn code_mode_can_run_multiple_yielded_sessions() -> Result<()> {
     let session_b_wait = wait_for_file_source(&session_b_gate)?;
 
     let session_a_code = format!(
-        r#"
-text("session a start");
-set_yield_time(10);
+        r#"// @exec: {{"yield_time_ms": 10}}
+import {{ output_text }} from "@openai/code_mode";
+import {{ exec_command }} from "tools.js";
+
+output_text("session a start");
 {session_a_wait}
-text("session a done");
+output_text("session a done");
 "#
     );
     let session_b_code = format!(
-        r#"
-text("session b start");
-set_yield_time(10);
+        r#"// @exec: {{"yield_time_ms": 10}}
+import {{ output_text }} from "@openai/code_mode";
+import {{ exec_command }} from "tools.js";
+
+output_text("session b start");
 {session_b_wait}
-text("session b done");
+output_text("session b done");
 "#
     );
 
@@ -832,11 +845,13 @@ async fn code_mode_exec_wait_can_terminate_and_continue() -> Result<()> {
     let termination_wait = wait_for_file_source(&termination_gate)?;
 
     let code = format!(
-        r#"
-text("phase 1");
-set_yield_time(10);
+        r#"// @exec: {{"yield_time_ms": 10}}
+import {{ output_text }} from "@openai/code_mode";
+import {{ exec_command }} from "tools.js";
+
+output_text("phase 1");
 {termination_wait}
-text("phase 2");
+output_text("phase 2");
 "#
     );
 
@@ -912,7 +927,9 @@ text("phase 2");
                 "call-3",
                 "exec",
                 r#"
-text("after terminate");
+import { output_text } from "@openai/code_mode";
+
+output_text("after terminate");
 "#,
             ),
             ev_completed("resp-5"),
@@ -1026,20 +1043,24 @@ async fn code_mode_exec_wait_terminate_returns_completed_session_if_it_finished_
     let session_a_done_command = format!("printf done > {session_a_done_marker_quoted}");
 
     let session_a_code = format!(
-        r#"
-text("session a start");
-set_yield_time(10);
+        r#"// @exec: {{"yield_time_ms": 10}}
+import {{ output_text }} from "@openai/code_mode";
+import {{ exec_command }} from "tools.js";
+
+output_text("session a start");
 {session_a_wait}
-text("session a done");
-await tools.exec_command({{ cmd: {session_a_done_command:?} }});
+output_text("session a done");
+await exec_command({{ cmd: {session_a_done_command:?} }});
 "#
     );
     let session_b_code = format!(
-        r#"
-text("session b start");
-set_yield_time(10);
+        r#"// @exec: {{"yield_time_ms": 10}}
+import {{ output_text }} from "@openai/code_mode";
+import {{ exec_command }} from "tools.js";
+
+output_text("session b start");
 {session_b_wait}
-text("session b done");
+output_text("session b done");
 "#
     );
 
@@ -1218,10 +1239,13 @@ async fn code_mode_background_keeps_running_on_later_turn_without_exec_wait() ->
         format!("while [ ! -f {resumed_file_quoted} ]; do sleep 0.01; done; printf ready");
     let code = format!(
         r#"
-text("before yield");
+import {{ yield_control, output_text }} from "@openai/code_mode";
+import {{ exec_command }} from "tools.js";
+
+output_text("before yield");
 yield_control();
-await tools.exec_command({{ cmd: {write_file_command:?} }});
-text("after yield");
+await exec_command({{ cmd: {write_file_command:?} }});
+output_text("after yield");
 "#
     );
 
@@ -1308,12 +1332,13 @@ async fn code_mode_exec_wait_uses_its_own_max_tokens_budget() -> Result<()> {
     let completion_wait = wait_for_file_source(&completion_gate)?;
 
     let code = format!(
-        r#"
-text("phase 1");
-set_max_output_tokens_per_exec_call(100);
-set_yield_time(10);
+        r#"// @exec: {{"max_output_tokens": 100, "yield_time_ms": 10}}
+import {{ output_text }} from "@openai/code_mode";
+import {{ exec_command }} from "tools.js";
+
+output_text("phase 1");
 {completion_wait}
-text("token one token two token three token four token five token six token seven");
+output_text("token one token two token three token four token five token six token seven");
 "#
     );
 
@@ -1395,7 +1420,7 @@ Total\ output\ lines:\ 1\n
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_can_output_serialized_text_via_global_helper() -> Result<()> {
+async fn code_mode_can_output_serialized_text_via_openai_code_mode_module() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1403,7 +1428,9 @@ async fn code_mode_can_output_serialized_text_via_global_helper() -> Result<()> 
         &server,
         "use exec to return structured text",
         r#"
-text({ json: true });
+import { output_text } from "@openai/code_mode";
+
+output_text({ json: true });
 "#,
         false,
     )
@@ -1422,7 +1449,7 @@ text({ json: true });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_surfaces_text_stringify_errors() -> Result<()> {
+async fn code_mode_surfaces_output_text_stringify_errors() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1430,9 +1457,11 @@ async fn code_mode_surfaces_text_stringify_errors() -> Result<()> {
         &server,
         "use exec to return circular text",
         r#"
+import { output_text } from "@openai/code_mode";
+
 const circular = {};
 circular.self = circular;
-text(circular);
+output_text(circular);
 "#,
         false,
     )
@@ -1463,7 +1492,7 @@ text(circular);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_can_output_images_via_global_helper() -> Result<()> {
+async fn code_mode_can_output_images_via_openai_code_mode_module() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1471,8 +1500,10 @@ async fn code_mode_can_output_images_via_global_helper() -> Result<()> {
         &server,
         "use exec to return images",
         r#"
-image("https://example.com/image.jpg");
-image("data:image/png;base64,AAA");
+import { output_image } from "@openai/code_mode";
+
+output_image("https://example.com/image.jpg");
+output_image("data:image/png;base64,AAA");
 "#,
         false,
     )
@@ -1521,7 +1552,9 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
     let patch = format!(
         "*** Begin Patch\n*** Add File: {file_name}\n+hello from code_mode\n*** End Patch\n"
     );
-    let code = format!("text(await tools.apply_patch({patch:?}));\n");
+    let code = format!(
+        "import {{ apply_patch }} from \"tools.js\";\nconst items = await apply_patch({patch:?});\nadd_content(items);\n"
+    );
 
     let (test, second_mock) =
         run_code_mode_turn(&server, "use exec to run apply_patch", &code, true).await?;
@@ -1557,10 +1590,12 @@ async fn code_mode_can_print_structured_mcp_tool_result_fields() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const { content, structuredContent, isError } = await tools.mcp__rmcp__echo({
+import { echo } from "tools/mcp/rmcp.js";
+
+const { content, structuredContent, isError } = await echo({
   message: "ping",
 });
-text(
+add_content(
   `echo=${structuredContent?.echo ?? "missing"}\n` +
     `env=${structuredContent?.env ?? "missing"}\n` +
     `isError=${String(isError)}\n` +
@@ -1590,33 +1625,37 @@ contentLength=0"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exposes_mcp_tools_on_global_tools_object() -> Result<()> {
+async fn code_mode_can_dynamically_import_namespaced_mcp_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const { content, structuredContent, isError } = await tools.mcp__rmcp__echo({
+const rmcp = await import("tools/mcp/rmcp.js");
+const { content, structuredContent, isError } = await rmcp.echo({
   message: "ping",
 });
-text(
-  `hasEcho=${String(Object.keys(tools).includes("mcp__rmcp__echo"))}\n` +
-    `echoType=${typeof tools.mcp__rmcp__echo}\n` +
+add_content(
+  `hasEcho=${String(Object.keys(rmcp).includes("echo"))}\n` +
+    `echoType=${typeof rmcp.echo}\n` +
     `echo=${structuredContent?.echo ?? "missing"}\n` +
     `isError=${String(isError)}\n` +
     `contentLength=${content.length}`
 );
 "#;
 
-    let (_test, second_mock) =
-        run_code_mode_turn_with_rmcp(&server, "use exec to inspect the global tools object", code)
-            .await?;
+    let (_test, second_mock) = run_code_mode_turn_with_rmcp(
+        &server,
+        "use exec to dynamically import the rmcp module",
+        code,
+    )
+    .await?;
 
     let req = second_mock.single_request();
     let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "exec global rmcp access failed unexpectedly: {output}"
+        "exec dynamic rmcp import failed unexpectedly: {output}"
     );
     assert_eq!(
         output,
@@ -1631,18 +1670,23 @@ contentLength=0"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exposes_normalized_illegal_mcp_tool_names() -> Result<()> {
+async fn code_mode_does_not_export_namespaced_mcp_tools_from_tools_js() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const result = await tools.mcp__rmcp__echo_tool({ message: "ping" });
-text(`echo=${result.structuredContent.echo}`);
+const tools = await import("tools.js");
+const exports = Object.keys(tools).sort();
+add_content(JSON.stringify({
+  hasAllTools: exports.includes("ALL_TOOLS"),
+  hasExecCommand: exports.includes("exec_command"),
+  namespacedExports: exports.filter((name) => name.startsWith("mcp__")),
+}));
 "#;
 
     let (_test, second_mock) = run_code_mode_turn_with_rmcp(
         &server,
-        "use exec to call a normalized rmcp tool name",
+        "use exec to inspect the top-level tools module",
         code,
     )
     .await?;
@@ -1652,7 +1696,47 @@ text(`echo=${result.structuredContent.echo}`);
     assert_ne!(
         success,
         Some(false),
-        "exec normalized rmcp tool call failed unexpectedly: {output}"
+        "exec tools.js inspection failed unexpectedly: {output}"
+    );
+
+    let parsed: Value = serde_json::from_str(&output)?;
+    assert_eq!(
+        parsed,
+        serde_json::json!({
+            "hasAllTools": true,
+            "hasExecCommand": true,
+            "namespacedExports": [],
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_normalizes_illegal_namespaced_mcp_tool_identifiers() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+import { echo_tool } from "tools/mcp/rmcp.js";
+
+const result = await echo_tool({ message: "ping" });
+add_content(`echo=${result.structuredContent.echo}`);
+"#;
+
+    let (_test, second_mock) = run_code_mode_turn_with_rmcp(
+        &server,
+        "use exec to import a normalized rmcp tool name",
+        code,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec normalized rmcp import failed unexpectedly: {output}"
     );
     assert_eq!(output, "echo=ECHOING: ping");
 
@@ -1665,7 +1749,7 @@ async fn code_mode_lists_global_scope_items() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let code = r#"
-text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
+add_content(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
 "#;
 
     let (_test, second_mock) =
@@ -1682,7 +1766,6 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
     let globals = globals.into_iter().collect::<HashSet<_>>();
     let expected = [
         "AggregateError",
-        "ALL_TOOLS",
         "Array",
         "ArrayBuffer",
         "AsyncDisposableStack",
@@ -1736,6 +1819,7 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "WeakSet",
         "WebAssembly",
         "__codexContentItems",
+        "add_content",
         "console",
         "decodeURI",
         "decodeURIComponent",
@@ -1744,20 +1828,12 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "escape",
         "eval",
         "globalThis",
-        "image",
         "isFinite",
         "isNaN",
-        "load",
         "parseFloat",
         "parseInt",
-        "set_max_output_tokens_per_exec_call",
-        "set_yield_time",
-        "store",
-        "text",
-        "tools",
         "undefined",
         "unescape",
-        "yield_control",
     ];
     for g in &globals {
         assert!(
@@ -1775,8 +1851,10 @@ async fn code_mode_exports_all_tools_metadata_for_builtin_tools() -> Result<()> 
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const tool = ALL_TOOLS.find(({ name }) => name === "view_image");
-text(JSON.stringify(tool));
+import { ALL_TOOLS } from "tools.js";
+
+const tool = ALL_TOOLS.find(({ module, name }) => module === "tools.js" && name === "view_image");
+add_content(JSON.stringify(tool));
 "#;
 
     let (_test, second_mock) =
@@ -1794,8 +1872,9 @@ text(JSON.stringify(tool));
     assert_eq!(
         parsed,
         serde_json::json!({
+            "module": "tools.js",
             "name": "view_image",
-            "description": "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nCode mode declaration:\n```ts\ndeclare const tools: {\n  view_image(args: {\n    path: string;\n  }): Promise<unknown>;\n};\n```",
+            "description": "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nCode mode declaration:\n```ts\nimport { view_image } from \"tools.js\";\ndeclare function view_image(args: {\n  path: string;\n}): Promise<unknown>;\n```",
         })
     );
 
@@ -1808,10 +1887,12 @@ async fn code_mode_exports_all_tools_metadata_for_namespaced_mcp_tools() -> Resu
 
     let server = responses::start_mock_server().await;
     let code = r#"
+import { ALL_TOOLS } from "tools.js";
+
 const tool = ALL_TOOLS.find(
-  ({ name }) => name === "mcp__rmcp__echo"
+  ({ module, name }) => module === "tools/mcp/rmcp.js" && name === "echo"
 );
-text(JSON.stringify(tool));
+add_content(JSON.stringify(tool));
 "#;
 
     let (_test, second_mock) =
@@ -1829,8 +1910,9 @@ text(JSON.stringify(tool));
     assert_eq!(
         parsed,
         serde_json::json!({
-            "name": "mcp__rmcp__echo",
-            "description": "Echo back the provided message and include environment data.\n\nCode mode declaration:\n```ts\ndeclare const tools: {\n  mcp__rmcp__echo(args: {\n    env_var?: string;\n    message: string;\n  }): Promise<{\n    _meta?: unknown;\n    content: Array<unknown>;\n    isError?: boolean;\n    structuredContent?: unknown;\n  }>;\n};\n```",
+            "module": "tools/mcp/rmcp.js",
+            "name": "echo",
+            "description": "Echo back the provided message and include environment data.\n\nCode mode declaration:\n```ts\nimport { echo } from \"tools/mcp/rmcp.js\";\ndeclare function echo(args: {\n  env_var?: string;\n  message: string;\n}): Promise<{\n  _meta?: unknown;\n  content: Array<unknown>;\n  isError?: boolean;\n  structuredContent?: unknown;\n}>;\n```",
         })
     );
 
@@ -1843,11 +1925,13 @@ async fn code_mode_can_print_content_only_mcp_tool_result_fields() -> Result<()>
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const { content, structuredContent, isError } = await tools.mcp__rmcp__image_scenario({
+import { image_scenario } from "tools/mcp/rmcp.js";
+
+const { content, structuredContent, isError } = await image_scenario({
   scenario: "text_only",
   caption: "caption from mcp",
 });
-text(
+add_content(
   `firstType=${content[0]?.type ?? "missing"}\n` +
     `firstText=${content[0]?.text ?? "missing"}\n` +
     `structuredContent=${String(structuredContent ?? null)}\n` +
@@ -1886,11 +1970,13 @@ async fn code_mode_can_print_error_mcp_tool_result_fields() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const { content, structuredContent, isError } = await tools.mcp__rmcp__echo({});
+import { echo } from "tools/mcp/rmcp.js";
+
+const { content, structuredContent, isError } = await echo({});
 const firstText = content[0]?.text ?? "";
 const mentionsMissingMessage =
   firstText.includes("missing field") && firstText.includes("message");
-text(
+add_content(
   `isError=${String(isError)}\n` +
     `contentLength=${content.length}\n` +
     `mentionsMissingMessage=${String(mentionsMissingMessage)}\n` +
@@ -1918,6 +2004,7 @@ structuredContent=null"
 
     Ok(())
 }
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_store_and_load_values_across_turns() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1936,8 +2023,10 @@ async fn code_mode_can_store_and_load_values_across_turns() -> Result<()> {
                 "call-1",
                 "exec",
                 r#"
+import { store } from "@openai/code_mode";
+
 store("nb", { title: "Notebook", items: [1, true, null] });
-text("stored");
+add_content("stored");
 "#,
             ),
             ev_completed("resp-1"),
@@ -1973,7 +2062,9 @@ text("stored");
                 "call-2",
                 "exec",
                 r#"
-text(JSON.stringify(load("nb")));
+import { load } from "openai/code_mode";
+
+add_content(JSON.stringify(load("nb")));
 "#,
             ),
             ev_completed("resp-3"),

@@ -2018,8 +2018,13 @@ fn create_js_repl_reset_tool() -> ToolSpec {
 
 fn create_code_mode_tool(enabled_tool_names: &[String]) -> ToolSpec {
     const CODE_MODE_FREEFORM_GRAMMAR: &str = r#"
-start: source
-source: /[\s\S]+/
+start: pragma_source | plain_source
+pragma_source: PRAGMA_LINE NEWLINE SOURCE
+plain_source: SOURCE
+
+PRAGMA_LINE: /[ \t]*\/\/ @exec:[^\r\n]*/
+NEWLINE: /\r?\n/
+SOURCE: /[\s\S]+/
 "#;
 
     ToolSpec::Freeform(FreeformTool {
