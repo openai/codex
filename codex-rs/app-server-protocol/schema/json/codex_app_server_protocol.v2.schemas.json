@@ -533,7 +533,7 @@
       "type": "object"
     },
     "ApprovalReviewPolicy": {
-      "description": "Controls whether approvals remain manual or are automatically reviewed.",
+      "description": "Controls whether approvals remain manual or are automatically reviewed by a carefully prompted subagent.",
       "enum": [
         "manual-only",
         "auto-only"
@@ -2887,7 +2887,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional default for how approval requests are reviewed. Use `manual-only` for user approval prompts or `auto-only` for automatic approval review."
+          "description": "Optional default for how approval requests are reviewed. Use `manual-only` for user approval prompts or `auto-only` for automatic approval review by a carefully prompted subagent."
         },
         "compact_prompt": {
           "type": [
@@ -6308,7 +6308,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional override for how approval requests are reviewed in this profile. Use `manual-only` for user approval prompts or `auto-only` for automatic approval review."
+          "description": "Optional override for how approval requests are reviewed in this profile. Use `manual-only` for user approval prompts or `auto-only` for automatic approval review by a carefully prompted subagent."
         },
         "chatgpt_base_url": {
           "type": [
@@ -9555,7 +9555,7 @@
               "type": "null"
             }
           ],
-          "description": "Override whether approvals stay manual or are automatically reviewed for this thread and subsequent turns."
+          "description": "Override whether approvals stay manual or are automatically reviewed by a carefully prompted subagent for this thread and subsequent turns."
         },
         "baseInstructions": {
           "type": [
@@ -9647,7 +9647,7 @@
               "$ref": "#/definitions/ApprovalReviewPolicy"
             }
           ],
-          "description": "Whether approvals remain manual or are automatically reviewed."
+          "description": "Whether approvals remain manual or are automatically reviewed by a carefully prompted subagent."
         },
         "cwd": {
           "type": "string"
@@ -10693,7 +10693,7 @@
               "type": "null"
             }
           ],
-          "description": "Override whether approvals stay manual or are automatically reviewed for this thread and subsequent turns."
+          "description": "Override whether approvals stay manual or are automatically reviewed by a carefully prompted subagent for this thread and subsequent turns."
         },
         "baseInstructions": {
           "type": [
@@ -10792,7 +10792,7 @@
               "$ref": "#/definitions/ApprovalReviewPolicy"
             }
           ],
-          "description": "Whether approvals remain manual or are automatically reviewed."
+          "description": "Whether approvals remain manual or are automatically reviewed by a carefully prompted subagent."
         },
         "cwd": {
           "type": "string"
@@ -10946,7 +10946,7 @@
               "type": "null"
             }
           ],
-          "description": "Override whether approvals stay manual or are automatically reviewed for this thread and subsequent turns."
+          "description": "Override whether approvals stay manual or are automatically reviewed by a carefully prompted subagent for this thread and subsequent turns."
         },
         "baseInstructions": {
           "type": [
@@ -11050,7 +11050,7 @@
               "$ref": "#/definitions/ApprovalReviewPolicy"
             }
           ],
-          "description": "Whether approvals remain manual or are automatically reviewed."
+          "description": "Whether approvals remain manual or are automatically reviewed by a carefully prompted subagent."
         },
         "cwd": {
           "type": "string"
@@ -11609,7 +11609,7 @@
               "type": "null"
             }
           ],
-          "description": "Override whether approvals stay manual or are automatically reviewed for this turn and subsequent turns."
+          "description": "Override whether approvals stay manual or are automatically reviewed by a carefully prompted subagent for this turn and subsequent turns."
         },
         "cwd": {
           "description": "Override the working directory for this turn and subsequent turns.",

@@ -19,8 +19,8 @@ cwd?: string | null, /**
  * Override the approval policy for this turn and subsequent turns.
  */
 approvalPolicy?: AskForApproval | null, /**
- * Override whether approvals stay manual or are automatically reviewed
- * for this turn and subsequent turns.
+ * Override whether approvals stay manual or are automatically reviewed by
+ * a carefully prompted subagent for this turn and subsequent turns.
  */
 approvalReviewPolicy?: ApprovalReviewPolicy | null, /**
  * Override the sandbox policy for this turn and subsequent turns.

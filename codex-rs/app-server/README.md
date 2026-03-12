@@ -424,7 +424,7 @@ You can optionally specify config overrides on the new turn. If specified, these
 `approvalReviewPolicy` accepts:
 
 - `"manual-only"` — keep approval requests manual.
-- `"auto-only"` — let Codex automatically review `on-request` approvals instead of blocking on user input.
+- `"auto-only"` — let Codex automatically review `on-request` approvals with a carefully prompted subagent instead of blocking on user input.
 
 ```json
 { "method": "turn/start", "id": 30, "params": {

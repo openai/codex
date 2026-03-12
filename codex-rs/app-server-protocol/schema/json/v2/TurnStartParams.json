@@ -6,7 +6,7 @@
       "type": "string"
     },
     "ApprovalReviewPolicy": {
-      "description": "Controls whether approvals remain manual or are automatically reviewed.",
+      "description": "Controls whether approvals remain manual or are automatically reviewed by a carefully prompted subagent.",
       "enum": [
         "manual-only",
         "auto-only"
@@ -519,7 +519,7 @@
           "type": "null"
         }
       ],
-      "description": "Override whether approvals stay manual or are automatically reviewed for this turn and subsequent turns."
+      "description": "Override whether approvals stay manual or are automatically reviewed by a carefully prompted subagent for this turn and subsequent turns."
     },
     "cwd": {
       "description": "Override the working directory for this turn and subsequent turns.",

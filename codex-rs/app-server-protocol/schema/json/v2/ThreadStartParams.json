@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
     "ApprovalReviewPolicy": {
-      "description": "Controls whether approvals remain manual or are automatically reviewed.",
+      "description": "Controls whether approvals remain manual or are automatically reviewed by a carefully prompted subagent.",
       "enum": [
         "manual-only",
         "auto-only"
@@ -120,7 +120,7 @@
           "type": "null"
         }
       ],
-      "description": "Override whether approvals stay manual or are automatically reviewed for this thread and subsequent turns."
+      "description": "Override whether approvals stay manual or are automatically reviewed by a carefully prompted subagent for this thread and subsequent turns."
     },
     "baseInstructions": {
       "type": [
