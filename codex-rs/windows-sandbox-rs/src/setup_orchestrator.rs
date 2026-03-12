@@ -217,6 +217,28 @@ impl SetupMarker {
     pub fn version_matches(&self) -> bool {
         self.version == SETUP_VERSION
     }
+
+    pub(crate) fn request_mismatch_reason(
+        &self,
+        network_identity: SandboxNetworkIdentity,
+        offline_proxy_settings: &OfflineProxySettings,
+    ) -> Option<String> {
+        if !network_identity.uses_offline_identity() {
+            return None;
+        }
+        if self.proxy_ports == offline_proxy_settings.proxy_ports
+            && self.allow_local_binding == offline_proxy_settings.allow_local_binding
+        {
+            return None;
+        }
+        Some(format!(
+            "offline firewall settings changed (stored_ports={:?}, desired_ports={:?}, stored_allow_local_binding={}, desired_allow_local_binding={})",
+            self.proxy_ports,
+            offline_proxy_settings.proxy_ports,
+            self.allow_local_binding,
+            offline_proxy_settings.allow_local_binding
+        ))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -840,6 +862,51 @@ mod tests {
                 proxy_ports: vec![1081, 8080],
                 allow_local_binding: true,
             }
+        );
+    }
+
+    #[test]
+    fn setup_marker_request_mismatch_reason_ignores_proxy_drift_for_online_identity() {
+        let marker = super::SetupMarker {
+            version: super::SETUP_VERSION,
+            offline_username: "offline".to_string(),
+            online_username: "online".to_string(),
+            created_at: None,
+            proxy_ports: vec![3128],
+            allow_local_binding: false,
+        };
+        let desired = super::OfflineProxySettings {
+            proxy_ports: vec![1081, 8080],
+            allow_local_binding: true,
+        };
+
+        assert_eq!(
+            marker.request_mismatch_reason(super::SandboxNetworkIdentity::Online, &desired),
+            None
+        );
+    }
+
+    #[test]
+    fn setup_marker_request_mismatch_reason_reports_offline_firewall_drift() {
+        let marker = super::SetupMarker {
+            version: super::SETUP_VERSION,
+            offline_username: "offline".to_string(),
+            online_username: "online".to_string(),
+            created_at: None,
+            proxy_ports: vec![3128],
+            allow_local_binding: false,
+        };
+        let desired = super::OfflineProxySettings {
+            proxy_ports: vec![1081, 8080],
+            allow_local_binding: true,
+        };
+
+        assert_eq!(
+            marker.request_mismatch_reason(super::SandboxNetworkIdentity::Offline, &desired),
+            Some(
+                "offline firewall settings changed (stored_ports=[3128], desired_ports=[1081, 8080], stored_allow_local_binding=false, desired_allow_local_binding=true)"
+                    .to_string()
+            )
         );
     }
 

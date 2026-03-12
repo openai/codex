@@ -35,7 +35,8 @@ pub struct SandboxCreds {
 /// Returns true when the on-disk setup artifacts exist and match the current
 /// setup version.
 ///
-/// This reuses the same marker/users validation used by `require_logon_sandbox_creds`.
+/// This is a coarse readiness check; `require_logon_sandbox_creds` performs the
+/// additional runtime validation for offline firewall settings.
 pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
     let marker_ok = matches!(load_marker(codex_home), Ok(Some(marker)) if marker.version_matches());
     if !marker_ok {
@@ -144,40 +145,28 @@ pub fn require_logon_sandbox_creds(
     // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
     // granting the sandbox group access to this directory without granting the capability SID.
     let mut setup_reason: Option<String> = None;
-    let mut existing_marker: Option<SetupMarker> = None;
 
     let mut identity = match load_marker(codex_home)? {
         Some(marker) if marker.version_matches() => {
-            existing_marker = Some(marker.clone());
-            let selected = select_identity(network_identity, codex_home)?;
-            if selected.is_none() {
-                setup_reason =
-                    Some("sandbox users missing or incompatible with marker version".to_string());
+            if let Some(reason) =
+                marker.request_mismatch_reason(network_identity, &desired_offline_proxy_settings)
+            {
+                setup_reason = Some(reason);
+                None
+            } else {
+                let selected = select_identity(network_identity, codex_home)?;
+                if selected.is_none() {
+                    setup_reason =
+                        Some("sandbox users missing or incompatible with marker version".to_string());
+                }
+                selected
             }
-            selected
         }
         _ => {
             setup_reason = Some("sandbox setup marker missing or incompatible".to_string());
             None
         }
     };
-    if network_identity.uses_offline_identity() {
-        if let (Some(marker), Some(_)) = (&existing_marker, &identity) {
-            if marker.proxy_ports != desired_offline_proxy_settings.proxy_ports
-                || marker.allow_local_binding
-                    != desired_offline_proxy_settings.allow_local_binding
-            {
-                setup_reason = Some(format!(
-                    "offline firewall settings changed (stored_ports={:?}, desired_ports={:?}, stored_allow_local_binding={}, desired_allow_local_binding={})",
-                    marker.proxy_ports,
-                    desired_offline_proxy_settings.proxy_ports,
-                    marker.allow_local_binding,
-                    desired_offline_proxy_settings.allow_local_binding
-                ));
-                identity = None;
-            }
-        }
-    }
 
     if identity.is_none() {
         if let Some(reason) = &setup_reason {
