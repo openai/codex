@@ -115,7 +115,10 @@ impl PrivateDesktop {
         }
 
         unsafe {
-            grant_desktop_access(handle, logs_base_dir)?;
+            if let Err(err) = grant_desktop_access(handle, logs_base_dir) {
+                let _ = CloseDesktop(handle);
+                return Err(err);
+            }
         }
 
         Ok(Self { handle, name })
