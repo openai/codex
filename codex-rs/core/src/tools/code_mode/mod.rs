@@ -57,7 +57,7 @@ enum CodeModeSessionProgress {
 enum CodeModeExecutionStatus {
     Completed,
     Failed,
-    Running(i32),
+    Running(String),
     Terminated,
 }
 
@@ -79,7 +79,7 @@ pub(crate) fn wait_tool_description() -> &'static str {
 
 async fn handle_node_message(
     exec: &ExecContext,
-    session_id: i32,
+    cell_id: String,
     message: protocol::NodeToHostMessage,
     poll_max_output_tokens: Option<Option<usize>>,
     started_at: std::time::Instant,
@@ -91,7 +91,7 @@ async fn handle_node_message(
             delta_items = truncate_code_mode_result(delta_items, poll_max_output_tokens.flatten());
             prepend_script_status(
                 &mut delta_items,
-                CodeModeExecutionStatus::Running(session_id),
+                CodeModeExecutionStatus::Running(cell_id),
                 started_at.elapsed(),
             );
             Ok(CodeModeSessionProgress::Yielded {
@@ -161,8 +161,8 @@ fn prepend_script_status(
         match status {
             CodeModeExecutionStatus::Completed => "Script completed".to_string(),
             CodeModeExecutionStatus::Failed => "Script failed".to_string(),
-            CodeModeExecutionStatus::Running(session_id) => {
-                format!("Script running with session ID {session_id}")
+            CodeModeExecutionStatus::Running(cell_id) => {
+                format!("Script running with cell ID {cell_id}")
             }
             CodeModeExecutionStatus::Terminated => "Script terminated".to_string(),
         }

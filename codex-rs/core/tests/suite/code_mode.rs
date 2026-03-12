@@ -51,12 +51,11 @@ fn text_item(items: &[Value], index: usize) -> &str {
         .expect("content item should be input_text")
 }
 
-fn extract_running_session_id(text: &str) -> i32 {
-    text.strip_prefix("Script running with session ID ")
+fn extract_running_cell_id(text: &str) -> String {
+    text.strip_prefix("Script running with cell ID ")
         .and_then(|rest| rest.split('\n').next())
-        .expect("running header should contain a session ID")
-        .parse()
-        .expect("session ID should parse as i32")
+        .expect("running header should contain a cell ID")
+        .to_string()
 }
 
 fn wait_for_file_source(path: &Path) -> Result<String> {
@@ -420,12 +419,12 @@ output_text("phase 3");
     assert_regex_match(
         concat!(
             r"(?s)\A",
-            r"Script running with session ID \d+\nWall time \d+\.\d seconds\nOutput:\n\z"
+            r"Script running with cell ID \d+\nWall time \d+\.\d seconds\nOutput:\n\z"
         ),
         text_item(&first_items, 0),
     );
     assert_eq!(text_item(&first_items, 1), "phase 1");
-    let session_id = extract_running_session_id(text_item(&first_items, 0));
+    let cell_id = extract_running_cell_id(text_item(&first_items, 0));
 
     responses::mount_sse_once(
         &server,
@@ -435,7 +434,7 @@ output_text("phase 3");
                 "call-2",
                 "exec_wait",
                 &serde_json::to_string(&serde_json::json!({
-                    "session_id": session_id,
+                    "cell_id": cell_id.clone(),
                     "yield_time_ms": 1_000,
                 }))?,
             ),
@@ -461,13 +460,13 @@ output_text("phase 3");
     assert_regex_match(
         concat!(
             r"(?s)\A",
-            r"Script running with session ID \d+\nWall time \d+\.\d seconds\nOutput:\n\z"
+            r"Script running with cell ID \d+\nWall time \d+\.\d seconds\nOutput:\n\z"
         ),
         text_item(&second_items, 0),
     );
     assert_eq!(
-        extract_running_session_id(text_item(&second_items, 0)),
-        session_id
+        extract_running_cell_id(text_item(&second_items, 0)),
+        cell_id
     );
     assert_eq!(text_item(&second_items, 1), "phase 2");
 
@@ -479,7 +478,7 @@ output_text("phase 3");
                 "call-3",
                 "exec_wait",
                 &serde_json::to_string(&serde_json::json!({
-                    "session_id": session_id,
+                    "cell_id": cell_id.clone(),
                     "yield_time_ms": 1_000,
                 }))?,
             ),
@@ -563,12 +562,12 @@ while (true) {}
     assert_regex_match(
         concat!(
             r"(?s)\A",
-            r"Script running with session ID \d+\nWall time \d+\.\d seconds\nOutput:\n\z"
+            r"Script running with cell ID \d+\nWall time \d+\.\d seconds\nOutput:\n\z"
         ),
         text_item(&first_items, 0),
     );
     assert_eq!(text_item(&first_items, 1), "phase 1");
-    let session_id = extract_running_session_id(text_item(&first_items, 0));
+    let cell_id = extract_running_cell_id(text_item(&first_items, 0));
 
     responses::mount_sse_once(
         &server,
@@ -578,7 +577,7 @@ while (true) {}
                 "call-2",
                 "exec_wait",
                 &serde_json::to_string(&serde_json::json!({
-                    "session_id": session_id,
+                    "cell_id": cell_id.clone(),
                     "terminate": true,
                 }))?,
             ),
@@ -672,7 +671,7 @@ output_text("session b done");
     let first_request = first_completion.single_request();
     let first_items = custom_tool_output_items(&first_request, "call-1");
     assert_eq!(first_items.len(), 2);
-    let session_a_id = extract_running_session_id(text_item(&first_items, 0));
+    let session_a_id = extract_running_cell_id(text_item(&first_items, 0));
     assert_eq!(text_item(&first_items, 1), "session a start");
 
     responses::mount_sse_once(
@@ -698,7 +697,7 @@ output_text("session b done");
     let second_request = second_completion.single_request();
     let second_items = custom_tool_output_items(&second_request, "call-2");
     assert_eq!(second_items.len(), 2);
-    let session_b_id = extract_running_session_id(text_item(&second_items, 0));
+    let session_b_id = extract_running_cell_id(text_item(&second_items, 0));
     assert_eq!(text_item(&second_items, 1), "session b start");
     assert_ne!(session_a_id, session_b_id);
 
@@ -711,7 +710,7 @@ output_text("session b done");
                 "call-3",
                 "exec_wait",
                 &serde_json::to_string(&serde_json::json!({
-                    "session_id": session_a_id,
+                    "cell_id": session_a_id.clone(),
                     "yield_time_ms": 1_000,
                 }))?,
             ),
@@ -751,7 +750,7 @@ output_text("session b done");
                 "call-4",
                 "exec_wait",
                 &serde_json::to_string(&serde_json::json!({
-                    "session_id": session_b_id,
+                    "cell_id": session_b_id.clone(),
                     "yield_time_ms": 1_000,
                 }))?,
             ),
@@ -833,7 +832,7 @@ output_text("phase 2");
     let first_request = first_completion.single_request();
     let first_items = custom_tool_output_items(&first_request, "call-1");
     assert_eq!(first_items.len(), 2);
-    let session_id = extract_running_session_id(text_item(&first_items, 0));
+    let cell_id = extract_running_cell_id(text_item(&first_items, 0));
     assert_eq!(text_item(&first_items, 1), "phase 1");
 
     responses::mount_sse_once(
@@ -844,7 +843,7 @@ output_text("phase 2");
                 "call-2",
                 "exec_wait",
                 &serde_json::to_string(&serde_json::json!({
-                    "session_id": session_id,
+                    "cell_id": cell_id.clone(),
                     "terminate": true,
                 }))?,
             ),
@@ -935,7 +934,7 @@ async fn code_mode_exec_wait_returns_error_for_unknown_session() -> Result<()> {
                 "call-1",
                 "exec_wait",
                 &serde_json::to_string(&serde_json::json!({
-                    "session_id": 999_999,
+                    "cell_id": "999999",
                     "yield_time_ms": 1_000,
                 }))?,
             ),
@@ -952,7 +951,7 @@ async fn code_mode_exec_wait_returns_error_for_unknown_session() -> Result<()> {
     )
     .await;
 
-    test.submit_turn("wait on an unknown exec session").await?;
+    test.submit_turn("wait on an unknown exec cell").await?;
 
     let request = completion.single_request();
     let (_, success) = request
@@ -971,7 +970,7 @@ async fn code_mode_exec_wait_returns_error_for_unknown_session() -> Result<()> {
     );
     assert_eq!(
         text_item(&items, 1),
-        "Script error:\nexec session 999999 not found"
+        "Script error:\nexec cell 999999 not found"
     );
 
     Ok(())
@@ -1044,7 +1043,7 @@ output_text("session b done");
     let first_request = first_completion.single_request();
     let first_items = custom_tool_output_items(&first_request, "call-1");
     assert_eq!(first_items.len(), 2);
-    let session_a_id = extract_running_session_id(text_item(&first_items, 0));
+    let session_a_id = extract_running_cell_id(text_item(&first_items, 0));
     assert_eq!(text_item(&first_items, 1), "session a start");
 
     responses::mount_sse_once(
@@ -1070,7 +1069,7 @@ output_text("session b done");
     let second_request = second_completion.single_request();
     let second_items = custom_tool_output_items(&second_request, "call-2");
     assert_eq!(second_items.len(), 2);
-    let session_b_id = extract_running_session_id(text_item(&second_items, 0));
+    let session_b_id = extract_running_cell_id(text_item(&second_items, 0));
     assert_eq!(text_item(&second_items, 1), "session b start");
 
     fs::write(&session_a_gate, "ready")?;
@@ -1082,7 +1081,7 @@ output_text("session b done");
                 "call-3",
                 "exec_wait",
                 &serde_json::to_string(&serde_json::json!({
-                    "session_id": session_b_id,
+                    "cell_id": session_b_id.clone(),
                     "yield_time_ms": 1_000,
                 }))?,
             ),
@@ -1107,12 +1106,12 @@ output_text("session b done");
     assert_regex_match(
         concat!(
             r"(?s)\A",
-            r"Script running with session ID \d+\nWall time \d+\.\d seconds\nOutput:\n\z"
+            r"Script running with cell ID \d+\nWall time \d+\.\d seconds\nOutput:\n\z"
         ),
         text_item(&third_items, 0),
     );
     assert_eq!(
-        extract_running_session_id(text_item(&third_items, 0)),
+        extract_running_cell_id(text_item(&third_items, 0)),
         session_b_id
     );
 
@@ -1132,7 +1131,7 @@ output_text("session b done");
                 "call-4",
                 "exec_wait",
                 &serde_json::to_string(&serde_json::json!({
-                    "session_id": session_a_id,
+                    "cell_id": session_a_id.clone(),
                     "terminate": true,
                 }))?,
             ),
@@ -1232,7 +1231,7 @@ output_text("after yield");
     assert_regex_match(
         concat!(
             r"(?s)\A",
-            r"Script running with session ID \d+\nWall time \d+\.\d seconds\nOutput:\n\z"
+            r"Script running with cell ID \d+\nWall time \d+\.\d seconds\nOutput:\n\z"
         ),
         text_item(&first_items, 0),
     );
@@ -1325,7 +1324,7 @@ output_text("token one token two token three token four token five token six tok
     let first_items = custom_tool_output_items(&first_request, "call-1");
     assert_eq!(first_items.len(), 2);
     assert_eq!(text_item(&first_items, 1), "phase 1");
-    let session_id = extract_running_session_id(text_item(&first_items, 0));
+    let cell_id = extract_running_cell_id(text_item(&first_items, 0));
 
     fs::write(&completion_gate, "ready")?;
     responses::mount_sse_once(
@@ -1336,7 +1335,7 @@ output_text("token one token two token three token four token five token six tok
                 "call-2",
                 "exec_wait",
                 &serde_json::to_string(&serde_json::json!({
-                    "session_id": session_id,
+                    "cell_id": cell_id.clone(),
                     "yield_time_ms": 1_000,
                     "max_tokens": 6,
                 }))?,
