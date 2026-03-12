@@ -2,4 +2,6 @@
 
 Searches over apps/connectors tool metadata with BM25 and exposes matching tools for the next model call.
 
-Tools of the apps/connectors ({{app_names}}) are hidden until you search for them with this tool (`tool_search`). If the task can be fulfilled by the apps/connectors mentioned here, always prefer to do tool search before calling `list_mcp_resources` or `list_mcp_resource_templates`.
+The following connectors are installed but their tools may not be loaded upfront:
+({{app_names}})
+When the request needs one of these connectors and you don't already have the required tools from them, search for the connector tools with this tool (`tool_search`) to load them. For the connectors mentioned above, always prefer `tool_search`over `list_mcp_resources` or `list_mcp_resource_templates` for tool discovery.
