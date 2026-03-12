@@ -4,7 +4,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::client_common::tools::ToolSpec;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::SandboxPolicy;
@@ -174,10 +173,6 @@ impl ToolRegistry {
                 sandbox_tag(
                     &invocation.turn.sandbox_policy,
                     invocation.turn.windows_sandbox_level,
-                    invocation
-                        .turn
-                        .features
-                        .enabled(Feature::UseLinuxSandboxBwrap),
                 ),
             ),
             (
@@ -502,12 +497,8 @@ async fn dispatch_after_tool_use_hook(
                     success: dispatch.success,
                     duration_ms: u64::try_from(dispatch.duration.as_millis()).unwrap_or(u64::MAX),
                     mutating: dispatch.mutating,
-                    sandbox: sandbox_tag(
-                        &turn.sandbox_policy,
-                        turn.windows_sandbox_level,
-                        turn.features.enabled(Feature::UseLinuxSandboxBwrap),
-                    )
-                    .to_string(),
+                    sandbox: sandbox_tag(&turn.sandbox_policy, turn.windows_sandbox_level)
+                        .to_string(),
                     sandbox_policy: sandbox_policy_tag(&turn.sandbox_policy).to_string(),
                     output_preview: dispatch.output_preview.clone(),
                 },
@@ -547,58 +538,5 @@ async fn dispatch_after_tool_use_hook(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::tools::context::ToolInvocation;
-    use async_trait::async_trait;
-    use pretty_assertions::assert_eq;
-
-    struct TestHandler;
-
-    #[async_trait]
-    impl ToolHandler for TestHandler {
-        type Output = crate::tools::context::FunctionToolOutput;
-
-        fn kind(&self) -> ToolKind {
-            ToolKind::Function
-        }
-
-        async fn handle(
-            &self,
-            _invocation: ToolInvocation,
-        ) -> Result<Self::Output, FunctionCallError> {
-            unreachable!("test handler should not be invoked")
-        }
-    }
-
-    #[test]
-    fn handler_looks_up_namespaced_aliases_explicitly() {
-        let plain_handler = Arc::new(TestHandler) as Arc<dyn AnyToolHandler>;
-        let namespaced_handler = Arc::new(TestHandler) as Arc<dyn AnyToolHandler>;
-        let namespace = "mcp__codex_apps__gmail";
-        let tool_name = "gmail_get_recent_emails";
-        let namespaced_name = tool_handler_key(tool_name, Some(namespace));
-        let registry = ToolRegistry::new(HashMap::from([
-            (tool_name.to_string(), Arc::clone(&plain_handler)),
-            (namespaced_name, Arc::clone(&namespaced_handler)),
-        ]));
-
-        let plain = registry.handler(tool_name, None);
-        let namespaced = registry.handler(tool_name, Some(namespace));
-        let missing_namespaced = registry.handler(tool_name, Some("mcp__codex_apps__calendar"));
-
-        assert_eq!(plain.is_some(), true);
-        assert_eq!(namespaced.is_some(), true);
-        assert_eq!(missing_namespaced.is_none(), true);
-        assert!(
-            plain
-                .as_ref()
-                .is_some_and(|handler| Arc::ptr_eq(handler, &plain_handler))
-        );
-        assert!(
-            namespaced
-                .as_ref()
-                .is_some_and(|handler| Arc::ptr_eq(handler, &namespaced_handler))
-        );
-    }
-}
+#[path = "registry_tests.rs"]
+mod tests;

@@ -22,7 +22,8 @@ use codex_protocol::protocol::SandboxPolicy;
 /// CLI surface for the Linux sandbox helper.
 ///
 /// The type name remains `LandlockCommand` for compatibility with existing
-/// wiring, but the filesystem sandbox now uses bubblewrap.
+/// wiring, but bubblewrap is now the default filesystem sandbox and Landlock
+/// is the legacy fallback.
 pub struct LandlockCommand {
     /// It is possible that the cwd used in the context of the sandbox policy
     /// is different from the cwd of the process to spawn.
@@ -42,11 +43,11 @@ pub struct LandlockCommand {
     #[arg(long = "network-sandbox-policy", hide = true)]
     pub network_sandbox_policy: Option<NetworkSandboxPolicy>,
 
-    /// Opt-in: use the bubblewrap-based Linux sandbox pipeline.
+    /// Opt-in: use the legacy Landlock Linux sandbox fallback.
     ///
-    /// When not set, we fall back to the legacy Landlock + mount pipeline.
-    #[arg(long = "use-bwrap-sandbox", hide = true, default_value_t = false)]
-    pub use_bwrap_sandbox: bool,
+    /// When not set, the helper uses the default bubblewrap pipeline.
+    #[arg(long = "use-legacy-landlock", hide = true, default_value_t = false)]
+    pub use_legacy_landlock: bool,
 
     /// Internal: apply seccomp and `no_new_privs` in the already-sandboxed
     /// process, then exec the user command.
@@ -92,7 +93,7 @@ pub fn run_main() -> ! {
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
-        use_bwrap_sandbox,
+        use_legacy_landlock,
         apply_seccomp_then_exec,
         allow_network_for_proxy,
         proxy_route_spec,
@@ -103,7 +104,7 @@ pub fn run_main() -> ! {
     if command.is_empty() {
         panic!("No command specified to execute.");
     }
-    ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec, use_bwrap_sandbox);
+    ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec, use_legacy_landlock);
     let EffectiveSandboxPolicies {
         sandbox_policy,
         file_system_sandbox_policy,
@@ -154,7 +155,7 @@ pub fn run_main() -> ! {
         exec_or_panic(command);
     }
 
-    if use_bwrap_sandbox {
+    if !use_legacy_landlock {
         // Outer stage: bubblewrap first, then re-enter this binary in the
         // sandboxed environment to apply seccomp. This path never falls back
         // to legacy Landlock on failure.
@@ -171,7 +172,6 @@ pub fn run_main() -> ! {
             sandbox_policy: &sandbox_policy,
             file_system_sandbox_policy: &file_system_sandbox_policy,
             network_sandbox_policy,
-            use_bwrap_sandbox,
             allow_network_for_proxy,
             proxy_route_spec,
             command,
@@ -256,9 +256,9 @@ fn resolve_sandbox_policies(
     }
 }
 
-fn ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec: bool, use_bwrap_sandbox: bool) {
-    if apply_seccomp_then_exec && !use_bwrap_sandbox {
-        panic!("--apply-seccomp-then-exec requires --use-bwrap-sandbox");
+fn ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec: bool, use_legacy_landlock: bool) {
+    if apply_seccomp_then_exec && use_legacy_landlock {
+        panic!("--apply-seccomp-then-exec is incompatible with --use-legacy-landlock");
     }
 }
 
@@ -280,7 +280,8 @@ fn run_bwrap_with_proc_fallback(
             network_mode,
         )
     {
-        eprintln!("codex-linux-sandbox: bwrap could not mount /proc; retrying with --no-proc");
+        // Keep the retry silent so sandbox-internal diagnostics do not leak into the
+        // child process stderr stream.
         mount_proc = false;
     }
 
@@ -470,7 +471,6 @@ struct InnerSeccompCommandArgs<'a> {
     sandbox_policy: &'a SandboxPolicy,
     file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
-    use_bwrap_sandbox: bool,
     allow_network_for_proxy: bool,
     proxy_route_spec: Option<String>,
     command: Vec<String>,
@@ -483,7 +483,6 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
-        use_bwrap_sandbox,
         allow_network_for_proxy,
         proxy_route_spec,
         command,
@@ -515,11 +514,8 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
         file_system_policy_json,
         "--network-sandbox-policy".to_string(),
         network_policy_json,
+        "--apply-seccomp-then-exec".to_string(),
     ];
-    if use_bwrap_sandbox {
-        inner.push("--use-bwrap-sandbox".to_string());
-        inner.push("--apply-seccomp-then-exec".to_string());
-    }
     if allow_network_for_proxy {
         inner.push("--allow-network-for-proxy".to_string());
         let proxy_route_spec = proxy_route_spec

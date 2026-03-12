@@ -127,7 +127,6 @@ fn managed_proxy_inner_command_includes_route_spec() {
         sandbox_policy: &sandbox_policy,
         file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
-        use_bwrap_sandbox: true,
         allow_network_for_proxy: true,
         proxy_route_spec: Some("{\"routes\":[]}".to_string()),
         command: vec!["/bin/true".to_string()],
@@ -145,7 +144,6 @@ fn inner_command_includes_split_policy_flags() {
         sandbox_policy: &sandbox_policy,
         file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
-        use_bwrap_sandbox: true,
         allow_network_for_proxy: false,
         proxy_route_spec: None,
         command: vec!["/bin/true".to_string()],
@@ -163,7 +161,6 @@ fn non_managed_inner_command_omits_route_spec() {
         sandbox_policy: &sandbox_policy,
         file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
-        use_bwrap_sandbox: true,
         allow_network_for_proxy: false,
         proxy_route_spec: None,
         command: vec!["/bin/true".to_string()],
@@ -181,7 +178,6 @@ fn managed_proxy_inner_command_requires_route_spec() {
             sandbox_policy: &sandbox_policy,
             file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
             network_sandbox_policy: NetworkSandboxPolicy::Restricted,
-            use_bwrap_sandbox: true,
             allow_network_for_proxy: true,
             proxy_route_spec: None,
             command: vec!["/bin/true".to_string()],
@@ -244,8 +240,8 @@ fn resolve_sandbox_policies_rejects_partial_split_policies() {
 }
 
 #[test]
-fn apply_seccomp_then_exec_without_bwrap_panics() {
-    let result = std::panic::catch_unwind(|| ensure_inner_stage_mode_is_valid(true, false));
+fn apply_seccomp_then_exec_with_legacy_landlock_panics() {
+    let result = std::panic::catch_unwind(|| ensure_inner_stage_mode_is_valid(true, true));
     assert!(result.is_err());
 }
 
@@ -253,5 +249,5 @@ fn apply_seccomp_then_exec_without_bwrap_panics() {
 fn valid_inner_stage_modes_do_not_panic() {
     ensure_inner_stage_mode_is_valid(false, false);
     ensure_inner_stage_mode_is_valid(false, true);
-    ensure_inner_stage_mode_is_valid(true, true);
+    ensure_inner_stage_mode_is_valid(true, false);
 }
