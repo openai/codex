@@ -19,6 +19,7 @@ fn test_skill_metadata(skill_doc_path: PathBuf) -> SkillMetadata {
         dependencies: None,
         policy: None,
         permission_profile: None,
+        managed_network_override: None,
         path_to_skills_md: skill_doc_path,
         scope: codex_protocol::protocol::SkillScope::User,
     }

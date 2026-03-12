@@ -92,6 +92,7 @@ fn test_skill_metadata(permission_profile: Option<PermissionProfile>) -> SkillMe
         dependencies: None,
         policy: None,
         permission_profile,
+        managed_network_override: None,
         path_to_skills_md: PathBuf::from("/tmp/skill/SKILL.md"),
         scope: SkillScope::User,
     }
