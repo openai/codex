@@ -15,8 +15,8 @@ mod request_permissions;
 mod request_user_input;
 mod shell;
 mod test_sync;
-mod tool_suggest;
 mod tool_search;
+mod tool_suggest;
 pub(crate) mod unified_exec;
 mod view_image;
 

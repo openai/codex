@@ -1512,6 +1512,7 @@ fn create_tool_suggest_tool(discoverable_tools: &[DiscoverableTool]) -> ToolSpec
         name: TOOL_SUGGEST_TOOL_NAME.to_string(),
         description,
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec![
@@ -2254,7 +2255,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::TestSyncHandler;
-    use crate::tools::handlers::ToolSuggestHandler;
     use crate::tools::handlers::ToolSearchHandler;
     use crate::tools::handlers::ToolSuggestHandler;
     use crate::tools::handlers::UnifiedExecHandler;
