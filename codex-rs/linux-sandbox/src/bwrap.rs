@@ -302,7 +302,7 @@ fn create_filesystem_args(
             .filter(|unreadable_root| root.starts_with(unreadable_root))
             .max_by_key(|unreadable_root| path_depth(unreadable_root))
         {
-            append_dir_mount_target_args(&mut args, root, masking_root);
+            append_mount_target_parent_dir_args(&mut args, root, masking_root);
         }
         args.push("--bind".to_string());
         args.push(path_to_string(root));
@@ -386,8 +386,15 @@ fn path_depth(path: &Path) -> usize {
     path.components().count()
 }
 
-fn append_dir_mount_target_args(args: &mut Vec<String>, mount_target: &Path, anchor: &Path) {
-    let mut mount_target_dirs: Vec<PathBuf> = mount_target
+fn append_mount_target_parent_dir_args(args: &mut Vec<String>, mount_target: &Path, anchor: &Path) {
+    let mount_target_dir = if mount_target.is_dir() {
+        mount_target
+    } else {
+        mount_target
+            .parent()
+            .expect("writable file targets under unreadable roots must have a parent")
+    };
+    let mut mount_target_dirs: Vec<PathBuf> = mount_target_dir
         .ancestors()
         .take_while(|path| *path != anchor)
         .map(Path::to_path_buf)
@@ -866,6 +873,85 @@ mod tests {
         assert!(
             blocked_none_index < allowed_dir_index && allowed_dir_index < allowed_bind_index,
             "expected unreadable parent mask before recreating and rebinding writable child: {:#?}",
+            args.args
+        );
+    }
+
+    #[test]
+    fn split_policy_reenables_writable_files_after_unreadable_parent() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let blocked = temp_dir.path().join("blocked");
+        let allowed_dir = blocked.join("allowed");
+        let allowed_file = allowed_dir.join("note.txt");
+        std::fs::create_dir_all(&allowed_dir).expect("create blocked/allowed");
+        std::fs::write(&allowed_file, "ok").expect("create note");
+        let blocked = AbsolutePathBuf::from_absolute_path(&blocked).expect("absolute blocked");
+        let allowed_dir =
+            AbsolutePathBuf::from_absolute_path(&allowed_dir).expect("absolute allowed dir");
+        let allowed_file =
+            AbsolutePathBuf::from_absolute_path(&allowed_file).expect("absolute allowed file");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: blocked.clone(),
+                },
+                access: FileSystemAccessMode::None,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: allowed_file.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+        ]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let blocked_str = path_to_string(blocked.as_path());
+        let allowed_dir_str = path_to_string(allowed_dir.as_path());
+        let allowed_file_str = path_to_string(allowed_file.as_path());
+
+        assert!(
+            args.args
+                .windows(2)
+                .any(|window| window == ["--dir", allowed_dir_str.as_str()]),
+            "expected ancestor directory to be recreated: {:#?}",
+            args.args
+        );
+        assert!(
+            !args
+                .args
+                .windows(2)
+                .any(|window| window == ["--dir", allowed_file_str.as_str()]),
+            "writable file target should not be converted into a directory: {:#?}",
+            args.args
+        );
+        let blocked_none_index = args
+            .args
+            .windows(4)
+            .position(|window| window == ["--perms", "000", "--tmpfs", blocked_str.as_str()])
+            .expect("blocked should be masked first");
+        let allowed_bind_index = args
+            .args
+            .windows(3)
+            .position(|window| {
+                window
+                    == [
+                        "--bind",
+                        allowed_file_str.as_str(),
+                        allowed_file_str.as_str(),
+                    ]
+            })
+            .expect("allowed file should be rebound writable");
+
+        assert!(
+            blocked_none_index < allowed_bind_index,
+            "expected unreadable parent mask before rebinding writable file child: {:#?}",
             args.args
         );
     }

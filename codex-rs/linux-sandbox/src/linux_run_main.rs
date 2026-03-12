@@ -278,6 +278,15 @@ fn resolve_sandbox_policies(
 
     match (sandbox_policy, split_policies) {
         (Some(sandbox_policy), Some((file_system_sandbox_policy, network_sandbox_policy))) => {
+            if file_system_sandbox_policy
+                .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd)
+            {
+                return Ok(EffectiveSandboxPolicies {
+                    sandbox_policy,
+                    file_system_sandbox_policy,
+                    network_sandbox_policy,
+                });
+            }
             let derived_legacy_policy = file_system_sandbox_policy
                 .to_legacy_sandbox_policy(network_sandbox_policy, sandbox_policy_cwd)
                 .map_err(|err| {

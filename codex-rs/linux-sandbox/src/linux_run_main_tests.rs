@@ -319,6 +319,45 @@ fn resolve_sandbox_policies_rejects_mismatched_legacy_and_split_inputs() {
 }
 
 #[test]
+fn resolve_sandbox_policies_accepts_split_policies_requiring_direct_runtime_enforcement() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let docs = temp_dir.path().join("docs");
+    std::fs::create_dir_all(&docs).expect("create docs");
+    let docs = AbsolutePathBuf::from_absolute_path(&docs).expect("absolute docs");
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Special {
+                value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+            },
+            access: codex_protocol::permissions::FileSystemAccessMode::Read,
+        },
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
+            access: codex_protocol::permissions::FileSystemAccessMode::Write,
+        },
+    ]);
+
+    let resolved = resolve_sandbox_policies(
+        temp_dir.path(),
+        Some(sandbox_policy.clone()),
+        Some(file_system_sandbox_policy.clone()),
+        Some(NetworkSandboxPolicy::Restricted),
+    )
+    .expect("split-only policy should preserve provided legacy fallback");
+
+    assert_eq!(resolved.sandbox_policy, sandbox_policy);
+    assert_eq!(
+        resolved.file_system_sandbox_policy,
+        file_system_sandbox_policy
+    );
+    assert_eq!(
+        resolved.network_sandbox_policy,
+        NetworkSandboxPolicy::Restricted
+    );
+}
+
+#[test]
 fn apply_seccomp_then_exec_without_bwrap_panics() {
     let result = std::panic::catch_unwind(|| ensure_inner_stage_mode_is_valid(true, false));
     assert!(result.is_err());
