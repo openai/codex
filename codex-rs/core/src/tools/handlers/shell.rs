@@ -412,6 +412,11 @@ impl ShellHandler {
                 prefix_rule,
             })
             .await;
+        let exec_approval_requirement = if turn.tools_config.requires_manual_tool_approval() {
+            exec_approval_requirement.force_manual_approval()
+        } else {
+            exec_approval_requirement
+        };
 
         let req = ShellRequest {
             command: exec_params.command.clone(),

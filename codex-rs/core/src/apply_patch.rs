@@ -38,6 +38,8 @@ pub(crate) async fn apply_patch(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
+    let manual_tool_approval_required = turn_context.tools_config.requires_manual_tool_approval();
+
     match assess_patch_safety(
         &action,
         turn_context.approval_policy.value(),
@@ -52,9 +54,16 @@ pub(crate) async fn apply_patch(
         } => InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
             action,
             auto_approved: !user_explicitly_approved,
-            exec_approval_requirement: ExecApprovalRequirement::Skip {
-                bypass_sandbox: false,
-                proposed_execpolicy_amendment: None,
+            exec_approval_requirement: if manual_tool_approval_required {
+                ExecApprovalRequirement::NeedsApproval {
+                    reason: None,
+                    proposed_execpolicy_amendment: None,
+                }
+            } else {
+                ExecApprovalRequirement::Skip {
+                    bypass_sandbox: false,
+                    proposed_execpolicy_amendment: None,
+                }
             },
         }),
         SafetyCheck::AskUser => {

@@ -157,6 +157,19 @@ impl ExecApprovalRequirement {
             _ => None,
         }
     }
+
+    pub fn force_manual_approval(self) -> Self {
+        match self {
+            Self::Skip {
+                proposed_execpolicy_amendment,
+                ..
+            } => Self::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment,
+            },
+            other => other,
+        }
+    }
 }
 
 /// - Never, OnFailure: do not ask

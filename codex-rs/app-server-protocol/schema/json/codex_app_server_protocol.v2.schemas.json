@@ -10566,9 +10566,38 @@
       ],
       "type": "object"
     },
+    "ToolExecutionMode": {
+      "enum": [
+        "auto",
+        "manual"
+      ],
+      "type": "string"
+    },
     "ToolsV2": {
       "properties": {
+        "capabilities": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "description": "Additive capability overrides keyed by canonical capability name.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "execution_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolExecutionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Execution policy for approval-capable tools."
+        },
         "view_image": {
+          "description": "Legacy enablement for the `view_image` capability.",
           "type": [
             "boolean",
             "null"
@@ -10582,7 +10611,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Per-tool web search configuration. Presence alone does not enable the capability."
         }
       },
       "type": "object"

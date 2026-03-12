@@ -497,9 +497,25 @@ pub struct SandboxWorkspaceWrite {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
+pub enum ToolExecutionMode {
+    Auto,
+    Manual,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
 pub struct ToolsV2 {
+    /// Per-tool web search configuration. Presence alone does not enable the capability.
     pub web_search: Option<WebSearchToolConfig>,
+    /// Legacy enablement for the `view_image` capability.
     pub view_image: Option<bool>,
+    /// Additive capability overrides keyed by canonical capability name.
+    #[serde(alias = "builtin_features")]
+    pub capabilities: Option<std::collections::BTreeMap<String, bool>>,
+    /// Execution policy for approval-capable tools.
+    #[serde(alias = "builtin_execution_mode")]
+    pub execution_mode: Option<ToolExecutionMode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

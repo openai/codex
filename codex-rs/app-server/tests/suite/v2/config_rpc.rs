@@ -30,6 +30,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::BTreeMap;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -102,6 +103,11 @@ allowed_domains = ["example.com"]
 
 [tools]
 view_image = false
+execution_mode = "manual"
+
+[tools.capabilities]
+command_execution = true
+apply_patch = false
 "#,
     )?;
     let codex_home_path = codex_home.path().canonicalize()?;
@@ -137,6 +143,11 @@ view_image = false
                 location: None,
             }),
             view_image: Some(false),
+            capabilities: Some(BTreeMap::from([
+                ("command_execution".to_string(), true),
+                ("apply_patch".to_string(), false),
+            ])),
+            execution_mode: Some(codex_app_server_protocol::ToolExecutionMode::Manual),
         }
     );
     assert_eq!(
@@ -159,6 +170,30 @@ view_image = false
     );
     assert_eq!(
         origins.get("tools.view_image").expect("origin").name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+    assert_eq!(
+        origins.get("tools.execution_mode").expect("origin").name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+    assert_eq!(
+        origins
+            .get("tools.capabilities.command_execution")
+            .expect("origin")
+            .name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+    assert_eq!(
+        origins
+            .get("tools.capabilities.apply_patch")
+            .expect("origin")
+            .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
         }
