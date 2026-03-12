@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Fork into a new pane
+  Choose where to open the fork.
+
+› 1. /fork right  Open the fork in a pane to the right.
+  2. /fork left   Open the fork in a pane to the left.
+  3. /fork up     Open the fork in a pane above.
+  4. /fork down   Open the fork in a pane below.
+
+  Press enter to confirm or esc to go back
