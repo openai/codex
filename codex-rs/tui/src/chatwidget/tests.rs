@@ -6032,6 +6032,18 @@ async fn slash_help_esc_dismisses_popup() {
 }
 
 #[tokio::test]
+async fn slash_help_q_dismisses_popup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Help);
+    assert!(chat.bottom_pane.has_active_view());
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char('q')));
+
+    assert!(!chat.bottom_pane.has_active_view());
+}
+
+#[tokio::test]
 async fn slash_copy_state_is_preserved_during_running_task() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 

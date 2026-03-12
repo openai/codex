@@ -157,6 +157,11 @@ impl BottomPaneView for SlashHelpView {
             } => self.scroll_by(MAX_POPUP_ROWS as isize),
             KeyEvent {
                 code: KeyCode::Esc, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('q'),
+                modifiers: KeyModifiers::NONE,
+                ..
             } => {
                 self.on_ctrl_c();
             }
