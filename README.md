@@ -13,19 +13,20 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 >
 > This fork tracks `openai/codex` and carries a small set of workflow-level changes on top of upstream.
 >
-> - README section updated on `2026-03-08`
-> - Exomind release versions use `<openai-version>-exomind`; current release line: `0.112.0-alpha.11-exomind`
+> - README section updated on `2026-03-12`
+> - Baseline upstream release tag for this branch: `rust-v0.114.0` (`b9904c0ae`)
+> - Exomind release line: `0.114.0-exomind`
 > - Formal Exomind release tags use `rust-v<openai-version>-exomind`
-> - Latest `upstream/main` observed at update time: `b9a2e4000`
-> - Current fork/upstream merge-base: `e84ee33cc`
+> - Latest `upstream/main` observed at update time: `745ed4e5e`
 > - Fork-specific additions currently include:
 >   - a shared pending-input queue for repeating queue and repeating steer messages, with distinct preview colors
+>   - retry-aware queue handling that keeps queued drafts frozen until transient turn retries settle
+>   - tmux redraw backlog draining in the TUI frame scheduler
 >   - `Shift+Tab` cycling collaboration mode when the composer is empty, and enqueuing a repeating queue message otherwise
 >   - `Alt+Up` recalling the most recently enqueued queue or steer draft by enqueue order
 >   - Termux compatibility work and a stable Android build path
 >   - fork-specific CI compatibility adjustments plus governance/task-tracking experiments
-> - This snapshot is currently `29` commits ahead of the sync merge-base and `1` upstream commit behind latest observed `upstream/main`
-> - When this block changes, update the `upstream/main` hash in the same PR so the fork baseline stays auditable
+> - This release intentionally tracks the latest formal upstream release, not upstream alpha snapshots
 
 ---
 

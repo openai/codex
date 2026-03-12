@@ -4,7 +4,7 @@
 # git tag -a rust-v0.1.0 -m "Release 0.1.0"
 # git push origin rust-v0.1.0
 # # Exomind fork releases use the upstream version with an `-exomind` suffix.
-# # Example: rust-v0.112.0-alpha.11-exomind
+# # Example: rust-v0.114.0-exomind
 # ```
 
 name: rust-release

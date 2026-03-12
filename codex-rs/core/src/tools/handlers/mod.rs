@@ -11,6 +11,7 @@ pub(crate) mod multi_agents;
 mod plan;
 mod read_file;
 mod request_user_input;
+#[cfg(not(target_os = "android"))]
 mod search_tool_bm25;
 mod shell;
 mod test_sync;
@@ -43,8 +44,15 @@ pub use plan::PlanHandler;
 pub use read_file::ReadFileHandler;
 pub use request_user_input::RequestUserInputHandler;
 pub(crate) use request_user_input::request_user_input_tool_description;
+#[cfg(target_os = "android")]
+pub(crate) const SEARCH_TOOL_BM25_DEFAULT_LIMIT: usize = 8;
+#[cfg(target_os = "android")]
+pub(crate) const SEARCH_TOOL_BM25_TOOL_NAME: &str = "search_tool_bm25";
+#[cfg(not(target_os = "android"))]
 pub(crate) use search_tool_bm25::DEFAULT_LIMIT as SEARCH_TOOL_BM25_DEFAULT_LIMIT;
+#[cfg(not(target_os = "android"))]
 pub(crate) use search_tool_bm25::SEARCH_TOOL_BM25_TOOL_NAME;
+#[cfg(not(target_os = "android"))]
 pub use search_tool_bm25::SearchToolBm25Handler;
 pub use shell::ShellCommandHandler;
 pub use shell::ShellHandler;

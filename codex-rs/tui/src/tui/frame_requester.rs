@@ -107,12 +107,18 @@ impl FrameScheduler {
                         // All senders dropped; exit the scheduler.
                         break
                     };
-                    let draw_at = self.rate_limiter.clamp_deadline(draw_at);
+                    let mut draw_at = self.rate_limiter.clamp_deadline(draw_at);
+                    while let Ok(pending_draw_at) = self.receiver.try_recv() {
+                        let pending_draw_at = self.rate_limiter.clamp_deadline(pending_draw_at);
+                        draw_at = draw_at.min(pending_draw_at);
+                    }
                     next_deadline = Some(next_deadline.map_or(draw_at, |cur| cur.min(draw_at)));
 
                     // Do not send a draw immediately here. By continuing the loop,
                     // we recompute the sleep target so the draw fires once via the
                     // sleep branch, coalescing multiple requests into a single draw.
+                    // Draining the ready queue here avoids leaving a long tail of
+                    // stale redraw requests after bursty streaming updates.
                     continue;
                 }
                 _ = &mut deadline => {
@@ -206,6 +212,32 @@ mod tests {
         // No additional draw should be sent for the same coalesced batch.
         let second = draw_rx.recv().timeout(Duration::from_millis(20)).await;
         assert!(second.is_err(), "unexpected extra draw received");
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn test_drains_bursty_requests_without_backlog_tail() {
+        let (draw_tx, mut draw_rx) = broadcast::channel(16);
+        let requester = FrameRequester::new(draw_tx);
+
+        for _ in 0..64 {
+            requester.schedule_frame();
+        }
+
+        time::advance(Duration::from_millis(1)).await;
+
+        let first = draw_rx
+            .recv()
+            .timeout(Duration::from_millis(50))
+            .await
+            .expect("timed out waiting for bursty draw");
+        assert!(first.is_ok(), "broadcast closed unexpectedly");
+
+        time::advance(MIN_FRAME_INTERVAL * 4).await;
+        let second = draw_rx.recv().timeout(Duration::from_millis(5)).await;
+        assert!(
+            second.is_err(),
+            "unexpected extra draw received from drained redraw backlog"
+        );
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
