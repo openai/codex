@@ -127,7 +127,9 @@ const pendingTool = new Map();
 const pendingEmitImage = new Map();
 let toolCounter = 0;
 let emitImageCounter = 0;
-const tmpDir = process.env.CODEX_JS_TMP_DIR || process.cwd();
+const cwd = process.cwd();
+const tmpDir = process.env.CODEX_JS_TMP_DIR || cwd;
+const homeDir = process.env.HOME ?? null;
 const nodeModuleDirEnv = process.env.CODEX_JS_REPL_NODE_MODULE_DIRS ?? "";
 const moduleSearchBases = (() => {
   const bases = [];
@@ -150,7 +152,6 @@ const moduleSearchBases = (() => {
     seen.add(base);
     bases.push(base);
   }
-  const cwd = process.cwd();
   if (!seen.has(cwd)) {
     bases.push(cwd);
   }
@@ -1209,20 +1210,15 @@ function encodeByteImage(bytes, mimeType, detail) {
 }
 
 function parseImageDetail(detail) {
-  if (typeof detail === "undefined") {
+  if (detail == null) {
     return undefined;
   }
   if (typeof detail !== "string" || !detail) {
     throw new Error("codex.emitImage expected detail to be a non-empty string");
   }
-  if (
-    detail !== "auto" &&
-    detail !== "low" &&
-    detail !== "high" &&
-    detail !== "original"
-  ) {
+  if (detail !== "original") {
     throw new Error(
-      'codex.emitImage expected detail to be one of "auto", "low", "high", or "original"',
+      'codex.emitImage only supports detail "original"; omit detail for default behavior',
     );
   }
   return detail;
@@ -1539,12 +1535,12 @@ async function handleExec(message) {
     priorBindings = builtSource.priorBindings;
     let output = "";
 
-    context.codex = { tmpDir, tool, emitImage };
+    context.codex = { cwd, homeDir, tmpDir, tool, emitImage };
     context.tmpDir = tmpDir;
 
     await withCapturedConsole(context, async (logs) => {
       const cellIdentifier = path.join(
-        process.cwd(),
+        cwd,
         `.codex_js_repl_cell_${cellCounter++}.mjs`,
       );
       module = new SourceTextModule(source, {

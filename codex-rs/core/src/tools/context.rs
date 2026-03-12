@@ -1,3 +1,4 @@
+use crate::client_common::tools::ToolSearchOutputTool;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
@@ -12,6 +13,7 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_utils_string::take_bytes_at_char_boundary;
@@ -38,6 +40,7 @@ pub struct ToolInvocation {
     pub tracker: SharedTurnDiffTracker,
     pub call_id: String,
     pub tool_name: String,
+    pub tool_namespace: Option<String>,
     pub payload: ToolPayload,
 }
 
@@ -45,6 +48,9 @@ pub struct ToolInvocation {
 pub enum ToolPayload {
     Function {
         arguments: String,
+    },
+    ToolSearch {
+        arguments: SearchToolCallParams,
     },
     Custom {
         input: String,
@@ -63,6 +69,7 @@ impl ToolPayload {
     pub fn log_payload(&self) -> Cow<'_, str> {
         match self {
             ToolPayload::Function { arguments } => Cow::Borrowed(arguments),
+            ToolPayload::ToolSearch { arguments } => Cow::Owned(arguments.query.clone()),
             ToolPayload::Custom { input } => Cow::Borrowed(input),
             ToolPayload::LocalShell { params } => Cow::Owned(params.command.join(" ")),
             ToolPayload::Mcp { raw_arguments, .. } => Cow::Borrowed(raw_arguments),
@@ -104,6 +111,47 @@ impl ToolOutput for CallToolResult {
         serde_json::to_value(self).unwrap_or_else(|err| {
             JsonValue::String(format!("failed to serialize mcp result: {err}"))
         })
+    }
+}
+
+#[derive(Clone)]
+pub struct ToolSearchOutput {
+    pub tools: Vec<ToolSearchOutputTool>,
+}
+
+impl ToolOutput for ToolSearchOutput {
+    fn log_preview(&self) -> String {
+        let tools = self
+            .tools
+            .iter()
+            .map(|tool| {
+                serde_json::to_value(tool).unwrap_or_else(|err| {
+                    JsonValue::String(format!("failed to serialize tool_search output: {err}"))
+                })
+            })
+            .collect();
+        telemetry_preview(&JsonValue::Array(tools).to_string())
+    }
+
+    fn success_for_logging(&self) -> bool {
+        true
+    }
+
+    fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
+        ResponseInputItem::ToolSearchOutput {
+            call_id: call_id.to_string(),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: self
+                .tools
+                .iter()
+                .map(|tool| {
+                    serde_json::to_value(tool).unwrap_or_else(|err| {
+                        JsonValue::String(format!("failed to serialize tool_search output: {err}"))
+                    })
+                })
+                .collect(),
+        }
     }
 }
 
@@ -277,6 +325,7 @@ fn response_input_to_code_mode_result(response: ResponseInputItem) -> JsonValue 
                 content_items_to_code_mode_result(&items)
             }
         },
+        ResponseInputItem::ToolSearchOutput { tools, .. } => JsonValue::Array(tools),
         ResponseInputItem::McpToolCallOutput { output, .. } => {
             output.code_mode_result(&ToolPayload::Mcp {
                 server: String::new(),
@@ -379,6 +428,7 @@ mod tests {
     use super::*;
     use core_test_support::assert_regex_match;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
 
     #[test]
     fn custom_tool_calls_should_roundtrip_as_custom_outputs() {
@@ -502,6 +552,61 @@ mod tests {
                 assert_eq!(output.success, Some(true));
             }
             other => panic!("expected CustomToolCallOutput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_search_payloads_roundtrip_as_tool_search_outputs() {
+        let payload = ToolPayload::ToolSearch {
+            arguments: SearchToolCallParams {
+                query: "calendar".to_string(),
+                limit: None,
+            },
+        };
+        let response = ToolSearchOutput {
+            tools: vec![ToolSearchOutputTool::Function(
+                crate::client_common::tools::ResponsesApiTool {
+                    name: "create_event".to_string(),
+                    description: String::new(),
+                    strict: false,
+                    defer_loading: Some(true),
+                    parameters: crate::tools::spec::JsonSchema::Object {
+                        properties: Default::default(),
+                        required: None,
+                        additional_properties: None,
+                    },
+                    output_schema: None,
+                },
+            )],
+        }
+        .to_response_item("search-1", &payload);
+
+        match response {
+            ResponseInputItem::ToolSearchOutput {
+                call_id,
+                status,
+                execution,
+                tools,
+            } => {
+                assert_eq!(call_id, "search-1");
+                assert_eq!(status, "completed");
+                assert_eq!(execution, "client");
+                assert_eq!(
+                    tools,
+                    vec![json!({
+                        "type": "function",
+                        "name": "create_event",
+                        "description": "",
+                        "strict": false,
+                        "defer_loading": true,
+                        "parameters": {
+                            "type": "object",
+                            "properties": {}
+                        }
+                    })]
+                );
+            }
+            other => panic!("expected ToolSearchOutput, got {other:?}"),
         }
     }
 

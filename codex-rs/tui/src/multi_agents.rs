@@ -121,8 +121,10 @@ fn previous_agent_word_motion_fallback(
     key_event: KeyEvent,
     allow_word_motion_fallback: bool,
 ) -> bool {
-    // macOS terminals often send Option+b/f as word-motion keys instead of Option+arrow events
-    // unless enhanced keyboard reporting is enabled.
+    // Some terminals, especially on macOS, send Option+b/f as word-motion keys instead of
+    // Option+arrow events unless enhanced keyboard reporting is enabled. Callers should only
+    // enable this fallback when the composer is empty so draft editing retains the expected
+    // word-wise motion behavior.
     allow_word_motion_fallback
         && matches!(
             key_event,
@@ -145,8 +147,10 @@ fn previous_agent_word_motion_fallback(
 
 #[cfg(target_os = "macos")]
 fn next_agent_word_motion_fallback(key_event: KeyEvent, allow_word_motion_fallback: bool) -> bool {
-    // macOS terminals often send Option+b/f as word-motion keys instead of Option+arrow events
-    // unless enhanced keyboard reporting is enabled.
+    // Some terminals, especially on macOS, send Option+b/f as word-motion keys instead of
+    // Option+arrow events unless enhanced keyboard reporting is enabled. Callers should only
+    // enable this fallback when the composer is empty so draft editing retains the expected
+    // word-wise motion behavior.
     allow_word_motion_fallback
         && matches!(
             key_event,
@@ -179,6 +183,7 @@ pub(crate) fn spawn_end(
         new_agent_role,
         prompt,
         status: _,
+        ..
     } = ev;
 
     let title = match new_thread_id {
@@ -597,6 +602,8 @@ mod tests {
                 new_agent_nickname: Some("Robie".to_string()),
                 new_agent_role: Some("explorer".to_string()),
                 prompt: "Compute 11! and reply with just the integer result.".to_string(),
+                model: "gpt-5".to_string(),
+                reasoning_effort: ReasoningEffortConfig::High,
                 status: AgentStatus::PendingInit,
             },
             Some(&SpawnRequestSummary {
@@ -671,7 +678,15 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn agent_shortcut_matches_option_arrow_word_motion_fallbacks() {
+    fn agent_shortcut_matches_option_arrow_word_motion_fallbacks_only_when_allowed() {
+        assert!(previous_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Left, KeyModifiers::ALT),
+            false,
+        ));
+        assert!(next_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Right, KeyModifiers::ALT),
+            false,
+        ));
         assert!(previous_agent_shortcut_matches(
             KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT),
             true,
@@ -690,6 +705,27 @@ mod tests {
         ));
     }
 
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn agent_shortcut_matches_option_arrows_only() {
+        assert!(previous_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Left, crossterm::event::KeyModifiers::ALT,),
+            false
+        ));
+        assert!(next_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::ALT,),
+            false
+        ));
+        assert!(!previous_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Char('b'), crossterm::event::KeyModifiers::ALT,),
+            false
+        ));
+        assert!(!next_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Char('f'), crossterm::event::KeyModifiers::ALT,),
+            false
+        ));
+    }
+
     #[test]
     fn title_styles_nickname_and_role() {
         let sender_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000001")
@@ -704,6 +740,8 @@ mod tests {
                 new_agent_nickname: Some("Robie".to_string()),
                 new_agent_role: Some("explorer".to_string()),
                 prompt: String::new(),
+                model: "gpt-5".to_string(),
+                reasoning_effort: ReasoningEffortConfig::High,
                 status: AgentStatus::PendingInit,
             },
             Some(&SpawnRequestSummary {

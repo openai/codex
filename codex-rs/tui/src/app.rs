@@ -1567,8 +1567,16 @@ impl App {
             self.chat_widget.thread_name(),
         );
         self.shutdown_current_thread().await;
-        if let Err(err) = self.server.remove_and_close_all_threads().await {
-            tracing::warn!(error = %err, "failed to close all threads");
+        let report = self
+            .server
+            .shutdown_all_threads_bounded(Duration::from_secs(10))
+            .await;
+        if !report.submit_failed.is_empty() || !report.timed_out.is_empty() {
+            tracing::warn!(
+                submit_failed = report.submit_failed.len(),
+                timed_out = report.timed_out.len(),
+                "failed to close all threads"
+            );
         }
         let init = crate::chatwidget::ChatWidgetInit {
             config,
@@ -1834,6 +1842,7 @@ impl App {
                         config.clone(),
                         target_session.path.clone(),
                         auth_manager.clone(),
+                        None,
                     )
                     .await
                     .wrap_err_with(|| {
@@ -1871,6 +1880,7 @@ impl App {
                         config.clone(),
                         target_session.path.clone(),
                         false,
+                        None,
                     )
                     .await
                     .wrap_err_with(|| {
@@ -2182,6 +2192,7 @@ impl App {
                                 resume_config.clone(),
                                 target_session.path.clone(),
                                 self.auth_manager.clone(),
+                                None,
                             )
                             .await
                         {
@@ -2250,7 +2261,7 @@ impl App {
                     if path.exists() {
                         match self
                             .server
-                            .fork_thread(usize::MAX, self.config.clone(), path.clone(), false)
+                            .fork_thread(usize::MAX, self.config.clone(), path.clone(), false, None)
                             .await
                         {
                             Ok(forked) => {
@@ -2411,6 +2422,9 @@ impl App {
                         url,
                         is_installed,
                         is_enabled,
+                        suggest_reason: None,
+                        suggestion_type: None,
+                        elicitation_target: None,
                     });
             }
             AppEvent::OpenUrlInBrowser { url } => {
@@ -3686,10 +3700,18 @@ impl App {
     }
 
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+        // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
+        // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
+        // agent-switch shortcuts when the composer is empty so we never steal the expected
+        // editing behavior for moving across words inside a draft.
         let allow_agent_word_motion_fallback = !self.enhanced_keys_supported
             && self.chat_widget.composer_text_with_pending().is_empty();
         if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
+            // Alt+Left/Right are also natural word-motion keys in the composer. Keep agent
+            // fast-switch available only once the draft is empty so editing behavior wins whenever
+            // there is text on screen.
+            && self.chat_widget.composer_text_with_pending().is_empty()
             && previous_agent_shortcut_matches(key_event, allow_agent_word_motion_fallback)
         {
             if let Some(thread_id) = self.agent_navigation.adjacent_thread_id(
@@ -3702,6 +3724,9 @@ impl App {
         }
         if self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
+            // Mirror the previous-agent rule above: empty drafts may use these keys for thread
+            // switching, but non-empty drafts keep them for expected word-wise cursor motion.
+            && self.chat_widget.composer_text_with_pending().is_empty()
             && next_agent_shortcut_matches(key_event, allow_agent_word_motion_fallback)
         {
             if let Some(thread_id) = self.agent_navigation.adjacent_thread_id(

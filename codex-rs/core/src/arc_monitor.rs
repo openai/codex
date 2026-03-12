@@ -391,9 +391,11 @@ fn build_arc_monitor_message_item(
         ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::ToolSearchCall { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::ToolSearchOutput { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::GhostSnapshot { .. }
         | ResponseItem::Compaction { .. }
@@ -553,6 +555,7 @@ mod tests {
                 &[ResponseItem::FunctionCall {
                     id: None,
                     name: "old_tool".to_string(),
+                    namespace: None,
                     arguments: "{\"old\":true}".to_string(),
                     call_id: "call_old".to_string(),
                 }],

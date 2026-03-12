@@ -692,10 +692,14 @@ impl EscalationPolicy for CoreShellActionProvider {
                 &policy,
                 program,
                 argv,
-                self.approval_policy,
-                &self.sandbox_policy,
-                self.sandbox_permissions,
-                ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
+                InterceptedExecPolicyContext {
+                    approval_policy: self.approval_policy,
+                    sandbox_policy: &self.sandbox_policy,
+                    file_system_sandbox_policy: &self.file_system_sandbox_policy,
+                    sandbox_permissions: self.sandbox_permissions,
+                    enable_shell_wrapper_parsing:
+                        ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
+                },
             )
         };
         // When true, means the Evaluation was due to *.rules, not the
@@ -744,15 +748,19 @@ fn evaluate_intercepted_exec_policy(
     policy: &Policy,
     program: &AbsolutePathBuf,
     argv: &[String],
-    approval_policy: AskForApproval,
-    sandbox_policy: &SandboxPolicy,
-    sandbox_permissions: SandboxPermissions,
-    enable_intercepted_exec_policy_shell_wrapper_parsing: bool,
+    context: InterceptedExecPolicyContext<'_>,
 ) -> Evaluation {
+    let InterceptedExecPolicyContext {
+        approval_policy,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        sandbox_permissions,
+        enable_shell_wrapper_parsing,
+    } = context;
     let CandidateCommands {
         commands,
         used_complex_parsing,
-    } = if enable_intercepted_exec_policy_shell_wrapper_parsing {
+    } = if enable_shell_wrapper_parsing {
         // In this codepath, the first argument in `commands` could be a bare
         // name like `find` instead of an absolute path like `/usr/bin/find`.
         // It could also be a shell built-in like `echo`.
@@ -770,6 +778,7 @@ fn evaluate_intercepted_exec_policy(
         crate::exec_policy::render_decision_for_unmatched_command(
             approval_policy,
             sandbox_policy,
+            file_system_sandbox_policy,
             cmd,
             sandbox_permissions,
             used_complex_parsing,
@@ -783,6 +792,15 @@ fn evaluate_intercepted_exec_policy(
             resolve_host_executables: true,
         },
     )
+}
+
+#[derive(Clone, Copy)]
+struct InterceptedExecPolicyContext<'a> {
+    approval_policy: AskForApproval,
+    sandbox_policy: &'a SandboxPolicy,
+    file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
+    sandbox_permissions: SandboxPermissions,
+    enable_shell_wrapper_parsing: bool,
 }
 
 struct CandidateCommands {

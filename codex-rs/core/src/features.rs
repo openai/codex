@@ -130,7 +130,7 @@ pub enum Feature {
     MemoryTool,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
-    /// Allow `detail: "original"` image outputs on supported models.
+    /// Allow the model to request `detail: "original"` image outputs on supported models.
     ImageDetailOriginal,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
@@ -142,6 +142,8 @@ pub enum Feature {
     SpawnCsv,
     /// Enable apps.
     Apps,
+    /// Enable discoverable tool suggestions for apps.
+    ToolSuggest,
     /// Enable plugins.
     Plugins,
     /// Allow the model to invoke the built-in image generation tool.
@@ -715,6 +717,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::ToolSuggest,
+        key: "tool_suggest",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Plugins,
         key: "plugins",
         stage: Stage::UnderDevelopment,
@@ -997,9 +1005,24 @@ mod tests {
     }
 
     #[test]
+    fn tool_suggest_is_under_development() {
+        assert_eq!(Feature::ToolSuggest.stage(), Stage::UnderDevelopment);
+        assert_eq!(Feature::ToolSuggest.default_enabled(), false);
+    }
+
+    #[test]
     fn image_generation_is_under_development() {
         assert_eq!(Feature::ImageGeneration.stage(), Stage::UnderDevelopment);
         assert_eq!(Feature::ImageGeneration.default_enabled(), false);
+    }
+
+    #[test]
+    fn image_detail_original_feature_is_under_development() {
+        assert_eq!(
+            Feature::ImageDetailOriginal.stage(),
+            Stage::UnderDevelopment
+        );
+        assert_eq!(Feature::ImageDetailOriginal.default_enabled(), false);
     }
 
     #[test]

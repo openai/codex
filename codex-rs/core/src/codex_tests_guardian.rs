@@ -137,6 +137,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "test-call".to_string(),
             tool_name: "shell".to_string(),
+            tool_namespace: None,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": params.command.clone(),
@@ -204,6 +205,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),
             tool_name: "exec_command".to_string(),
+            tool_namespace: None,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "cmd": "echo hi",
@@ -287,7 +289,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let file_watcher = Arc::new(FileWatcher::noop());
 
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
+    let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
         models_manager,
@@ -295,14 +297,17 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         plugins_manager,
         mcp_manager,
         file_watcher,
-        InitialHistory::New,
-        SessionSource::SubAgent(SubAgentSource::Other(GUARDIAN_SUBAGENT_NAME.to_string())),
-        AgentControl::default(),
-        Vec::new(),
-        false,
-        None,
-        None,
-    )
+        conversation_history: InitialHistory::New,
+        session_source: SessionSource::SubAgent(SubAgentSource::Other(
+            GUARDIAN_SUBAGENT_NAME.to_string(),
+        )),
+        agent_control: AgentControl::default(),
+        dynamic_tools: Vec::new(),
+        persist_extended_history: false,
+        metrics_service_name: None,
+        inherited_shell_snapshot: None,
+        parent_trace: None,
+    })
     .await
     .expect("spawn guardian subagent");
 

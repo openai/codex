@@ -6,4 +6,4 @@ import type { PluginInstallPolicy } from "./PluginInstallPolicy";
 import type { PluginInterface } from "./PluginInterface";
 import type { PluginSource } from "./PluginSource";
 
-export type PluginSummary = { id: string, name: string, source: PluginSource, installed: boolean, enabled: boolean, installPolicy: PluginInstallPolicy | null, authPolicy: PluginAuthPolicy | null, interface: PluginInterface | null, };
+export type PluginSummary = { id: string, name: string, source: PluginSource, installed: boolean, enabled: boolean, installPolicy: PluginInstallPolicy, authPolicy: PluginAuthPolicy, interface: PluginInterface | null, };

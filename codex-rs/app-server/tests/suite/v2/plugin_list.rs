@@ -224,10 +224,26 @@ enabled = false
     assert_eq!(marketplace.plugins[0].name, "enabled-plugin");
     assert_eq!(marketplace.plugins[0].installed, true);
     assert_eq!(marketplace.plugins[0].enabled, true);
+    assert_eq!(
+        marketplace.plugins[0].install_policy,
+        PluginInstallPolicy::Available
+    );
+    assert_eq!(
+        marketplace.plugins[0].auth_policy,
+        PluginAuthPolicy::OnInstall
+    );
     assert_eq!(marketplace.plugins[1].id, "disabled-plugin@codex-curated");
     assert_eq!(marketplace.plugins[1].name, "disabled-plugin");
     assert_eq!(marketplace.plugins[1].installed, true);
     assert_eq!(marketplace.plugins[1].enabled, false);
+    assert_eq!(
+        marketplace.plugins[1].install_policy,
+        PluginInstallPolicy::Available
+    );
+    assert_eq!(
+        marketplace.plugins[1].auth_policy,
+        PluginAuthPolicy::OnInstall
+    );
     assert_eq!(
         marketplace.plugins[2].id,
         "uninstalled-plugin@codex-curated"
@@ -235,6 +251,14 @@ enabled = false
     assert_eq!(marketplace.plugins[2].name, "uninstalled-plugin");
     assert_eq!(marketplace.plugins[2].installed, false);
     assert_eq!(marketplace.plugins[2].enabled, false);
+    assert_eq!(
+        marketplace.plugins[2].install_policy,
+        PluginInstallPolicy::Available
+    );
+    assert_eq!(
+        marketplace.plugins[2].auth_policy,
+        PluginAuthPolicy::OnInstall
+    );
     Ok(())
 }
 
@@ -418,8 +442,8 @@ async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Res
     assert_eq!(plugin.id, "demo-plugin@codex-curated");
     assert_eq!(plugin.installed, false);
     assert_eq!(plugin.enabled, false);
-    assert_eq!(plugin.install_policy, Some(PluginInstallPolicy::Available));
-    assert_eq!(plugin.auth_policy, Some(PluginAuthPolicy::OnInstall));
+    assert_eq!(plugin.install_policy, PluginInstallPolicy::Available);
+    assert_eq!(plugin.auth_policy, PluginAuthPolicy::OnInstall);
     let interface = plugin
         .interface
         .as_ref()

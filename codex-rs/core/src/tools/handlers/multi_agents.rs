@@ -223,6 +223,8 @@ mod spawn {
                     new_agent_nickname,
                     new_agent_role,
                     prompt,
+                    model: args.model.clone().unwrap_or_default(),
+                    reasoning_effort: args.reasoning_effort.unwrap_or_default(),
                     status,
                 }
                 .into(),
@@ -1117,6 +1119,7 @@ mod tests {
             tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
             call_id: "call-1".to_string(),
             tool_name: tool_name.to_string(),
+            tool_namespace: None,
             payload,
         }
     }
@@ -1722,6 +1725,7 @@ mod tests {
                 })]),
                 AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
                 false,
+                None,
             )
             .await
             .expect("start thread");

@@ -471,6 +471,9 @@
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
+            "tool_suggest": {
+              "type": "boolean"
+            },
             "undo": {
               "type": "boolean"
             },
@@ -594,10 +597,11 @@
       "type": "object"
     },
     "FileSystemAccessMode": {
+      "description": "Access mode for a filesystem entry.\n\nWhen two equally specific entries target the same path, we compare these by conflict precedence rather than by capability breadth: `none` beats `write`, and `write` beats `read`.",
       "enum": [
-        "none",
         "read",
-        "write"
+        "write",
+        "none"
       ],
       "type": "string"
     },
@@ -1970,6 +1974,9 @@
           "type": "boolean"
         },
         "tool_call_mcp_elicitation": {
+          "type": "boolean"
+        },
+        "tool_suggest": {
           "type": "boolean"
         },
         "undo": {
