@@ -609,7 +609,6 @@ async fn spawn_code_mode_process(
     });
     let stdout_task = tokio::spawn({
         let response_waiters = Arc::clone(&response_waiters);
-        let tool_call_tx = tool_call_tx.clone();
         async move {
             let mut stdout_lines = BufReader::new(stdout).lines();
             loop {
