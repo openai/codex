@@ -1742,6 +1742,7 @@ async fn helpers_are_available_and_do_not_panic() {
         model: Some(resolved_model),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
     let mut w = ChatWidget::new(init, thread_manager);
@@ -1860,6 +1861,7 @@ async fn make_chatwidget_manual(
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         current_status_header: String::from("Working"),
+        terminal_title_status_kind: TerminalTitleStatusKind::Working,
         retry_status_header: None,
         pending_status_indicator_restore: false,
         suppress_queue_autosend: false,
@@ -1883,6 +1885,7 @@ async fn make_chatwidget_manual(
         had_work_activity: false,
         saw_plan_update_this_turn: false,
         saw_plan_item_this_turn: false,
+        last_plan_progress: None,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
         last_separator_elapsed_secs: None,
@@ -1894,6 +1897,11 @@ async fn make_chatwidget_manual(
         current_cwd: None,
         session_network_proxy: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        last_terminal_title: None,
+        terminal_title_setup_original_items: None,
+        terminal_title_animation_origin: Instant::now(),
+        status_line_project_root_name_cache: None,
         status_line_branch: None,
         status_line_branch_cwd: None,
         status_line_branch_pending: false,
@@ -5599,6 +5607,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
 
@@ -5649,6 +5658,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
 
@@ -6202,6 +6212,50 @@ async fn undo_started_hides_interrupt_hint() {
         !status.interrupt_hint_visible(),
         "undo should hide the interrupt hint because the operation cannot be cancelled"
     );
+}
+
+#[tokio::test]
+async fn undo_completed_clears_terminal_title_undo_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.animations = true;
+    chat.config.tui_terminal_title = Some(vec!["spinner".to_string(), "status".to_string()]);
+    chat.terminal_title_animation_origin = Instant::now() + Duration::from_secs(1);
+
+    chat.handle_codex_event(Event {
+        id: "turn-undo".to_string(),
+        msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
+    });
+
+    assert_eq!(chat.last_terminal_title, Some("⠋ Undoing".to_string()));
+
+    chat.handle_codex_event(Event {
+        id: "turn-undo".to_string(),
+        msg: EventMsg::UndoCompleted(UndoCompletedEvent {
+            success: true,
+            message: None,
+        }),
+    });
+
+    assert_eq!(chat.last_terminal_title, Some("Ready".to_string()));
+}
+
+#[tokio::test]
+async fn undo_started_refreshes_default_spinner_project_title() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.animations = true;
+    chat.refresh_terminal_title();
+    let project = chat
+        .last_terminal_title
+        .clone()
+        .expect("default title should include a project name");
+    chat.terminal_title_animation_origin = Instant::now() + Duration::from_secs(1);
+
+    chat.handle_codex_event(Event {
+        id: "turn-undo".to_string(),
+        msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
+    });
+
+    assert_eq!(chat.last_terminal_title, Some(format!("⠋ {project}")));
 }
 
 /// The commit picker shows only commit subjects (no timestamps).
@@ -9690,21 +9744,276 @@ async fn status_line_invalid_items_warn_once() {
     ]);
     chat.thread_id = Some(ThreadId::new());
 
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one warning history cell");
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains("bogus_item"),
+        rendered.contains(r#""bogus_item""#),
         "warning cell missing invalid item content: {rendered}"
     );
+    assert!(
+        !rendered.contains(r#"\"bogus_item\""#),
+        "warning cell should render plain quotes, not escaped quotes: {rendered}"
+    );
 
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
     let cells = drain_insert_history(&mut rx);
     assert!(
         cells.is_empty(),
         "expected invalid status line warning to emit only once"
     );
+}
+
+#[tokio::test]
+async fn terminal_title_invalid_items_warn_once() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.tui_terminal_title = Some(vec![
+        "status".to_string(),
+        "bogus_item".to_string(),
+        "bogus_item".to_string(),
+    ]);
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.refresh_status_surfaces();
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(r#""bogus_item""#),
+        "warning cell missing invalid item content: {rendered}"
+    );
+    assert!(
+        !rendered.contains(r#"\"bogus_item\""#),
+        "warning cell should render plain quotes, not escaped quotes: {rendered}"
+    );
+
+    chat.refresh_status_surfaces();
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected invalid terminal title warning to emit only once"
+    );
+}
+
+#[tokio::test]
+async fn terminal_title_setup_cancel_reverts_live_preview() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let original = chat.config.tui_terminal_title.clone();
+
+    chat.open_terminal_title_setup();
+    chat.preview_terminal_title(vec![TerminalTitleItem::Thread, TerminalTitleItem::Status]);
+
+    assert_eq!(
+        chat.config.tui_terminal_title,
+        Some(vec!["thread".to_string(), "status".to_string()])
+    );
+    assert_eq!(
+        chat.terminal_title_setup_original_items,
+        Some(original.clone())
+    );
+
+    chat.cancel_terminal_title_setup();
+
+    assert_eq!(chat.config.tui_terminal_title, original);
+    assert_eq!(chat.terminal_title_setup_original_items, None);
+}
+
+#[tokio::test]
+async fn terminal_title_status_uses_waiting_label_for_background_terminal_when_animations_disabled()
+{
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.animations = false;
+    chat.on_task_started();
+    terminal_interaction(&mut chat, "call-1", "proc-1", "");
+
+    assert_eq!(chat.terminal_title_status_text(), "Waiting");
+}
+
+#[tokio::test]
+async fn terminal_title_status_uses_plain_labels_for_transient_states_when_animations_disabled() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.animations = false;
+
+    chat.mcp_startup_status = Some(std::collections::HashMap::new());
+    assert_eq!(chat.terminal_title_status_text(), "Starting");
+
+    chat.mcp_startup_status = None;
+    chat.on_task_started();
+    assert_eq!(chat.terminal_title_status_text(), "Working");
+
+    chat.handle_codex_event(Event {
+        id: "undo-1".to_string(),
+        msg: EventMsg::UndoStarted(UndoStartedEvent {
+            message: Some("Undoing changes".to_string()),
+        }),
+    });
+    assert_eq!(chat.terminal_title_status_text(), "Undoing");
+
+    chat.on_agent_reasoning_delta("**Planning**\nmore".to_string());
+    assert_eq!(chat.terminal_title_status_text(), "Thinking");
+}
+
+#[tokio::test]
+async fn default_terminal_title_items_are_spinner_then_project() {
+    let (chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    assert_eq!(
+        chat.configured_terminal_title_items(),
+        vec!["spinner".to_string(), "project".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn terminal_title_can_render_app_name_item() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.tui_terminal_title = Some(vec!["app-name".to_string()]);
+
+    chat.refresh_terminal_title();
+
+    assert_eq!(chat.last_terminal_title, Some("codex".to_string()));
+}
+
+#[tokio::test]
+async fn default_terminal_title_refreshes_when_spinner_state_changes() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.animations = true;
+
+    chat.config.tui_terminal_title = None;
+    let cwd = chat
+        .current_cwd
+        .clone()
+        .unwrap_or_else(|| chat.config.cwd.clone());
+    let project = get_git_repo_root(&cwd)
+        .map(|root| {
+            root.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| format_directory_display(&root, None))
+        })
+        .or_else(|| {
+            chat.config
+                .config_layer_stack
+                .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+                .iter()
+                .find_map(|layer| match &layer.name {
+                    ConfigLayerSource::Project { dot_codex_folder } => {
+                        dot_codex_folder.as_path().parent().map(|path| {
+                            path.file_name()
+                                .map(|name| name.to_string_lossy().to_string())
+                                .unwrap_or_else(|| format_directory_display(path, None))
+                        })
+                    }
+                    _ => None,
+                })
+        })
+        .unwrap_or_else(|| {
+            cwd.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| format_directory_display(&cwd, None))
+        });
+    chat.last_terminal_title = Some(project.clone());
+    chat.bottom_pane.set_task_running(true);
+    chat.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
+    chat.terminal_title_animation_origin = Instant::now() + Duration::from_secs(1);
+
+    chat.refresh_terminal_title();
+
+    assert_eq!(chat.last_terminal_title, Some(format!("⠋ {project}")));
+}
+
+#[tokio::test]
+async fn terminal_title_spinner_item_renders_when_animations_enabled() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_task_running(true);
+    chat.terminal_title_status_kind = TerminalTitleStatusKind::Working;
+    chat.terminal_title_animation_origin = Instant::now();
+
+    assert_eq!(
+        chat.terminal_title_spinner_text_at(chat.terminal_title_animation_origin),
+        Some("⠋".to_string())
+    );
+    assert_eq!(
+        chat.terminal_title_spinner_text_at(
+            chat.terminal_title_animation_origin + TERMINAL_TITLE_SPINNER_INTERVAL,
+        ),
+        Some("⠙".to_string())
+    );
+}
+
+#[tokio::test]
+async fn terminal_title_uses_spaces_around_spinner_item() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.animations = true;
+    chat.config.tui_terminal_title = Some(vec![
+        "project".to_string(),
+        "spinner".to_string(),
+        "status".to_string(),
+        "thread".to_string(),
+    ]);
+    chat.thread_name = Some("Investigate flaky test".to_string());
+    chat.bottom_pane.set_task_running(true);
+    chat.terminal_title_status_kind = TerminalTitleStatusKind::Working;
+    chat.terminal_title_animation_origin = Instant::now() + Duration::from_secs(1);
+
+    chat.refresh_terminal_title();
+
+    let title = chat
+        .last_terminal_title
+        .clone()
+        .expect("expected terminal title");
+    assert!(title.contains(" ⠋ Working | "));
+    assert!(!title.contains("| ⠋"));
+    assert!(!title.contains("⠋ |"));
+}
+
+#[tokio::test]
+async fn terminal_title_shows_spinner_and_undoing_without_task_running() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.animations = true;
+    chat.config.tui_terminal_title = Some(vec!["spinner".to_string(), "status".to_string()]);
+    chat.terminal_title_status_kind = TerminalTitleStatusKind::Undoing;
+    chat.terminal_title_animation_origin = Instant::now() + Duration::from_secs(1);
+
+    assert!(!chat.bottom_pane.is_task_running());
+
+    chat.refresh_terminal_title();
+
+    assert_eq!(chat.last_terminal_title, Some("⠋ Undoing".to_string()));
+}
+
+#[tokio::test]
+async fn terminal_title_reschedules_spinner_when_title_text_is_unchanged() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (frame_requester, mut frame_schedule_rx) = FrameRequester::test_observable();
+    chat.frame_requester = frame_requester;
+    chat.config.animations = true;
+    chat.config.tui_terminal_title = Some(vec!["spinner".to_string()]);
+    chat.bottom_pane.set_task_running(true);
+    chat.terminal_title_status_kind = TerminalTitleStatusKind::Working;
+    chat.terminal_title_animation_origin = Instant::now() + Duration::from_secs(1);
+    chat.last_terminal_title = Some("⠋".to_string());
+
+    chat.refresh_terminal_title();
+
+    assert!(frame_schedule_rx.try_recv().is_ok());
+}
+
+#[tokio::test]
+async fn on_task_started_resets_terminal_title_task_progress() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.last_plan_progress = Some((2, 5));
+
+    chat.on_task_started();
+
+    assert_eq!(chat.last_plan_progress, None);
+    assert_eq!(chat.terminal_title_task_progress(), None);
+}
+
+#[test]
+fn terminal_title_part_truncation_preserves_grapheme_clusters() {
+    let value = "ab👩‍💻cdefg".to_string();
+    let truncated = ChatWidget::truncate_terminal_title_part(value, 7);
+    assert_eq!(truncated, "ab👩‍💻c...");
 }
 
 #[tokio::test]
@@ -9715,7 +10024,7 @@ async fn status_line_branch_state_resets_when_git_branch_disabled() {
     chat.status_line_branch_lookup_complete = true;
     chat.config.tui_status_line = Some(vec!["model_name".to_string()]);
 
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
 
     assert_eq!(chat.status_line_branch, None);
     assert!(!chat.status_line_branch_pending);
@@ -9726,6 +10035,25 @@ async fn status_line_branch_state_resets_when_git_branch_disabled() {
 async fn status_line_branch_refreshes_after_turn_complete() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.tui_status_line = Some(vec!["git-branch".to_string()]);
+    chat.status_line_branch_lookup_complete = true;
+    chat.status_line_branch_pending = false;
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+
+    assert!(chat.status_line_branch_pending);
+}
+
+#[tokio::test]
+async fn status_line_branch_refreshes_after_turn_complete_when_terminal_title_uses_git_branch() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.tui_status_line = Some(Vec::new());
+    chat.config.tui_terminal_title = Some(vec!["git-branch".to_string()]);
     chat.status_line_branch_lookup_complete = true;
     chat.status_line_branch_pending = false;
 
@@ -9763,11 +10091,11 @@ async fn status_line_fast_mode_renders_on_and_off() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.tui_status_line = Some(vec!["fast-mode".to_string()]);
 
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
     assert_eq!(status_line_text(&chat), Some("Fast off".to_string()));
 
     chat.set_service_tier(Some(ServiceTier::Fast));
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
     assert_eq!(status_line_text(&chat), Some("Fast on".to_string()));
 }
 
@@ -9780,7 +10108,7 @@ async fn status_line_fast_mode_footer_snapshot() {
     chat.show_welcome_banner = false;
     chat.config.tui_status_line = Some(vec!["fast-mode".to_string()]);
     chat.set_service_tier(Some(ServiceTier::Fast));
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
 
     let width = 80;
     let height = chat.desired_height(width);
@@ -9803,7 +10131,7 @@ async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
     chat.set_service_tier(Some(ServiceTier::Fast));
     set_chatgpt_auth(&mut chat);
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
 
     assert_eq!(
         status_line_text(&chat),
@@ -9811,7 +10139,7 @@ async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
     );
 
     chat.set_model("gpt-5.3-codex");
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
 
     assert_eq!(
         status_line_text(&chat),
@@ -9835,7 +10163,7 @@ async fn status_line_model_with_reasoning_fast_footer_snapshot() {
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
     chat.set_service_tier(Some(ServiceTier::Fast));
     set_chatgpt_auth(&mut chat);
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
 
     let width = 80;
     let height = chat.desired_height(width);
