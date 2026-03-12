@@ -29,10 +29,14 @@ REASONING_RANK = {
     "high": 4,
     "xhigh": 5,
 }
+PREFERRED_MODEL = "gpt-5.4"
 
 
 def _pick_highest_model(models):
     visible = [m for m in models if not m.hidden] or models
+    preferred = next((m for m in visible if m.model == PREFERRED_MODEL or m.id == PREFERRED_MODEL), None)
+    if preferred is not None:
+        return preferred
     known_names = {m.id for m in visible} | {m.model for m in visible}
     top_candidates = [m for m in visible if not (m.upgrade and m.upgrade in known_names)]
     pool = top_candidates or visible

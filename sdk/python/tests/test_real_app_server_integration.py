@@ -1,21 +1,25 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-from codex_app_server import AppServerConfig, AsyncCodex, Codex, TextInput
-
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES_DIR = ROOT / "examples"
 NOTEBOOK_PATH = ROOT / "notebooks" / "sdk_walkthrough.ipynb"
+
+root_str = str(ROOT)
+if root_str not in sys.path:
+    sys.path.insert(0, root_str)
+
+from _runtime_setup import ensure_runtime_package_installed, required_runtime_version
 
 RUN_REAL_CODEX_TESTS = os.environ.get("RUN_REAL_CODEX_TESTS") == "1"
 pytestmark = pytest.mark.skipif(
@@ -54,24 +58,59 @@ EXAMPLE_CASES: list[tuple[str, str]] = [
 ]
 
 
-def _run_example(
-    folder: str, script: str, *, timeout_s: int = 150
-) -> subprocess.CompletedProcess[str]:
-    path = EXAMPLES_DIR / folder / script
-    assert path.exists(), f"Missing example script: {path}"
+@dataclass(frozen=True)
+class PreparedRuntimeEnv:
+    python: str
+    env: dict[str, str]
+    runtime_version: str
 
-    env = os.environ.copy()
-    env.setdefault(
-        "CODEX_PYTHON_SDK_CODEX_BIN",
-        _real_test_config().codex_bin or "",
+
+@pytest.fixture(scope="session")
+def runtime_env(tmp_path_factory: pytest.TempPathFactory) -> PreparedRuntimeEnv:
+    runtime_version = required_runtime_version()
+    temp_root = tmp_path_factory.mktemp("python-runtime-env")
+    isolated_site = temp_root / "site-packages"
+    python = sys.executable
+
+    _run_command(
+        [
+            python,
+            "-m",
+            "pip",
+            "install",
+            "--target",
+            str(isolated_site),
+            "pydantic>=2.12",
+        ],
+        cwd=ROOT,
+        env=os.environ.copy(),
+        timeout_s=240,
+    )
+    ensure_runtime_package_installed(
+        python,
+        ROOT,
+        runtime_version,
+        install_target=isolated_site,
     )
 
-    # Feed '/exit' only to interactive mini-cli examples.
-    stdin = "/exit\n" if folder == "11_cli_mini_app" else None
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join([str(isolated_site), str(ROOT / "src")])
+    env["CODEX_PYTHON_RUNTIME_VERSION"] = runtime_version
+    env["CODEX_PYTHON_SDK_DIR"] = str(ROOT)
+    return PreparedRuntimeEnv(python=python, env=env, runtime_version=runtime_version)
 
+
+def _run_command(
+    args: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout_s: int,
+    stdin: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(path)],
-        cwd=str(ROOT),
+        args,
+        cwd=str(cwd),
         env=env,
         input=stdin,
         text=True,
@@ -81,76 +120,172 @@ def _run_example(
     )
 
 
+def _run_python(
+    runtime_env: PreparedRuntimeEnv,
+    source: str,
+    *,
+    cwd: Path | None = None,
+    timeout_s: int = 180,
+) -> subprocess.CompletedProcess[str]:
+    return _run_command(
+        [str(runtime_env.python), "-c", source],
+        cwd=cwd or ROOT,
+        env=runtime_env.env,
+        timeout_s=timeout_s,
+    )
+
+
+def _run_json_python(
+    runtime_env: PreparedRuntimeEnv,
+    source: str,
+    *,
+    cwd: Path | None = None,
+    timeout_s: int = 180,
+) -> dict[str, object]:
+    result = _run_python(runtime_env, source, cwd=cwd, timeout_s=timeout_s)
+    assert result.returncode == 0, (
+        f"Python snippet failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+    return json.loads(result.stdout)
+
+
+def _run_example(
+    runtime_env: PreparedRuntimeEnv,
+    folder: str,
+    script: str,
+    *,
+    timeout_s: int = 180,
+) -> subprocess.CompletedProcess[str]:
+    path = EXAMPLES_DIR / folder / script
+    assert path.exists(), f"Missing example script: {path}"
+
+    stdin = "/exit\n" if folder == "11_cli_mini_app" else None
+    return _run_command(
+        [str(runtime_env.python), str(path)],
+        cwd=ROOT,
+        env=runtime_env.env,
+        timeout_s=timeout_s,
+        stdin=stdin,
+    )
+
+
 def _notebook_cell_source(cell_index: int) -> str:
     notebook = json.loads(NOTEBOOK_PATH.read_text())
     return "".join(notebook["cells"][cell_index]["source"])
 
 
-def _real_test_config() -> AppServerConfig:
-    codex_bin = os.environ.get("CODEX_PYTHON_SDK_CODEX_BIN") or shutil.which("codex")
-    if codex_bin is None:
-        raise RuntimeError(
-            "Real SDK integration tests require a Codex CLI binary.\n"
-            "Set RUN_REAL_CODEX_TESTS=1 and CODEX_PYTHON_SDK_CODEX_BIN=/absolute/path/to/codex, "
-            "or ensure `codex` is on PATH."
-        )
-    return AppServerConfig(codex_bin=codex_bin)
+def test_real_initialize_and_model_list(runtime_env: PreparedRuntimeEnv) -> None:
+    data = _run_json_python(
+        runtime_env,
+        textwrap.dedent(
+            """
+            import json
+            from codex_app_server import Codex
+
+            with Codex() as codex:
+                models = codex.models(include_hidden=True)
+                print(json.dumps({
+                    "user_agent": codex.metadata.user_agent,
+                    "server_name": codex.metadata.server_name,
+                    "server_version": codex.metadata.server_version,
+                    "model_count": len(models.data),
+                }))
+            """
+        ),
+    )
+
+    assert isinstance(data["user_agent"], str) and data["user_agent"].strip()
+    assert isinstance(data["server_name"], str) and data["server_name"].strip()
+    assert isinstance(data["server_version"], str) and data["server_version"].strip()
+    assert isinstance(data["model_count"], int)
 
 
-def test_real_initialize_and_model_list():
-    with Codex(config=_real_test_config()) as codex:
-        metadata = codex.metadata
-        assert isinstance(metadata.user_agent, str) and metadata.user_agent.strip()
-        assert isinstance(metadata.server_name, str) and metadata.server_name.strip()
-        assert isinstance(metadata.server_version, str) and metadata.server_version.strip()
+def test_real_thread_and_turn_start_smoke(runtime_env: PreparedRuntimeEnv) -> None:
+    data = _run_json_python(
+        runtime_env,
+        textwrap.dedent(
+            """
+            import json
+            from codex_app_server import Codex, TextInput
 
-        models = codex.models(include_hidden=True)
-        assert isinstance(models.data, list)
+            with Codex() as codex:
+                thread = codex.thread_start(
+                    model="gpt-5.4",
+                    config={"model_reasoning_effort": "high"},
+                )
+                result = thread.turn(TextInput("hello")).run()
+                print(json.dumps({
+                    "thread_id": result.thread_id,
+                    "turn_id": result.turn_id,
+                    "items_count": len(result.items),
+                    "has_usage": result.usage is not None,
+                    "usage_thread_id": None if result.usage is None else result.usage.thread_id,
+                    "usage_turn_id": None if result.usage is None else result.usage.turn_id,
+                }))
+            """
+        ),
+    )
 
-
-def test_real_thread_and_turn_start_smoke():
-    with Codex(config=_real_test_config()) as codex:
-        thread = codex.thread_start(model="gpt-5", config={"model_reasoning_effort": "high"})
-        result = thread.turn(TextInput("hello")).run()
-
-        assert isinstance(result.thread_id, str) and result.thread_id.strip()
-        assert isinstance(result.turn_id, str) and result.turn_id.strip()
-        assert isinstance(result.items, list)
-        assert result.usage is not None
-        assert result.usage.thread_id == result.thread_id
-        assert result.usage.turn_id == result.turn_id
-
-
-def test_real_async_thread_turn_usage_and_ids_smoke() -> None:
-    async def _run() -> None:
-        async with AsyncCodex(config=_real_test_config()) as codex:
-            thread = await codex.thread_start(model="gpt-5", config={"model_reasoning_effort": "high"})
-            result = await (await thread.turn(TextInput("say ok"))).run()
-
-            assert isinstance(result.thread_id, str) and result.thread_id.strip()
-            assert isinstance(result.turn_id, str) and result.turn_id.strip()
-            assert isinstance(result.items, list)
-            assert result.usage is not None
-            assert result.usage.thread_id == result.thread_id
-            assert result.usage.turn_id == result.turn_id
-
-    asyncio.run(_run())
+    assert isinstance(data["thread_id"], str) and data["thread_id"].strip()
+    assert isinstance(data["turn_id"], str) and data["turn_id"].strip()
+    assert isinstance(data["items_count"], int)
+    assert data["has_usage"] is True
+    assert data["usage_thread_id"] == data["thread_id"]
+    assert data["usage_turn_id"] == data["turn_id"]
 
 
-def test_notebook_bootstrap_resolves_sdk_from_unrelated_cwd() -> None:
+def test_real_async_thread_turn_usage_and_ids_smoke(
+    runtime_env: PreparedRuntimeEnv,
+) -> None:
+    data = _run_json_python(
+        runtime_env,
+        textwrap.dedent(
+            """
+            import asyncio
+            import json
+            from codex_app_server import AsyncCodex, TextInput
+
+            async def main():
+                async with AsyncCodex() as codex:
+                    thread = await codex.thread_start(
+                        model="gpt-5.4",
+                        config={"model_reasoning_effort": "high"},
+                    )
+                    result = await (await thread.turn(TextInput("say ok"))).run()
+                    print(json.dumps({
+                        "thread_id": result.thread_id,
+                        "turn_id": result.turn_id,
+                        "items_count": len(result.items),
+                        "has_usage": result.usage is not None,
+                        "usage_thread_id": None if result.usage is None else result.usage.thread_id,
+                        "usage_turn_id": None if result.usage is None else result.usage.turn_id,
+                    }))
+
+            asyncio.run(main())
+            """
+        ),
+    )
+
+    assert isinstance(data["thread_id"], str) and data["thread_id"].strip()
+    assert isinstance(data["turn_id"], str) and data["turn_id"].strip()
+    assert isinstance(data["items_count"], int)
+    assert data["has_usage"] is True
+    assert data["usage_thread_id"] == data["thread_id"]
+    assert data["usage_turn_id"] == data["turn_id"]
+
+
+def test_notebook_bootstrap_resolves_sdk_and_runtime_from_unrelated_cwd(
+    runtime_env: PreparedRuntimeEnv,
+) -> None:
     cell_1_source = _notebook_cell_source(1)
-    env = os.environ.copy()
-    env["CODEX_PYTHON_SDK_DIR"] = str(ROOT)
+    env = runtime_env.env.copy()
 
     with tempfile.TemporaryDirectory() as temp_cwd:
-        result = subprocess.run(
-            [sys.executable, "-c", cell_1_source],
-            cwd=temp_cwd,
+        result = _run_command(
+            [str(runtime_env.python), "-c", cell_1_source],
+            cwd=Path(temp_cwd),
             env=env,
-            text=True,
-            capture_output=True,
-            timeout=60,
-            check=False,
+            timeout_s=180,
         )
 
     assert result.returncode == 0, (
@@ -159,43 +294,89 @@ def test_notebook_bootstrap_resolves_sdk_from_unrelated_cwd() -> None:
         f"STDERR:\n{result.stderr}"
     )
     assert "SDK source:" in result.stdout
-    assert "codex_app_server" in result.stdout or "sdk/python/src" in result.stdout
+    assert f"Runtime package: {runtime_env.runtime_version}" in result.stdout
 
 
-def test_real_streaming_smoke_turn_completed():
-    with Codex(config=_real_test_config()) as codex:
-        thread = codex.thread_start(model="gpt-5", config={"model_reasoning_effort": "high"})
-        turn = thread.turn(TextInput("Reply with one short sentence."))
-
-        saw_delta = False
-        saw_completed = False
-        for evt in turn.stream():
-            if evt.method == "item/agentMessage/delta":
-                saw_delta = True
-            if evt.method == "turn/completed":
-                saw_completed = True
-
-        assert saw_completed
-        # Some environments can produce zero deltas for very short output;
-        # this assert keeps the smoke test informative but non-flaky.
-        assert isinstance(saw_delta, bool)
+def test_notebook_sync_cell_smoke(runtime_env: PreparedRuntimeEnv) -> None:
+    source = "\n\n".join(
+        [
+            _notebook_cell_source(1),
+            _notebook_cell_source(2),
+            _notebook_cell_source(3),
+        ]
+    )
+    result = _run_python(runtime_env, source, timeout_s=240)
+    assert result.returncode == 0, (
+        f"Notebook sync smoke failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+    assert "status:" in result.stdout
+    assert "server:" in result.stdout
 
 
-def test_real_turn_interrupt_smoke():
-    with Codex(config=_real_test_config()) as codex:
-        thread = codex.thread_start(model="gpt-5", config={"model_reasoning_effort": "high"})
-        turn = thread.turn(TextInput("Count from 1 to 200 with commas."))
+def test_real_streaming_smoke_turn_completed(runtime_env: PreparedRuntimeEnv) -> None:
+    data = _run_json_python(
+        runtime_env,
+        textwrap.dedent(
+            """
+            import json
+            from codex_app_server import Codex, TextInput
 
-        # Best effort: interrupting quickly may race with completion on fast models.
-        _ = turn.interrupt()
+            with Codex() as codex:
+                thread = codex.thread_start(
+                    model="gpt-5.4",
+                    config={"model_reasoning_effort": "high"},
+                )
+                turn = thread.turn(TextInput("Reply with one short sentence."))
+                saw_delta = False
+                saw_completed = False
+                for event in turn.stream():
+                    if event.method == "item/agentMessage/delta":
+                        saw_delta = True
+                    if event.method == "turn/completed":
+                        saw_completed = True
+                print(json.dumps({
+                    "saw_delta": saw_delta,
+                    "saw_completed": saw_completed,
+                }))
+            """
+        ),
+    )
 
-        # Confirm the session is still usable after interrupt race.
-        follow_up = thread.turn(TextInput("Say 'ok' only.")).run()
-        assert follow_up.status.value in {"completed", "failed"}
+    assert data["saw_completed"] is True
+    assert isinstance(data["saw_delta"], bool)
+
+
+def test_real_turn_interrupt_smoke(runtime_env: PreparedRuntimeEnv) -> None:
+    data = _run_json_python(
+        runtime_env,
+        textwrap.dedent(
+            """
+            import json
+            from codex_app_server import Codex, TextInput
+
+            with Codex() as codex:
+                thread = codex.thread_start(
+                    model="gpt-5.4",
+                    config={"model_reasoning_effort": "high"},
+                )
+                turn = thread.turn(TextInput("Count from 1 to 200 with commas."))
+                turn.interrupt()
+                follow_up = thread.turn(TextInput("Say 'ok' only.")).run()
+                print(json.dumps({"status": follow_up.status.value}))
+            """
+        ),
+    )
+
+    assert data["status"] in {"completed", "failed"}
+
 
 @pytest.mark.parametrize(("folder", "script"), EXAMPLE_CASES)
-def test_real_examples_run_and_assert(folder: str, script: str):
-    result = _run_example(folder, script)
+def test_real_examples_run_and_assert(
+    runtime_env: PreparedRuntimeEnv,
+    folder: str,
+    script: str,
+) -> None:
+    result = _run_example(runtime_env, folder, script)
 
     assert result.returncode == 0, (
         f"Example failed: {folder}/{script}\n"
@@ -205,7 +386,6 @@ def test_real_examples_run_and_assert(folder: str, script: str):
 
     out = result.stdout
 
-    # Minimal content assertions so we validate behavior, not just exit code.
     if folder == "01_quickstart_constructor":
         assert "Status:" in out and "Text:" in out
         assert "Server: None None" not in out

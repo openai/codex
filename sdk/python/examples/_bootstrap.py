@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import shutil
 import sys
 from pathlib import Path
+
+_SDK_PYTHON_DIR = Path(__file__).resolve().parents[1]
+_SDK_PYTHON_STR = str(_SDK_PYTHON_DIR)
+if _SDK_PYTHON_STR not in sys.path:
+    sys.path.insert(0, _SDK_PYTHON_STR)
+
+from _runtime_setup import ensure_runtime_package_installed
 
 
 def _ensure_runtime_dependencies(sdk_python_dir: Path) -> None:
@@ -23,7 +29,7 @@ def _ensure_runtime_dependencies(sdk_python_dir: Path) -> None:
 
 def ensure_local_sdk_src() -> Path:
     """Add sdk/python/src to sys.path so examples run without installing the package."""
-    sdk_python_dir = Path(__file__).resolve().parents[1]
+    sdk_python_dir = _SDK_PYTHON_DIR
     src_dir = sdk_python_dir / "src"
     package_dir = src_dir / "codex_app_server"
     if not package_dir.exists():
@@ -38,13 +44,8 @@ def ensure_local_sdk_src() -> Path:
 
 
 def runtime_config():
-    """Return an example-friendly AppServerConfig for local repo usage."""
+    """Return an example-friendly AppServerConfig for repo-source SDK usage."""
     from codex_app_server import AppServerConfig
 
-    codex_bin = os.environ.get("CODEX_PYTHON_SDK_CODEX_BIN") or shutil.which("codex")
-    if codex_bin is None:
-        raise RuntimeError(
-            "Examples require a Codex CLI binary when run from this repo checkout.\n"
-            "Set CODEX_PYTHON_SDK_CODEX_BIN=/absolute/path/to/codex, or ensure `codex` is on PATH."
-        )
-    return AppServerConfig(codex_bin=codex_bin)
+    ensure_runtime_package_installed(sys.executable, _SDK_PYTHON_DIR)
+    return AppServerConfig()
