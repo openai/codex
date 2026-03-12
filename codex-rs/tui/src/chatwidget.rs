@@ -5682,41 +5682,34 @@ impl ChatWidget {
     fn parse_model_selection_args(
         args: &str,
     ) -> Result<(String, Option<ReasoningEffortConfig>, ModelSelectionScope), String> {
+        const MODEL_USAGE: &str = "Usage: /model <model> [default|none|minimal|low|medium|high|xhigh] [plan-only|all-modes]";
         let mut tokens = args.split_whitespace();
         let Some(model) = tokens.next() else {
-            return Err(
-                "Usage: /model <model> [default|none|minimal|low|medium|high|xhigh] [plan-only|all-modes]"
-                    .to_string(),
-            );
+            return Err(MODEL_USAGE.to_string());
         };
 
         let mut effort = None;
+        let mut saw_effort = false;
         let mut scope = ModelSelectionScope::Global;
+        let mut saw_scope = false;
         for token in tokens {
             if let Some(parsed_effort) = Self::parse_model_reasoning_effort_token(token) {
-                if effort.is_some() {
-                    return Err(
-                        "Usage: /model <model> [default|none|minimal|low|medium|high|xhigh] [plan-only|all-modes]"
-                            .to_string(),
-                    );
+                if saw_effort {
+                    return Err(MODEL_USAGE.to_string());
                 }
+                saw_effort = true;
                 effort = parsed_effort;
                 continue;
             }
             if let Some(parsed_scope) = Self::parse_model_scope_token(token) {
-                if scope != ModelSelectionScope::Global {
-                    return Err(
-                        "Usage: /model <model> [default|none|minimal|low|medium|high|xhigh] [plan-only|all-modes]"
-                            .to_string(),
-                    );
+                if saw_scope {
+                    return Err(MODEL_USAGE.to_string());
                 }
+                saw_scope = true;
                 scope = parsed_scope;
                 continue;
             }
-            return Err(
-                "Usage: /model <model> [default|none|minimal|low|medium|high|xhigh] [plan-only|all-modes]"
-                    .to_string(),
-            );
+            return Err(MODEL_USAGE.to_string());
         }
 
         Ok((model.to_string(), effort, scope))

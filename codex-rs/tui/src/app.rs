@@ -880,6 +880,7 @@ impl App {
                 resume_config.clone(),
                 target_session.path.clone(),
                 self.auth_manager.clone(),
+                None,
             )
             .await
         {

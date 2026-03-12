@@ -8085,6 +8085,32 @@ async fn single_reasoning_option_skips_selection() {
     );
 }
 
+#[test]
+fn model_parser_rejects_repeated_effort_when_first_token_is_default() {
+    let parsed = ChatWidget::parse_model_selection_args("gpt-5 default high");
+
+    assert_eq!(
+        parsed,
+        Err(
+            "Usage: /model <model> [default|none|minimal|low|medium|high|xhigh] [plan-only|all-modes]"
+                .to_string(),
+        )
+    );
+}
+
+#[test]
+fn model_parser_rejects_repeated_scope_when_first_token_is_global() {
+    let parsed = ChatWidget::parse_model_selection_args("gpt-5 global plan-only");
+
+    assert_eq!(
+        parsed,
+        Err(
+            "Usage: /model <model> [default|none|minimal|low|medium|high|xhigh] [plan-only|all-modes]"
+                .to_string(),
+        )
+    );
+}
+
 #[tokio::test]
 async fn feedback_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
