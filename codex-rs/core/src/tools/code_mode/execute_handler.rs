@@ -4,7 +4,6 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
-use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
@@ -25,14 +24,9 @@ impl CodeModeExecuteHandler {
         &self,
         session: std::sync::Arc<Session>,
         turn: std::sync::Arc<TurnContext>,
-        tracker: SharedTurnDiffTracker,
         code: String,
     ) -> Result<FunctionToolOutput, FunctionCallError> {
-        let exec = ExecContext {
-            session,
-            turn,
-            tracker,
-        };
+        let exec = ExecContext { session, turn };
         let enabled_tools = build_enabled_tools(&exec).await;
         let service = &exec.session.services.code_mode_service;
         let stored_values = service.stored_values().await;
@@ -93,7 +87,6 @@ impl ToolHandler for CodeModeExecuteHandler {
         let ToolInvocation {
             session,
             turn,
-            tracker,
             tool_name,
             payload,
             ..
@@ -101,7 +94,7 @@ impl ToolHandler for CodeModeExecuteHandler {
 
         match payload {
             ToolPayload::Custom { input } if tool_name == PUBLIC_TOOL_NAME => {
-                self.execute(session, turn, tracker, input).await
+                self.execute(session, turn, input).await
             }
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "{PUBLIC_TOOL_NAME} expects raw JavaScript source text"

@@ -5545,11 +5545,6 @@ pub(crate) async fn run_turn(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let _code_mode_worker = sess
-        .services
-        .code_mode_service
-        .start_turn_worker(&sess, &turn_context, &turn_diff_tracker)
-        .await;
     let mut server_model_warning_emitted_for_turn = false;
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
@@ -6155,10 +6150,21 @@ async fn run_sampling_request(
         turn_context.as_ref(),
         base_instructions,
     );
+    let tool_runtime = ToolCallRuntime::new(
+        Arc::clone(&router),
+        Arc::clone(&sess),
+        Arc::clone(&turn_context),
+        Arc::clone(&turn_diff_tracker),
+    );
+    let _code_mode_worker = sess
+        .services
+        .code_mode_service
+        .start_turn_worker(&sess, &turn_context, tool_runtime.clone())
+        .await;
     let mut retries = 0;
     loop {
         let err = match try_run_sampling_request(
-            Arc::clone(&router),
+            tool_runtime.clone(),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             client_session,
@@ -6913,7 +6919,7 @@ async fn drain_in_flight(
     )
 )]
 async fn try_run_sampling_request(
-    router: Arc<ToolRouter>,
+    tool_runtime: ToolCallRuntime,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     client_session: &mut ModelClientSession,
@@ -6944,13 +6950,6 @@ async fn try_run_sampling_request(
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
         .await??;
-
-    let tool_runtime = ToolCallRuntime::new(
-        Arc::clone(&router),
-        Arc::clone(&sess),
-        Arc::clone(&turn_context),
-        Arc::clone(&turn_diff_tracker),
-    );
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;

@@ -9,8 +9,8 @@ use tracing::warn;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::features::Feature;
-use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::js_repl::resolve_compatible_node;
+use crate::tools::parallel::ToolCallRuntime;
 
 use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
@@ -65,7 +65,7 @@ impl CodeModeService {
         &self,
         session: &Arc<Session>,
         turn: &Arc<TurnContext>,
-        tracker: &SharedTurnDiffTracker,
+        tool_runtime: ToolCallRuntime,
     ) -> Option<CodeModeWorker> {
         if !turn.features.enabled(Feature::CodeMode) {
             return None;
@@ -73,7 +73,6 @@ impl CodeModeService {
         let exec = ExecContext {
             session: Arc::clone(session),
             turn: Arc::clone(turn),
-            tracker: Arc::clone(tracker),
         };
         let mut process_slot = match self.ensure_started().await {
             Ok(process_slot) => process_slot,
@@ -88,7 +87,7 @@ impl CodeModeService {
             );
             return None;
         };
-        Some(process.worker(exec))
+        Some(process.worker(exec, tool_runtime))
     }
 
     pub(crate) async fn allocate_session_id(&self) -> i32 {
