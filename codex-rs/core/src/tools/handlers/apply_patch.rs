@@ -11,6 +11,7 @@ use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::sandboxing::effective_file_system_sandbox_policy;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
@@ -89,6 +90,36 @@ fn write_permissions_for_paths(file_paths: &[AbsolutePathBuf]) -> Option<Permiss
     crate::sandboxing::normalize_additional_permissions(permissions).ok()
 }
 
+async fn effective_patch_permissions(
+    session: &Session,
+    turn: &TurnContext,
+    action: &ApplyPatchAction,
+) -> (
+    Vec<AbsolutePathBuf>,
+    crate::tools::handlers::EffectiveAdditionalPermissions,
+    codex_protocol::permissions::FileSystemSandboxPolicy,
+) {
+    let file_paths = file_paths_for_action(action);
+    let effective_additional_permissions = apply_granted_turn_permissions(
+        session,
+        crate::sandboxing::SandboxPermissions::UseDefault,
+        write_permissions_for_paths(&file_paths),
+    )
+    .await;
+    let file_system_sandbox_policy = effective_file_system_sandbox_policy(
+        &turn.file_system_sandbox_policy,
+        effective_additional_permissions
+            .additional_permissions
+            .as_ref(),
+    );
+
+    (
+        file_paths,
+        effective_additional_permissions,
+        file_system_sandbox_policy,
+    )
+}
+
 #[async_trait]
 impl ToolHandler for ApplyPatchHandler {
     type Output = FunctionToolOutput;
@@ -138,20 +169,17 @@ impl ToolHandler for ApplyPatchHandler {
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
         match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &cwd) {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
-                match apply_patch::apply_patch(turn.as_ref(), changes).await {
+                let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
+                    effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes).await;
+                match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
+                    .await
+                {
                     InternalApplyPatchInvocation::Output(item) => {
                         let content = item?;
                         Ok(FunctionToolOutput::from_text(content, Some(true)))
                     }
                     InternalApplyPatchInvocation::DelegateToExec(apply) => {
                         let changes = convert_apply_patch_to_protocol(&apply.action);
-                        let file_paths = file_paths_for_action(&apply.action);
-                        let effective_additional_permissions = apply_granted_turn_permissions(
-                            session.as_ref(),
-                            crate::sandboxing::SandboxPermissions::UseDefault,
-                            write_permissions_for_paths(&file_paths),
-                        )
-                        .await;
                         let emitter =
                             ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                         let event_ctx = ToolEventCtx::new(
@@ -247,20 +275,17 @@ pub(crate) async fn intercept_apply_patch(
                     turn.as_ref(),
                 )
                 .await;
-            match apply_patch::apply_patch(turn.as_ref(), changes).await {
+            let (approval_keys, effective_additional_permissions, file_system_sandbox_policy) =
+                effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes).await;
+            match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
+                .await
+            {
                 InternalApplyPatchInvocation::Output(item) => {
                     let content = item?;
                     Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
                 }
                 InternalApplyPatchInvocation::DelegateToExec(apply) => {
                     let changes = convert_apply_patch_to_protocol(&apply.action);
-                    let approval_keys = file_paths_for_action(&apply.action);
-                    let effective_additional_permissions = apply_granted_turn_permissions(
-                        session.as_ref(),
-                        crate::sandboxing::SandboxPermissions::UseDefault,
-                        write_permissions_for_paths(&approval_keys),
-                    )
-                    .await;
                     let emitter = ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                     let event_ctx = ToolEventCtx::new(
                         session.as_ref(),

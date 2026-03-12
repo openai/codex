@@ -1,6 +1,7 @@
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::FileChange;
+use crate::protocol::FileSystemSandboxPolicy;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_patch_safety;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -34,13 +35,14 @@ pub(crate) struct ApplyPatchExec {
 
 pub(crate) async fn apply_patch(
     turn_context: &TurnContext,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
     match assess_patch_safety(
         &action,
         turn_context.approval_policy.value(),
         turn_context.sandbox_policy.get(),
-        &turn_context.file_system_sandbox_policy,
+        file_system_sandbox_policy,
         &turn_context.cwd,
         turn_context.windows_sandbox_level,
     ) {
