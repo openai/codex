@@ -1,5 +1,5 @@
 ## exec
-- Runs raw JavaScript in an isolated context (no Node, no file system, or network acces, no console).
+- Runs raw JavaScript in an isolated context (no Node, no file system, or network access, no console).
 - Send raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
 - You have a set of tools provided to you. They are imported either from `tools.js` or `/mcp/server.js`
 - Tool methods take either string or object as parameter.
@@ -11,8 +11,9 @@
 - `output_text(value: string | number | boolean | undefined | null)`: A string representation of the value is returned to the model. Manually serialize complex values.
 - `output_image(imageUrl: string)`: An image is returned to the model. `image_url` can be an HTTPS URL or a base64-encoded `data:` URL.
 - `store(key: string, value: any)`: stores a serializeable value under a string key for later `exec` calls in the same session.
-- `load(key: stirng)`: returns the stored value for a string key, or `undefined` if it is missing.
+- `load(key: string)`: returns the stored value for a string key, or `undefined` if it is missing.
 
 - `set_max_output_tokens_per_exec_call(value)`: sets the token budget for direct `exec` results. By default the result is trucated to 10000 tokens.
 - `set_yield_time(value)`: asks `exec` to yield early after that many milliseconds if the script is still running.
-- `yield_control()`: yields the accumulated output to the model immidiately while the script keeps running.
+- `yield_control()`: yields the accumulated output to the model immediately while the script keeps running.
+
