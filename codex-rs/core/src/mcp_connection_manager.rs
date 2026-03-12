@@ -591,7 +591,7 @@ pub struct SandboxState {
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub sandbox_cwd: PathBuf,
     #[serde(default)]
-    pub use_linux_sandbox_bwrap: bool,
+    pub use_legacy_landlock: bool,
 }
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
@@ -827,9 +827,10 @@ impl McpConnectionManager {
 
     /// Force-refresh codex apps tools by bypassing the in-process cache.
     ///
-    /// On success, the refreshed tools replace the cache contents. On failure,
-    /// the existing cache remains unchanged.
-    pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<()> {
+    /// On success, the refreshed tools replace the cache contents and the
+    /// latest filtered tool map is returned directly to the caller. On
+    /// failure, the existing cache remains unchanged.
+    pub async fn hard_refresh_codex_apps_tools_cache(&self) -> Result<HashMap<String, ToolInfo>> {
         let managed_client = self
             .clients
             .get(CODEX_APPS_MCP_SERVER_NAME)
@@ -865,7 +866,10 @@ impl McpConnectionManager {
             list_start.elapsed(),
             &[("cache", "miss")],
         );
-        Ok(())
+        Ok(qualify_tools(filter_tools(
+            tools,
+            &managed_client.tool_filter,
+        )))
     }
 
     /// Returns a single map that contains all resources. Each key is the

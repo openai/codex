@@ -2422,6 +2422,9 @@ impl App {
                         url,
                         is_installed,
                         is_enabled,
+                        suggest_reason: None,
+                        suggestion_type: None,
+                        elicitation_target: None,
                     });
             }
             AppEvent::OpenUrlInBrowser { url } => {

@@ -287,12 +287,14 @@ use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::discoverable::DiscoverableTool;
 use crate::tools::js_repl::JsReplHandle;
 use crate::tools::js_repl::resolve_compatible_node;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::network_approval::build_blocked_request_observer;
 use crate::tools::network_approval::build_network_policy_decider;
 use crate::tools::parallel::ToolCallRuntime;
+use crate::tools::router::ToolRouterParams;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::ToolsConfigParams;
@@ -1288,9 +1290,6 @@ impl Session {
             cwd.clone(),
             session_configuration.sandbox_policy.get(),
             session_configuration.windows_sandbox_level,
-            per_turn_config
-                .features
-                .enabled(Feature::UseLinuxSandboxBwrap),
         ));
         let (current_date, timezone) = local_time_context();
         TurnContext {
@@ -1735,7 +1734,9 @@ impl Session {
                 config.features.enabled(Feature::RuntimeMetrics),
                 Self::build_model_client_beta_features_header(config.as_ref()),
             ),
-            code_mode_store: Default::default(),
+            code_mode_service: crate::tools::code_mode::CodeModeService::new(
+                config.js_repl_node_path.clone(),
+            ),
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
@@ -1798,7 +1799,7 @@ impl Session {
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             sandbox_cwd: session_configuration.cwd.clone(),
-            use_linux_sandbox_bwrap: config.features.enabled(Feature::UseLinuxSandboxBwrap),
+            use_legacy_landlock: config.features.use_legacy_landlock(),
         };
         let mut required_mcp_servers: Vec<String> = mcp_servers
             .iter()
@@ -2271,9 +2272,7 @@ impl Session {
                 sandbox_policy: per_turn_config.permissions.sandbox_policy.get().clone(),
                 codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
                 sandbox_cwd: per_turn_config.cwd.clone(),
-                use_linux_sandbox_bwrap: per_turn_config
-                    .features
-                    .enabled(Feature::UseLinuxSandboxBwrap),
+                use_legacy_landlock: per_turn_config.features.use_legacy_landlock(),
             };
             if let Err(e) = self
                 .services
@@ -3934,7 +3933,7 @@ impl Session {
             sandbox_policy: turn_context.sandbox_policy.get().clone(),
             codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
             sandbox_cwd: turn_context.cwd.clone(),
-            use_linux_sandbox_bwrap: turn_context.features.enabled(Feature::UseLinuxSandboxBwrap),
+            use_legacy_landlock: turn_context.features.use_legacy_landlock(),
         };
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
@@ -5211,9 +5210,6 @@ async fn spawn_review_thread(
         parent_turn_context.cwd.clone(),
         parent_turn_context.sandbox_policy.get(),
         parent_turn_context.windows_sandbox_level,
-        parent_turn_context
-            .features
-            .enabled(Feature::UseLinuxSandboxBwrap),
     ));
 
     let review_turn_context = TurnContext {
@@ -6246,7 +6242,7 @@ async fn run_sampling_request(
     }
 }
 
-async fn built_tools(
+pub(crate) async fn built_tools(
     sess: &Session,
     turn_context: &TurnContext,
     input: &[ResponseItem],
@@ -6269,15 +6265,50 @@ async fn built_tools(
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
     effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
 
-    let connectors = if turn_context.apps_enabled() {
+    let apps_enabled = turn_context.apps_enabled();
+    let accessible_connectors =
+        apps_enabled.then(|| connectors::accessible_connectors_from_mcp_tools(&mcp_tools));
+    let accessible_connectors_with_enabled_state =
+        accessible_connectors.as_ref().map(|connectors| {
+            connectors::with_app_enabled_state(connectors.clone(), &turn_context.config)
+        });
+    let connectors = if apps_enabled {
         let connectors = connectors::merge_plugin_apps_with_accessible(
             loaded_plugins.effective_apps(),
-            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+            accessible_connectors.clone().unwrap_or_default(),
         );
         Some(connectors::with_app_enabled_state(
             connectors,
             &turn_context.config,
         ))
+    } else {
+        None
+    };
+    let auth = sess.services.auth_manager.auth().await;
+    let discoverable_tools = if apps_enabled
+        && turn_context.tools_config.search_tool
+        && turn_context.tools_config.tool_suggest
+    {
+        if let Some(accessible_connectors) = accessible_connectors_with_enabled_state.as_ref() {
+            match connectors::list_tool_suggest_discoverable_tools_with_auth(
+                &turn_context.config,
+                auth.as_ref(),
+                accessible_connectors.as_slice(),
+            )
+            .await
+            {
+                Ok(connectors) if connectors.is_empty() => None,
+                Ok(connectors) => {
+                    Some(connectors.into_iter().map(DiscoverableTool::from).collect())
+                }
+                Err(err) => {
+                    warn!("failed to load discoverable tool suggestions: {err:#}");
+                    None
+                }
+            }
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -6312,14 +6343,17 @@ async fn built_tools(
 
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
-        has_mcp_servers.then(|| {
-            mcp_tools
-                .into_iter()
-                .map(|(name, tool)| (name, tool.tool))
-                .collect()
-        }),
-        app_tools,
-        turn_context.dynamic_tools.as_slice(),
+        ToolRouterParams {
+            mcp_tools: has_mcp_servers.then(|| {
+                mcp_tools
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect()
+            }),
+            app_tools,
+            discoverable_tools,
+            dynamic_tools: turn_context.dynamic_tools.as_slice(),
+        },
     )))
 }
 

@@ -8,11 +8,18 @@ use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::original_image_detail::can_request_original_image_detail;
+use crate::tools::code_mode::DEFAULT_WAIT_YIELD_TIME_MS;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
+use crate::tools::code_mode::WAIT_TOOL_NAME;
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
+use crate::tools::discoverable::DiscoverablePluginInfo;
+use crate::tools::discoverable::DiscoverableTool;
+use crate::tools::discoverable::DiscoverableToolAction;
+use crate::tools::discoverable::DiscoverableToolType;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::TOOL_SEARCH_DEFAULT_LIMIT;
 use crate::tools::handlers::TOOL_SEARCH_TOOL_NAME;
+use crate::tools::handlers::TOOL_SUGGEST_TOOL_NAME;
 use crate::tools::handlers::agent_jobs::BatchJobHandler;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
@@ -44,6 +51,8 @@ use std::collections::HashMap;
 
 const TOOL_SEARCH_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
+const TOOL_SUGGEST_DESCRIPTION_TEMPLATE: &str =
+    include_str!("../../templates/search_tool/tool_suggest_description.md");
 const WEB_SEARCH_CONTENT_TYPES: [&str; 2] = ["text", "image"];
 
 fn unified_exec_output_schema() -> JsonValue {
@@ -105,6 +114,7 @@ pub(crate) struct ToolsConfig {
     pub image_gen_tool: bool,
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
+    pub tool_suggest: bool,
     pub request_permission_enabled: bool,
     pub request_permissions_tool_enabled: bool,
     pub code_mode_enabled: bool,
@@ -148,6 +158,7 @@ impl ToolsConfig {
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool = features.enabled(Feature::Apps);
+        let include_tool_suggest = include_search_tool && features.enabled(Feature::ToolSuggest);
         let include_original_image_detail = can_request_original_image_detail(features, model_info);
         let include_artifact_tools =
             features.enabled(Feature::Artifact) && codex_artifacts::can_manage_artifact_runtime();
@@ -215,6 +226,7 @@ impl ToolsConfig {
             image_gen_tool: include_image_gen_tool,
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
+            tool_suggest: include_tool_suggest,
             request_permission_enabled,
             request_permissions_tool_enabled,
             code_mode_enabled: include_code_mode,
@@ -579,6 +591,55 @@ fn create_write_stdin_tool() -> ToolSpec {
     })
 }
 
+fn create_exec_wait_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "session_id".to_string(),
+            JsonSchema::Number {
+                description: Some("Identifier of the running exec session.".to_string()),
+            },
+        ),
+        (
+            "yield_time_ms".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "How long to wait (in milliseconds) for more output before yielding again."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "max_tokens".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Maximum number of output tokens to return for this wait call.".to_string(),
+                ),
+            },
+        ),
+        (
+            "terminate".to_string(),
+            JsonSchema::Boolean {
+                description: Some("Whether to terminate the running exec session.".to_string()),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: WAIT_TOOL_NAME.to_string(),
+        description: format!(
+            "Waits on a yielded `{PUBLIC_TOOL_NAME}` session and returns new output or completion."
+        ),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["session_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+        defer_loading: None,
+    })
+}
+
 fn create_shell_tool(request_permission_enabled: bool) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
@@ -843,7 +904,10 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
         name: "spawn_agent".to_string(),
         description: format!(
             r#"
-        Only use `spawn_agent` if and only if the user explicitly asked for sub-agents or parallel agent work. Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
+        Only use `spawn_agent` if and only if the user explicitly asks for sub-agents, delegation, or parallel agent work.
+        Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn.
+        Agent-role guidance below only helps choose which agent to use after spawning is already authorized; it never authorizes spawning by itself.
+        Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
 
 {available_models_description}
 ### When to delegate vs. do the subtask yourself
@@ -1451,6 +1515,133 @@ fn create_tool_search_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSpec {
     }
 }
 
+fn create_tool_suggest_tool(discoverable_tools: &[DiscoverableTool]) -> ToolSpec {
+    let discoverable_tool_ids = discoverable_tools
+        .iter()
+        .map(DiscoverableTool::id)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let properties = BTreeMap::from([
+        (
+            "tool_type".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Type of discoverable tool to suggest. Use \"connector\" or \"plugin\"."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "action_type".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Suggested action for the tool. Use \"install\" or \"enable\".".to_string(),
+                ),
+            },
+        ),
+        (
+            "tool_id".to_string(),
+            JsonSchema::String {
+                description: Some(format!(
+                    "Connector or plugin id to suggest. Must be one of: {discoverable_tool_ids}."
+                )),
+            },
+        ),
+        (
+            "suggest_reason".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Concise one-line user-facing reason why this tool can help with the current request."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+    let description = TOOL_SUGGEST_DESCRIPTION_TEMPLATE.replace(
+        "{{discoverable_tools}}",
+        format_discoverable_tools(discoverable_tools).as_str(),
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: TOOL_SUGGEST_TOOL_NAME.to_string(),
+        description,
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![
+                "tool_type".to_string(),
+                "action_type".to_string(),
+                "tool_id".to_string(),
+                "suggest_reason".to_string(),
+            ]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
+
+fn format_discoverable_tools(discoverable_tools: &[DiscoverableTool]) -> String {
+    let mut discoverable_tools = discoverable_tools.to_vec();
+    discoverable_tools.sort_by(|left, right| {
+        left.name()
+            .cmp(right.name())
+            .then_with(|| left.id().cmp(right.id()))
+    });
+
+    discoverable_tools
+        .into_iter()
+        .map(|tool| {
+            let description = tool
+                .description()
+                .filter(|description| !description.trim().is_empty())
+                .map(ToString::to_string)
+                .unwrap_or_else(|| match &tool {
+                    DiscoverableTool::Connector(_) => "No description provided.".to_string(),
+                    DiscoverableTool::Plugin(plugin) => format_plugin_summary(plugin.as_ref()),
+                });
+            let default_action = match tool.tool_type() {
+                DiscoverableToolType::Connector => DiscoverableToolAction::Install,
+                DiscoverableToolType::Plugin => DiscoverableToolAction::Enable,
+            };
+            format!(
+                "- {} (id: `{}`, type: {}, action: {}): {}",
+                tool.name(),
+                tool.id(),
+                tool.tool_type().as_str(),
+                default_action.as_str(),
+                description
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_plugin_summary(plugin: &DiscoverablePluginInfo) -> String {
+    let mut details = Vec::new();
+    if plugin.has_skills {
+        details.push("skills".to_string());
+    }
+    if !plugin.mcp_server_names.is_empty() {
+        details.push(format!(
+            "MCP servers: {}",
+            plugin.mcp_server_names.join(", ")
+        ));
+    }
+    if !plugin.app_connector_ids.is_empty() {
+        details.push(format!(
+            "app connectors: {}",
+            plugin.app_connector_ids.join(", ")
+        ));
+    }
+
+    if details.is_empty() {
+        "No description provided.".to_string()
+    } else {
+        details.join("; ")
+    }
+}
+
 fn create_read_file_tool() -> ToolSpec {
     let indentation_properties = BTreeMap::from([
         (
@@ -1692,7 +1883,7 @@ source: /[\s\S]+/
         enabled_tool_names.join(", ")
     };
     let description = format!(
-        "Runs JavaScript in a Node-backed `node:vm` context. This is a freeform tool: send raw JavaScript source text (no JSON/quotes/markdown fences). Direct tool calls remain available while `{PUBLIC_TOOL_NAME}` is enabled. Inside JavaScript, import nested tools from `tools.js`, for example `import {{ exec_command }} from \"tools.js\"` or `import {{ ALL_TOOLS }} from \"tools.js\"` to inspect the available `{{ module, name, description }}` entries. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import {{ append_notebook_logs_chart }} from \"tools/mcp/ologs.js\"`. Nested tool calls resolve to their code-mode result values. Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, store, load }}` from `\"@openai/code_mode\"` (or `\"openai/code_mode\"`); `output_text(value)` surfaces text back to the model and stringifies non-string objects when possible, `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs, `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, `load(key)` returns a cloned stored value or `undefined`, and `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `{PUBLIC_TOOL_NAME}` execution. The default is `10000`. This guards the overall `{PUBLIC_TOOL_NAME}` output, not individual nested tool invocations. The returned content starts with a separate `Script completed` or `Script failed` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker. Function tools require JSON object arguments. Freeform tools require raw strings. `add_content(value)` remains available for compatibility with a content item, content-item array, or string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`. Only content passed to `output_text(...)`, `output_image(...)`, or `add_content(value)` is surfaced back to the model. Enabled nested tools: {enabled_list}."
+        "Runs JavaScript in a Node-backed `node:vm` context. This is a freeform tool: send raw JavaScript source text (no JSON/quotes/markdown fences). Direct tool calls remain available while `{PUBLIC_TOOL_NAME}` is enabled. Inside JavaScript, import nested tools from `tools.js`, for example `import {{ exec_command }} from \"tools.js\"` or `import {{ ALL_TOOLS }} from \"tools.js\"` to inspect the available `{{ module, name, description }}` entries. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import {{ append_notebook_logs_chart }} from \"tools/mcp/ologs.js\"`. Nested tool calls resolve to their code-mode result values. Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, set_yield_time, store, load }}` from `\"@openai/code_mode\"` (or `\"openai/code_mode\"`); `output_text(value)` surfaces text back to the model and stringifies non-string objects when possible, `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs, `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, `load(key)` returns a cloned stored value or `undefined`, `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate direct `{PUBLIC_TOOL_NAME}` returns, and `{WAIT_TOOL_NAME}` uses its own `max_tokens` argument with a default of `10000`. `set_yield_time(value)` asks `{PUBLIC_TOOL_NAME}` to return early if the script is still running after that many milliseconds so `{WAIT_TOOL_NAME}` can resume it later. The default wait timeout for `{WAIT_TOOL_NAME}` is {DEFAULT_WAIT_YIELD_TIME_MS}. The returned content starts with a separate `Script completed`, `Script failed`, or `Script running with session ID …` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker. Function tools require JSON object arguments. Freeform tools require raw strings. `add_content(value)` remains available for compatibility with a content item, content-item array, or string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`. Only content passed to `output_text(...)`, `output_image(...)`, or `add_content(value)` is surfaced back to the model. Enabled nested tools: {enabled_list}."
     );
 
     ToolSpec::Freeform(FreeformTool {
@@ -1707,7 +1898,9 @@ source: /[\s\S]+/
 }
 
 fn is_code_mode_nested_tool(spec: &ToolSpec) -> bool {
-    spec.name() != PUBLIC_TOOL_NAME && matches!(spec, ToolSpec::Function(_) | ToolSpec::Freeform(_))
+    spec.name() != PUBLIC_TOOL_NAME
+        && spec.name() != WAIT_TOOL_NAME
+        && matches!(spec, ToolSpec::Function(_) | ToolSpec::Freeform(_))
 }
 
 fn create_list_mcp_resources_tool() -> ToolSpec {
@@ -2083,15 +2276,27 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 }
 
 /// Builds the tool registry builder while collecting tool specs for later serialization.
+#[cfg(test)]
 pub(crate) fn build_specs(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
     app_tools: Option<HashMap<String, ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
+    build_specs_with_discoverable_tools(config, mcp_tools, app_tools, None, dynamic_tools)
+}
+
+pub(crate) fn build_specs_with_discoverable_tools(
+    config: &ToolsConfig,
+    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    app_tools: Option<HashMap<String, ToolInfo>>,
+    discoverable_tools: Option<Vec<DiscoverableTool>>,
+    dynamic_tools: &[DynamicToolSpec],
+) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::ArtifactsHandler;
     use crate::tools::handlers::CodeModeHandler;
+    use crate::tools::handlers::CodeModeWaitHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
@@ -2108,6 +2313,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::ToolSearchHandler;
+    use crate::tools::handlers::ToolSuggestHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
     use std::sync::Arc;
@@ -2127,7 +2333,9 @@ pub(crate) fn build_specs(
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
+    let tool_suggest_handler = Arc::new(ToolSuggestHandler);
     let code_mode_handler = Arc::new(CodeModeHandler);
+    let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
     let artifacts_handler = Arc::new(ArtifactsHandler);
@@ -2135,10 +2343,11 @@ pub(crate) fn build_specs(
 
     if config.code_mode_enabled {
         let nested_config = config.for_code_mode_nested_tools();
-        let (nested_specs, _) = build_specs(
+        let (nested_specs, _) = build_specs_with_discoverable_tools(
             &nested_config,
             mcp_tools.clone(),
             app_tools.clone(),
+            None,
             dynamic_tools,
         )
         .build();
@@ -2157,6 +2366,13 @@ pub(crate) fn build_specs(
             config.code_mode_enabled,
         );
         builder.register_handler(PUBLIC_TOOL_NAME, code_mode_handler);
+        push_tool_spec(
+            &mut builder,
+            create_exec_wait_tool(),
+            false,
+            config.code_mode_enabled,
+        );
+        builder.register_handler(WAIT_TOOL_NAME, code_mode_wait_handler);
     }
 
     match &config.shell_type {
@@ -2302,6 +2518,15 @@ pub(crate) fn build_specs(
 
             builder.register_handler(alias_name, mcp_handler.clone());
         }
+    }
+
+    if config.tool_suggest
+        && let Some(discoverable_tools) = discoverable_tools
+            .as_ref()
+            .filter(|tools| !tools.is_empty())
+    {
+        builder.push_spec_with_parallel_support(create_tool_suggest_tool(discoverable_tools), true);
+        builder.register_handler(TOOL_SUGGEST_TOOL_NAME, tool_suggest_handler);
     }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
@@ -2565,6 +2790,7 @@ mod tests {
     use crate::models_manager::manager::ModelsManager;
     use crate::models_manager::model_info::with_config_overrides;
     use crate::tools::registry::ConfiguredToolSpec;
+    use codex_app_server_protocol::AppInfo;
     use codex_protocol::openai_models::InputModality;
     use codex_protocol::openai_models::ModelInfo;
     use codex_protocol::openai_models::ModelsResponse;
@@ -2588,6 +2814,25 @@ mod tests {
             icons: None,
             meta: None,
         }
+    }
+
+    fn discoverable_connector(id: &str, name: &str, description: &str) -> DiscoverableTool {
+        let slug = name.replace(' ', "-").to_lowercase();
+        DiscoverableTool::Connector(Box::new(AppInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: Some(description.to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some(format!("https://chatgpt.com/apps/{slug}/{id}")),
+            is_accessible: false,
+            is_enabled: true,
+            plugin_display_names: Vec::new(),
+        }))
     }
 
     #[test]
@@ -4147,7 +4392,6 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, app_tools.clone(), &[]).build();
         assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
-
         let mut features = Features::with_defaults();
         features.enable(Feature::Apps);
         let available_models = Vec::new();
@@ -4160,6 +4404,41 @@ mod tests {
         });
         let (tools, _) = build_specs(&tools_config, None, app_tools, &[]).build();
         assert_contains_tool_names(&tools, &[TOOL_SEARCH_TOOL_NAME]);
+    }
+
+    #[test]
+    fn tool_suggest_is_not_registered_without_feature_flag() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Apps);
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs_with_discoverable_tools(
+            &tools_config,
+            None,
+            None,
+            Some(vec![discoverable_connector(
+                "connector_2128aebfecb84f64a069897515042a44",
+                "Google Calendar",
+                "Plan events and schedules.",
+            )]),
+            &[],
+        )
+        .build();
+
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == TOOL_SUGGEST_TOOL_NAME)
+        );
     }
 
     #[test]
@@ -4251,6 +4530,89 @@ mod tests {
 
         assert!(registry.has_handler(TOOL_SEARCH_TOOL_NAME, None));
         assert!(registry.has_handler(alias.as_str(), None));
+    }
+
+    #[test]
+    fn tool_suggest_description_lists_discoverable_tools() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Apps);
+        features.enable(Feature::ToolSuggest);
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+
+        let discoverable_tools = vec![
+            discoverable_connector(
+                "connector_2128aebfecb84f64a069897515042a44",
+                "Google Calendar",
+                "Plan events and schedules.",
+            ),
+            discoverable_connector(
+                "connector_68df038e0ba48191908c8434991bbac2",
+                "Gmail",
+                "Find and summarize email threads.",
+            ),
+            DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
+                id: "sample@test".to_string(),
+                name: "Sample Plugin".to_string(),
+                description: None,
+                has_skills: true,
+                mcp_server_names: vec!["sample-docs".to_string()],
+                app_connector_ids: vec!["connector_sample".to_string()],
+            })),
+        ];
+
+        let (tools, _) = build_specs_with_discoverable_tools(
+            &tools_config,
+            None,
+            None,
+            Some(discoverable_tools),
+            &[],
+        )
+        .build();
+
+        let tool_suggest = find_tool(&tools, TOOL_SUGGEST_TOOL_NAME);
+        let ToolSpec::Function(ResponsesApiTool {
+            description,
+            parameters,
+            ..
+        }) = &tool_suggest.spec
+        else {
+            panic!("expected function tool");
+        };
+        assert!(description.contains("Google Calendar"));
+        assert!(description.contains("Gmail"));
+        assert!(description.contains("Sample Plugin"));
+        assert!(description.contains("Plan events and schedules."));
+        assert!(description.contains("Find and summarize email threads."));
+        assert!(description.contains("id: `sample@test`, type: plugin, action: enable"));
+        assert!(
+            description
+                .contains("skills; MCP servers: sample-docs; app connectors: connector_sample")
+        );
+        assert!(
+            description.contains("DO NOT explore or recommend tools that are not on this list.")
+        );
+        let JsonSchema::Object { required, .. } = parameters else {
+            panic!("expected object parameters");
+        };
+        assert_eq!(
+            required.as_ref(),
+            Some(&vec![
+                "tool_type".to_string(),
+                "action_type".to_string(),
+                "tool_id".to_string(),
+                "suggest_reason".to_string(),
+            ])
+        );
     }
 
     #[test]

@@ -165,9 +165,12 @@ fn default_image_save_developer_message_text() -> String {
 fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
     let router = Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
-        None,
-        None,
-        turn_context.dynamic_tools.as_slice(),
+        crate::tools::router::ToolRouterParams {
+            mcp_tools: None,
+            app_tools: None,
+            discoverable_tools: None,
+            dynamic_tools: turn_context.dynamic_tools.as_slice(),
+        },
     ));
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     ToolCallRuntime::new(router, session, turn_context, tracker)
@@ -2162,7 +2165,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
         ),
-        code_mode_store: Default::default(),
+        code_mode_service: crate::tools::code_mode::CodeModeService::new(
+            config.js_repl_node_path.clone(),
+        ),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -2799,7 +2804,9 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
         ),
-        code_mode_store: Default::default(),
+        code_mode_service: crate::tools::code_mode::CodeModeService::new(
+            config.js_repl_node_path.clone(),
+        ),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -3954,14 +3961,17 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
     let app_tools = Some(tools.clone());
     let router = ToolRouter::from_config(
         &turn_context.tools_config,
-        Some(
-            tools
-                .into_iter()
-                .map(|(name, tool)| (name, tool.tool))
-                .collect(),
-        ),
-        app_tools,
-        turn_context.dynamic_tools.as_slice(),
+        crate::tools::router::ToolRouterParams {
+            mcp_tools: Some(
+                tools
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect(),
+            ),
+            app_tools,
+            discoverable_tools: None,
+            dynamic_tools: turn_context.dynamic_tools.as_slice(),
+        },
     );
     let item = ResponseItem::CustomToolCall {
         id: None,

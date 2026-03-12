@@ -884,9 +884,7 @@ impl JsReplManager {
                 #[cfg(target_os = "macos")]
                 macos_seatbelt_profile_extensions: None,
                 codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_ref(),
-                use_linux_sandbox_bwrap: turn
-                    .features
-                    .enabled(crate::features::Feature::UseLinuxSandboxBwrap),
+                use_legacy_landlock: turn.features.use_legacy_landlock(),
                 windows_sandbox_level: turn.windows_sandbox_level,
             })
             .map_err(|err| format!("failed to configure sandbox for js_repl: {err}"))?;
@@ -1360,14 +1358,17 @@ impl JsReplManager {
 
         let router = ToolRouter::from_config(
             &exec.turn.tools_config,
-            Some(
-                mcp_tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect(),
-            ),
-            None,
-            exec.turn.dynamic_tools.as_slice(),
+            crate::tools::router::ToolRouterParams {
+                mcp_tools: Some(
+                    mcp_tools
+                        .into_iter()
+                        .map(|(name, tool)| (name, tool.tool))
+                        .collect(),
+                ),
+                app_tools: None,
+                discoverable_tools: None,
+                dynamic_tools: exec.turn.dynamic_tools.as_slice(),
+            },
         );
 
         let payload = if let Some((server, tool)) = exec
