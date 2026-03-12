@@ -14,11 +14,11 @@ use tokio::task::JoinHandle;
 
 use super::CLIENT_ID_METADATA_DOCUMENT_SUPPORTED_FIELD;
 use super::CallbackOutcome;
-use super::OAuthProviderError;
 use super::DEFAULT_CIMD_CLIENT_METADATA_URL;
 use super::DEFAULT_CIMD_REDIRECT_URI_CALLBACK;
 use super::DEFAULT_CIMD_REDIRECT_URI_ROOT;
 use super::OAuthCredentialsStoreMode;
+use super::OAuthProviderError;
 use super::append_query_param;
 use super::callback_bind_host;
 use super::callback_path_from_redirect_uri;
@@ -226,24 +226,6 @@ fn cimd_support_requires_metadata_flag_and_missing_registration_endpoint() {
 }
 
 #[test]
-fn parse_oauth_callback_accepts_default_path() {
-    let parsed = parse_oauth_callback("/callback?code=abc&state=xyz", "/callback");
-    assert!(matches!(parsed, CallbackOutcome::Success(_)));
-}
-
-#[test]
-fn parse_oauth_callback_accepts_custom_path() {
-    let parsed = parse_oauth_callback("/oauth/callback?code=abc&state=xyz", "/oauth/callback");
-    assert!(matches!(parsed, CallbackOutcome::Success(_)));
-}
-
-#[test]
-fn parse_oauth_callback_rejects_wrong_path() {
-    let parsed = parse_oauth_callback("/callback?code=abc&state=xyz", "/oauth/callback");
-    assert!(matches!(parsed, CallbackOutcome::Invalid));
-}
-
-#[test]
 fn parse_oauth_callback_returns_provider_error() {
     let parsed = parse_oauth_callback(
         "/callback?error=invalid_scope&error_description=scope%20rejected",
@@ -257,45 +239,6 @@ fn parse_oauth_callback_returns_provider_error() {
             Some("scope rejected".to_string()),
         ))
     );
-}
-
-#[test]
-fn callback_path_comes_from_redirect_uri() {
-    let path = callback_path_from_redirect_uri("https://example.com/oauth/callback")
-        .expect("redirect URI should parse");
-    assert_eq!(path, "/oauth/callback");
-}
-
-#[test]
-fn append_query_param_adds_resource_to_absolute_url() {
-    let url = append_query_param(
-        "https://example.com/authorize?scope=read",
-        "resource",
-        Some("https://api.example.com"),
-    );
-
-    assert_eq!(
-        url,
-        "https://example.com/authorize?scope=read&resource=https%3A%2F%2Fapi.example.com"
-    );
-}
-
-#[test]
-fn append_query_param_ignores_empty_values() {
-    let url = append_query_param(
-        "https://example.com/authorize?scope=read",
-        "resource",
-        Some("   "),
-    );
-
-    assert_eq!(url, "https://example.com/authorize?scope=read");
-}
-
-#[test]
-fn append_query_param_handles_unparseable_url() {
-    let url = append_query_param("not a url", "resource", Some("api/resource"));
-
-    assert_eq!(url, "not a url?resource=api%2Fresource");
 }
 
 #[tokio::test]

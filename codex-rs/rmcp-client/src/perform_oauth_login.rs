@@ -303,7 +303,7 @@ struct OauthLoginFlow {
 struct CallbackListener {
     guard: CallbackServerGuard,
     redirect_uri: String,
-    rx: oneshot::Receiver<(String, String)>,
+    rx: oneshot::Receiver<CallbackResult>,
 }
 
 fn default_cimd_callback_port_nonzero() -> Result<NonZeroU16> {
@@ -742,6 +742,5 @@ fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
 }
 
 #[cfg(test)]
-
 #[path = "perform_oauth_login.rs_tests.rs"]
 mod tests;
