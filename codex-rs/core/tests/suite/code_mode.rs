@@ -1515,47 +1515,100 @@ add_content(`echo=${result.structuredContent.echo}`);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_normalizes_illegal_top_level_mcp_tool_identifiers() -> Result<()> {
+async fn code_mode_lists_global_scope_items() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
     let code = r#"
-import { ALL_TOOLS, mcp__rmcp__echo_tool } from "tools.js";
-
-const tool = ALL_TOOLS.find(
-  ({ module, name }) => module === "tools/mcp/rmcp.js" && name === "echo_tool"
-);
-
-add_content(JSON.stringify({
-  hasGlobalBinding: Object.prototype.hasOwnProperty.call(globalThis, "mcp__rmcp__echo_tool"),
-  bindingType: typeof globalThis.mcp__rmcp__echo_tool,
-  metadataName: tool?.name,
-  result: (await mcp__rmcp__echo_tool({ message: "ping" })).structuredContent.echo,
-}));
+add_content(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
 "#;
 
-    let (_test, second_mock) = run_code_mode_turn_with_rmcp(
-        &server,
-        "use exec to import a normalized top-level rmcp tool name",
-        code,
-    )
-    .await?;
+    let (_test, second_mock) =
+        run_code_mode_turn_with_rmcp(&server, "use exec to inspect global scope", code).await?;
 
     let req = second_mock.single_request();
     let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "exec normalized top-level rmcp import failed unexpectedly: {output}"
+        "exec global scope inspection failed unexpectedly: {output}"
     );
     assert_eq!(
-        serde_json::from_str::<Value>(&output)?,
-        serde_json::json!({
-            "hasGlobalBinding": false,
-            "bindingType": "undefined",
-            "metadataName": "echo_tool",
-            "result": "ECHOING: ping",
-        })
+        serde_json::from_str::<Vec<String>>(&output)?,
+        vec![
+            "AggregateError",
+            "Array",
+            "ArrayBuffer",
+            "AsyncDisposableStack",
+            "Atomics",
+            "BigInt",
+            "BigInt64Array",
+            "BigUint64Array",
+            "Boolean",
+            "DataView",
+            "Date",
+            "DisposableStack",
+            "Error",
+            "EvalError",
+            "FinalizationRegistry",
+            "Float16Array",
+            "Float32Array",
+            "Float64Array",
+            "Function",
+            "Infinity",
+            "Int16Array",
+            "Int32Array",
+            "Int8Array",
+            "Intl",
+            "Iterator",
+            "JSON",
+            "Map",
+            "Math",
+            "NaN",
+            "Number",
+            "Object",
+            "Promise",
+            "Proxy",
+            "RangeError",
+            "ReferenceError",
+            "Reflect",
+            "RegExp",
+            "Set",
+            "SharedArrayBuffer",
+            "String",
+            "SuppressedError",
+            "Symbol",
+            "SyntaxError",
+            "TypeError",
+            "URIError",
+            "Uint16Array",
+            "Uint32Array",
+            "Uint8Array",
+            "Uint8ClampedArray",
+            "WeakMap",
+            "WeakRef",
+            "WeakSet",
+            "WebAssembly",
+            "__codexContentItems",
+            "add_content",
+            "console",
+            "decodeURI",
+            "decodeURIComponent",
+            "encodeURI",
+            "encodeURIComponent",
+            "escape",
+            "eval",
+            "globalThis",
+            "isFinite",
+            "isNaN",
+            "parseFloat",
+            "parseInt",
+            "undefined",
+            "unescape",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>()
     );
 
     Ok(())

@@ -427,7 +427,6 @@ function codeModeWorkerMain() {
     const callTool = createToolCaller();
     const context = vm.createContext({
       __codexContentItems: createContentItems(),
-      __codex_tool_call: callTool,
     });
 
     try {
