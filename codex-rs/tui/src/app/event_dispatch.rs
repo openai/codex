@@ -115,7 +115,7 @@ impl App {
                     }
                 }
             }
-            AppEvent::ForkCurrentSession => {
+            AppEvent::ForkCurrentSession { placement } => {
                 self.session_telemetry.counter(
                     "codex.thread.fork",
                     /*inc*/ 1,
@@ -127,11 +127,46 @@ impl App {
                     self.chat_widget.thread_name(),
                     self.chat_widget.rollout_path().as_deref(),
                 );
-                self.chat_widget
-                    .add_plain_history_lines(vec!["/fork".magenta().into()]);
+                let terminal_info = terminal_info();
+                if terminal_info.multiplexer.is_none() {
+                    self.chat_widget
+                        .add_plain_history_lines(vec!["/fork".magenta().into()]);
+                }
                 if let Some(thread_id) = self.chat_widget.thread_id() {
                     self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                         .await;
+                    if let Some(multiplexer) = terminal_info.multiplexer.as_ref() {
+                        match spawn_fork_in_new_pane(
+                            multiplexer,
+                            &thread_id,
+                            &self.config,
+                            &self.harness_overrides.additional_writable_roots,
+                            placement,
+                        )
+                        .await
+                        {
+                            ForkPaneSpawnResult::Spawned => {
+                                tui.frame_requester().schedule_frame();
+                                return Ok(AppRunControl::Continue);
+                            }
+                            ForkPaneSpawnResult::InvalidPlacement(message) => {
+                                self.chat_widget.add_error_message(message);
+                                tui.frame_requester().schedule_frame();
+                                return Ok(AppRunControl::Continue);
+                            }
+                            ForkPaneSpawnResult::Failed(err) => {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to open a new pane for /fork: {err}"
+                                ));
+                            }
+                        }
+                    } else if placement.is_some() {
+                        self.chat_widget.add_error_message(
+                            FORK_PLACEMENT_REQUIRES_MULTIPLEXER_MESSAGE.to_string(),
+                        );
+                        tui.frame_requester().schedule_frame();
+                        return Ok(AppRunControl::Continue);
+                    }
                     match app_server.fork_thread(self.config.clone(), thread_id).await {
                         Ok(forked) => {
                             self.shutdown_current_thread(app_server).await;

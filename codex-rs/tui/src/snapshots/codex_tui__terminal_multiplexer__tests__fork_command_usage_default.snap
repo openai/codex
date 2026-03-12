@@ -1,0 +1,6 @@
+---
+source: tui/src/terminal_multiplexer.rs
+assertion_line: 367
+expression: fork_command_usage(None)
+---
+Usage: /fork

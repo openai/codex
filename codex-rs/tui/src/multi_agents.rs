@@ -493,7 +493,7 @@ fn wait_complete_lines(
                 status: status.clone(),
             })
             .collect::<Vec<_>>();
-        entries.sort_by(|left, right| left.thread_id.to_string().cmp(&right.thread_id.to_string()));
+        entries.sort_by_key(|left| left.thread_id.to_string());
         entries
     } else {
         let mut entries = agent_statuses.to_vec();
@@ -511,7 +511,7 @@ fn wait_complete_lines(
                 status: status.clone(),
             })
             .collect::<Vec<_>>();
-        extras.sort_by(|left, right| left.thread_id.to_string().cmp(&right.thread_id.to_string()));
+        extras.sort_by_key(|left| left.thread_id.to_string());
         entries.extend(extras);
         entries
     };
