@@ -1394,6 +1394,11 @@ async fn thread_resume_fails_when_required_mcp_server_fails_to_initialize() -> R
     .await??;
 
     assert!(
+        err.error.message.contains("failed to load configuration"),
+        "unexpected error message: {}",
+        err.error.message
+    );
+    assert!(
         err.error
             .message
             .contains("required MCP servers failed to initialize"),
