@@ -1009,6 +1009,101 @@ output_text("session b done");
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_yield_control_keeps_running_on_later_turn_without_exec_wait() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex().with_config(move |config| {
+        let _ = config.features.enable(Feature::CodeMode);
+    });
+    let test = builder.build(&server).await?;
+    let resumed_file = test.workspace_path("code-mode-yield-resumed.txt");
+    let resumed_file_quoted = shlex::try_join([resumed_file.to_string_lossy().as_ref()])?;
+    let write_file_command = format!("printf resumed > {resumed_file_quoted}");
+    let wait_for_file_command =
+        format!("while [ ! -f {resumed_file_quoted} ]; do sleep 0.01; done; printf ready");
+    let code = format!(
+        r#"
+import {{ output_text, yield_control }} from "@openai/code_mode";
+import {{ exec_command }} from "tools.js";
+
+output_text("before yield");
+yield_control();
+await exec_command({{ cmd: {write_file_command:?} }});
+output_text("after yield");
+"#
+    );
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call("call-1", "exec", &code),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let first_completion = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "exec yielded"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("start yielded exec").await?;
+
+    let first_request = first_completion.single_request();
+    let first_items = custom_tool_output_items(&first_request, "call-1");
+    assert_eq!(first_items.len(), 2);
+    assert_regex_match(
+        concat!(
+            r"(?s)\A",
+            r"Script running with session ID \d+\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
+        text_item(&first_items, 0),
+    );
+    assert_eq!(text_item(&first_items, 1), "before yield");
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-3"),
+            responses::ev_function_call(
+                "call-2",
+                "exec_command",
+                &serde_json::to_string(&serde_json::json!({
+                    "cmd": wait_for_file_command,
+                }))?,
+            ),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+    let second_completion = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-2", "file appeared"),
+            ev_completed("resp-4"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("wait for resumed file").await?;
+
+    let second_request = second_completion.single_request();
+    assert_eq!(
+        second_request.function_call_output_text("call-2"),
+        Some("ready".to_string())
+    );
+    assert_eq!(fs::read_to_string(&resumed_file)?, "resumed");
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_exec_wait_uses_its_own_max_tokens_budget() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

@@ -265,6 +265,7 @@ function codeModeWorkerMain() {
         'set_max_output_tokens_per_exec_call',
         'set_yield_time',
         'store',
+        'yield_control',
       ],
       function initCodeModeModule() {
         this.setExport('load', load);
@@ -288,6 +289,9 @@ function codeModeWorkerMain() {
           return normalized;
         });
         this.setExport('store', store);
+        this.setExport('yield_control', () => {
+          parentPort.postMessage({ type: 'yield' });
+        });
       },
       { context }
     );
@@ -469,8 +473,6 @@ function createProtocol() {
         session.request_id = String(message.request_id);
         if (session.pending_result) {
           void completeSession(protocol, sessions, session, session.pending_result);
-        } else if (session.pending_tool_call) {
-          void forwardToolCall(protocol, session, session.pending_tool_call);
         } else {
           schedulePollYield(protocol, session, normalizeYieldTime(message.yield_time_ms ?? 0));
         }
@@ -545,7 +547,8 @@ function createProtocol() {
     });
   }
 
-  function request(requestId, type, payload) {
+  function request(type, payload) {
+    const requestId = 'req-' + ++nextId;
     const id = 'msg-' + ++nextId;
     const pendingKey = requestId + ':' + id;
     return new Promise((resolve, reject) => {
@@ -574,7 +577,6 @@ function startSession(protocol, sessions, start) {
     initial_yield_triggered: false,
     max_output_tokens_per_exec_call: DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL,
     pending_result: null,
-    pending_tool_call: null,
     poll_yield_timer: null,
     request_id: String(start.request_id),
     worker: new Worker(sessionWorkerSource(), {
@@ -631,11 +633,12 @@ async function handleWorkerMessage(protocol, sessions, session, message) {
     return;
   }
 
+  if (message.type === 'yield') {
+    void sendYielded(protocol, session);
+    return;
+  }
+
   if (message.type === 'tool_call') {
-    if (session.request_id === null) {
-      session.pending_tool_call = message;
-      return;
-    }
     void forwardToolCall(protocol, session, message);
     return;
   }
@@ -662,11 +665,10 @@ async function handleWorkerMessage(protocol, sessions, session, message) {
 
 async function forwardToolCall(protocol, session, message) {
   try {
-    const result = await protocol.request(session.request_id, 'tool_call', {
+    const result = await protocol.request('tool_call', {
       name: String(message.name),
       input: message.input,
     });
-    session.pending_tool_call = null;
     if (session.completed) {
       return;
     }
@@ -678,7 +680,6 @@ async function forwardToolCall(protocol, session, message) {
       });
     } catch {}
   } catch (error) {
-    session.pending_tool_call = null;
     if (session.completed) {
       return;
     }
@@ -693,7 +694,7 @@ async function forwardToolCall(protocol, session, message) {
 }
 
 async function sendYielded(protocol, session) {
-  if (session.completed) {
+  if (session.completed || session.request_id === null) {
     return;
   }
   const contentItems = takeContentItems(session);
@@ -750,7 +751,6 @@ async function completeSession(protocol, sessions, session, message) {
   sessions.delete(session.id);
   const contentItems = takeContentItems(session);
   session.pending_result = null;
-  session.pending_tool_call = null;
   try {
     session.worker.postMessage({ type: 'clear_content' });
   } catch {}
