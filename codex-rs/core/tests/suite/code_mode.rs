@@ -4,6 +4,14 @@ use anyhow::Result;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::features::Feature;
+use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
+use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ResponseMock;
@@ -17,6 +25,8 @@ use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -1962,6 +1972,163 @@ text(JSON.stringify(tool));
             "name": "mcp__rmcp__echo",
             "description": "Echo back the provided message and include environment data.\n\nexec tool declaration:\n```ts\ndeclare const tools: { mcp__rmcp__echo(args: { env_var?: string; message: string; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };\n```",
         })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex().with_config(move |config| {
+        let _ = config.features.enable(Feature::CodeMode);
+    });
+    let base_test = builder.build(&server).await?;
+    let new_thread = base_test
+        .thread_manager
+        .start_thread_with_tools(
+            base_test.config.clone(),
+            vec![DynamicToolSpec {
+                name: "hidden_dynamic_tool".to_string(),
+                description: "A hidden dynamic tool.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "city": { "type": "string" }
+                    },
+                    "required": ["city"],
+                    "additionalProperties": false,
+                }),
+                expose_to_context: false,
+            }],
+            false,
+        )
+        .await?;
+    let test = TestCodex {
+        home: base_test.home,
+        cwd: base_test.cwd,
+        codex: new_thread.thread,
+        session_configured: new_thread.session_configured,
+        config: base_test.config,
+        thread_manager: base_test.thread_manager,
+    };
+
+    let code = r#"
+import { ALL_TOOLS, hidden_dynamic_tool } from "tools.js";
+
+const tool = ALL_TOOLS.find(
+  ({ module, name }) => module === "tools.js" && name === "hidden_dynamic_tool"
+);
+const out = await hidden_dynamic_tool({ city: "Paris" });
+add_content(
+  JSON.stringify({
+    module: tool?.module ?? null,
+    name: tool?.name ?? null,
+    description: tool?.description ?? null,
+    out,
+  })
+);
+"#;
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call("call-1", "exec", code),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let second_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "use exec to inspect and call hidden tools".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let turn_id = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+    let request = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::DynamicToolCallRequest(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(request.tool, "hidden_dynamic_tool");
+    assert_eq!(request.arguments, serde_json::json!({ "city": "Paris" }));
+    test.codex
+        .submit(Op::DynamicToolResponse {
+            id: request.call_id,
+            response: DynamicToolResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "hidden-ok".to_string(),
+                }],
+                success: true,
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| match event {
+        EventMsg::TurnComplete(event) => event.turn_id == turn_id,
+        _ => false,
+    })
+    .await;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec hidden dynamic tool call failed unexpectedly: {output}"
+    );
+
+    let parsed: Value = serde_json::from_str(&output)?;
+    assert_eq!(
+        parsed.get("module"),
+        Some(&Value::String("tools.js".to_string()))
+    );
+    assert_eq!(
+        parsed.get("name"),
+        Some(&Value::String("hidden_dynamic_tool".to_string()))
+    );
+    assert_eq!(
+        parsed.get("out"),
+        Some(&Value::String("hidden-ok".to_string()))
+    );
+    assert!(
+        parsed
+            .get("description")
+            .and_then(Value::as_str)
+            .is_some_and(|description| {
+                description.contains("A hidden dynamic tool.")
+                    && description.contains("import { hidden_dynamic_tool } from \"tools.js\";")
+                    && description.contains("declare function hidden_dynamic_tool")
+            })
     );
 
     Ok(())
