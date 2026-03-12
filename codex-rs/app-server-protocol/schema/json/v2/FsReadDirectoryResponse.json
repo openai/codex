@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "FsReadDirectoryEntry": {
+      "description": "A directory entry returned by `fs/readDirectory`.",
+      "properties": {
+        "fileName": {
+          "description": "Direct child entry name only, not an absolute or relative path.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fileName"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "Directory entries returned by `fs/readDirectory`.",
+  "properties": {
+    "entries": {
+      "description": "Direct child entries in the requested directory.",
+      "items": {
+        "$ref": "#/definitions/FsReadDirectoryEntry"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "entries"
+  ],
+  "title": "FsReadDirectoryResponse",
+  "type": "object"
+}

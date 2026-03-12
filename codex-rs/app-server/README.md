@@ -153,6 +153,13 @@ Example with notification opt-out:
 - `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
 - `command/exec/terminate` — terminate a running `command/exec` session by `processId`; returns `{}`.
 - `command/exec/outputDelta` — notification emitted for base64-encoded stdout/stderr chunks from a streaming `command/exec` session.
+- `fs/readFile` — read an absolute file path and return `{ dataBase64 }`.
+- `fs/writeFile` — write an absolute file path from base64-encoded `{ dataBase64 }`; returns `{}`.
+- `fs/createDirectory` — create an absolute directory path; `recursive` defaults to `true`.
+- `fs/getMetadata` — return metadata for an absolute path: `isDirectory`, `isFile`, `createdAtMs`, and `modifiedAtMs`.
+- `fs/readDirectory` — list direct child entries for an absolute directory path; each entry currently contains only `fileName`, which is just the child name, not a path.
+- `fs/remove` — remove an absolute file or directory tree; `recursive` and `force` default to `true`.
+- `fs/copy` — copy between absolute paths; directory copies require `recursive: true`.
 - `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options, optional legacy `upgrade` model ids, optional `upgradeInfo` metadata (`model`, `upgradeCopy`, `modelLink`, `migrationMarkdown`), and optional `availabilityNux` metadata.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
@@ -710,6 +717,46 @@ Streaming stdin/stdout uses base64 so PTY sessions can carry arbitrary bytes:
 - `command/exec/outputDelta.capReached` is `true` on the final streamed chunk for a stream when `outputBytesCap` truncates that stream; later output on that stream is dropped.
 - `command/exec.params.env` overrides the server-computed environment per key; set a key to `null` to unset an inherited variable.
 - `command/exec/resize` is only supported for PTY-backed `command/exec` sessions.
+
+### Example: Filesystem utilities
+
+These methods operate on absolute paths on the host filesystem and cover reading, writing, directory traversal, copying, removal, and change notifications.
+
+All filesystem paths in this section must be absolute.
+
+```json
+{ "method": "fs/createDirectory", "id": 40, "params": {
+    "path": "/tmp/example/nested",
+    "recursive": true
+} }
+{ "id": 40, "result": {} }
+{ "method": "fs/writeFile", "id": 41, "params": {
+    "path": "/tmp/example/nested/note.txt",
+    "dataBase64": "aGVsbG8="
+} }
+{ "id": 41, "result": {} }
+{ "method": "fs/getMetadata", "id": 42, "params": {
+    "path": "/tmp/example/nested/note.txt"
+} }
+{ "id": 42, "result": {
+    "isDirectory": false,
+    "isFile": true,
+    "createdAtMs": 1730910000000,
+    "modifiedAtMs": 1730910000000
+} }
+{ "method": "fs/readFile", "id": 43, "params": {
+    "path": "/tmp/example/nested/note.txt"
+} }
+{ "id": 43, "result": {
+    "dataBase64": "aGVsbG8="
+} }
+```
+
+- `fs/getMetadata` returns whether the path currently resolves to a directory or regular file, plus `createdAtMs` and `modifiedAtMs` in Unix milliseconds. If a timestamp is unavailable on the current platform, that field is `0`.
+- `fs/createDirectory` defaults `recursive` to `true` when omitted.
+- `fs/remove` defaults both `recursive` and `force` to `true` when omitted.
+- `fs/readFile` always returns base64 bytes via `dataBase64`, and `fs/writeFile` always expects base64 bytes in `dataBase64`.
+- `fs/copy` handles both file copies and directory-tree copies; it requires `recursive: true` when `sourcePath` is a directory. Recursive copies traverse regular files, directories, and symlinks; other entry types are skipped.
 
 ## Events
 

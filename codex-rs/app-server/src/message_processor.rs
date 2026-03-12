@@ -10,6 +10,7 @@ use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::external_agent_config_api::ExternalAgentConfigApi;
+use crate::fs_api::FsApi;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -29,6 +30,13 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::ExperimentalApi;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
+use codex_app_server_protocol::FsCopyParams;
+use codex_app_server_protocol::FsCreateDirectoryParams;
+use codex_app_server_protocol::FsGetMetadataParams;
+use codex_app_server_protocol::FsReadDirectoryParams;
+use codex_app_server_protocol::FsReadFileParams;
+use codex_app_server_protocol::FsRemoveParams;
+use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -138,6 +146,7 @@ pub(crate) struct MessageProcessor {
     codex_message_processor: CodexMessageProcessor,
     config_api: ConfigApi,
     external_agent_config_api: ExternalAgentConfigApi,
+    fs_api: FsApi,
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
 }
@@ -225,12 +234,14 @@ impl MessageProcessor {
             thread_manager,
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
+        let fs_api = FsApi;
 
         Self {
             outgoing,
             codex_message_processor,
             config_api,
             external_agent_config_api,
+            fs_api,
             config,
             config_warnings: Arc::new(config_warnings),
         }
@@ -638,6 +649,76 @@ impl MessageProcessor {
                 })
                 .await;
             }
+            ClientRequest::FsReadFile { request_id, params } => {
+                self.handle_fs_read_file(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::FsWriteFile { request_id, params } => {
+                self.handle_fs_write_file(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::FsCreateDirectory { request_id, params } => {
+                self.handle_fs_create_directory(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::FsGetMetadata { request_id, params } => {
+                self.handle_fs_get_metadata(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::FsReadDirectory { request_id, params } => {
+                self.handle_fs_read_directory(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::FsRemove { request_id, params } => {
+                self.handle_fs_remove(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::FsCopy { request_id, params } => {
+                self.handle_fs_copy(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
             other => {
                 // Box the delegated future so this wrapper's async state machine does not
                 // inline the full `CodexMessageProcessor::process_request` future, which
@@ -720,6 +801,71 @@ impl MessageProcessor {
         params: ExternalAgentConfigImportParams,
     ) {
         match self.external_agent_config_api.import(params).await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_fs_read_file(&self, request_id: ConnectionRequestId, params: FsReadFileParams) {
+        match self.fs_api.read_file(params).await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_fs_write_file(
+        &self,
+        request_id: ConnectionRequestId,
+        params: FsWriteFileParams,
+    ) {
+        match self.fs_api.write_file(params).await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_fs_create_directory(
+        &self,
+        request_id: ConnectionRequestId,
+        params: FsCreateDirectoryParams,
+    ) {
+        match self.fs_api.create_directory(params).await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_fs_get_metadata(
+        &self,
+        request_id: ConnectionRequestId,
+        params: FsGetMetadataParams,
+    ) {
+        match self.fs_api.get_metadata(params).await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_fs_read_directory(
+        &self,
+        request_id: ConnectionRequestId,
+        params: FsReadDirectoryParams,
+    ) {
+        match self.fs_api.read_directory(params).await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_fs_remove(&self, request_id: ConnectionRequestId, params: FsRemoveParams) {
+        match self.fs_api.remove(params).await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_fs_copy(&self, request_id: ConnectionRequestId, params: FsCopyParams) {
+        match self.fs_api.copy(params).await {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }

@@ -746,6 +746,174 @@
             },
             "method": {
               "enum": [
+                "fs/readFile"
+              ],
+              "title": "Fs/readFileRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/FsReadFileParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/readFileRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/writeFile"
+              ],
+              "title": "Fs/writeFileRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/FsWriteFileParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/writeFileRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/createDirectory"
+              ],
+              "title": "Fs/createDirectoryRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/FsCreateDirectoryParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/createDirectoryRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/getMetadata"
+              ],
+              "title": "Fs/getMetadataRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/FsGetMetadataParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/getMetadataRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/readDirectory"
+              ],
+              "title": "Fs/readDirectoryRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/FsReadDirectoryParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/readDirectoryRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/remove"
+              ],
+              "title": "Fs/removeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/FsRemoveParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/removeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/copy"
+              ],
+              "title": "Fs/copyRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/FsCopyParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/copyRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "skills/config/write"
               ],
               "title": "Skills/config/writeRequestMethod",
@@ -7180,6 +7348,280 @@
           "api"
         ],
         "type": "string"
+      },
+      "FsCopyParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Copy a file or directory tree on the host filesystem.",
+        "properties": {
+          "destinationPath": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Absolute destination path."
+          },
+          "recursive": {
+            "description": "Required for directory copies; ignored for file copies.",
+            "type": "boolean"
+          },
+          "sourcePath": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Absolute source path."
+          }
+        },
+        "required": [
+          "destinationPath",
+          "sourcePath"
+        ],
+        "title": "FsCopyParams",
+        "type": "object"
+      },
+      "FsCopyResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Successful response for `fs/copy`.",
+        "title": "FsCopyResponse",
+        "type": "object"
+      },
+      "FsCreateDirectoryParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Create a directory on the host filesystem.",
+        "properties": {
+          "path": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Absolute directory path to create."
+          },
+          "recursive": {
+            "description": "Whether parent directories should also be created. Defaults to `true`.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "FsCreateDirectoryParams",
+        "type": "object"
+      },
+      "FsCreateDirectoryResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Successful response for `fs/createDirectory`.",
+        "title": "FsCreateDirectoryResponse",
+        "type": "object"
+      },
+      "FsGetMetadataParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Request metadata for an absolute path.",
+        "properties": {
+          "path": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Absolute path to inspect."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "FsGetMetadataParams",
+        "type": "object"
+      },
+      "FsGetMetadataResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Metadata returned by `fs/getMetadata`.",
+        "properties": {
+          "createdAtMs": {
+            "description": "File creation time in Unix milliseconds when available, otherwise `0`.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "isDirectory": {
+            "description": "Whether the path currently resolves to a directory.",
+            "type": "boolean"
+          },
+          "isFile": {
+            "description": "Whether the path currently resolves to a regular file.",
+            "type": "boolean"
+          },
+          "modifiedAtMs": {
+            "description": "File modification time in Unix milliseconds when available, otherwise `0`.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "createdAtMs",
+          "isDirectory",
+          "isFile",
+          "modifiedAtMs"
+        ],
+        "title": "FsGetMetadataResponse",
+        "type": "object"
+      },
+      "FsReadDirectoryEntry": {
+        "description": "A directory entry returned by `fs/readDirectory`.",
+        "properties": {
+          "fileName": {
+            "description": "Direct child entry name only, not an absolute or relative path.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fileName"
+        ],
+        "type": "object"
+      },
+      "FsReadDirectoryParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "List direct child names for a directory.",
+        "properties": {
+          "path": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Absolute directory path to read."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "FsReadDirectoryParams",
+        "type": "object"
+      },
+      "FsReadDirectoryResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Directory entries returned by `fs/readDirectory`.",
+        "properties": {
+          "entries": {
+            "description": "Direct child entries in the requested directory.",
+            "items": {
+              "$ref": "#/definitions/v2/FsReadDirectoryEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "title": "FsReadDirectoryResponse",
+        "type": "object"
+      },
+      "FsReadFileParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Read a file from the host filesystem.",
+        "properties": {
+          "path": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Absolute path to read."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "FsReadFileParams",
+        "type": "object"
+      },
+      "FsReadFileResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Base64-encoded file contents returned by `fs/readFile`.",
+        "properties": {
+          "dataBase64": {
+            "description": "File contents encoded as base64.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dataBase64"
+        ],
+        "title": "FsReadFileResponse",
+        "type": "object"
+      },
+      "FsRemoveParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Remove a file or directory tree from the host filesystem.",
+        "properties": {
+          "force": {
+            "description": "Whether missing paths should be ignored. Defaults to `true`.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "path": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Absolute path to remove."
+          },
+          "recursive": {
+            "description": "Whether directory removal should recurse. Defaults to `true`.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "FsRemoveParams",
+        "type": "object"
+      },
+      "FsRemoveResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Successful response for `fs/remove`.",
+        "title": "FsRemoveResponse",
+        "type": "object"
+      },
+      "FsWriteFileParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Write a file on the host filesystem.",
+        "properties": {
+          "dataBase64": {
+            "description": "File contents encoded as base64.",
+            "type": "string"
+          },
+          "path": {
+            "allOf": [
+              {
+                "$ref": "#/definitions/v2/AbsolutePathBuf"
+              }
+            ],
+            "description": "Absolute path to write."
+          }
+        },
+        "required": [
+          "dataBase64",
+          "path"
+        ],
+        "title": "FsWriteFileParams",
+        "type": "object"
+      },
+      "FsWriteFileResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Successful response for `fs/writeFile`.",
+        "title": "FsWriteFileResponse",
+        "type": "object"
       },
       "FunctionCallOutputBody": {
         "anyOf": [
