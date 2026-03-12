@@ -210,19 +210,33 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     )
     .await;
 
-    if force_refetch
-        && let Err(err) = mcp_connection_manager
+    let refreshed_tools = if force_refetch {
+        match mcp_connection_manager
             .hard_refresh_codex_apps_tools_cache()
             .await
-    {
-        warn!(
-            "failed to force-refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}', using cached/startup tools: {err:#}"
-        );
-    }
+        {
+            Ok(tools) => Some(tools),
+            Err(err) => {
+                warn!(
+                    "failed to force-refresh tools for MCP server '{CODEX_APPS_MCP_SERVER_NAME}', using cached/startup tools: {err:#}"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let refreshed_tools_succeeded = refreshed_tools.is_some();
 
-    let mut tools = mcp_connection_manager.list_all_tools().await;
+    let mut tools = if let Some(tools) = refreshed_tools {
+        tools
+    } else {
+        mcp_connection_manager.list_all_tools().await
+    };
     let mut should_reload_tools = false;
-    let codex_apps_ready = if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
+    let codex_apps_ready = if refreshed_tools_succeeded {
+        true
+    } else if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
         let immediate_ready = mcp_connection_manager
             .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, Duration::ZERO)
             .await;
@@ -325,6 +339,7 @@ fn filter_tool_suggest_discoverable_tools(
 ) -> Vec<AppInfo> {
     let accessible_connector_ids: HashSet<&str> = accessible_connectors
         .iter()
+        .filter(|connector| connector.is_accessible && connector.is_enabled)
         .map(|connector| connector.id.as_str())
         .collect();
     let allowed_connector_ids: HashSet<&str> = TOOL_SUGGEST_DISCOVERABLE_CONNECTOR_IDS
@@ -1537,10 +1552,13 @@ mod tests {
                 named_app("connector_68df038e0ba48191908c8434991bbac2", "Gmail"),
                 named_app("connector_other", "Other"),
             ],
-            &[named_app(
-                "connector_2128aebfecb84f64a069897515042a44",
-                "Google Calendar",
-            )],
+            &[AppInfo {
+                is_accessible: true,
+                ..named_app(
+                    "connector_2128aebfecb84f64a069897515042a44",
+                    "Google Calendar",
+                )
+            }],
         );
 
         assert_eq!(
@@ -1548,6 +1566,41 @@ mod tests {
             vec![named_app(
                 "connector_68df038e0ba48191908c8434991bbac2",
                 "Gmail",
+            )]
+        );
+    }
+
+    #[test]
+    fn filter_tool_suggest_discoverable_tools_keeps_disabled_accessible_apps() {
+        let filtered = filter_tool_suggest_discoverable_tools(
+            vec![
+                named_app(
+                    "connector_2128aebfecb84f64a069897515042a44",
+                    "Google Calendar",
+                ),
+                named_app("connector_68df038e0ba48191908c8434991bbac2", "Gmail"),
+            ],
+            &[
+                AppInfo {
+                    is_accessible: true,
+                    ..named_app(
+                        "connector_2128aebfecb84f64a069897515042a44",
+                        "Google Calendar",
+                    )
+                },
+                AppInfo {
+                    is_accessible: true,
+                    is_enabled: false,
+                    ..named_app("connector_68df038e0ba48191908c8434991bbac2", "Gmail")
+                },
+            ],
+        );
+
+        assert_eq!(
+            filtered,
+            vec![named_app(
+                "connector_68df038e0ba48191908c8434991bbac2",
+                "Gmail"
             )]
         );
     }

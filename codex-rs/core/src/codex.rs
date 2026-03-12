@@ -6256,6 +6256,10 @@ pub(crate) async fn built_tools(
     let apps_enabled = turn_context.apps_enabled();
     let accessible_connectors =
         apps_enabled.then(|| connectors::accessible_connectors_from_mcp_tools(&mcp_tools));
+    let accessible_connectors_with_enabled_state =
+        accessible_connectors.as_ref().map(|connectors| {
+            connectors::with_app_enabled_state(connectors.clone(), &turn_context.config)
+        });
     let connectors = if apps_enabled {
         let connectors = connectors::merge_plugin_apps_with_accessible(
             loaded_plugins.effective_apps(),
@@ -6273,7 +6277,7 @@ pub(crate) async fn built_tools(
         && turn_context.tools_config.search_tool
         && turn_context.tools_config.tool_suggest
     {
-        if let Some(accessible_connectors) = accessible_connectors.as_ref() {
+        if let Some(accessible_connectors) = accessible_connectors_with_enabled_state.as_ref() {
             match connectors::list_tool_suggest_discoverable_tools_with_auth(
                 &turn_context.config,
                 auth.as_ref(),

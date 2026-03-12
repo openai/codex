@@ -79,6 +79,7 @@ struct ToolSuggestArgs {
 #[derive(Debug, Serialize, PartialEq, Eq)]
 struct ToolSuggestResult {
     completed: bool,
+    user_confirmed: bool,
     tool_type: ToolSuggestToolType,
     action_type: ToolSuggestActionType,
     tool_id: String,
@@ -130,11 +131,18 @@ impl ToolHandler for ToolSuggestHandler {
                 }
 
                 let auth = session.services.auth_manager.auth().await;
+                let manager = session.services.mcp_connection_manager.read().await;
+                let mcp_tools = manager.list_all_tools().await;
+                drop(manager);
+                let accessible_connectors = connectors::with_app_enabled_state(
+                    connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+                    &turn.config,
+                );
                 let discoverable_tools =
                     connectors::list_tool_suggest_discoverable_tools_with_auth(
                         &turn.config,
                         auth.as_ref(),
-                        &[],
+                        &accessible_connectors,
                     )
                     .await
                     .map_err(|err| {
@@ -172,32 +180,50 @@ impl ToolHandler for ToolSuggestHandler {
         let response = session
             .request_mcp_server_elicitation(turn.as_ref(), request_id, params)
             .await;
-        let completed = response
+        let user_confirmed = response
             .as_ref()
             .is_some_and(|response| response.action == ElicitationAction::Accept);
+
+        let completed = if user_confirmed {
+            let manager = session.services.mcp_connection_manager.read().await;
+            match manager.hard_refresh_codex_apps_tools_cache().await {
+                Ok(mcp_tools) => {
+                    let accessible_connectors = connectors::with_app_enabled_state(
+                        connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+                        &turn.config,
+                    );
+                    connectors::refresh_accessible_connectors_cache_from_mcp_tools(
+                        &turn.config,
+                        auth.as_ref(),
+                        &mcp_tools,
+                    );
+                    verified_connector_suggestion_completed(
+                        args.action_type,
+                        connector.id.as_str(),
+                        &accessible_connectors,
+                    )
+                }
+                Err(err) => {
+                    warn!(
+                        "failed to refresh codex apps tools cache after tool suggestion for {}: {err:#}",
+                        connector.id
+                    );
+                    false
+                }
+            }
+        } else {
+            false
+        };
 
         if completed {
             session
                 .merge_connector_selection(HashSet::from([connector.id.clone()]))
                 .await;
-            let manager = session.services.mcp_connection_manager.read().await;
-            if let Err(err) = manager.hard_refresh_codex_apps_tools_cache().await {
-                warn!(
-                    "failed to refresh codex apps tools cache after tool suggestion for {}: {err:#}",
-                    connector.id
-                );
-            } else {
-                let mcp_tools = manager.list_all_tools().await;
-                connectors::refresh_accessible_connectors_cache_from_mcp_tools(
-                    &turn.config,
-                    auth.as_ref(),
-                    &mcp_tools,
-                );
-            }
         }
 
         let content = serde_json::to_string(&ToolSuggestResult {
             completed,
+            user_confirmed,
             tool_type: args.tool_type,
             action_type: args.action_type,
             tool_id: connector.id,
@@ -228,7 +254,8 @@ fn build_tool_suggestion_elicitation_request(
         .unwrap_or_else(|| connectors::connector_install_url(&tool_name, &connector.id));
 
     let message = format!(
-        "{tool_name} could help with this request.\n\n{suggest_reason}\n\nOpen ChatGPT to install it, then confirm here if you finish."
+        "{tool_name} could help with this request.\n\n{suggest_reason}\n\nOpen ChatGPT to {} it, then confirm here if you finish.",
+        args.action_type.as_str()
     );
 
     McpServerElicitationRequestParams {
@@ -272,6 +299,20 @@ fn build_tool_suggestion_meta(
         TOOL_SUGGEST_TOOL_NAME_KEY: tool_name,
         TOOL_SUGGEST_INSTALL_URL_KEY: install_url,
     })
+}
+
+fn verified_connector_suggestion_completed(
+    action_type: ToolSuggestActionType,
+    tool_id: &str,
+    accessible_connectors: &[AppInfo],
+) -> bool {
+    accessible_connectors
+        .iter()
+        .find(|connector| connector.id == tool_id)
+        .is_some_and(|connector| match action_type {
+            ToolSuggestActionType::Install => connector.is_accessible,
+            ToolSuggestActionType::Enable => connector.is_accessible && connector.is_enabled,
+        })
 }
 
 #[cfg(test)]
@@ -365,5 +406,82 @@ mod tests {
                 "install_url": "https://chatgpt.com/apps/gmail/connector_68df038e0ba48191908c8434991bbac2",
             })
         );
+    }
+
+    #[test]
+    fn verified_connector_suggestion_completed_requires_installed_connector() {
+        let accessible_connectors = vec![AppInfo {
+            id: "calendar".to_string(),
+            name: "Google Calendar".to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: None,
+            is_accessible: true,
+            is_enabled: true,
+            plugin_display_names: Vec::new(),
+        }];
+
+        assert!(verified_connector_suggestion_completed(
+            ToolSuggestActionType::Install,
+            "calendar",
+            &accessible_connectors,
+        ));
+        assert!(!verified_connector_suggestion_completed(
+            ToolSuggestActionType::Install,
+            "gmail",
+            &accessible_connectors,
+        ));
+    }
+
+    #[test]
+    fn verified_connector_suggestion_completed_requires_enabled_connector_for_enable() {
+        let accessible_connectors = vec![
+            AppInfo {
+                id: "calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: None,
+                is_accessible: true,
+                is_enabled: false,
+                plugin_display_names: Vec::new(),
+            },
+            AppInfo {
+                id: "gmail".to_string(),
+                name: "Gmail".to_string(),
+                description: None,
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: None,
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: Vec::new(),
+            },
+        ];
+
+        assert!(!verified_connector_suggestion_completed(
+            ToolSuggestActionType::Enable,
+            "calendar",
+            &accessible_connectors,
+        ));
+        assert!(verified_connector_suggestion_completed(
+            ToolSuggestActionType::Enable,
+            "gmail",
+            &accessible_connectors,
+        ));
     }
 }
