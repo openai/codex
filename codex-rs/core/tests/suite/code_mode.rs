@@ -1520,14 +1520,7 @@ async fn code_mode_lists_global_scope_items() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let code = r#"
-const globals = Object.getOwnPropertyNames(globalThis).sort();
-add_content(JSON.stringify({
-  codexEntries: globals.filter((name) => name.startsWith("__codex") || name === "add_content"),
-  leakedToolGlobals: globals.filter(
-    (name) => name.includes("rmcp") || name === "echo" || name === "echo_tool"
-  ),
-  hasConsole: globals.includes("console"),
-}));
+add_content(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
 "#;
 
     let (_test, second_mock) =
@@ -1541,12 +1534,81 @@ add_content(JSON.stringify({
         "exec global scope inspection failed unexpectedly: {output}"
     );
     assert_eq!(
-        serde_json::from_str::<Value>(&output)?,
-        serde_json::json!({
-            "codexEntries": ["__codexContentItems", "add_content"],
-            "leakedToolGlobals": [],
-            "hasConsole": true,
-        })
+        serde_json::from_str::<Vec<String>>(&output)?,
+        vec![
+            "AggregateError",
+            "Array",
+            "ArrayBuffer",
+            "AsyncDisposableStack",
+            "Atomics",
+            "BigInt",
+            "BigInt64Array",
+            "BigUint64Array",
+            "Boolean",
+            "DataView",
+            "Date",
+            "DisposableStack",
+            "Error",
+            "EvalError",
+            "FinalizationRegistry",
+            "Float16Array",
+            "Float32Array",
+            "Float64Array",
+            "Function",
+            "Infinity",
+            "Int16Array",
+            "Int32Array",
+            "Int8Array",
+            "Intl",
+            "Iterator",
+            "JSON",
+            "Map",
+            "Math",
+            "NaN",
+            "Number",
+            "Object",
+            "Promise",
+            "Proxy",
+            "RangeError",
+            "ReferenceError",
+            "Reflect",
+            "RegExp",
+            "Set",
+            "SharedArrayBuffer",
+            "String",
+            "SuppressedError",
+            "Symbol",
+            "SyntaxError",
+            "TypeError",
+            "URIError",
+            "Uint16Array",
+            "Uint32Array",
+            "Uint8Array",
+            "Uint8ClampedArray",
+            "WeakMap",
+            "WeakRef",
+            "WeakSet",
+            "WebAssembly",
+            "__codexContentItems",
+            "add_content",
+            "console",
+            "decodeURI",
+            "decodeURIComponent",
+            "encodeURI",
+            "encodeURIComponent",
+            "escape",
+            "eval",
+            "globalThis",
+            "isFinite",
+            "isNaN",
+            "parseFloat",
+            "parseInt",
+            "undefined",
+            "unescape",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>()
     );
 
     Ok(())
