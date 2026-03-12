@@ -1840,6 +1840,9 @@ async fn make_chatwidget_manual(
         next_queued_message_seq: 0,
         in_flight_user_message: None,
         retry_current_user_message: None,
+        paused_current_user_message: None,
+        active_turn_id: None,
+        ignored_turn_complete_ids: HashSet::new(),
         pending_rlph_exec_commands: VecDeque::new(),
         active_rlph_exec_commands: HashMap::new(),
         pending_steers: VecDeque::new(),
@@ -7301,6 +7304,203 @@ async fn transient_connection_error_retries_current_message_before_advancing_que
             .map(|message| message.text.clone())
             .collect::<Vec<_>>(),
         vec!["beta".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn late_turn_complete_after_transient_retry_does_not_advance_queue() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.submit_user_message(UserMessage::from("alpha".to_string()));
+    let _ = next_submit_op(&mut op_rx);
+
+    chat.handle_codex_event(Event {
+        id: "turn-start-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.queue_user_message(UserMessage::from("beta".to_string()));
+
+    chat.handle_codex_event(Event {
+        id: "err-1".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "connection failed while streaming response".to_string(),
+            codex_error_info: Some(CodexErrorInfo::HttpConnectionFailed {
+                http_status_code: Some(502),
+            }),
+        }),
+    });
+    let _ = next_submit_op(&mut op_rx);
+
+    chat.handle_codex_event(Event {
+        id: "turn-complete-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+    assert_no_submit_op(&mut op_rx);
+    assert_eq!(
+        chat.queued_user_messages
+            .iter()
+            .map(|message| message.text.clone())
+            .collect::<Vec<_>>(),
+        vec!["beta".to_string()]
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-start-2".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-2".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-complete-2".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-2".to_string(),
+            last_agent_message: None,
+        }),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "beta".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued follow-up after retry turn completed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn bad_request_holds_queue_until_empty_enter_retries_preserved_message() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.submit_user_message(UserMessage::from("first".to_string()));
+    let _ = next_submit_op(&mut op_rx);
+
+    chat.handle_codex_event(Event {
+        id: "turn-start-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.queue_user_message(UserMessage::from("second".to_string()));
+
+    chat.handle_codex_event(Event {
+        id: "err-1".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "bad request".to_string(),
+            codex_error_info: Some(CodexErrorInfo::BadRequest),
+        }),
+    });
+    assert_no_submit_op(&mut op_rx);
+
+    chat.handle_codex_event(Event {
+        id: "turn-complete-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+    assert_no_submit_op(&mut op_rx);
+    assert_eq!(
+        chat.queued_user_messages
+            .iter()
+            .map(|message| message.text.clone())
+            .collect::<Vec<_>>(),
+        vec!["second".to_string()]
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "first".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected preserved message retry, got {other:?}"),
+    }
+
+    chat.handle_codex_event(Event {
+        id: "turn-start-2".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-2".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-complete-2".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-2".to_string(),
+            last_agent_message: None,
+        }),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "second".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued follow-up after preserved retry, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn non_empty_submit_while_queue_paused_stays_queued() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.submit_user_message(UserMessage::from("first".to_string()));
+    let _ = next_submit_op(&mut op_rx);
+
+    chat.handle_codex_event(Event {
+        id: "turn-start-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.queue_user_message(UserMessage::from("second".to_string()));
+
+    chat.handle_codex_event(Event {
+        id: "err-1".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "bad request".to_string(),
+            codex_error_info: Some(CodexErrorInfo::BadRequest),
+        }),
+    });
+    assert_no_submit_op(&mut op_rx);
+
+    chat.bottom_pane
+        .set_composer_text("third".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_no_submit_op(&mut op_rx);
+    assert_eq!(
+        chat.queued_user_messages
+            .iter()
+            .map(|message| message.text.clone())
+            .collect::<Vec<_>>(),
+        vec!["second".to_string(), "third".to_string()]
     );
 }
 
