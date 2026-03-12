@@ -542,6 +542,8 @@ pub struct DynamicToolSpec {
     pub name: String,
     pub description: String,
     pub input_schema: JsonValue,
+    #[serde(default = "default_enabled")]
+    pub expose_to_context: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]

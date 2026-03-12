@@ -205,6 +205,7 @@ Start a fresh thread when you need a new Codex conversation.
         {
             "name": "lookup_ticket",
             "description": "Fetch a ticket by id",
+            "exposeToContext": false,
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -990,6 +991,8 @@ If the session approval policy uses `Granular` with `request_permissions: false`
 ### Dynamic tool calls (experimental)
 
 `dynamicTools` on `thread/start` and the corresponding `item/tool/call` request/response flow are experimental APIs. To enable them, set `initialize.params.capabilities.experimentalApi = true`.
+
+Each dynamic tool may set `exposeToContext`. When omitted, it defaults to `true`. Set it to `false` to keep the tool registered and callable by runtime features such as `js_repl`, while excluding it from the model-facing tool list sent on ordinary turns.
 
 When a dynamic tool is invoked during a turn, the server sends an `item/tool/call` JSON-RPC request to the client:
 

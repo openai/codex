@@ -10,6 +10,8 @@ pub struct DynamicToolSpec {
     pub name: String,
     pub description: String,
     pub input_schema: JsonValue,
+    #[serde(default = "default_expose_to_context")]
+    pub expose_to_context: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
@@ -36,4 +38,8 @@ pub enum DynamicToolCallOutputContentItem {
     InputText { text: String },
     #[serde(rename_all = "camelCase")]
     InputImage { image_url: String },
+}
+
+fn default_expose_to_context() -> bool {
+    true
 }

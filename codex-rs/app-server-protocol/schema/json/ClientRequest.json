@@ -509,6 +509,10 @@
         "description": {
           "type": "string"
         },
+        "exposeToContext": {
+          "default": true,
+          "type": "boolean"
+        },
         "inputSchema": true,
         "name": {
           "type": "string"

@@ -6219,9 +6219,25 @@ fn build_prompt(
     turn_context: &TurnContext,
     base_instructions: BaseInstructions,
 ) -> Prompt {
+    let hidden_dynamic_tools = turn_context
+        .dynamic_tools
+        .iter()
+        .filter(|tool| !tool.expose_to_context)
+        .map(|tool| tool.name.as_str())
+        .collect::<HashSet<_>>();
+    let tools = if hidden_dynamic_tools.is_empty() {
+        router.model_visible_specs()
+    } else {
+        router
+            .model_visible_specs()
+            .into_iter()
+            .filter(|spec| !hidden_dynamic_tools.contains(spec.name()))
+            .collect()
+    };
+
     Prompt {
         input,
-        tools: router.model_visible_specs(),
+        tools,
         parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
         base_instructions,
         personality: turn_context.personality,
