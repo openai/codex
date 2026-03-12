@@ -138,6 +138,7 @@ pub(crate) struct MessageProcessor {
     codex_message_processor: CodexMessageProcessor,
     config_api: ConfigApi,
     external_agent_config_api: ExternalAgentConfigApi,
+    auth_manager: Arc<AuthManager>,
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
 }
@@ -218,7 +219,7 @@ impl MessageProcessor {
             .maybe_start_curated_repo_sync_for_config(&config);
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
-            auth_manager,
+            auth_manager: auth_manager.clone(),
             thread_manager: Arc::clone(&thread_manager),
             outgoing: outgoing.clone(),
             arg0_paths,
@@ -242,9 +243,14 @@ impl MessageProcessor {
             codex_message_processor,
             config_api,
             external_agent_config_api,
+            auth_manager,
             config,
             config_warnings: Arc::new(config_warnings),
         }
+    }
+
+    pub(crate) fn clear_runtime_references(&self) {
+        self.auth_manager.clear_external_auth_refresher();
     }
 
     pub(crate) async fn process_request(

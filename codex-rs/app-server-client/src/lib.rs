@@ -915,4 +915,14 @@ mod tests {
 
         client.shutdown().await.expect("shutdown should complete");
     }
+
+    #[tokio::test]
+    async fn shutdown_completes_promptly_with_retained_shared_managers() {
+        let client = start_test_client(SessionSource::Cli).await;
+
+        timeout(Duration::from_secs(1), client.shutdown())
+            .await
+            .expect("shutdown should not wait for the 5s fallback timeout")
+            .expect("shutdown should complete");
+    }
 }
