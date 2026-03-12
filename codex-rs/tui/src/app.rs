@@ -701,6 +701,7 @@ pub(crate) struct App {
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
+    btw_parent_threads: HashMap<ThreadId, ThreadId>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<Event>>,
     primary_thread_id: Option<ThreadId>,
@@ -1128,7 +1129,7 @@ impl App {
         self.active_thread_id.or(self.chat_widget.thread_id())
     }
 
-    /// Mirrors the visible thread into the contextual footer row.
+    /// Mirrors the visible thread into the contextual footer row and BTW banner.
     ///
     /// The footer sometimes shows ambient context instead of an instructional hint. In multi-agent
     /// sessions, that contextual row includes the currently viewed agent label. The label is
@@ -1139,6 +1140,113 @@ impl App {
             .agent_navigation
             .active_agent_label(self.current_displayed_thread_id(), self.primary_thread_id);
         self.chat_widget.set_active_agent_label(label);
+        self.sync_btw_footer_hint();
+    }
+
+    fn sync_btw_footer_hint(&mut self) {
+        let Some(active_thread_id) = self.current_displayed_thread_id() else {
+            self.chat_widget.set_footer_hint_override(None);
+            return;
+        };
+        let Some(parent_thread_id) = self.btw_parent_threads.get(&active_thread_id).copied() else {
+            self.chat_widget.set_footer_hint_override(None);
+            return;
+        };
+        let label = if self.primary_thread_id == Some(parent_thread_id) {
+            "from main thread  Esc/Ctrl+C to return".to_string()
+        } else {
+            let parent_label = self.thread_label(parent_thread_id);
+            format!("from parent thread ({parent_label})  Esc/Ctrl+C to return")
+        };
+        self.chat_widget
+            .set_footer_hint_override(Some(vec![("BTW".to_string(), label)]));
+    }
+
+    fn active_btw_parent_thread(&self) -> Option<ThreadId> {
+        self.current_displayed_thread_id()
+            .and_then(|thread_id| self.btw_parent_threads.get(&thread_id).copied())
+    }
+
+    fn active_btw_thread_id(&self) -> Option<ThreadId> {
+        let thread_id = self.current_displayed_thread_id()?;
+        self.btw_parent_threads
+            .contains_key(&thread_id)
+            .then_some(thread_id)
+    }
+
+    fn btw_developer_instructions(parent_label: &str) -> String {
+        format!(
+            "<btw_context>\n\
+You are a forked subagent answering a side question about the parent thread ({parent_label}).\n\
+The parent model will not automatically see this exchange unless the user explicitly shares it later.\n\
+Use the forked thread history as your source of truth.\n\
+If the parent thread appears to be missing some very recent in-flight progress, say that briefly instead of inventing it.\n\
+Answer the user's side question directly and concisely.\n\
+</btw_context>"
+        )
+    }
+
+    async fn attach_live_thread(
+        &mut self,
+        thread_id: ThreadId,
+        thread: Arc<codex_core::CodexThread>,
+        session_configured: SessionConfiguredEvent,
+        show_in_agent_picker: bool,
+    ) -> Result<()> {
+        if self.thread_event_channels.contains_key(&thread_id) {
+            return Ok(());
+        }
+        let config_snapshot = thread.config_snapshot().await;
+        if show_in_agent_picker {
+            self.upsert_agent_picker_thread(
+                thread_id,
+                config_snapshot.session_source.get_nickname(),
+                config_snapshot.session_source.get_agent_role(),
+                false,
+            );
+        }
+        let event = Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(session_configured),
+        };
+        let channel =
+            ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
+        let app_event_tx = self.app_event_tx.clone();
+        self.thread_event_channels.insert(thread_id, channel);
+        let listener_handle = tokio::spawn(async move {
+            loop {
+                let event = match thread.next_event().await {
+                    Ok(event) => event,
+                    Err(err) => {
+                        tracing::debug!("external thread {thread_id} listener stopped: {err}");
+                        break;
+                    }
+                };
+                app_event_tx.send(AppEvent::ThreadEvent { thread_id, event });
+            }
+        });
+        self.thread_event_listener_tasks
+            .insert(thread_id, listener_handle);
+        Ok(())
+    }
+
+    async fn discard_btw_thread(&mut self, thread_id: ThreadId) {
+        if self.chat_widget.thread_id() == Some(thread_id) {
+            self.backtrack.pending_rollback = None;
+            self.suppress_shutdown_complete = true;
+            self.chat_widget.submit_op(Op::Shutdown);
+        } else if let Ok(thread) = self.server.get_thread(thread_id).await {
+            let _ = thread.submit(Op::Shutdown).await;
+        }
+        self.server.remove_thread(&thread_id).await;
+        self.abort_thread_event_listener(thread_id);
+        self.thread_event_channels.remove(&thread_id);
+        self.btw_parent_threads.remove(&thread_id);
+        self.agent_navigation.remove(thread_id);
+        if self.active_thread_id == Some(thread_id) {
+            self.clear_active_thread().await;
+        }
+        self.sync_active_agent_label();
     }
 
     async fn thread_cwd(&self, thread_id: ThreadId) -> Option<PathBuf> {
@@ -1471,6 +1579,11 @@ impl App {
     }
 
     async fn select_agent_thread(&mut self, tui: &mut tui::Tui, thread_id: ThreadId) -> Result<()> {
+        if let Some(btw_thread_id) = self.active_btw_thread_id()
+            && btw_thread_id != thread_id
+        {
+            self.discard_btw_thread(btw_thread_id).await;
+        }
         if self.active_thread_id == Some(thread_id) {
             return Ok(());
         }
@@ -1546,6 +1659,7 @@ impl App {
         self.abort_all_thread_event_listeners();
         self.thread_event_channels.clear();
         self.agent_navigation.clear();
+        self.btw_parent_threads.clear();
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
@@ -1950,6 +2064,7 @@ impl App {
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
+            btw_parent_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -2310,6 +2425,86 @@ impl App {
                 }
 
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::StartBtw {
+                parent_thread_id,
+                user_message,
+            } => {
+                self.session_telemetry.counter(
+                    "codex.thread.btw",
+                    1,
+                    &[("source", "slash_command")],
+                );
+                self.refresh_in_memory_config_from_disk_best_effort("starting a BTW subagent")
+                    .await;
+                let path = match self.server.get_thread(parent_thread_id).await {
+                    Ok(thread) => thread.rollout_path(),
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to fork BTW thread from {parent_thread_id}: {err}"
+                        ));
+                        return Ok(AppRunControl::Continue);
+                    }
+                };
+                let Some(path) = path else {
+                    self.chat_widget.add_error_message(
+                        "A thread must contain at least one turn before /btw can fork it."
+                            .to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+                if !path.exists() {
+                    self.chat_widget.add_error_message(
+                        "A thread must contain at least one turn before /btw can fork it."
+                            .to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                }
+
+                match self
+                    .server
+                    .fork_thread(usize::MAX, self.config.clone(), path.clone(), false, None)
+                    .await
+                {
+                    Ok(forked) => {
+                        let child_thread_id = forked.thread_id;
+                        let parent_label = self.thread_label(parent_thread_id);
+                        self.attach_live_thread(
+                            child_thread_id,
+                            Arc::clone(&forked.thread),
+                            forked.session_configured,
+                            false,
+                        )
+                        .await?;
+                        self.btw_parent_threads
+                            .insert(child_thread_id, parent_thread_id);
+                        self.select_agent_thread(tui, child_thread_id).await?;
+                        if self.active_thread_id == Some(child_thread_id) {
+                            let developer_instructions =
+                                Self::btw_developer_instructions(&parent_label);
+                            if let Some(op) = self
+                                .chat_widget
+                                .submit_user_message_for_current_thread_with_developer_instructions(
+                                    user_message,
+                                    developer_instructions,
+                                )
+                            {
+                                self.note_active_thread_outbound_op(&op).await;
+                            }
+                        } else {
+                            self.btw_parent_threads.remove(&child_thread_id);
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to switch into BTW thread {child_thread_id}."
+                            ));
+                        }
+                    }
+                    Err(err) => {
+                        let path_display = path.display();
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to start BTW thread from {path_display}: {err}"
+                        ));
+                    }
+                }
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
@@ -3167,6 +3362,9 @@ impl App {
                 self.chat_widget.open_approvals_popup();
             }
             AppEvent::OpenAgentPicker => {
+                if let Some(parent_thread_id) = self.active_btw_parent_thread() {
+                    self.select_agent_thread(tui, parent_thread_id).await?;
+                }
                 self.open_agent_picker().await;
             }
             AppEvent::SelectAgentThread(thread_id) => {
@@ -3550,25 +3748,11 @@ impl App {
                 rollout_path: thread.rollout_path(),
             }),
         };
-        let channel =
-            ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
-        let app_event_tx = self.app_event_tx.clone();
-        self.thread_event_channels.insert(thread_id, channel);
-        let listener_handle = tokio::spawn(async move {
-            loop {
-                let event = match thread.next_event().await {
-                    Ok(event) => event,
-                    Err(err) => {
-                        tracing::debug!("external thread {thread_id} listener stopped: {err}");
-                        break;
-                    }
-                };
-                app_event_tx.send(AppEvent::ThreadEvent { thread_id, event });
-            }
-        });
-        self.thread_event_listener_tasks
-            .insert(thread_id, listener_handle);
-        Ok(())
+        let EventMsg::SessionConfigured(session_configured) = event.msg else {
+            unreachable!("thread-created event must be session-configured");
+        };
+        self.attach_live_thread(thread_id, thread, session_configured, true)
+            .await
     }
 
     fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
@@ -3789,11 +3973,33 @@ impl App {
             // Esc so the active UI (e.g. status indicator, modals, popups)
             // handles it.
             KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                if self.overlay.is_none()
+                    && self.chat_widget.no_modal_or_popup_active()
+                    && self.chat_widget.composer_is_empty()
+                    && let Some(parent_thread_id) = self.active_btw_parent_thread()
+                {
+                    let _ = self.select_agent_thread(tui, parent_thread_id).await;
+                } else {
+                    self.chat_widget.handle_key_event(key_event);
+                }
+            }
+            KeyEvent {
                 code: KeyCode::Esc,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
-                if self.chat_widget.is_normal_backtrack_mode()
+                if self.overlay.is_none()
+                    && self.chat_widget.no_modal_or_popup_active()
+                    && self.chat_widget.composer_is_empty()
+                    && let Some(parent_thread_id) = self.active_btw_parent_thread()
+                {
+                    let _ = self.select_agent_thread(tui, parent_thread_id).await;
+                } else if self.chat_widget.is_normal_backtrack_mode()
                     && self.chat_widget.composer_is_empty()
                 {
                     self.handle_backtrack_esc_key(tui);
@@ -5063,6 +5269,304 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_btw_forks_switches_and_esc_returns_to_parent() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut tui = make_test_tui();
+
+        let parent = app.server.start_thread(app.config.clone()).await?;
+        let parent_thread_id = parent.thread_id;
+        let parent_rollout_path = parent
+            .session_configured
+            .rollout_path
+            .clone()
+            .expect("thread rollout path");
+        if let Some(parent_dir) = parent_rollout_path.parent() {
+            std::fs::create_dir_all(parent_dir)?;
+        }
+        let rollout_line = codex_protocol::protocol::RolloutLine {
+            timestamp: "2026-03-12T00:00:00.000Z".to_string(),
+            item: codex_protocol::protocol::RolloutItem::SessionMeta(
+                codex_protocol::protocol::SessionMetaLine {
+                    meta: codex_protocol::protocol::SessionMeta {
+                        id: parent_thread_id,
+                        forked_from_id: None,
+                        timestamp: "2026-03-12T00:00:00.000Z".to_string(),
+                        cwd: app.config.cwd.clone(),
+                        originator: "test".to_string(),
+                        cli_version: env!("CARGO_PKG_VERSION").to_string(),
+                        source: SessionSource::Cli,
+                        agent_nickname: None,
+                        agent_role: None,
+                        model_provider: Some(app.config.model_provider_id.clone()),
+                        base_instructions: None,
+                        dynamic_tools: None,
+                        memory_mode: None,
+                    },
+                    git: None,
+                },
+            ),
+        };
+        let parent_user_message = codex_protocol::protocol::RolloutLine {
+            timestamp: "2026-03-12T00:00:01.000Z".to_string(),
+            item: codex_protocol::protocol::RolloutItem::EventMsg(EventMsg::UserMessage(
+                codex_protocol::protocol::UserMessageEvent {
+                    message: "what have you explored so far?".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                },
+            )),
+        };
+        std::fs::write(
+            &parent_rollout_path,
+            format!(
+                "{}\n{}\n",
+                serde_json::to_string(&rollout_line)?,
+                serde_json::to_string(&parent_user_message)?,
+            ),
+        )?;
+
+        app.handle_thread_created(parent_thread_id).await?;
+        app.primary_thread_id = Some(parent_thread_id);
+        app.activate_thread_channel(parent_thread_id).await;
+
+        let user_message =
+            crate::chatwidget::UserMessage::plain("explore the codebase".to_string());
+        let control = app
+            .handle_event(
+                &mut tui,
+                AppEvent::StartBtw {
+                    parent_thread_id,
+                    user_message: user_message.clone(),
+                },
+            )
+            .await?;
+        assert!(matches!(control, AppRunControl::Continue));
+
+        let child_thread_id = app
+            .active_thread_id
+            .expect("BTW child should be active after start");
+        assert_ne!(child_thread_id, parent_thread_id);
+        assert_eq!(app.active_btw_parent_thread(), Some(parent_thread_id));
+        assert_eq!(app.agent_navigation.get(&child_thread_id), None);
+        let child_channel = app
+            .thread_event_channels
+            .get(&child_thread_id)
+            .expect("child thread channel");
+        let child_store = child_channel.store.lock().await;
+        let session_configured = child_store
+            .session_configured
+            .as_ref()
+            .expect("child session configured");
+        let EventMsg::SessionConfigured(session_configured) = &session_configured.msg else {
+            panic!(
+                "expected SessionConfigured, got {:?}",
+                session_configured.msg
+            );
+        };
+        assert!(
+            session_configured
+                .initial_messages
+                .as_ref()
+                .is_some_and(|messages| {
+                    messages.iter().any(|message| {
+                        matches!(
+                            message,
+                            EventMsg::UserMessage(ev)
+                                if ev.message == "what have you explored so far?"
+                        )
+                    })
+                }),
+            "expected child session to replay forked history into initial_messages"
+        );
+        drop(child_store);
+
+        let mut rendered_cells = Vec::new();
+        let found_user_prompt = loop {
+            match app_event_rx.try_recv() {
+                Ok(AppEvent::InsertHistoryCell(cell)) => {
+                    let rendered = cell
+                        .display_lines(80)
+                        .into_iter()
+                        .map(|line| line.to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let contains_user_prompt = rendered.contains("explore the codebase");
+                    rendered_cells.push(rendered);
+                    if contains_user_prompt {
+                        break true;
+                    }
+                }
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        };
+        assert!(
+            found_user_prompt,
+            "expected BTW user prompt cell, got {rendered_cells:?}"
+        );
+
+        app.handle_key_event(&mut tui, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .await;
+        assert_eq!(app.active_thread_id, Some(parent_thread_id));
+        assert_eq!(app.active_btw_parent_thread(), None);
+        assert!(!app.thread_event_channels.contains_key(&child_thread_id));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn start_btw_ctrl_c_returns_to_parent() -> Result<()> {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut tui = make_test_tui();
+
+        let parent = app.server.start_thread(app.config.clone()).await?;
+        let parent_thread_id = parent.thread_id;
+        let parent_rollout_path = parent
+            .session_configured
+            .rollout_path
+            .clone()
+            .expect("thread rollout path");
+        if let Some(parent_dir) = parent_rollout_path.parent() {
+            std::fs::create_dir_all(parent_dir)?;
+        }
+        let rollout_line = codex_protocol::protocol::RolloutLine {
+            timestamp: "2026-03-12T00:00:00.000Z".to_string(),
+            item: codex_protocol::protocol::RolloutItem::SessionMeta(
+                codex_protocol::protocol::SessionMetaLine {
+                    meta: codex_protocol::protocol::SessionMeta {
+                        id: parent_thread_id,
+                        forked_from_id: None,
+                        timestamp: "2026-03-12T00:00:00.000Z".to_string(),
+                        cwd: app.config.cwd.clone(),
+                        originator: "test".to_string(),
+                        cli_version: env!("CARGO_PKG_VERSION").to_string(),
+                        source: SessionSource::Cli,
+                        agent_nickname: None,
+                        agent_role: None,
+                        model_provider: Some(app.config.model_provider_id.clone()),
+                        base_instructions: None,
+                        dynamic_tools: None,
+                        memory_mode: None,
+                    },
+                    git: None,
+                },
+            ),
+        };
+        std::fs::write(
+            &parent_rollout_path,
+            format!("{}\n", serde_json::to_string(&rollout_line)?),
+        )?;
+
+        app.handle_thread_created(parent_thread_id).await?;
+        app.primary_thread_id = Some(parent_thread_id);
+        app.activate_thread_channel(parent_thread_id).await;
+
+        let control = app
+            .handle_event(
+                &mut tui,
+                AppEvent::StartBtw {
+                    parent_thread_id,
+                    user_message: crate::chatwidget::UserMessage::plain(
+                        "explore the codebase".to_string(),
+                    ),
+                },
+            )
+            .await?;
+        assert!(matches!(control, AppRunControl::Continue));
+
+        let child_thread_id = app
+            .active_thread_id
+            .expect("BTW child should be active after start");
+        assert_ne!(child_thread_id, parent_thread_id);
+
+        app.handle_key_event(
+            &mut tui,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        )
+        .await;
+
+        assert_eq!(app.active_thread_id, Some(parent_thread_id));
+        assert_eq!(app.active_btw_parent_thread(), None);
+        assert!(!app.thread_event_channels.contains_key(&child_thread_id));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn open_agent_picker_discards_active_btw_thread() -> Result<()> {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut tui = make_test_tui();
+
+        let parent = app.server.start_thread(app.config.clone()).await?;
+        let parent_thread_id = parent.thread_id;
+        let parent_rollout_path = parent
+            .session_configured
+            .rollout_path
+            .clone()
+            .expect("thread rollout path");
+        if let Some(parent_dir) = parent_rollout_path.parent() {
+            std::fs::create_dir_all(parent_dir)?;
+        }
+        let rollout_line = codex_protocol::protocol::RolloutLine {
+            timestamp: "2026-03-12T00:00:00.000Z".to_string(),
+            item: codex_protocol::protocol::RolloutItem::SessionMeta(
+                codex_protocol::protocol::SessionMetaLine {
+                    meta: codex_protocol::protocol::SessionMeta {
+                        id: parent_thread_id,
+                        forked_from_id: None,
+                        timestamp: "2026-03-12T00:00:00.000Z".to_string(),
+                        cwd: app.config.cwd.clone(),
+                        originator: "test".to_string(),
+                        cli_version: env!("CARGO_PKG_VERSION").to_string(),
+                        source: SessionSource::Cli,
+                        agent_nickname: None,
+                        agent_role: None,
+                        model_provider: Some(app.config.model_provider_id.clone()),
+                        base_instructions: None,
+                        dynamic_tools: None,
+                        memory_mode: None,
+                    },
+                    git: None,
+                },
+            ),
+        };
+        std::fs::write(
+            &parent_rollout_path,
+            format!("{}\n", serde_json::to_string(&rollout_line)?),
+        )?;
+
+        app.handle_thread_created(parent_thread_id).await?;
+        app.primary_thread_id = Some(parent_thread_id);
+        app.activate_thread_channel(parent_thread_id).await;
+
+        let control = app
+            .handle_event(
+                &mut tui,
+                AppEvent::StartBtw {
+                    parent_thread_id,
+                    user_message: crate::chatwidget::UserMessage::plain(
+                        "explore the codebase".to_string(),
+                    ),
+                },
+            )
+            .await?;
+        assert!(matches!(control, AppRunControl::Continue));
+
+        let child_thread_id = app
+            .active_thread_id
+            .expect("BTW child should be active after start");
+
+        let control = app
+            .handle_event(&mut tui, AppEvent::OpenAgentPicker)
+            .await?;
+        assert!(matches!(control, AppRunControl::Continue));
+        assert_eq!(app.active_thread_id, Some(parent_thread_id));
+        assert_eq!(app.active_btw_parent_thread(), None);
+        assert!(!app.thread_event_channels.contains_key(&child_thread_id));
+        assert_eq!(app.agent_navigation.get(&child_thread_id), None);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn update_feature_flags_enabling_guardian_persists_only_the_feature_flag() -> Result<()> {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
@@ -5615,6 +6119,7 @@ mod tests {
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
+            btw_parent_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -5675,6 +6180,7 @@ mod tests {
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),
+                btw_parent_threads: HashMap::new(),
                 active_thread_id: None,
                 active_thread_rx: None,
                 primary_thread_id: None,
@@ -5711,6 +6217,14 @@ mod tests {
             "test".to_string(),
             SessionSource::Cli,
         )
+    }
+
+    fn make_test_tui() -> crate::tui::Tui {
+        let terminal = crate::custom_terminal::Terminal::with_options(
+            ratatui::backend::CrosstermBackend::new(std::io::stdout()),
+        )
+        .expect("terminal");
+        crate::tui::Tui::new(terminal)
     }
 
     fn app_enabled_in_effective_config(config: &Config, app_id: &str) -> Option<bool> {

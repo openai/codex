@@ -2471,6 +2471,34 @@ async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
 }
 
 #[tokio::test]
+async fn submit_user_message_for_current_thread_with_developer_instructions_overrides_turn_mode() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    let developer_instructions = "<btw_context>Answer a side question.</btw_context>".to_string();
+
+    chat.submit_user_message_for_current_thread_with_developer_instructions(
+        UserMessage::plain("Explore the codebase".to_string()),
+        developer_instructions.clone(),
+    );
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode:
+                Some(CollaborationMode {
+                    settings:
+                        Settings {
+                            developer_instructions: Some(actual_instructions),
+                            ..
+                        },
+                    ..
+                }),
+            ..
+        } => assert_eq!(actual_instructions, developer_instructions),
+        other => panic!("expected Op::UserTurn with BTW developer instructions, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn reasoning_selection_in_plan_mode_opens_scope_prompt_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
     chat.thread_id = Some(ThreadId::new());
@@ -6075,6 +6103,42 @@ async fn slash_fork_requests_current_fork() {
     chat.dispatch_command(SlashCommand::Fork);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::ForkCurrentSession));
+}
+
+#[tokio::test]
+async fn slash_btw_requests_forked_side_question_while_task_running() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let parent_thread_id = ThreadId::new();
+    chat.thread_id = Some(parent_thread_id);
+    chat.on_task_started();
+    chat.bottom_pane.set_composer_text(
+        "/btw explore the codebase".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::StartBtw {
+            parent_thread_id: emitted_parent_thread_id,
+            user_message,
+        }) if emitted_parent_thread_id == parent_thread_id
+            && user_message
+                == UserMessage {
+                    text: "explore the codebase".to_string(),
+                    local_images: Vec::new(),
+                    remote_image_urls: Vec::new(),
+                    text_elements: Vec::new(),
+                    mention_bindings: Vec::new(),
+                }
+    );
+    assert!(
+        op_rx.try_recv().is_err(),
+        "expected no op on the parent thread"
+    );
+    assert_eq!(chat.bottom_pane.composer_text(), "");
 }
 
 #[tokio::test]
@@ -9789,6 +9853,27 @@ async fn status_line_fast_mode_footer_snapshot() {
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw fast-mode footer");
     assert_snapshot!("status_line_fast_mode_footer", terminal.backend());
+}
+
+#[tokio::test]
+async fn btw_footer_override_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.show_welcome_banner = false;
+    chat.set_footer_hint_override(Some(vec![(
+        "BTW".to_string(),
+        "from main thread  Esc/Ctrl+C to return".to_string(),
+    )]));
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw BTW footer");
+    assert_snapshot!("btw_footer_override", terminal.backend());
 }
 
 #[tokio::test]
