@@ -4871,10 +4871,11 @@ mod tests {
             HashMap::new(),
         ));
 
-        thread_manager
-            .remove_and_close_all_threads()
-            .await
-            .expect("close all threads");
+        let report = thread_manager
+            .shutdown_all_threads_bounded(Duration::from_secs(10))
+            .await;
+        assert!(report.submit_failed.is_empty());
+        assert!(report.timed_out.is_empty());
 
         let shutdown_complete = timeout(Duration::from_secs(2), async {
             loop {
