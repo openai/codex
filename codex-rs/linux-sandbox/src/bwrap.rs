@@ -183,14 +183,14 @@ fn create_bwrap_flags(
 ///    `--tmpfs /` and layer scoped `--ro-bind` mounts.
 /// 2. `--dev /dev` mounts a minimal writable `/dev` with standard device nodes
 ///    (including `/dev/urandom`) even under a read-only root.
-/// 3. Unreadable ancestors of writable roots are masked first so narrower
-///    writable descendants can be rebound afterward.
+/// 3. Unreadable ancestors of writable roots are masked before their child
+///    mounts are rebound so nested writable carveouts can be reopened safely.
 /// 4. `--bind <root> <root>` re-enables writes for allowed roots, including
 ///    writable subpaths under `/dev` (for example, `/dev/shm`).
 /// 5. `--ro-bind <subpath> <subpath>` re-applies read-only protections under
 ///    those writable roots so protected subpaths win.
-/// 6. Remaining explicit unreadable roots are masked last so deny carveouts
-///    still win even when the readable baseline includes `/`.
+/// 6. Nested unreadable carveouts under a writable root are masked after that
+///    root is bound, and unrelated unreadable roots are masked afterward.
 fn create_filesystem_args(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &Path,
@@ -265,13 +265,15 @@ fn create_filesystem_args(
         .iter()
         .map(|writable_root| writable_root.root.as_path().to_path_buf())
         .collect();
-
     let unreadable_paths: HashSet<PathBuf> = unreadable_roots
         .iter()
         .map(|path| path.as_path().to_path_buf())
         .collect();
     let mut sorted_writable_roots = writable_roots;
     sorted_writable_roots.sort_by_key(|writable_root| path_depth(writable_root.root.as_path()));
+    // Mask only the unreadable ancestors that sit outside every writable root.
+    // Unreadable paths nested under a broader writable root are applied after
+    // that broader root is bound, then reopened by any deeper writable child.
     let mut unreadable_ancestors_of_writable_roots: Vec<PathBuf> = unreadable_roots
         .iter()
         .filter(|path| {
@@ -286,6 +288,7 @@ fn create_filesystem_args(
         .map(|path| path.as_path().to_path_buf())
         .collect();
     unreadable_ancestors_of_writable_roots.sort_by_key(|path| path_depth(path));
+
     for unreadable_root in &unreadable_ancestors_of_writable_roots {
         append_unreadable_root_args(
             &mut args,
@@ -297,13 +300,17 @@ fn create_filesystem_args(
 
     for writable_root in &sorted_writable_roots {
         let root = writable_root.root.as_path();
-        if let Some(masking_root) = unreadable_ancestors_of_writable_roots
+        // If a denied ancestor was already masked, recreate any missing mount
+        // target parents before binding the narrower writable descendant.
+        if let Some(masking_root) = unreadable_roots
             .iter()
+            .map(|path| path.as_path())
             .filter(|unreadable_root| root.starts_with(unreadable_root))
             .max_by_key(|unreadable_root| path_depth(unreadable_root))
         {
             append_mount_target_parent_dir_args(&mut args, root, masking_root);
         }
+
         args.push("--bind".to_string());
         args.push(path_to_string(root));
         args.push(path_to_string(root));
@@ -318,7 +325,6 @@ fn create_filesystem_args(
         for subpath in read_only_subpaths {
             append_read_only_subpath_args(&mut args, &subpath, &allowed_write_paths);
         }
-
         let mut nested_unreadable_roots: Vec<PathBuf> = unreadable_roots
             .iter()
             .filter(|path| path.as_path().starts_with(root))
@@ -389,11 +395,10 @@ fn path_depth(path: &Path) -> usize {
 fn append_mount_target_parent_dir_args(args: &mut Vec<String>, mount_target: &Path, anchor: &Path) {
     let mount_target_dir = if mount_target.is_dir() {
         mount_target
+    } else if let Some(parent) = mount_target.parent() {
+        parent
     } else {
-        match mount_target.parent() {
-            Some(parent) => parent,
-            None => return,
-        }
+        return;
     };
     let mut mount_target_dirs: Vec<PathBuf> = mount_target_dir
         .ancestors()
@@ -977,6 +982,64 @@ mod tests {
         assert!(
             blocked_none_index < allowed_bind_index,
             "expected unreadable parent mask before rebinding writable file child: {:#?}",
+            args.args
+        );
+    }
+
+    #[test]
+    fn split_policy_reenables_nested_writable_roots_after_unreadable_parent() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let writable_root = temp_dir.path().join("workspace");
+        let blocked = writable_root.join("blocked");
+        let allowed = blocked.join("allowed");
+        std::fs::create_dir_all(&allowed).expect("create blocked/allowed dir");
+        let writable_root =
+            AbsolutePathBuf::from_absolute_path(&writable_root).expect("absolute writable root");
+        let blocked = AbsolutePathBuf::from_absolute_path(&blocked).expect("absolute blocked dir");
+        let allowed = AbsolutePathBuf::from_absolute_path(&allowed).expect("absolute allowed dir");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: writable_root.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: blocked.clone(),
+                },
+                access: FileSystemAccessMode::None,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: allowed.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+        ]);
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let blocked_str = path_to_string(blocked.as_path());
+        let allowed_str = path_to_string(allowed.as_path());
+        let blocked_none_index = args
+            .args
+            .windows(4)
+            .position(|window| window == ["--perms", "000", "--tmpfs", blocked_str.as_str()])
+            .expect("blocked should be masked first");
+        let allowed_dir_index = args
+            .args
+            .windows(2)
+            .position(|window| window == ["--dir", allowed_str.as_str()])
+            .expect("allowed mount target should be recreated");
+        let allowed_bind_index = args
+            .args
+            .windows(3)
+            .position(|window| window == ["--bind", allowed_str.as_str(), allowed_str.as_str()])
+            .expect("allowed path should be rebound writable");
+
+        assert!(
+            blocked_none_index < allowed_dir_index && allowed_dir_index < allowed_bind_index,
+            "expected unreadable parent mask before recreating and rebinding writable child: {:#?}",
             args.args
         );
     }
