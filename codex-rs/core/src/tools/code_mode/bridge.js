@@ -1,5 +1,4 @@
 const __codexEnabledTools = __CODE_MODE_ENABLED_TOOLS_PLACEHOLDER__;
-const __codexEnabledToolNames = __codexEnabledTools.map((tool) => tool.global_name);
 const __codexContentItems = Array.isArray(globalThis.__codexContentItems)
   ? globalThis.__codexContentItems
   : [];
@@ -45,10 +44,6 @@ Object.defineProperty(globalThis, '__codexContentItems', {
   writable: false,
 });
 
-globalThis.codex = {
-  enabledTools: Object.freeze(__codexEnabledToolNames.slice()),
-};
-
 globalThis.add_content = (value) => {
   const contentItems = __codexNormalizeContentItems(value);
   __codexContentItems.push(...contentItems);
@@ -62,16 +57,5 @@ globalThis.console = Object.freeze({
   error() {},
   debug() {},
 });
-
-for (const tool of __codexEnabledTools) {
-  if (!(tool.global_name in globalThis)) {
-    Object.defineProperty(globalThis, tool.global_name, {
-      value: async (args) => __codex_tool_call(tool.tool_name, args),
-      configurable: true,
-      enumerable: false,
-      writable: false,
-    });
-  }
-}
 
 __CODE_MODE_USER_CODE_PLACEHOLDER__

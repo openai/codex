@@ -1527,7 +1527,8 @@ const tool = ALL_TOOLS.find(
 );
 
 add_content(JSON.stringify({
-  enabled: codex.enabledTools.includes("mcp__rmcp__echo_tool"),
+  hasGlobalBinding: Object.prototype.hasOwnProperty.call(globalThis, "mcp__rmcp__echo_tool"),
+  bindingType: typeof globalThis.mcp__rmcp__echo_tool,
   metadataName: tool?.name,
   result: (await mcp__rmcp__echo_tool({ message: "ping" })).structuredContent.echo,
 }));
@@ -1550,7 +1551,8 @@ add_content(JSON.stringify({
     assert_eq!(
         serde_json::from_str::<Value>(&output)?,
         serde_json::json!({
-            "enabled": true,
+            "hasGlobalBinding": false,
+            "bindingType": "undefined",
             "metadataName": "echo_tool",
             "result": "ECHOING: ping",
         })

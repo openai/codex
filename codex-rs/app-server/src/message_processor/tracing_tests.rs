@@ -414,8 +414,6 @@ where
     F: Fn(&[SpanData]) -> bool,
 {
     let mut last_spans = Vec::new();
-    // Bazel remote execution can take longer to drain background work and flush
-    // spans than a local cargo test run.
     for _ in 0..200 {
         tokio::task::yield_now().await;
         tracing
