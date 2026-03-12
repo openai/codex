@@ -6,7 +6,6 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 pub(crate) fn sandbox_tag(
     policy: &SandboxPolicy,
     windows_sandbox_level: WindowsSandboxLevel,
-    use_legacy_landlock: bool,
 ) -> &'static str {
     if matches!(policy, SandboxPolicy::DangerFullAccess) {
         return "none";
@@ -17,9 +16,6 @@ pub(crate) fn sandbox_tag(
     if cfg!(target_os = "windows") && matches!(windows_sandbox_level, WindowsSandboxLevel::Elevated)
     {
         return "windows_elevated";
-    }
-    if cfg!(target_os = "linux") && !use_legacy_landlock {
-        return "linux_bubblewrap";
     }
 
     get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled)
@@ -38,41 +34,34 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn danger_full_access_is_untagged_even_when_bubblewrap_is_default() {
+    fn danger_full_access_is_untagged_even_when_linux_sandbox_defaults_apply() {
         let actual = sandbox_tag(
             &SandboxPolicy::DangerFullAccess,
             WindowsSandboxLevel::Disabled,
-            false,
         );
         assert_eq!(actual, "none");
     }
 
     #[test]
-    fn external_sandbox_keeps_external_tag_when_bubblewrap_is_default() {
+    fn external_sandbox_keeps_external_tag_when_linux_sandbox_defaults_apply() {
         let actual = sandbox_tag(
             &SandboxPolicy::ExternalSandbox {
                 network_access: NetworkAccess::Enabled,
             },
             WindowsSandboxLevel::Disabled,
-            false,
         );
         assert_eq!(actual, "external");
     }
 
     #[test]
-    fn bubblewrap_default_sets_distinct_linux_tag() {
+    fn default_linux_sandbox_uses_platform_sandbox_tag() {
         let actual = sandbox_tag(
             &SandboxPolicy::new_read_only_policy(),
             WindowsSandboxLevel::Disabled,
-            false,
         );
-        let expected = if cfg!(target_os = "linux") {
-            "linux_bubblewrap"
-        } else {
-            get_platform_sandbox(false)
-                .map(SandboxType::as_metric_tag)
-                .unwrap_or("none")
-        };
+        let expected = get_platform_sandbox(false)
+            .map(SandboxType::as_metric_tag)
+            .unwrap_or("none");
         assert_eq!(actual, expected);
     }
 }

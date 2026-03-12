@@ -132,12 +132,9 @@ impl TurnMetadataState {
         cwd: PathBuf,
         sandbox_policy: &SandboxPolicy,
         windows_sandbox_level: WindowsSandboxLevel,
-        use_legacy_landlock: bool,
     ) -> Self {
         let repo_root = get_git_repo_root(&cwd).map(|root| root.to_string_lossy().into_owned());
-        let sandbox = Some(
-            sandbox_tag(sandbox_policy, windows_sandbox_level, use_legacy_landlock).to_string(),
-        );
+        let sandbox = Some(sandbox_tag(sandbox_policy, windows_sandbox_level).to_string());
         let base_metadata = build_turn_metadata_bag(Some(turn_id), sandbox, None, None);
         let base_header = base_metadata
             .to_header_value()
@@ -295,53 +292,23 @@ mod tests {
     }
 
     #[test]
-    fn turn_metadata_state_respects_legacy_landlock_flag() {
+    fn turn_metadata_state_uses_platform_sandbox_tag() {
         let temp_dir = TempDir::new().expect("temp dir");
         let cwd = temp_dir.path().to_path_buf();
         let sandbox_policy = SandboxPolicy::new_read_only_policy();
 
-        let default_bubblewrap = TurnMetadataState::new(
+        let state = TurnMetadataState::new(
             "turn-a".to_string(),
-            cwd.clone(),
-            &sandbox_policy,
-            WindowsSandboxLevel::Disabled,
-            false,
-        );
-        let legacy_landlock = TurnMetadataState::new(
-            "turn-b".to_string(),
             cwd,
             &sandbox_policy,
             WindowsSandboxLevel::Disabled,
-            true,
         );
 
-        let default_bubblewrap_header = default_bubblewrap
-            .current_header_value()
-            .expect("default_bubblewrap_header");
-        let legacy_landlock_header = legacy_landlock
-            .current_header_value()
-            .expect("legacy_landlock_header");
+        let header = state.current_header_value().expect("header");
+        let json: Value = serde_json::from_str(&header).expect("json");
+        let sandbox_name = json.get("sandbox").and_then(Value::as_str);
 
-        let default_bubblewrap_json: Value =
-            serde_json::from_str(&default_bubblewrap_header).expect("default_bubblewrap_json");
-        let legacy_landlock_json: Value =
-            serde_json::from_str(&legacy_landlock_header).expect("legacy_landlock_json");
-
-        let default_bubblewrap_sandbox = default_bubblewrap_json
-            .get("sandbox")
-            .and_then(Value::as_str);
-        let legacy_landlock_sandbox = legacy_landlock_json.get("sandbox").and_then(Value::as_str);
-
-        let expected_default_bubblewrap =
-            sandbox_tag(&sandbox_policy, WindowsSandboxLevel::Disabled, false);
-        assert_eq!(
-            default_bubblewrap_sandbox,
-            Some(expected_default_bubblewrap)
-        );
-
-        if cfg!(target_os = "linux") {
-            assert_eq!(default_bubblewrap_sandbox, Some("linux_bubblewrap"));
-            assert_ne!(default_bubblewrap_sandbox, legacy_landlock_sandbox);
-        }
+        let expected_sandbox = sandbox_tag(&sandbox_policy, WindowsSandboxLevel::Disabled);
+        assert_eq!(sandbox_name, Some(expected_sandbox));
     }
 }

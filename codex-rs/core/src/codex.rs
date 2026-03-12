@@ -1290,7 +1290,6 @@ impl Session {
             cwd.clone(),
             session_configuration.sandbox_policy.get(),
             session_configuration.windows_sandbox_level,
-            per_turn_config.features.use_legacy_landlock(),
         ));
         let (current_date, timezone) = local_time_context();
         TurnContext {
@@ -5211,7 +5210,6 @@ async fn spawn_review_thread(
         parent_turn_context.cwd.clone(),
         parent_turn_context.sandbox_policy.get(),
         parent_turn_context.windows_sandbox_level,
-        parent_turn_context.features.use_legacy_landlock(),
     ));
 
     let review_turn_context = TurnContext {
