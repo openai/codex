@@ -14,10 +14,6 @@ const ALIASES: &[Alias] = &[
         feature: Feature::Apps,
     },
     Alias {
-        legacy_key: "use_linux_sandbox_bwrap",
-        feature: Feature::UseLegacyLandlock,
-    },
-    Alias {
         legacy_key: "enable_experimental_windows_sandbox",
         feature: Feature::WindowsSandbox,
     },

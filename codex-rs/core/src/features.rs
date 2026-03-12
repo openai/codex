@@ -362,10 +362,15 @@ impl Features {
                         Feature::WebSearchCached,
                     );
                 }
-                // Bubblewrap used to be opt-in; the replacement flag opts back into legacy Landlock.
                 "use_linux_sandbox_bwrap" => {
-                    self.record_legacy_usage_force(k.as_str(), Feature::UseLegacyLandlock);
-                    self.set_enabled(Feature::UseLegacyLandlock, !*v);
+                    self.legacy_usages.insert(LegacyFeatureUsage {
+                        alias: k.clone(),
+                        feature: Feature::UseLegacyLandlock,
+                        summary: "`use_linux_sandbox_bwrap` is deprecated and ignored because the bubblewrap sandbox is now the default on Linux.".to_string(),
+                        details: Some(
+                            "Remove this flag from wrapper arguments or config overrides.".to_string(),
+                        ),
+                    });
                     continue;
                 }
                 _ => {}
@@ -944,7 +949,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_use_linux_sandbox_bwrap_true_disables_legacy_landlock() {
+    fn legacy_use_linux_sandbox_bwrap_is_ignored() {
         let mut features = Features::with_defaults();
         features.enable(Feature::UseLegacyLandlock);
 
@@ -953,19 +958,19 @@ mod tests {
             true,
         )]));
 
-        assert_eq!(features.use_legacy_landlock(), false);
-    }
-
-    #[test]
-    fn legacy_use_linux_sandbox_bwrap_false_enables_legacy_landlock() {
-        let mut features = Features::with_defaults();
-
-        features.apply_map(&BTreeMap::from([(
-            "use_linux_sandbox_bwrap".to_string(),
-            false,
-        )]));
-
         assert_eq!(features.use_legacy_landlock(), true);
+        let usage = features
+            .legacy_feature_usages()
+            .find(|usage| usage.alias == "use_linux_sandbox_bwrap")
+            .expect("legacy usage should be recorded");
+        assert_eq!(
+            usage.summary,
+            "`use_linux_sandbox_bwrap` is deprecated and ignored because the bubblewrap sandbox is now the default on Linux."
+        );
+        assert_eq!(
+            usage.details.as_deref(),
+            Some("Remove this flag from wrapper arguments or config overrides.")
+        );
     }
 
     #[test]
@@ -1027,15 +1032,12 @@ mod tests {
     }
 
     #[test]
-    fn use_linux_sandbox_bwrap_is_legacy_alias_for_use_legacy_landlock() {
+    fn use_linux_sandbox_bwrap_is_not_a_feature_alias() {
         assert_eq!(
             feature_for_key("use_legacy_landlock"),
             Some(Feature::UseLegacyLandlock)
         );
-        assert_eq!(
-            feature_for_key("use_linux_sandbox_bwrap"),
-            Some(Feature::UseLegacyLandlock)
-        );
+        assert_eq!(feature_for_key("use_linux_sandbox_bwrap"), None);
     }
 
     #[test]

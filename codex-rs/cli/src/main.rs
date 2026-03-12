@@ -498,14 +498,22 @@ impl FeatureToggles {
     fn to_overrides(&self) -> anyhow::Result<Vec<String>> {
         let mut v = Vec::new();
         for feature in &self.enable {
-            Self::validate_feature(feature)?;
+            Self::validate_runtime_toggle(feature)?;
             v.push(format!("features.{feature}=true"));
         }
         for feature in &self.disable {
-            Self::validate_feature(feature)?;
+            Self::validate_runtime_toggle(feature)?;
             v.push(format!("features.{feature}=false"));
         }
         Ok(v)
+    }
+
+    fn validate_runtime_toggle(feature: &str) -> anyhow::Result<()> {
+        if feature == "use_linux_sandbox_bwrap" || is_known_feature_key(feature) {
+            Ok(())
+        } else {
+            anyhow::bail!("Unknown feature flag: {feature}")
+        }
     }
 
     fn validate_feature(feature: &str) -> anyhow::Result<()> {
