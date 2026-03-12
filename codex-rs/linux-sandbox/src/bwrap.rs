@@ -20,6 +20,7 @@ use codex_core::error::CodexErr;
 use codex_core::error::Result;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::WritableRoot;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 /// Linux "platform defaults" that keep common system binaries and dynamic
 /// libraries readable when `ReadOnlyAccess::Restricted` requests them.
@@ -735,6 +736,8 @@ mod tests {
         let writable_root =
             AbsolutePathBuf::from_absolute_path(&writable_root).expect("absolute writable root");
         let blocked = AbsolutePathBuf::from_absolute_path(&blocked).expect("absolute blocked dir");
+        let writable_root_str = path_to_string(writable_root.as_path());
+        let blocked_str = path_to_string(blocked.as_path());
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
@@ -751,8 +754,6 @@ mod tests {
         ]);
 
         let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
-        let writable_root_str = path_to_string(writable_root.as_path());
-        let blocked_str = path_to_string(blocked.as_path());
 
         assert!(args.args.windows(3).any(|window| {
             window
