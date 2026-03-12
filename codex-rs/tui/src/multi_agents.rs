@@ -1,7 +1,14 @@
+//! Helpers for rendering and navigating multi-agent state in the TUI.
+//!
+//! This module owns the shared presentation contracts for multi-agent history rows, `/agent` picker
+//! entries, and the fast-switch keyboard shortcuts. Higher-level coordination, such as deciding
+//! which thread becomes active or when a thread closes, stays in [`crate::app::App`].
+
 use crate::history_cell::PlainHistoryCell;
 use crate::render::line_utils::prefix_lines;
 use crate::text_formatting::truncate_text;
 use codex_protocol::ThreadId;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentRef;
@@ -12,6 +19,12 @@ use codex_protocol::protocol::CollabResumeBeginEvent;
 use codex_protocol::protocol::CollabResumeEndEvent;
 use codex_protocol::protocol::CollabWaitingBeginEvent;
 use codex_protocol::protocol::CollabWaitingEndEvent;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+#[cfg(target_os = "macos")]
+use crossterm::event::KeyEventKind;
+#[cfg(target_os = "macos")]
+use crossterm::event::KeyModifiers;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -24,8 +37,11 @@ const COLLAB_AGENT_RESPONSE_PREVIEW_GRAPHEMES: usize = 240;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentPickerThreadEntry {
+    /// Human-friendly nickname shown in picker rows and footer labels.
     pub(crate) agent_nickname: Option<String>,
+    /// Agent type shown in brackets when present, for example `worker`.
     pub(crate) agent_role: Option<String>,
+    /// Whether the thread has emitted a close event and should render dimmed.
     pub(crate) is_closed: bool,
 }
 
@@ -34,6 +50,12 @@ struct AgentLabel<'a> {
     thread_id: Option<ThreadId>,
     nickname: Option<&'a str>,
     role: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SpawnRequestSummary {
+    pub(crate) model: String,
+    pub(crate) reasoning_effort: ReasoningEffortConfig,
 }
 
 pub(crate) fn agent_picker_status_dot_spans(is_closed: bool) -> Vec<Span<'static>> {
@@ -66,15 +88,93 @@ pub(crate) fn format_agent_picker_item_name(
     }
 }
 
-pub(crate) fn sort_agent_picker_threads(agent_threads: &mut [(ThreadId, AgentPickerThreadEntry)]) {
-    agent_threads.sort_by(|(left_id, left), (right_id, right)| {
-        left.is_closed
-            .cmp(&right.is_closed)
-            .then_with(|| left_id.to_string().cmp(&right_id.to_string()))
-    });
+pub(crate) fn previous_agent_shortcut() -> crate::key_hint::KeyBinding {
+    crate::key_hint::alt(KeyCode::Left)
 }
 
-pub(crate) fn spawn_end(ev: CollabAgentSpawnEndEvent) -> PlainHistoryCell {
+pub(crate) fn next_agent_shortcut() -> crate::key_hint::KeyBinding {
+    crate::key_hint::alt(KeyCode::Right)
+}
+
+/// Matches the canonical "previous agent" binding plus platform-specific fallbacks that keep agent
+/// navigation working when enhanced key reporting is unavailable.
+pub(crate) fn previous_agent_shortcut_matches(
+    key_event: KeyEvent,
+    allow_word_motion_fallback: bool,
+) -> bool {
+    previous_agent_shortcut().is_press(key_event)
+        || previous_agent_word_motion_fallback(key_event, allow_word_motion_fallback)
+}
+
+/// Matches the canonical "next agent" binding plus platform-specific fallbacks that keep agent
+/// navigation working when enhanced key reporting is unavailable.
+pub(crate) fn next_agent_shortcut_matches(
+    key_event: KeyEvent,
+    allow_word_motion_fallback: bool,
+) -> bool {
+    next_agent_shortcut().is_press(key_event)
+        || next_agent_word_motion_fallback(key_event, allow_word_motion_fallback)
+}
+
+#[cfg(target_os = "macos")]
+fn previous_agent_word_motion_fallback(
+    key_event: KeyEvent,
+    allow_word_motion_fallback: bool,
+) -> bool {
+    // Some terminals, especially on macOS, send Option+b/f as word-motion keys instead of
+    // Option+arrow events unless enhanced keyboard reporting is enabled. Callers should only
+    // enable this fallback when the composer is empty so draft editing retains the expected
+    // word-wise motion behavior.
+    allow_word_motion_fallback
+        && matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Char('b'),
+                modifiers: KeyModifiers::ALT,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }
+        )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn previous_agent_word_motion_fallback(
+    _key_event: KeyEvent,
+    _allow_word_motion_fallback: bool,
+) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn next_agent_word_motion_fallback(key_event: KeyEvent, allow_word_motion_fallback: bool) -> bool {
+    // Some terminals, especially on macOS, send Option+b/f as word-motion keys instead of
+    // Option+arrow events unless enhanced keyboard reporting is enabled. Callers should only
+    // enable this fallback when the composer is empty so draft editing retains the expected
+    // word-wise motion behavior.
+    allow_word_motion_fallback
+        && matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Char('f'),
+                modifiers: KeyModifiers::ALT,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }
+        )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn next_agent_word_motion_fallback(
+    _key_event: KeyEvent,
+    _allow_word_motion_fallback: bool,
+) -> bool {
+    false
+}
+
+pub(crate) fn spawn_end(
+    ev: CollabAgentSpawnEndEvent,
+    spawn_request: Option<&SpawnRequestSummary>,
+) -> PlainHistoryCell {
     let CollabAgentSpawnEndEvent {
         call_id: _,
         sender_thread_id: _,
@@ -83,6 +183,7 @@ pub(crate) fn spawn_end(ev: CollabAgentSpawnEndEvent) -> PlainHistoryCell {
         new_agent_role,
         prompt,
         status: _,
+        ..
     } = ev;
 
     let title = match new_thread_id {
@@ -93,6 +194,7 @@ pub(crate) fn spawn_end(ev: CollabAgentSpawnEndEvent) -> PlainHistoryCell {
                 nickname: new_agent_nickname.as_deref(),
                 role: new_agent_role.as_deref(),
             },
+            spawn_request,
         ),
         None => title_text("Agent spawn failed"),
     };
@@ -122,6 +224,7 @@ pub(crate) fn interaction_end(ev: CollabAgentInteractionEndEvent) -> PlainHistor
             nickname: receiver_agent_nickname.as_deref(),
             role: receiver_agent_role.as_deref(),
         },
+        None,
     );
 
     let mut details = Vec::new();
@@ -141,7 +244,7 @@ pub(crate) fn waiting_begin(ev: CollabWaitingBeginEvent) -> PlainHistoryCell {
     let receiver_agents = merge_wait_receivers(&receiver_thread_ids, receiver_agents);
 
     let title = match receiver_agents.as_slice() {
-        [receiver] => title_with_agent("Waiting for", agent_label_from_ref(receiver)),
+        [receiver] => title_with_agent("Waiting for", agent_label_from_ref(receiver), None),
         [] => title_text("Waiting for agents"),
         _ => title_text(format!("Waiting for {} agents", receiver_agents.len())),
     };
@@ -187,6 +290,7 @@ pub(crate) fn close_end(ev: CollabCloseEndEvent) -> PlainHistoryCell {
                 nickname: receiver_agent_nickname.as_deref(),
                 role: receiver_agent_role.as_deref(),
             },
+            None,
         ),
         Vec::new(),
     )
@@ -209,6 +313,7 @@ pub(crate) fn resume_begin(ev: CollabResumeBeginEvent) -> PlainHistoryCell {
                 nickname: receiver_agent_nickname.as_deref(),
                 role: receiver_agent_role.as_deref(),
             },
+            None,
         ),
         Vec::new(),
     )
@@ -232,6 +337,7 @@ pub(crate) fn resume_end(ev: CollabResumeEndEvent) -> PlainHistoryCell {
                 nickname: receiver_agent_nickname.as_deref(),
                 role: receiver_agent_role.as_deref(),
             },
+            None,
         ),
         vec![status_summary_line(&status)],
     )
@@ -249,9 +355,14 @@ fn title_text(title: impl Into<String>) -> Line<'static> {
     title_spans_line(vec![Span::from(title.into()).bold()])
 }
 
-fn title_with_agent(prefix: &str, agent: AgentLabel<'_>) -> Line<'static> {
+fn title_with_agent(
+    prefix: &str,
+    agent: AgentLabel<'_>,
+    spawn_request: Option<&SpawnRequestSummary>,
+) -> Line<'static> {
     let mut spans = vec![Span::from(format!("{prefix} ")).bold()];
     spans.extend(agent_label_spans(agent));
+    spans.extend(spawn_request_spans(spawn_request));
     title_spans_line(spans)
 }
 
@@ -296,6 +407,25 @@ fn agent_label_spans(agent: AgentLabel<'_>) -> Vec<Span<'static>> {
     }
 
     spans
+}
+
+fn spawn_request_spans(spawn_request: Option<&SpawnRequestSummary>) -> Vec<Span<'static>> {
+    let Some(spawn_request) = spawn_request else {
+        return Vec::new();
+    };
+
+    let model = spawn_request.model.trim();
+    if model.is_empty() && spawn_request.reasoning_effort == ReasoningEffortConfig::default() {
+        return Vec::new();
+    }
+
+    let details = if model.is_empty() {
+        format!("({})", spawn_request.reasoning_effort)
+    } else {
+        format!("({model} {})", spawn_request.reasoning_effort)
+    };
+
+    vec![Span::from(" ").dim(), Span::from(details).magenta()]
 }
 
 fn prompt_line(prompt: &str) -> Option<Line<'static>> {
@@ -446,6 +576,10 @@ fn status_summary_spans(status: &AgentStatus) -> Vec<Span<'static>> {
 mod tests {
     use super::*;
     use crate::history_cell::HistoryCell;
+    #[cfg(target_os = "macos")]
+    use crossterm::event::KeyEvent;
+    #[cfg(target_os = "macos")]
+    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::style::Color;
@@ -460,15 +594,23 @@ mod tests {
         let bob_id = ThreadId::from_string("00000000-0000-0000-0000-000000000003")
             .expect("valid bob thread id");
 
-        let spawn = spawn_end(CollabAgentSpawnEndEvent {
-            call_id: "call-spawn".to_string(),
-            sender_thread_id,
-            new_thread_id: Some(robie_id),
-            new_agent_nickname: Some("Robie".to_string()),
-            new_agent_role: Some("explorer".to_string()),
-            prompt: "Compute 11! and reply with just the integer result.".to_string(),
-            status: AgentStatus::PendingInit,
-        });
+        let spawn = spawn_end(
+            CollabAgentSpawnEndEvent {
+                call_id: "call-spawn".to_string(),
+                sender_thread_id,
+                new_thread_id: Some(robie_id),
+                new_agent_nickname: Some("Robie".to_string()),
+                new_agent_role: Some("explorer".to_string()),
+                prompt: "Compute 11! and reply with just the integer result.".to_string(),
+                model: "gpt-5".to_string(),
+                reasoning_effort: ReasoningEffortConfig::High,
+                status: AgentStatus::PendingInit,
+            },
+            Some(&SpawnRequestSummary {
+                model: "gpt-5".to_string(),
+                reasoning_effort: ReasoningEffortConfig::High,
+            }),
+        );
 
         let send = interaction_end(CollabAgentInteractionEndEvent {
             call_id: "call-send".to_string(),
@@ -534,21 +676,79 @@ mod tests {
         assert_snapshot!("collab_agent_transcript", snapshot);
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn agent_shortcut_matches_option_arrow_word_motion_fallbacks_only_when_allowed() {
+        assert!(previous_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Left, KeyModifiers::ALT),
+            false,
+        ));
+        assert!(next_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Right, KeyModifiers::ALT),
+            false,
+        ));
+        assert!(previous_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT),
+            true,
+        ));
+        assert!(next_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::ALT),
+            true,
+        ));
+        assert!(!previous_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT),
+            false,
+        ));
+        assert!(!next_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::ALT),
+            false,
+        ));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn agent_shortcut_matches_option_arrows_only() {
+        assert!(previous_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Left, crossterm::event::KeyModifiers::ALT,),
+            false
+        ));
+        assert!(next_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::ALT,),
+            false
+        ));
+        assert!(!previous_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Char('b'), crossterm::event::KeyModifiers::ALT,),
+            false
+        ));
+        assert!(!next_agent_shortcut_matches(
+            KeyEvent::new(KeyCode::Char('f'), crossterm::event::KeyModifiers::ALT,),
+            false
+        ));
+    }
+
     #[test]
     fn title_styles_nickname_and_role() {
         let sender_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000001")
             .expect("valid sender thread id");
         let robie_id = ThreadId::from_string("00000000-0000-0000-0000-000000000002")
             .expect("valid robie thread id");
-        let cell = spawn_end(CollabAgentSpawnEndEvent {
-            call_id: "call-spawn".to_string(),
-            sender_thread_id,
-            new_thread_id: Some(robie_id),
-            new_agent_nickname: Some("Robie".to_string()),
-            new_agent_role: Some("explorer".to_string()),
-            prompt: String::new(),
-            status: AgentStatus::PendingInit,
-        });
+        let cell = spawn_end(
+            CollabAgentSpawnEndEvent {
+                call_id: "call-spawn".to_string(),
+                sender_thread_id,
+                new_thread_id: Some(robie_id),
+                new_agent_nickname: Some("Robie".to_string()),
+                new_agent_role: Some("explorer".to_string()),
+                prompt: String::new(),
+                model: "gpt-5".to_string(),
+                reasoning_effort: ReasoningEffortConfig::High,
+                status: AgentStatus::PendingInit,
+            },
+            Some(&SpawnRequestSummary {
+                model: "gpt-5".to_string(),
+                reasoning_effort: ReasoningEffortConfig::High,
+            }),
+        );
 
         let lines = cell.display_lines(200);
         let title = &lines[0];
@@ -558,6 +758,8 @@ mod tests {
         assert_eq!(title.spans[4].content.as_ref(), "[explorer]");
         assert_eq!(title.spans[4].style.fg, None);
         assert!(!title.spans[4].style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(title.spans[6].content.as_ref(), "(gpt-5 high)");
+        assert_eq!(title.spans[6].style.fg, Some(Color::Magenta));
     }
 
     fn cell_to_text(cell: &PlainHistoryCell) -> String {

@@ -878,6 +878,7 @@ mod tests {
         let parent_spawn_call = ResponseItem::FunctionCall {
             id: None,
             name: "spawn_agent".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: parent_spawn_call_id.clone(),
         };
@@ -960,6 +961,7 @@ mod tests {
         let parent_spawn_call = ResponseItem::FunctionCall {
             id: None,
             name: "spawn_agent".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: parent_spawn_call_id.clone(),
         };
@@ -1035,6 +1037,7 @@ mod tests {
         let parent_spawn_call = ResponseItem::FunctionCall {
             id: None,
             name: "spawn_agent".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: parent_spawn_call_id.clone(),
         };

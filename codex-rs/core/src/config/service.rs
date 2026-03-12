@@ -168,10 +168,12 @@ impl ConfigService {
         };
 
         let effective = layers.effective_config();
-        validate_config(&effective)
+
+        let effective_config_toml: ConfigToml = effective
+            .try_into()
             .map_err(|err| ConfigServiceError::toml("invalid configuration", err))?;
 
-        let json_value = serde_json::to_value(&effective)
+        let json_value = serde_json::to_value(&effective_config_toml)
             .map_err(|err| ConfigServiceError::json("failed to serialize configuration", err))?;
         let config: ApiConfig = serde_json::from_value(json_value)
             .map_err(|err| ConfigServiceError::json("failed to deserialize configuration", err))?;

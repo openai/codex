@@ -740,7 +740,13 @@ mod tests {
 
         let dir = tempdir()?;
         let home = dir.path();
-        fs::write(home.join(".bashrc"), "read -r ignored\n").await?;
+        let read_status_path = home.join("stdin-read-status");
+        let read_status_display = read_status_path.display();
+        // Persist the startup `read` exit status so the test can assert whether
+        // bash saw EOF on stdin after the snapshot process exits.
+        let bashrc =
+            format!("read -t 1 -r ignored\nprintf '%s' \"$?\" > \"{read_status_display}\"\n");
+        fs::write(home.join(".bashrc"), bashrc).await?;
 
         let shell = Shell {
             shell_type: ShellType::Bash,
@@ -753,10 +759,17 @@ mod tests {
             "HOME=\"{home_display}\"; export HOME; {}",
             bash_snapshot_script()
         );
-        let output =
-            run_script_with_timeout(&shell, &script, Duration::from_millis(500), true, home)
-                .await
-                .context("run snapshot command")?;
+        let output = run_script_with_timeout(&shell, &script, Duration::from_secs(2), true, home)
+            .await
+            .context("run snapshot command")?;
+        let read_status = fs::read_to_string(&read_status_path)
+            .await
+            .context("read stdin probe status")?;
+
+        assert_eq!(
+            read_status, "1",
+            "expected shell startup read to see EOF on stdin; status={read_status:?}"
+        );
 
         assert!(
             output.contains("# Snapshot file"),

@@ -23,9 +23,11 @@ use opentelemetry_otlp::tonic_types::transport::ClientTlsConfig;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::runtime;
 use opentelemetry_sdk::trace::BatchSpanProcessor;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::trace::Tracer;
+use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor as TokioBatchSpanProcessor;
 use opentelemetry_semantic_conventions as semconv;
 use std::error::Error;
 use tracing::debug;
@@ -50,14 +52,15 @@ pub struct OtelProvider {
 
 impl OtelProvider {
     pub fn shutdown(&self) {
-        if let Some(logger) = &self.logger {
-            let _ = logger.shutdown();
-        }
         if let Some(tracer_provider) = &self.tracer_provider {
+            let _ = tracer_provider.force_flush();
             let _ = tracer_provider.shutdown();
         }
         if let Some(metrics) = &self.metrics {
             let _ = metrics.shutdown();
+        }
+        if let Some(logger) = &self.logger {
+            let _ = logger.shutdown();
         }
     }
 
@@ -159,14 +162,15 @@ impl OtelProvider {
 
 impl Drop for OtelProvider {
     fn drop(&mut self) {
-        if let Some(logger) = &self.logger {
-            let _ = logger.shutdown();
-        }
         if let Some(tracer_provider) = &self.tracer_provider {
+            let _ = tracer_provider.force_flush();
             let _ = tracer_provider.shutdown();
         }
         if let Some(metrics) = &self.metrics {
             let _ = metrics.shutdown();
+        }
+        if let Some(logger) = &self.logger {
+            let _ = logger.shutdown();
         }
     }
 }
@@ -320,6 +324,34 @@ fn build_tracer_provider(
             tls,
         } => {
             debug!("Using OTLP Http exporter for traces: {endpoint}");
+
+            if crate::otlp::current_tokio_runtime_is_multi_thread() {
+                let protocol = match protocol {
+                    OtelHttpProtocol::Binary => Protocol::HttpBinary,
+                    OtelHttpProtocol::Json => Protocol::HttpJson,
+                };
+
+                let mut exporter_builder = SpanExporter::builder()
+                    .with_http()
+                    .with_endpoint(endpoint)
+                    .with_protocol(protocol)
+                    .with_headers(headers);
+
+                let client = crate::otlp::build_async_http_client(
+                    tls.as_ref(),
+                    OTEL_EXPORTER_OTLP_TRACES_TIMEOUT,
+                )?;
+                exporter_builder = exporter_builder.with_http_client(client);
+
+                let processor =
+                    TokioBatchSpanProcessor::builder(exporter_builder.build()?, runtime::Tokio)
+                        .build();
+
+                return Ok(SdkTracerProvider::builder()
+                    .with_resource(resource.clone())
+                    .with_span_processor(processor)
+                    .build());
+            }
 
             let protocol = match protocol {
                 OtelHttpProtocol::Binary => Protocol::HttpBinary,

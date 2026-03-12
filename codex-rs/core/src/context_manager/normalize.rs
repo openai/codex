@@ -38,6 +38,31 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                     ));
                 }
             }
+            ResponseItem::ToolSearchCall {
+                call_id: Some(call_id),
+                ..
+            } => {
+                let has_output = items.iter().any(|i| match i {
+                    ResponseItem::ToolSearchOutput {
+                        call_id: Some(existing),
+                        ..
+                    } => existing == call_id,
+                    _ => false,
+                });
+
+                if !has_output {
+                    info!("Tool search output is missing for call id: {call_id}");
+                    missing_outputs_to_insert.push((
+                        idx,
+                        ResponseItem::ToolSearchOutput {
+                            call_id: Some(call_id.clone()),
+                            status: "completed".to_string(),
+                            execution: "client".to_string(),
+                            tools: Vec::new(),
+                        },
+                    ));
+                }
+            }
             ResponseItem::CustomToolCall { call_id, .. } => {
                 let has_output = items.iter().any(|i| match i {
                     ResponseItem::CustomToolCallOutput {
@@ -102,6 +127,17 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItem>) {
         })
         .collect();
 
+    let tool_search_call_ids: HashSet<String> = items
+        .iter()
+        .filter_map(|i| match i {
+            ResponseItem::ToolSearchCall {
+                call_id: Some(call_id),
+                ..
+            } => Some(call_id.clone()),
+            _ => None,
+        })
+        .collect();
+
     let local_shell_call_ids: HashSet<String> = items
         .iter()
         .filter_map(|i| match i {
@@ -141,6 +177,18 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItem>) {
             }
             has_match
         }
+        ResponseItem::ToolSearchOutput { execution, .. } if execution == "server" => true,
+        ResponseItem::ToolSearchOutput {
+            call_id: Some(call_id),
+            ..
+        } => {
+            let has_match = tool_search_call_ids.contains(call_id);
+            if !has_match {
+                error_or_panic(format!("Orphan tool search output for call id: {call_id}"));
+            }
+            has_match
+        }
+        ResponseItem::ToolSearchOutput { call_id: None, .. } => true,
         _ => true,
     });
 }
@@ -167,6 +215,37 @@ pub(crate) fn remove_corresponding_for(items: &mut Vec<ResponseItem>, item: &Res
             }) {
                 items.remove(pos);
             }
+        }
+        ResponseItem::ToolSearchCall {
+            call_id: Some(call_id),
+            ..
+        } => {
+            remove_first_matching(items, |i| {
+                matches!(
+                    i,
+                    ResponseItem::ToolSearchOutput {
+                        call_id: Some(existing),
+                        ..
+                    } if existing == call_id
+                )
+            });
+        }
+        ResponseItem::ToolSearchOutput {
+            call_id: Some(call_id),
+            ..
+        } => {
+            remove_first_matching(
+                items,
+                |i| {
+                    matches!(
+                        i,
+                        ResponseItem::ToolSearchCall {
+                            call_id: Some(existing),
+                            ..
+                        } if existing == call_id
+                    )
+                },
+            );
         }
         ResponseItem::CustomToolCall { call_id, .. } => {
             remove_first_matching(items, |i| {
@@ -215,17 +294,34 @@ pub(crate) fn rewrite_image_generation_calls_for_stateless_input(items: &mut Vec
     *items = original_items
         .into_iter()
         .map(|item| match item {
-            ResponseItem::ImageGenerationCall { result, .. } => {
+            ResponseItem::ImageGenerationCall {
+                id,
+                revised_prompt,
+                result,
+                ..
+            } => {
                 let image_url = if result.starts_with("data:") {
                     result
                 } else {
                     format!("data:image/png;base64,{result}")
                 };
+                let revised_prompt = revised_prompt.unwrap_or_default();
 
                 ResponseItem::Message {
                     id: None,
                     role: "user".to_string(),
-                    content: vec![ContentItem::InputImage { image_url }],
+                    content: vec![
+                        ContentItem::InputText {
+                            text: "Image Generation Call".to_string(),
+                        },
+                        ContentItem::InputText {
+                            text: format!("Image ID: {id}"),
+                        },
+                        ContentItem::InputText {
+                            text: format!("Prompt: {revised_prompt}"),
+                        },
+                        ContentItem::InputImage { image_url },
+                    ],
                     end_turn: None,
                     phase: None,
                 }

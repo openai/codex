@@ -451,6 +451,7 @@ pub struct ToolWithConnectorId {
     pub tool: Tool,
     pub connector_id: Option<String>,
     pub connector_name: Option<String>,
+    pub connector_description: Option<String>,
 }
 
 pub struct ListToolsWithConnectorIdResult {
@@ -616,10 +617,13 @@ impl RmcpClient {
                 let connector_id = Self::meta_string(meta, "connector_id");
                 let connector_name = Self::meta_string(meta, "connector_name")
                     .or_else(|| Self::meta_string(meta, "connector_display_name"));
+                let connector_description = Self::meta_string(meta, "connector_description")
+                    .or_else(|| Self::meta_string(meta, "connectorDescription"));
                 Ok(ToolWithConnectorId {
                     tool,
                     connector_id,
                     connector_name,
+                    connector_description,
                 })
             })
             .collect::<Result<Vec<_>>>()?;

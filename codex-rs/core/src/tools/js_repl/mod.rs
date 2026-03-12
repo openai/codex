@@ -36,8 +36,8 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecExpiration;
 use crate::exec_env::create_env;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
+use crate::original_image_detail::normalize_output_image_detail;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxPermissions;
@@ -620,28 +620,32 @@ impl JsReplManager {
                     output,
                 )
             }
-            ResponseInputItem::McpToolCallOutput { result, .. } => match result {
-                Ok(result) => {
-                    let output = FunctionCallOutputPayload::from(result);
-                    let mut summary = Self::summarize_function_output_payload(
-                        "mcp_tool_call_output",
-                        JsReplToolCallPayloadKind::McpResult,
-                        &output,
-                    );
-                    summary.payload_item_count = Some(result.content.len());
-                    summary.structured_content_present = Some(result.structured_content.is_some());
-                    summary.result_is_error = Some(result.is_error.unwrap_or(false));
-                    summary
-                }
-                Err(error) => {
-                    let mut summary = Self::summarize_text_payload(
-                        Some("mcp_tool_call_output"),
-                        JsReplToolCallPayloadKind::McpErrorResult,
-                        error,
-                    );
-                    summary.result_is_error = Some(true);
-                    summary
-                }
+            ResponseInputItem::McpToolCallOutput { output, .. } => {
+                let function_output = output.as_function_call_output_payload();
+                let payload_kind = if output.success() {
+                    JsReplToolCallPayloadKind::McpResult
+                } else {
+                    JsReplToolCallPayloadKind::McpErrorResult
+                };
+                let mut summary = Self::summarize_function_output_payload(
+                    "mcp_tool_call_output",
+                    payload_kind,
+                    &function_output,
+                );
+                summary.payload_item_count = Some(output.content.len());
+                summary.structured_content_present = Some(output.structured_content.is_some());
+                summary.result_is_error = Some(!output.success());
+                summary
+            }
+            ResponseInputItem::ToolSearchOutput { tools, .. } => JsReplToolCallResponseSummary {
+                response_type: Some("tool_search_output".to_string()),
+                payload_kind: Some(JsReplToolCallPayloadKind::FunctionText),
+                payload_text_preview: Some(serde_json::Value::Array(tools.clone()).to_string()),
+                payload_text_length: Some(
+                    serde_json::Value::Array(tools.clone()).to_string().len(),
+                ),
+                payload_item_count: Some(tools.len()),
+                ..Default::default()
             },
         }
     }
@@ -684,8 +688,13 @@ impl JsReplManager {
         let (stdin, pending_execs, exec_contexts, child, recent_stderr) = {
             let mut kernel = self.kernel.lock().await;
             if kernel.is_none() {
+                let dependency_env = session.dependency_env().await;
                 let state = self
-                    .start_kernel(Arc::clone(&turn), Some(session.conversation_id))
+                    .start_kernel(
+                        Arc::clone(&turn),
+                        &dependency_env,
+                        Some(session.conversation_id),
+                    )
                     .await
                     .map_err(FunctionCallError::RespondToModel)?;
                 *kernel = Some(state);
@@ -806,6 +815,7 @@ impl JsReplManager {
     async fn start_kernel(
         &self,
         turn: Arc<TurnContext>,
+        dependency_env: &HashMap<String, String>,
         thread_id: Option<ThreadId>,
     ) -> Result<KernelState, String> {
         let node_path = resolve_compatible_node(self.node_path.as_deref()).await?;
@@ -816,6 +826,9 @@ impl JsReplManager {
             .map_err(|err| err.to_string())?;
 
         let mut env = create_env(&turn.shell_environment_policy, thread_id);
+        if !dependency_env.is_empty() {
+            env.extend(dependency_env.clone());
+        }
         env.insert(
             "CODEX_JS_TMP_DIR".to_string(),
             self.tmp_dir.path().to_string_lossy().to_string(),
@@ -1357,26 +1370,30 @@ impl JsReplManager {
             exec.turn.dynamic_tools.as_slice(),
         );
 
-        let payload =
-            if let Some((server, tool)) = exec.session.parse_mcp_tool_name(&req.tool_name).await {
-                crate::tools::context::ToolPayload::Mcp {
-                    server,
-                    tool,
-                    raw_arguments: req.arguments.clone(),
-                }
-            } else if is_freeform_tool(&router.specs(), &req.tool_name) {
-                crate::tools::context::ToolPayload::Custom {
-                    input: req.arguments.clone(),
-                }
-            } else {
-                crate::tools::context::ToolPayload::Function {
-                    arguments: req.arguments.clone(),
-                }
-            };
+        let payload = if let Some((server, tool)) = exec
+            .session
+            .parse_mcp_tool_name(&req.tool_name, &None)
+            .await
+        {
+            crate::tools::context::ToolPayload::Mcp {
+                server,
+                tool,
+                raw_arguments: req.arguments.clone(),
+            }
+        } else if is_freeform_tool(&router.specs(), &req.tool_name) {
+            crate::tools::context::ToolPayload::Custom {
+                input: req.arguments.clone(),
+            }
+        } else {
+            crate::tools::context::ToolPayload::Function {
+                arguments: req.arguments.clone(),
+            }
+        };
 
         let tool_name = req.tool_name.clone();
         let call = crate::tools::router::ToolCall {
             tool_name: tool_name.clone(),
+            tool_namespace: None,
             call_id: req.id.clone(),
             payload,
         };
@@ -1475,7 +1492,7 @@ fn emitted_image_content_item(
 ) -> FunctionCallOutputContentItem {
     FunctionCallOutputContentItem::InputImage {
         image_url,
-        detail: detail.or_else(|| default_output_image_detail_for_turn(turn)),
+        detail: normalize_output_image_detail(turn.features.get(), &turn.model_info, detail),
     }
 }
 
@@ -1488,12 +1505,6 @@ fn validate_emitted_image_url(image_url: &str) -> Result<(), String> {
     } else {
         Err("codex.emitImage only accepts data URLs".to_string())
     }
-}
-
-fn default_output_image_detail_for_turn(turn: &TurnContext) -> Option<ImageDetail> {
-    (turn.config.features.enabled(Feature::ImageDetailOriginal)
-        && turn.model_info.supports_image_detail_original)
-        .then_some(ImageDetail::Original)
 }
 
 fn build_exec_result_content_items(
@@ -2001,7 +2012,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn emitted_image_content_item_preserves_explicit_detail() {
+    async fn emitted_image_content_item_drops_unsupported_explicit_detail() {
         let (_session, turn) = make_session_and_context().await;
         let content_item = emitted_image_content_item(
             &turn,
@@ -2012,18 +2023,21 @@ mod tests {
             content_item,
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
-                detail: Some(ImageDetail::Low),
+                detail: None,
             }
         );
     }
 
     #[tokio::test]
-    async fn emitted_image_content_item_uses_turn_original_detail_when_enabled() {
+    async fn emitted_image_content_item_does_not_force_original_when_enabled() {
         let (_session, mut turn) = make_session_and_context().await;
         Arc::make_mut(&mut turn.config)
             .features
             .enable(Feature::ImageDetailOriginal)
             .expect("test config should allow feature update");
+        turn.features
+            .enable(Feature::ImageDetailOriginal)
+            .expect("test turn features should allow feature update");
         turn.model_info.supports_image_detail_original = true;
 
         let content_item =
@@ -2033,7 +2047,53 @@ mod tests {
             content_item,
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,AAA".to_string(),
+                detail: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn emitted_image_content_item_allows_explicit_original_detail_when_enabled() {
+        let (_session, mut turn) = make_session_and_context().await;
+        Arc::make_mut(&mut turn.config)
+            .features
+            .enable(Feature::ImageDetailOriginal)
+            .expect("test config should allow feature update");
+        turn.features
+            .enable(Feature::ImageDetailOriginal)
+            .expect("test turn features should allow feature update");
+        turn.model_info.supports_image_detail_original = true;
+
+        let content_item = emitted_image_content_item(
+            &turn,
+            "data:image/png;base64,AAA".to_string(),
+            Some(ImageDetail::Original),
+        );
+
+        assert_eq!(
+            content_item,
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
                 detail: Some(ImageDetail::Original),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn emitted_image_content_item_drops_explicit_original_detail_when_disabled() {
+        let (_session, turn) = make_session_and_context().await;
+
+        let content_item = emitted_image_content_item(
+            &turn,
+            "data:image/png;base64,AAA".to_string(),
+            Some(ImageDetail::Original),
+        );
+
+        assert_eq!(
+            content_item,
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,AAA".to_string(),
+                detail: None,
             }
         );
     }
@@ -3081,7 +3141,63 @@ await codex.emitImage({ bytes: png, mimeType: "image/png", detail: "ultra" });
             )
             .await
             .expect_err("invalid detail should fail");
-        assert!(err.to_string().contains("expected detail to be one of"));
+        assert!(
+            err.to_string()
+                .contains("only supports detail \"original\"")
+        );
+        assert!(session.get_pending_input().await.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn js_repl_emit_image_treats_null_detail_as_omitted() -> anyhow::Result<()> {
+        if !can_run_js_repl_runtime_tests().await {
+            return Ok(());
+        }
+
+        let (session, turn) = make_session_and_context().await;
+        if !turn
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+        {
+            return Ok(());
+        }
+
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::default()));
+        let manager = turn.js_repl.manager().await?;
+        let code = r#"
+const png = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+  "base64"
+);
+await codex.emitImage({ bytes: png, mimeType: "image/png", detail: null });
+"#;
+
+        let result = manager
+            .execute(
+                Arc::clone(&session),
+                turn,
+                tracker,
+                JsReplArgs {
+                    code: code.to_string(),
+                    timeout_ms: Some(15_000),
+                },
+            )
+            .await?;
+        assert_eq!(
+            result.content_items.as_slice(),
+            [FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string(),
+                detail: None,
+            }]
+            .as_slice()
+        );
         assert!(session.get_pending_input().await.is_empty());
 
         Ok(())
@@ -3452,13 +3568,22 @@ await codex.emitImage(out);
         }
 
         let cwd_dir = tempdir()?;
+        let expected_home_dir = serde_json::to_string("/tmp/codex-home")?;
         write_js_repl_test_module(
             cwd_dir.path(),
             "globals.js",
-            "console.log(codex.tmpDir === tmpDir);\nconsole.log(typeof codex.tool);\nconsole.log(\"local-file-console-ok\");\n",
+            &format!(
+                "const expectedHomeDir = {expected_home_dir};\nconsole.log(`tmp:${{codex.tmpDir === tmpDir}}`);\nconsole.log(`cwd:${{typeof codex.cwd}}:${{codex.cwd.length > 0}}`);\nconsole.log(`home:${{codex.homeDir === expectedHomeDir}}`);\nconsole.log(`tool:${{typeof codex.tool}}`);\nconsole.log(\"local-file-console-ok\");\n"
+            ),
         )?;
 
         let (session, mut turn) = make_session_and_context().await;
+        session
+            .set_dependency_env(HashMap::from([(
+                "HOME".to_string(),
+                "/tmp/codex-home".to_string(),
+            )]))
+            .await;
         turn.shell_environment_policy
             .r#set
             .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
@@ -3484,8 +3609,10 @@ await codex.emitImage(out);
                 },
             )
             .await?;
-        assert!(result.output.contains("true"));
-        assert!(result.output.contains("function"));
+        assert!(result.output.contains("tmp:true"));
+        assert!(result.output.contains("cwd:string:true"));
+        assert!(result.output.contains("home:true"));
+        assert!(result.output.contains("tool:function"));
         assert!(result.output.contains("local-file-console-ok"));
         Ok(())
     }

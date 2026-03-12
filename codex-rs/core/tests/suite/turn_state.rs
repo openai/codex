@@ -103,6 +103,7 @@ async fn websocket_turn_state_persists_within_turn_and_resets_after() -> Result<
             ]],
             response_headers: vec![(TURN_STATE_HEADER.to_string(), "ts-1".to_string())],
             accept_delay: None,
+            close_after_requests: true,
         },
         WebSocketConnectionConfig {
             requests: vec![vec![
@@ -112,6 +113,7 @@ async fn websocket_turn_state_persists_within_turn_and_resets_after() -> Result<
             ]],
             response_headers: Vec::new(),
             accept_delay: None,
+            close_after_requests: true,
         },
         WebSocketConnectionConfig {
             requests: vec![vec![
@@ -121,6 +123,7 @@ async fn websocket_turn_state_persists_within_turn_and_resets_after() -> Result<
             ]],
             response_headers: Vec::new(),
             accept_delay: None,
+            close_after_requests: true,
         },
     ])
     .await;

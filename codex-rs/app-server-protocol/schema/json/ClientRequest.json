@@ -57,10 +57,18 @@
                 "mcp_elicitations": {
                   "type": "boolean"
                 },
+                "request_permissions": {
+                  "default": false,
+                  "type": "boolean"
+                },
                 "rules": {
                   "type": "boolean"
                 },
                 "sandbox_approval": {
+                  "type": "boolean"
+                },
+                "skill_approval": {
+                  "default": false,
                   "type": "boolean"
                 }
               },
@@ -350,6 +358,10 @@
             "string",
             "null"
           ]
+        },
+        "reloadUserConfig": {
+          "description": "When true, hot-reload the updated user config into all loaded threads after writing.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -801,7 +813,7 @@
           "type": "boolean"
         },
         "optOutNotificationMethods": {
-          "description": "Exact notification method names that should be suppressed for this connection (for example `codex/event/session_configured`).",
+          "description": "Exact notification method names that should be suppressed for this connection (for example `thread/started`).",
           "items": {
             "type": "string"
           },
@@ -1123,8 +1135,23 @@
             "array",
             "null"
           ]
+        },
+        "forceRemoteSync": {
+          "description": "When true, reconcile the official curated marketplace against the remote plugin state before listing marketplaces.",
+          "type": "boolean"
         }
       },
+      "type": "object"
+    },
+    "PluginUninstallParams": {
+      "properties": {
+        "pluginId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pluginId"
+      ],
       "type": "object"
     },
     "ProductSurface": {
@@ -1447,6 +1474,12 @@
             "name": {
               "type": "string"
             },
+            "namespace": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "function_call"
@@ -1462,6 +1495,47 @@
             "type"
           ],
           "title": "FunctionCallResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "arguments": true,
+            "call_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "execution": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "tool_search_call"
+              ],
+              "title": "ToolSearchCallResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "execution",
+            "type"
+          ],
+          "title": "ToolSearchCallResponseItem",
           "type": "object"
         },
         {
@@ -1551,6 +1625,41 @@
             "type"
           ],
           "title": "CustomToolCallOutputResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "execution": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tools": {
+              "items": true,
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "tool_search_output"
+              ],
+              "title": "ToolSearchOutputResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "execution",
+            "status",
+            "tools",
+            "type"
+          ],
+          "title": "ToolSearchOutputResponseItem",
           "type": "object"
         },
         {
@@ -2250,6 +2359,9 @@
             "string",
             "null"
           ]
+        },
+        "ephemeral": {
+          "type": "boolean"
         },
         "model": {
           "description": "Configuration overrides for the forked thread, if any.",
@@ -3565,6 +3677,30 @@
         "params"
       ],
       "title": "Plugin/installRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/uninstall"
+          ],
+          "title": "Plugin/uninstallRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginUninstallParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/uninstallRequest",
       "type": "object"
     },
     {

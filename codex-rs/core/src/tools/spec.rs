@@ -7,17 +7,22 @@ use crate::features::Feature;
 use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use crate::original_image_detail::can_request_original_image_detail;
+use crate::tools::code_mode::PUBLIC_TOOL_NAME;
+use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::handlers::PLAN_TOOL;
-use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
-use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
+use crate::tools::handlers::TOOL_SEARCH_DEFAULT_LIMIT;
+use crate::tools::handlers::TOOL_SEARCH_TOOL_NAME;
 use crate::tools::handlers::agent_jobs::BatchJobHandler;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::multi_agents::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents::MIN_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolRegistryBuilder;
+use crate::tools::registry::tool_handler_key;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -26,6 +31,7 @@ use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -36,9 +42,43 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-const SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE: &str =
+const TOOL_SEARCH_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
 const WEB_SEARCH_CONTENT_TYPES: [&str; 2] = ["text", "image"];
+
+fn unified_exec_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "chunk_id": {
+                "type": "string",
+                "description": "Chunk identifier included when the response reports one."
+            },
+            "wall_time_seconds": {
+                "type": "number",
+                "description": "Elapsed wall time spent waiting for output in seconds."
+            },
+            "exit_code": {
+                "type": "number",
+                "description": "Process exit code when the command finished during this call."
+            },
+            "session_id": {
+                "type": "number",
+                "description": "Session identifier to pass to write_stdin when the process is still running."
+            },
+            "original_token_count": {
+                "type": "number",
+                "description": "Approximate token count before output truncation."
+            },
+            "output": {
+                "type": "string",
+                "description": "Command output text, possibly truncated."
+            }
+        },
+        "required": ["wall_time_seconds", "output"],
+        "additionalProperties": false
+    })
+}
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ShellCommandBackendConfig {
     Classic,
@@ -53,6 +93,7 @@ pub enum UnifiedExecBackendConfig {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
+    pub available_models: Vec<ModelPreset>,
     pub shell_type: ConfigShellToolType,
     shell_command_backend: ShellCommandBackendConfig,
     pub unified_exec_backend: UnifiedExecBackendConfig,
@@ -65,8 +106,11 @@ pub(crate) struct ToolsConfig {
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
     pub request_permission_enabled: bool,
+    pub request_permissions_tool_enabled: bool,
+    pub code_mode_enabled: bool,
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
+    pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
     pub artifact_tools: bool,
     pub request_user_input: bool,
@@ -78,6 +122,7 @@ pub(crate) struct ToolsConfig {
 
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_info: &'a ModelInfo,
+    pub(crate) available_models: &'a Vec<ModelPreset>,
     pub(crate) features: &'a Features,
     pub(crate) web_search_mode: Option<WebSearchMode>,
     pub(crate) session_source: SessionSource,
@@ -87,25 +132,29 @@ impl ToolsConfig {
     pub fn new(params: &ToolsConfigParams) -> Self {
         let ToolsConfigParams {
             model_info,
+            available_models: available_models_ref,
             features,
             web_search_mode,
             session_source,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
+        let include_code_mode = features.enabled(Feature::CodeMode);
         let include_js_repl = features.enabled(Feature::JsRepl);
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
+        let include_agent_jobs = features.enabled(Feature::SpawnCsv);
         let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool = features.enabled(Feature::Apps);
+        let include_original_image_detail = can_request_original_image_detail(features, model_info);
         let include_artifact_tools =
             features.enabled(Feature::Artifact) && codex_artifacts::can_manage_artifact_runtime();
         let include_image_gen_tool =
             features.enabled(Feature::ImageGeneration) && supports_image_generation(model_info);
-        let include_agent_jobs = include_collab_tools;
         let request_permission_enabled = features.enabled(Feature::RequestPermissions);
+        let request_permissions_tool_enabled = features.enabled(Feature::RequestPermissionsTool);
         let shell_command_backend =
             if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
                 ShellCommandBackendConfig::ZshFork
@@ -154,6 +203,7 @@ impl ToolsConfig {
             );
 
         Self {
+            available_models: available_models_ref.to_vec(),
             shell_type,
             shell_command_backend,
             unified_exec_backend,
@@ -166,8 +216,11 @@ impl ToolsConfig {
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
             request_permission_enabled,
+            request_permissions_tool_enabled,
+            code_mode_enabled: include_code_mode,
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
+            can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
             artifact_tools: include_artifact_tools,
             request_user_input: include_request_user_input,
@@ -191,6 +244,12 @@ impl ToolsConfig {
     pub fn with_web_search_config(mut self, web_search_config: Option<WebSearchConfig>) -> Self {
         self.web_search_config = web_search_config;
         self
+    }
+
+    pub fn for_code_mode_nested_tools(&self) -> Self {
+        let mut nested = self.clone();
+        nested.code_mode_enabled = false;
+        nested
     }
 }
 
@@ -254,6 +313,94 @@ impl From<JsonSchema> for AdditionalProperties {
     }
 }
 
+fn create_network_permissions_schema() -> JsonSchema {
+    JsonSchema::Object {
+        properties: BTreeMap::from([(
+            "enabled".to_string(),
+            JsonSchema::Boolean {
+                description: Some("Set to true to request network access.".to_string()),
+            },
+        )]),
+        required: None,
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn create_file_system_permissions_schema() -> JsonSchema {
+    JsonSchema::Object {
+        properties: BTreeMap::from([
+            (
+                "read".to_string(),
+                JsonSchema::Array {
+                    items: Box::new(JsonSchema::String { description: None }),
+                    description: Some("Absolute paths to grant read access to.".to_string()),
+                },
+            ),
+            (
+                "write".to_string(),
+                JsonSchema::Array {
+                    items: Box::new(JsonSchema::String { description: None }),
+                    description: Some("Absolute paths to grant write access to.".to_string()),
+                },
+            ),
+        ]),
+        required: None,
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn create_macos_permissions_schema() -> JsonSchema {
+    JsonSchema::Object {
+        properties: BTreeMap::from([
+            (
+                "preferences".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "macOS preferences access. Supported values: `none`, `read_only`, or `read_write`."
+                            .to_string(),
+                    ),
+                },
+            ),
+            (
+                "automations".to_string(),
+                JsonSchema::Array {
+                    items: Box::new(JsonSchema::String { description: None }),
+                    description: Some("macOS automation access as app bundle identifiers.".to_string()),
+                },
+            ),
+            (
+                "accessibility".to_string(),
+                JsonSchema::Boolean {
+                    description: Some("Whether to request macOS accessibility access.".to_string()),
+                },
+            ),
+            (
+                "calendar".to_string(),
+                JsonSchema::Boolean {
+                    description: Some("Whether to request macOS calendar access.".to_string()),
+                },
+            ),
+        ]),
+        required: None,
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn create_permissions_schema() -> JsonSchema {
+    JsonSchema::Object {
+        properties: BTreeMap::from([
+            ("network".to_string(), create_network_permissions_schema()),
+            (
+                "file_system".to_string(),
+                create_file_system_permissions_schema(),
+            ),
+            ("macos".to_string(), create_macos_permissions_schema()),
+        ]),
+        required: None,
+        additional_properties: Some(false.into()),
+    }
+}
+
 fn create_approval_parameters(request_permission_enabled: bool) -> BTreeMap<String, JsonSchema> {
     let mut properties = BTreeMap::from([
         (
@@ -298,103 +445,7 @@ fn create_approval_parameters(request_permission_enabled: bool) -> BTreeMap<Stri
     if request_permission_enabled {
         properties.insert(
             "additional_permissions".to_string(),
-            JsonSchema::Object {
-                properties: BTreeMap::from([
-                    (
-                        "network".to_string(),
-                        JsonSchema::Object {
-                            properties: BTreeMap::from([(
-                                "enabled".to_string(),
-                                JsonSchema::Boolean {
-                                    description: Some(
-                                        "Set to true to enable network access for this command."
-                                            .to_string(),
-                                    ),
-                                },
-                            )]),
-                            required: None,
-                            additional_properties: Some(false.into()),
-                        },
-                    ),
-                    (
-                        "file_system".to_string(),
-                        JsonSchema::Object {
-                            properties: BTreeMap::from([
-                                (
-                                    "read".to_string(),
-                                    JsonSchema::Array {
-                                        items: Box::new(JsonSchema::String { description: None }),
-                                        description: Some(
-                                            "Additional filesystem paths to grant read access for this command."
-                                                .to_string(),
-                                        ),
-                                    },
-                                ),
-                                (
-                                    "write".to_string(),
-                                    JsonSchema::Array {
-                                        items: Box::new(JsonSchema::String { description: None }),
-                                        description: Some(
-                                            "Additional filesystem paths to grant write access for this command."
-                                                .to_string(),
-                                        ),
-                                    },
-                                ),
-                            ]),
-                            required: None,
-                            additional_properties: Some(false.into()),
-                        },
-                    ),
-                    (
-                        "macos".to_string(),
-                        JsonSchema::Object {
-                            properties: BTreeMap::from([
-                                (
-                                    "preferences".to_string(),
-                                    JsonSchema::String {
-                                        description: Some(
-                                            "Additional macOS preferences access for this command. Supported values: \"readonly\" or \"readwrite\"."
-                                                .to_string(),
-                                        ),
-                                    },
-                                ),
-                                (
-                                    "automations".to_string(),
-                                    JsonSchema::Array {
-                                        items: Box::new(JsonSchema::String { description: None }),
-                                        description: Some(
-                                            "Additional macOS automation targets for this command as bundle IDs, or use true in clients that support boolean union payloads."
-                                                .to_string(),
-                                        ),
-                                    },
-                                ),
-                                (
-                                    "accessibility".to_string(),
-                                    JsonSchema::Boolean {
-                                        description: Some(
-                                            "Set to true to allow macOS accessibility APIs for this command."
-                                                .to_string(),
-                                        ),
-                                    },
-                                ),
-                                (
-                                    "calendar".to_string(),
-                                    JsonSchema::Boolean {
-                                        description: Some(
-                                            "Set to true to allow macOS Calendar access for this command."
-                                                .to_string(),
-                                        ),
-                                    },
-                                ),
-                            ]),
-                            required: None,
-                            additional_properties: Some(false.into()),
-                        },
-                    ),
-                ]),
-                required: None,
-                additional_properties: Some(false.into()),
-            },
+            create_permissions_schema(),
         );
     }
 
@@ -469,11 +520,13 @@ fn create_exec_command_tool(allow_login_shell: bool, request_permission_enabled:
             "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
                 .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["cmd".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: Some(unified_exec_output_schema()),
     })
 }
 
@@ -516,11 +569,13 @@ fn create_write_stdin_tool() -> ToolSpec {
             "Writes characters to an existing unified exec session and returns recent output."
                 .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["session_id".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: Some(unified_exec_output_schema()),
     })
 }
 
@@ -569,11 +624,13 @@ Examples of valid command strings:
         name: "shell".to_string(),
         description,
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["command".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -636,33 +693,47 @@ Examples of valid command strings:
         name: "shell_command".to_string(),
         description,
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["command".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
-fn create_view_image_tool() -> ToolSpec {
+fn create_view_image_tool(can_request_original_image_detail: bool) -> ToolSpec {
     // Support only local filesystem path.
-    let properties = BTreeMap::from([(
+    let mut properties = BTreeMap::from([(
         "path".to_string(),
         JsonSchema::String {
             description: Some("Local filesystem path to an image file".to_string()),
         },
     )]);
+    if can_request_original_image_detail {
+        properties.insert(
+            "detail".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional detail override. The only supported value is `original`; omit this field for default resized behavior. Use `original` to preserve the file's original resolution instead of resizing to fit. This is important when high-fidelity image perception or precise localization is needed, especially for CUA agents.".to_string(),
+                ),
+            },
+        );
+    }
 
     ToolSpec::Function(ResponsesApiTool {
         name: VIEW_IMAGE_TOOL_NAME.to_string(),
         description: "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags)."
             .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["path".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -719,6 +790,7 @@ fn create_collab_input_items_schema() -> JsonSchema {
 }
 
 fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
+    let available_models_description = spawn_agent_models_description(&config.available_models);
     let properties = BTreeMap::from([
         (
             "message".to_string(),
@@ -747,12 +819,33 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
                 ),
             },
         ),
+        (
+            "model".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional model override for the new agent. Replaces the inherited model."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "reasoning_effort".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort."
+                        .to_string(),
+                ),
+            },
+        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
-        description: r#"Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
+        description: format!(
+            r#"
+        Only use `spawn_agent` if and only if the user explicitly asked for sub-agents or parallel agent work. Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
 
+{available_models_description}
 ### When to delegate vs. do the subtask yourself
 - First, quickly analyze the overall user task and form a succinct high-level plan. Identify which tasks are immediate blockers on the critical path, and which tasks are sidecar tasks that are needed but can run in parallel without blocking the next local step. As part of that plan, explicitly decide what immediate task you should do locally right now. Do this planning step before delegating to agents so you do not hand off the immediate blocking task to a submodel and then waste time waiting on it.
 - Use the smaller subagent when a subtask is easy enough for it to handle and can run in parallel with your local work. Prefer delegating concrete, bounded sidecar tasks that materially advance the main task without blocking your immediate next local step.
@@ -781,14 +874,45 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
 - Split implementation into disjoint codebase slices and spawn multiple agents for them in parallel when the write scopes do not overlap.
 - Delegate verification only when it can run in parallel with ongoing implementation and is likely to catch a concrete risk before final integration.
 - The key is to find opportunities to spawn multiple independent subtasks in parallel within the same round, while ensuring each subtask is well-defined, self-contained, and materially advances the main task."#
-            .to_string(),
+        ),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: None,
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
+}
+
+fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
+    let visible_models: Vec<&ModelPreset> =
+        models.iter().filter(|model| model.show_in_picker).collect();
+    if visible_models.is_empty() {
+        return "No picker-visible models are currently loaded.".to_string();
+    }
+
+    visible_models
+        .into_iter()
+        .map(|model| {
+            let efforts = model
+                .supported_reasoning_efforts
+                .iter()
+                .map(|preset| format!("{} ({})", preset.effort, preset.description))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "- {} (`{}`): {} Default reasoning effort: {}. Supported reasoning efforts: {}.",
+                model.display_name,
+                model.model,
+                model.description,
+                model.default_reasoning_effort,
+                efforts
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn create_spawn_agents_on_csv_tool() -> ToolSpec {
@@ -859,11 +983,13 @@ fn create_spawn_agents_on_csv_tool() -> ToolSpec {
         description: "Process a CSV by spawning one worker sub-agent per row. The instruction string is a template where `{column}` placeholders are replaced with row values. Each worker must call `report_agent_job_result` with a JSON object (matching `output_schema` when provided); missing reports are treated as failures. This call blocks until all rows finish and automatically exports results to `output_csv_path` (or a default path)."
             .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["csv_path".to_string(), "instruction".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -904,6 +1030,7 @@ fn create_report_agent_job_result_tool() -> ToolSpec {
             "Worker-only tool to report a result for an agent job item. Main agents should not call this."
                 .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec![
@@ -913,6 +1040,7 @@ fn create_report_agent_job_result_tool() -> ToolSpec {
             ]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -950,11 +1078,13 @@ fn create_send_input_tool() -> ToolSpec {
         description: "Send a message to an existing agent. Use interrupt=true to redirect work immediately. You should reuse the agent by send_input if you believe your assigned task is highly dependent on the context of a previous task."
             .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["id".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -973,11 +1103,13 @@ fn create_resume_agent_tool() -> ToolSpec {
             "Resume a previously closed agent by id so it can receive send_input and wait calls."
                 .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["id".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1007,11 +1139,13 @@ fn create_wait_tool() -> ToolSpec {
         description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches a final status, a notification message will be received containing the same completed status."
             .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["ids".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1092,11 +1226,39 @@ fn create_request_user_input_tool(
             collaboration_modes_config.default_mode_request_user_input,
         ),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["questions".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
+    })
+}
+
+fn create_request_permissions_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "reason".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional short explanation for why additional permissions are needed.".to_string(),
+            ),
+        },
+    );
+    properties.insert("permissions".to_string(), create_permissions_schema());
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "request_permissions".to_string(),
+        description: request_permissions_tool_description(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["permissions".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
     })
 }
 
@@ -1111,14 +1273,15 @@ fn create_close_agent_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "close_agent".to_string(),
-        description: "Close an agent when it is no longer needed and return its last known status."
-            .to_string(),
+        description: "Close an agent when it is no longer needed and return its last known status. Don't keep agents open for too long if they are not needed anymore.".to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["id".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1181,11 +1344,13 @@ fn create_test_sync_tool() -> ToolSpec {
         name: "test_sync_tool".to_string(),
         description: "Internal synchronization helper used by Codex integration tests.".to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: None,
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1232,15 +1397,17 @@ fn create_grep_files_tool() -> ToolSpec {
                       time."
             .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["pattern".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
-fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSpec {
+fn create_tool_search_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "query".to_string(),
@@ -1252,7 +1419,7 @@ fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSp
             "limit".to_string(),
             JsonSchema::Number {
                 description: Some(format!(
-                    "Maximum number of tools to return (defaults to {SEARCH_TOOL_BM25_DEFAULT_LIMIT})."
+                    "Maximum number of tools to return (defaults to {TOOL_SEARCH_DEFAULT_LIMIT})."
                 )),
             },
         ),
@@ -1265,19 +1432,23 @@ fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSp
     app_names.dedup();
     let app_names = app_names.join(", ");
 
-    let description =
-        SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE.replace("{{app_names}}", app_names.as_str());
+    let description = if app_names.is_empty() {
+        TOOL_SEARCH_DESCRIPTION_TEMPLATE
+            .replace("({{app_names}})", "(None currently enabled)")
+            .replace("{{app_names}}", "available apps")
+    } else {
+        TOOL_SEARCH_DESCRIPTION_TEMPLATE.replace("{{app_names}}", app_names.as_str())
+    };
 
-    ToolSpec::Function(ResponsesApiTool {
-        name: SEARCH_TOOL_BM25_TOOL_NAME.to_string(),
+    ToolSpec::ToolSearch {
+        execution: "client".to_string(),
         description,
-        strict: false,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["query".to_string()]),
             additional_properties: Some(false.into()),
         },
-    })
+    }
 }
 
 fn create_read_file_tool() -> ToolSpec {
@@ -1375,11 +1546,13 @@ fn create_read_file_tool() -> ToolSpec {
             "Reads a local file with 1-indexed line numbers, supporting slice and indentation-aware block modes."
                 .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["file_path".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1421,11 +1594,13 @@ fn create_list_dir_tool() -> ToolSpec {
             "Lists entries in a local directory with 1-indexed entry numbers and simple type labels."
                 .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["dir_path".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1495,12 +1670,44 @@ fn create_js_repl_reset_tool() -> ToolSpec {
             "Restarts the js_repl kernel for this run and clears persisted top-level bindings."
                 .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties: BTreeMap::new(),
             required: None,
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
+}
+
+fn create_code_mode_tool(enabled_tool_names: &[String]) -> ToolSpec {
+    const CODE_MODE_FREEFORM_GRAMMAR: &str = r#"
+start: source
+source: /[\s\S]+/
+"#;
+
+    let enabled_list = if enabled_tool_names.is_empty() {
+        "none".to_string()
+    } else {
+        enabled_tool_names.join(", ")
+    };
+    let description = format!(
+        "Runs JavaScript in a Node-backed `node:vm` context. This is a freeform tool: send raw JavaScript source text (no JSON/quotes/markdown fences). Direct tool calls remain available while `{PUBLIC_TOOL_NAME}` is enabled. Inside JavaScript, import nested tools from `tools.js`, for example `import {{ exec_command }} from \"tools.js\"` or `import {{ ALL_TOOLS }} from \"tools.js\"` to inspect the available `{{ module, name, description }}` entries. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import {{ append_notebook_logs_chart }} from \"tools/mcp/ologs.js\"`. Nested tool calls resolve to their code-mode result values. Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, store, load }}` from `\"@openai/code_mode\"` (or `\"openai/code_mode\"`); `output_text(value)` surfaces text back to the model and stringifies non-string objects when possible, `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs, `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, `load(key)` returns a cloned stored value or `undefined`, and `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `{PUBLIC_TOOL_NAME}` execution. The default is `10000`. This guards the overall `{PUBLIC_TOOL_NAME}` output, not individual nested tool invocations. The returned content starts with a separate `Script completed` or `Script failed` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker. Function tools require JSON object arguments. Freeform tools require raw strings. `add_content(value)` remains available for compatibility with a content item, content-item array, or string. Structured nested-tool results should be converted to text first, for example with `JSON.stringify(...)`. Only content passed to `output_text(...)`, `output_image(...)`, or `add_content(value)` is surfaced back to the model. Enabled nested tools: {enabled_list}."
+    );
+
+    ToolSpec::Freeform(FreeformTool {
+        name: PUBLIC_TOOL_NAME.to_string(),
+        description,
+        format: FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "lark".to_string(),
+            definition: CODE_MODE_FREEFORM_GRAMMAR.to_string(),
+        },
+    })
+}
+
+fn is_code_mode_nested_tool(spec: &ToolSpec) -> bool {
+    spec.name() != PUBLIC_TOOL_NAME && matches!(spec, ToolSpec::Function(_) | ToolSpec::Freeform(_))
 }
 
 fn create_list_mcp_resources_tool() -> ToolSpec {
@@ -1529,11 +1736,13 @@ fn create_list_mcp_resources_tool() -> ToolSpec {
         name: "list_mcp_resources".to_string(),
         description: "Lists resources provided by MCP servers. Resources allow servers to share data that provides context to language models, such as files, database schemas, or application-specific information. Prefer resources over web search when possible.".to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: None,
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1563,11 +1772,13 @@ fn create_list_mcp_resource_templates_tool() -> ToolSpec {
         name: "list_mcp_resource_templates".to_string(),
         description: "Lists resource templates provided by MCP servers. Parameterized resource templates allow servers to share data that takes parameters and provides context to language models, such as files, database schemas, or application-specific information. Prefer resource templates over web search when possible.".to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: None,
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1599,11 +1810,13 @@ fn create_read_mcp_resource_tool() -> ToolSpec {
             "Read a specific resource from an MCP server given the server name and resource URI."
                 .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["server".to_string(), "uri".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1629,13 +1842,81 @@ pub fn create_tools_json_for_responses_api(
     Ok(tools_json)
 }
 
+fn push_tool_spec(
+    builder: &mut ToolRegistryBuilder,
+    spec: ToolSpec,
+    supports_parallel_tool_calls: bool,
+    code_mode_enabled: bool,
+) {
+    let spec = augment_tool_spec_for_code_mode(spec, code_mode_enabled);
+    if supports_parallel_tool_calls {
+        builder.push_spec_with_parallel_support(spec, true);
+    } else {
+        builder.push_spec(spec);
+    }
+}
+
 pub(crate) fn mcp_tool_to_openai_tool(
     fully_qualified_name: String,
     tool: rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
+    let (description, input_schema, output_schema) = mcp_tool_to_openai_tool_parts(tool)?;
+
+    Ok(ResponsesApiTool {
+        name: fully_qualified_name,
+        description,
+        strict: false,
+        defer_loading: None,
+        parameters: input_schema,
+        output_schema,
+    })
+}
+
+pub(crate) fn mcp_tool_to_deferred_openai_tool(
+    name: String,
+    tool: rmcp::model::Tool,
+) -> Result<ResponsesApiTool, serde_json::Error> {
+    let (description, input_schema, _) = mcp_tool_to_openai_tool_parts(tool)?;
+
+    Ok(ResponsesApiTool {
+        name,
+        description,
+        strict: false,
+        defer_loading: Some(true),
+        parameters: input_schema,
+        output_schema: None,
+    })
+}
+
+fn dynamic_tool_to_openai_tool(
+    tool: &DynamicToolSpec,
+) -> Result<ResponsesApiTool, serde_json::Error> {
+    let input_schema = parse_tool_input_schema(&tool.input_schema)?;
+
+    Ok(ResponsesApiTool {
+        name: tool.name.clone(),
+        description: tool.description.clone(),
+        strict: false,
+        defer_loading: None,
+        parameters: input_schema,
+        output_schema: None,
+    })
+}
+
+/// Parse the tool input_schema or return an error for invalid schema
+pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, serde_json::Error> {
+    let mut input_schema = input_schema.clone();
+    sanitize_json_schema(&mut input_schema);
+    serde_json::from_value::<JsonSchema>(input_schema)
+}
+
+fn mcp_tool_to_openai_tool_parts(
+    tool: rmcp::model::Tool,
+) -> Result<(String, JsonSchema, Option<JsonValue>), serde_json::Error> {
     let rmcp::model::Tool {
         description,
         input_schema,
+        output_schema,
         ..
     } = tool;
 
@@ -1660,33 +1941,34 @@ pub(crate) fn mcp_tool_to_openai_tool(
     // `type`, so we coerce/sanitize here for compatibility.
     sanitize_json_schema(&mut serialized_input_schema);
     let input_schema = serde_json::from_value::<JsonSchema>(serialized_input_schema)?;
+    let structured_content_schema = output_schema
+        .map(|output_schema| serde_json::Value::Object(output_schema.as_ref().clone()))
+        .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
+    let output_schema = Some(mcp_call_tool_result_output_schema(
+        structured_content_schema,
+    ));
+    let description = description.map(Into::into).unwrap_or_default();
 
-    Ok(ResponsesApiTool {
-        name: fully_qualified_name,
-        description: description.map(Into::into).unwrap_or_default(),
-        strict: false,
-        parameters: input_schema,
-    })
+    Ok((description, input_schema, output_schema))
 }
 
-fn dynamic_tool_to_openai_tool(
-    tool: &DynamicToolSpec,
-) -> Result<ResponsesApiTool, serde_json::Error> {
-    let input_schema = parse_tool_input_schema(&tool.input_schema)?;
-
-    Ok(ResponsesApiTool {
-        name: tool.name.clone(),
-        description: tool.description.clone(),
-        strict: false,
-        parameters: input_schema,
+fn mcp_call_tool_result_output_schema(structured_content_schema: JsonValue) -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "content": {
+                "type": "array",
+                "items": {}
+            },
+            "structuredContent": structured_content_schema,
+            "isError": {
+                "type": "boolean"
+            },
+            "_meta": {}
+        },
+        "required": ["content"],
+        "additionalProperties": false
     })
-}
-
-/// Parse the tool input_schema or return an error for invalid schema
-pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, serde_json::Error> {
-    let mut input_schema = input_schema.clone();
-    sanitize_json_schema(&mut input_schema);
-    serde_json::from_value::<JsonSchema>(input_schema)
 }
 
 /// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
@@ -1809,6 +2091,7 @@ pub(crate) fn build_specs(
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::ArtifactsHandler;
+    use crate::tools::handlers::CodeModeHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
@@ -1819,11 +2102,12 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::MultiAgentHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
+    use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
-    use crate::tools::handlers::SearchToolBm25Handler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::TestSyncHandler;
+    use crate::tools::handlers::ToolSearchHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
     use std::sync::Arc;
@@ -1839,31 +2123,72 @@ pub(crate) fn build_specs(
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler::from(config.shell_command_backend));
+    let request_permissions_handler = Arc::new(RequestPermissionsHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
-    let search_tool_handler = Arc::new(SearchToolBm25Handler);
+    let code_mode_handler = Arc::new(CodeModeHandler);
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
     let artifacts_handler = Arc::new(ArtifactsHandler);
     let request_permission_enabled = config.request_permission_enabled;
 
+    if config.code_mode_enabled {
+        let nested_config = config.for_code_mode_nested_tools();
+        let (nested_specs, _) = build_specs(
+            &nested_config,
+            mcp_tools.clone(),
+            app_tools.clone(),
+            dynamic_tools,
+        )
+        .build();
+        let mut enabled_tool_names = nested_specs
+            .into_iter()
+            .map(|spec| spec.spec)
+            .filter(is_code_mode_nested_tool)
+            .map(|spec| spec.name().to_string())
+            .collect::<Vec<_>>();
+        enabled_tool_names.sort();
+        enabled_tool_names.dedup();
+        push_tool_spec(
+            &mut builder,
+            create_code_mode_tool(&enabled_tool_names),
+            false,
+            config.code_mode_enabled,
+        );
+        builder.register_handler(PUBLIC_TOOL_NAME, code_mode_handler);
+    }
+
     match &config.shell_type {
         ConfigShellToolType::Default => {
-            builder.push_spec_with_parallel_support(
+            push_tool_spec(
+                &mut builder,
                 create_shell_tool(request_permission_enabled),
                 true,
+                config.code_mode_enabled,
             );
         }
         ConfigShellToolType::Local => {
-            builder.push_spec_with_parallel_support(ToolSpec::LocalShell {}, true);
+            push_tool_spec(
+                &mut builder,
+                ToolSpec::LocalShell {},
+                true,
+                config.code_mode_enabled,
+            );
         }
         ConfigShellToolType::UnifiedExec => {
-            builder.push_spec_with_parallel_support(
+            push_tool_spec(
+                &mut builder,
                 create_exec_command_tool(config.allow_login_shell, request_permission_enabled),
                 true,
+                config.code_mode_enabled,
             );
-            builder.push_spec(create_write_stdin_tool());
+            push_tool_spec(
+                &mut builder,
+                create_write_stdin_tool(),
+                false,
+                config.code_mode_enabled,
+            );
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
         }
@@ -1871,9 +2196,11 @@ pub(crate) fn build_specs(
             // Do nothing.
         }
         ConfigShellToolType::ShellCommand => {
-            builder.push_spec_with_parallel_support(
+            push_tool_spec(
+                &mut builder,
                 create_shell_command_tool(config.allow_login_shell, request_permission_enabled),
                 true,
+                config.code_mode_enabled,
             );
         }
     }
@@ -1887,45 +2214,113 @@ pub(crate) fn build_specs(
     }
 
     if mcp_tools.is_some() {
-        builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
-        builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
-        builder.push_spec_with_parallel_support(create_read_mcp_resource_tool(), true);
+        push_tool_spec(
+            &mut builder,
+            create_list_mcp_resources_tool(),
+            true,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_list_mcp_resource_templates_tool(),
+            true,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_read_mcp_resource_tool(),
+            true,
+            config.code_mode_enabled,
+        );
         builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
         builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
         builder.register_handler("read_mcp_resource", mcp_resource_handler);
     }
 
-    builder.push_spec(PLAN_TOOL.clone());
+    push_tool_spec(
+        &mut builder,
+        PLAN_TOOL.clone(),
+        false,
+        config.code_mode_enabled,
+    );
     builder.register_handler("update_plan", plan_handler);
 
     if config.js_repl_enabled {
-        builder.push_spec(create_js_repl_tool());
-        builder.push_spec(create_js_repl_reset_tool());
+        push_tool_spec(
+            &mut builder,
+            create_js_repl_tool(),
+            false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_js_repl_reset_tool(),
+            false,
+            config.code_mode_enabled,
+        );
         builder.register_handler("js_repl", js_repl_handler);
         builder.register_handler("js_repl_reset", js_repl_reset_handler);
     }
 
     if config.request_user_input {
-        builder.push_spec(create_request_user_input_tool(CollaborationModesConfig {
-            default_mode_request_user_input: config.default_mode_request_user_input,
-        }));
+        push_tool_spec(
+            &mut builder,
+            create_request_user_input_tool(CollaborationModesConfig {
+                default_mode_request_user_input: config.default_mode_request_user_input,
+            }),
+            false,
+            config.code_mode_enabled,
+        );
         builder.register_handler("request_user_input", request_user_input_handler);
+    }
+
+    if config.request_permissions_tool_enabled {
+        push_tool_spec(
+            &mut builder,
+            create_request_permissions_tool(),
+            false,
+            config.code_mode_enabled,
+        );
+        builder.register_handler("request_permissions", request_permissions_handler);
     }
 
     if config.search_tool
         && let Some(app_tools) = app_tools
     {
-        builder.push_spec_with_parallel_support(create_search_tool_bm25_tool(&app_tools), true);
-        builder.register_handler(SEARCH_TOOL_BM25_TOOL_NAME, search_tool_handler);
+        let search_tool_handler = Arc::new(ToolSearchHandler::new(app_tools.clone()));
+        push_tool_spec(
+            &mut builder,
+            create_tool_search_tool(&app_tools),
+            true,
+            config.code_mode_enabled,
+        );
+        builder.register_handler(TOOL_SEARCH_TOOL_NAME, search_tool_handler);
+
+        for tool in app_tools.values() {
+            let alias_name =
+                tool_handler_key(tool.tool_name.as_str(), Some(tool.tool_namespace.as_str()));
+
+            builder.register_handler(alias_name, mcp_handler.clone());
+        }
     }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
             ApplyPatchToolType::Freeform => {
-                builder.push_spec(create_apply_patch_freeform_tool());
+                push_tool_spec(
+                    &mut builder,
+                    create_apply_patch_freeform_tool(),
+                    false,
+                    config.code_mode_enabled,
+                );
             }
             ApplyPatchToolType::Function => {
-                builder.push_spec(create_apply_patch_json_tool());
+                push_tool_spec(
+                    &mut builder,
+                    create_apply_patch_json_tool(),
+                    false,
+                    config.code_mode_enabled,
+                );
             }
         }
         builder.register_handler("apply_patch", apply_patch_handler);
@@ -1936,7 +2331,12 @@ pub(crate) fn build_specs(
         .contains(&"grep_files".to_string())
     {
         let grep_files_handler = Arc::new(GrepFilesHandler);
-        builder.push_spec_with_parallel_support(create_grep_files_tool(), true);
+        push_tool_spec(
+            &mut builder,
+            create_grep_files_tool(),
+            true,
+            config.code_mode_enabled,
+        );
         builder.register_handler("grep_files", grep_files_handler);
     }
 
@@ -1945,7 +2345,12 @@ pub(crate) fn build_specs(
         .contains(&"read_file".to_string())
     {
         let read_file_handler = Arc::new(ReadFileHandler);
-        builder.push_spec_with_parallel_support(create_read_file_tool(), true);
+        push_tool_spec(
+            &mut builder,
+            create_read_file_tool(),
+            true,
+            config.code_mode_enabled,
+        );
         builder.register_handler("read_file", read_file_handler);
     }
 
@@ -1955,7 +2360,12 @@ pub(crate) fn build_specs(
         .any(|tool| tool == "list_dir")
     {
         let list_dir_handler = Arc::new(ListDirHandler);
-        builder.push_spec_with_parallel_support(create_list_dir_tool(), true);
+        push_tool_spec(
+            &mut builder,
+            create_list_dir_tool(),
+            true,
+            config.code_mode_enabled,
+        );
         builder.register_handler("list_dir", list_dir_handler);
     }
 
@@ -1964,7 +2374,12 @@ pub(crate) fn build_specs(
         .contains(&"test_sync_tool".to_string())
     {
         let test_sync_handler = Arc::new(TestSyncHandler);
-        builder.push_spec_with_parallel_support(create_test_sync_tool(), true);
+        push_tool_spec(
+            &mut builder,
+            create_test_sync_tool(),
+            true,
+            config.code_mode_enabled,
+        );
         builder.register_handler("test_sync_tool", test_sync_handler);
     }
 
@@ -1985,45 +2400,90 @@ pub(crate) fn build_specs(
             ),
         };
 
-        builder.push_spec(ToolSpec::WebSearch {
-            external_web_access: Some(external_web_access),
-            filters: config
-                .web_search_config
-                .as_ref()
-                .and_then(|cfg| cfg.filters.clone()),
-            user_location: config
-                .web_search_config
-                .as_ref()
-                .and_then(|cfg| cfg.user_location.clone()),
-            search_context_size: config
-                .web_search_config
-                .as_ref()
-                .and_then(|cfg| cfg.search_context_size),
-            search_content_types,
-        });
+        push_tool_spec(
+            &mut builder,
+            ToolSpec::WebSearch {
+                external_web_access: Some(external_web_access),
+                filters: config
+                    .web_search_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.filters.clone().map(Into::into)),
+                user_location: config
+                    .web_search_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.user_location.clone().map(Into::into)),
+                search_context_size: config
+                    .web_search_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.search_context_size),
+                search_content_types,
+            },
+            false,
+            config.code_mode_enabled,
+        );
     }
 
     if config.image_gen_tool {
-        builder.push_spec(ToolSpec::ImageGeneration {
-            output_format: "png".to_string(),
-        });
+        push_tool_spec(
+            &mut builder,
+            ToolSpec::ImageGeneration {
+                output_format: "png".to_string(),
+            },
+            false,
+            config.code_mode_enabled,
+        );
     }
 
-    builder.push_spec_with_parallel_support(create_view_image_tool(), true);
+    push_tool_spec(
+        &mut builder,
+        create_view_image_tool(config.can_request_original_image_detail),
+        true,
+        config.code_mode_enabled,
+    );
     builder.register_handler("view_image", view_image_handler);
 
     if config.artifact_tools {
-        builder.push_spec(create_artifacts_tool());
+        push_tool_spec(
+            &mut builder,
+            create_artifacts_tool(),
+            false,
+            config.code_mode_enabled,
+        );
         builder.register_handler("artifacts", artifacts_handler);
     }
 
     if config.collab_tools {
         let multi_agent_handler = Arc::new(MultiAgentHandler);
-        builder.push_spec(create_spawn_agent_tool(config));
-        builder.push_spec(create_send_input_tool());
-        builder.push_spec(create_resume_agent_tool());
-        builder.push_spec(create_wait_tool());
-        builder.push_spec(create_close_agent_tool());
+        push_tool_spec(
+            &mut builder,
+            create_spawn_agent_tool(config),
+            false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_send_input_tool(),
+            false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_resume_agent_tool(),
+            false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_wait_tool(),
+            false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_close_agent_tool(),
+            false,
+            config.code_mode_enabled,
+        );
         builder.register_handler("spawn_agent", multi_agent_handler.clone());
         builder.register_handler("send_input", multi_agent_handler.clone());
         builder.register_handler("resume_agent", multi_agent_handler.clone());
@@ -2033,10 +2493,20 @@ pub(crate) fn build_specs(
 
     if config.agent_jobs_tools {
         let agent_jobs_handler = Arc::new(BatchJobHandler);
-        builder.push_spec(create_spawn_agents_on_csv_tool());
+        push_tool_spec(
+            &mut builder,
+            create_spawn_agents_on_csv_tool(),
+            false,
+            config.code_mode_enabled,
+        );
         builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
         if config.agent_jobs_worker_tools {
-            builder.push_spec(create_report_agent_job_result_tool());
+            push_tool_spec(
+                &mut builder,
+                create_report_agent_job_result_tool(),
+                false,
+                config.code_mode_enabled,
+            );
             builder.register_handler("report_agent_job_result", agent_jobs_handler);
         }
     }
@@ -2048,7 +2518,12 @@ pub(crate) fn build_specs(
         for (name, tool) in entries.into_iter() {
             match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
                 Ok(converted_tool) => {
-                    builder.push_spec(ToolSpec::Function(converted_tool));
+                    push_tool_spec(
+                        &mut builder,
+                        ToolSpec::Function(converted_tool),
+                        false,
+                        config.code_mode_enabled,
+                    );
                     builder.register_handler(name, mcp_handler.clone());
                 }
                 Err(e) => {
@@ -2062,7 +2537,12 @@ pub(crate) fn build_specs(
         for tool in dynamic_tools {
             match dynamic_tool_to_openai_tool(tool) {
                 Ok(converted_tool) => {
-                    builder.push_spec(ToolSpec::Function(converted_tool));
+                    push_tool_spec(
+                        &mut builder,
+                        ToolSpec::Function(converted_tool),
+                        false,
+                        config.code_mode_enabled,
+                    );
                     builder.register_handler(tool.name.clone(), dynamic_tool_handler.clone());
                 }
                 Err(e) => {
@@ -2134,9 +2614,183 @@ mod tests {
         assert_eq!(parameters.get("properties"), Some(&serde_json::json!({})));
     }
 
+    #[test]
+    fn mcp_tool_to_openai_tool_preserves_top_level_output_schema() {
+        let mut input_schema = rmcp::model::JsonObject::new();
+        input_schema.insert("type".to_string(), serde_json::json!("object"));
+
+        let mut output_schema = rmcp::model::JsonObject::new();
+        output_schema.insert(
+            "properties".to_string(),
+            serde_json::json!({
+                "result": {
+                    "properties": {
+                        "nested": {}
+                    }
+                }
+            }),
+        );
+        output_schema.insert("required".to_string(), serde_json::json!(["result"]));
+
+        let tool = rmcp::model::Tool {
+            name: "with_output".to_string().into(),
+            title: None,
+            description: Some("Has output schema".to_string().into()),
+            input_schema: std::sync::Arc::new(input_schema),
+            output_schema: Some(std::sync::Arc::new(output_schema)),
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        };
+
+        let openai_tool = mcp_tool_to_openai_tool("mcp__server__with_output".to_string(), tool)
+            .expect("convert tool");
+
+        assert_eq!(
+            openai_tool.output_schema,
+            Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "array",
+                        "items": {}
+                    },
+                    "structuredContent": {
+                        "properties": {
+                            "result": {
+                                "properties": {
+                                    "nested": {}
+                                }
+                            }
+                        },
+                        "required": ["result"]
+                    },
+                    "isError": {
+                        "type": "boolean"
+                    },
+                    "_meta": {}
+                },
+                "required": ["content"],
+                "additionalProperties": false
+            }))
+        );
+    }
+
+    #[test]
+    fn mcp_tool_to_openai_tool_preserves_output_schema_without_inferred_type() {
+        let mut input_schema = rmcp::model::JsonObject::new();
+        input_schema.insert("type".to_string(), serde_json::json!("object"));
+
+        let mut output_schema = rmcp::model::JsonObject::new();
+        output_schema.insert("enum".to_string(), serde_json::json!(["ok", "error"]));
+
+        let tool = rmcp::model::Tool {
+            name: "with_enum_output".to_string().into(),
+            title: None,
+            description: Some("Has enum output schema".to_string().into()),
+            input_schema: std::sync::Arc::new(input_schema),
+            output_schema: Some(std::sync::Arc::new(output_schema)),
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        };
+
+        let openai_tool =
+            mcp_tool_to_openai_tool("mcp__server__with_enum_output".to_string(), tool)
+                .expect("convert tool");
+
+        assert_eq!(
+            openai_tool.output_schema,
+            Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "array",
+                        "items": {}
+                    },
+                    "structuredContent": {
+                        "enum": ["ok", "error"]
+                    },
+                    "isError": {
+                        "type": "boolean"
+                    },
+                    "_meta": {}
+                },
+                "required": ["content"],
+                "additionalProperties": false
+            }))
+        );
+    }
+
+    #[test]
+    fn search_tool_deferred_tools_always_set_defer_loading_true() {
+        let tool = mcp_tool(
+            "lookup_order",
+            "Look up an order",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "order_id": {"type": "string"}
+                },
+                "required": ["order_id"],
+                "additionalProperties": false,
+            }),
+        );
+
+        let openai_tool =
+            mcp_tool_to_deferred_openai_tool("mcp__codex_apps__lookup_order".to_string(), tool)
+                .expect("convert deferred tool");
+
+        assert_eq!(openai_tool.defer_loading, Some(true));
+    }
+
+    #[test]
+    fn deferred_responses_api_tool_serializes_with_defer_loading() {
+        let tool = mcp_tool(
+            "lookup_order",
+            "Look up an order",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "order_id": {"type": "string"}
+                },
+                "required": ["order_id"],
+                "additionalProperties": false,
+            }),
+        );
+
+        let serialized = serde_json::to_value(ToolSpec::Function(
+            mcp_tool_to_deferred_openai_tool("mcp__codex_apps__lookup_order".to_string(), tool)
+                .expect("convert deferred tool"),
+        ))
+        .expect("serialize deferred tool");
+
+        assert_eq!(
+            serialized,
+            serde_json::json!({
+                "type": "function",
+                "name": "mcp__codex_apps__lookup_order",
+                "description": "Look up an order",
+                "strict": false,
+                "defer_loading": true,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "order_id": {"type": "string"}
+                    },
+                    "required": ["order_id"],
+                    "additionalProperties": false,
+                }
+            })
+        );
+    }
+
     fn tool_name(tool: &ToolSpec) -> &str {
         match tool {
             ToolSpec::Function(ResponsesApiTool { name, .. }) => name,
+            ToolSpec::ToolSearch { .. } => "tool_search",
             ToolSpec::LocalShell {} => "local_shell",
             ToolSpec::ImageGeneration { .. } => "image_generation",
             ToolSpec::WebSearch { .. } => "web_search",
@@ -2225,6 +2879,7 @@ mod tests {
 
     fn strip_descriptions_tool(spec: &mut ToolSpec) {
         match spec {
+            ToolSpec::ToolSearch { parameters, .. } => strip_descriptions_schema(parameters),
             ToolSpec::Function(ResponsesApiTool { parameters, .. }) => {
                 strip_descriptions_schema(parameters);
             }
@@ -2252,8 +2907,10 @@ mod tests {
         let model_info = model_info_from_models_json("gpt-5-codex");
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -2291,8 +2948,13 @@ mod tests {
                 search_context_size: None,
                 search_content_types: None,
             },
-            create_view_image_tool(),
+            create_view_image_tool(config.can_request_original_image_detail),
         ] {
+            expected.insert(tool_name(&spec).to_string(), spec);
+        }
+
+        if config.request_permission_enabled {
+            let spec = create_request_permissions_tool();
             expected.insert(tool_name(&spec).to_string(), spec);
         }
 
@@ -2318,8 +2980,34 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::Collab);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        assert_contains_tool_names(
+            &tools,
+            &["spawn_agent", "send_input", "wait", "close_agent"],
+        );
+        assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
+    }
+
+    #[test]
+    fn test_build_specs_spawn_csv_enables_agent_jobs_and_collab_tools() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::SpawnCsv);
+        features.normalize_dependencies();
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2338,6 +3026,67 @@ mod tests {
     }
 
     #[test]
+    fn view_image_tool_omits_detail_without_original_detail_feature() {
+        let config = test_config();
+        let mut model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        model_info.supports_image_detail_original = true;
+        let features = Features::with_defaults();
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        let view_image = find_tool(&tools, VIEW_IMAGE_TOOL_NAME);
+        let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &view_image.spec else {
+            panic!("view_image should be a function tool");
+        };
+        let JsonSchema::Object { properties, .. } = parameters else {
+            panic!("view_image should use an object schema");
+        };
+        assert!(!properties.contains_key("detail"));
+    }
+
+    #[test]
+    fn view_image_tool_includes_detail_with_original_detail_feature() {
+        let config = test_config();
+        let mut model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        model_info.supports_image_detail_original = true;
+        let mut features = Features::with_defaults();
+        features.enable(Feature::ImageDetailOriginal);
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        let view_image = find_tool(&tools, VIEW_IMAGE_TOOL_NAME);
+        let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &view_image.spec else {
+            panic!("view_image should be a function tool");
+        };
+        let JsonSchema::Object { properties, .. } = parameters else {
+            panic!("view_image should use an object schema");
+        };
+        assert!(properties.contains_key("detail"));
+        let Some(JsonSchema::String {
+            description: Some(description),
+        }) = properties.get("detail")
+        else {
+            panic!("view_image detail should include a description");
+        };
+        assert!(description.contains("only supported value is `original`"));
+        assert!(description.contains("omit this field for default resized behavior"));
+    }
+
+    #[test]
     fn test_build_specs_artifact_tool_enabled() {
         let mut config = test_config();
         let runtime_root = tempfile::TempDir::new().expect("create temp codex home");
@@ -2346,8 +3095,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::Artifact);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2362,10 +3113,13 @@ mod tests {
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
-        features.enable(Feature::Collab);
+        features.enable(Feature::SpawnCsv);
+        features.normalize_dependencies();
         features.enable(Feature::Sqlite);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::SubAgent(SubAgentSource::Other(
@@ -2394,8 +3148,10 @@ mod tests {
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2408,8 +3164,10 @@ mod tests {
         );
 
         features.enable(Feature::DefaultModeRequestUserInput);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2425,14 +3183,71 @@ mod tests {
     }
 
     #[test]
+    fn request_permissions_requires_feature_flag() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let features = Features::with_defaults();
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        assert_lacks_tool_name(&tools, "request_permissions");
+
+        let mut features = Features::with_defaults();
+        features.enable(Feature::RequestPermissionsTool);
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        let request_permissions_tool = find_tool(&tools, "request_permissions");
+        assert_eq!(
+            request_permissions_tool.spec,
+            create_request_permissions_tool()
+        );
+    }
+
+    #[test]
+    fn request_permissions_tool_is_independent_from_additional_permissions() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::RequestPermissions);
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+        assert_lacks_tool_name(&tools, "request_permissions");
+    }
+
+    #[test]
     fn get_memory_requires_feature_flag() {
         let config = test_config();
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.disable(Feature::MemoryTool);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2451,8 +3266,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let features = Features::with_defaults();
 
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2477,8 +3294,10 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::JsRepl);
 
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2499,8 +3318,10 @@ mod tests {
         let mut image_generation_features = default_features.clone();
         image_generation_features.enable(Feature::ImageGeneration);
 
+        let available_models = Vec::new();
         let default_tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &supported_model_info,
+            available_models: &available_models,
             features: &default_features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2515,6 +3336,7 @@ mod tests {
 
         let supported_tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &supported_model_info,
+            available_models: &available_models,
             features: &image_generation_features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2532,6 +3354,7 @@ mod tests {
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &unsupported_model_info,
+            available_models: &available_models,
             features: &image_generation_features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2568,8 +3391,10 @@ mod tests {
     ) {
         let _config = test_config();
         let model_info = model_info_from_models_json(model_slug);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features,
             web_search_mode,
             session_source: SessionSource::Cli,
@@ -2602,8 +3427,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let features = Features::with_defaults();
 
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2630,8 +3457,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let features = Features::with_defaults();
 
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -2671,8 +3500,10 @@ mod tests {
             search_context_size: Some(codex_protocol::config_types::WebSearchContextSize::High),
         };
 
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -2685,8 +3516,12 @@ mod tests {
             tool.spec,
             ToolSpec::WebSearch {
                 external_web_access: Some(true),
-                filters: web_search_config.filters,
-                user_location: web_search_config.user_location,
+                filters: web_search_config
+                    .filters
+                    .map(crate::client_common::tools::ResponsesApiWebSearchFilters::from),
+                user_location: web_search_config
+                    .user_location
+                    .map(crate::client_common::tools::ResponsesApiWebSearchUserLocation::from),
                 search_context_size: web_search_config.search_context_size,
                 search_content_types: None,
             }
@@ -2701,8 +3536,10 @@ mod tests {
         model_info.web_search_tool_type = WebSearchToolType::TextAndImage;
         let features = Features::with_defaults();
 
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -2733,8 +3570,10 @@ mod tests {
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let features = Features::with_defaults();
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2756,8 +3595,10 @@ mod tests {
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let features = Features::with_defaults();
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -2947,8 +3788,10 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -2971,8 +3814,10 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::ShellZshFork);
 
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -2997,8 +3842,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3023,8 +3870,10 @@ mod tests {
             "list_dir".to_string(),
         ];
         let features = Features::with_defaults();
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3055,8 +3904,10 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
             session_source: SessionSource::Cli,
@@ -3132,6 +3983,8 @@ mod tests {
                 },
                 description: "Do something cool".to_string(),
                 strict: false,
+                output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
+                defer_loading: None,
             })
         );
     }
@@ -3142,8 +3995,10 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3188,8 +4043,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::Apps);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3213,18 +4070,20 @@ mod tests {
             ])),
             Some(HashMap::from([
                 (
-                    "mcp__codex_apps__calendar_create_event".to_string(),
+                    "mcp__codex_apps__calendar-create-event".to_string(),
                     ToolInfo {
                         server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                        tool_name: "calendar_create_event".to_string(),
+                        tool_name: "-create-event".to_string(),
+                        tool_namespace: "mcp__codex_apps__calendar".to_string(),
                         tool: mcp_tool(
-                            "calendar_create_event",
+                            "calendar-create-event",
                             "Create calendar event",
                             serde_json::json!({"type": "object"}),
                         ),
                         connector_id: Some("calendar".to_string()),
                         connector_name: Some("Calendar".to_string()),
                         plugin_display_names: Vec::new(),
+                        connector_description: None,
                     },
                 ),
                 (
@@ -3232,9 +4091,154 @@ mod tests {
                     ToolInfo {
                         server_name: "rmcp".to_string(),
                         tool_name: "echo".to_string(),
+                        tool_namespace: "rmcp".to_string(),
                         tool: mcp_tool("echo", "Echo", serde_json::json!({"type": "object"})),
                         connector_id: None,
                         connector_name: None,
+                        plugin_display_names: Vec::new(),
+                        connector_description: None,
+                    },
+                ),
+            ])),
+            &[],
+        )
+        .build();
+
+        let search_tool = find_tool(&tools, TOOL_SEARCH_TOOL_NAME);
+        let ToolSpec::ToolSearch { description, .. } = &search_tool.spec else {
+            panic!("expected tool_search tool");
+        };
+        let description = description.as_str();
+        assert!(description.contains("Calendar"));
+        assert!(!description.contains("mcp__rmcp__echo"));
+    }
+
+    #[test]
+    fn search_tool_requires_apps_feature_flag_only() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let app_tools = Some(HashMap::from([(
+            "mcp__codex_apps__calendar_create_event".to_string(),
+            ToolInfo {
+                server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                tool_name: "calendar_create_event".to_string(),
+                tool_namespace: "mcp__codex_apps__calendar".to_string(),
+                tool: mcp_tool(
+                    "calendar_create_event",
+                    "Create calendar event",
+                    serde_json::json!({"type": "object"}),
+                ),
+                connector_id: Some("calendar".to_string()),
+                connector_name: Some("Calendar".to_string()),
+                connector_description: None,
+                plugin_display_names: Vec::new(),
+            },
+        )]));
+
+        let features = Features::with_defaults();
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, app_tools.clone(), &[]).build();
+        assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
+
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Apps);
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, app_tools, &[]).build();
+        assert_contains_tool_names(&tools, &[TOOL_SEARCH_TOOL_NAME]);
+    }
+
+    #[test]
+    fn search_tool_description_handles_no_enabled_apps() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Apps);
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+
+        let (tools, _) = build_specs(&tools_config, None, Some(HashMap::new()), &[]).build();
+        let search_tool = find_tool(&tools, TOOL_SEARCH_TOOL_NAME);
+        let ToolSpec::ToolSearch { description, .. } = &search_tool.spec else {
+            panic!("expected tool_search tool");
+        };
+
+        assert!(description.contains("(None currently enabled)"));
+        assert!(!description.contains("{{app_names}}"));
+    }
+
+    #[test]
+    fn search_tool_registers_namespaced_app_tool_aliases() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Apps);
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+
+        let (_, registry) = build_specs(
+            &tools_config,
+            None,
+            Some(HashMap::from([
+                (
+                    "mcp__codex_apps__calendar-create-event".to_string(),
+                    ToolInfo {
+                        server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                        tool_name: "-create-event".to_string(),
+                        tool_namespace: "mcp__codex_apps__calendar".to_string(),
+                        tool: mcp_tool(
+                            "calendar-create-event",
+                            "Create calendar event",
+                            serde_json::json!({"type": "object"}),
+                        ),
+                        connector_id: Some("calendar".to_string()),
+                        connector_name: Some("Calendar".to_string()),
+                        connector_description: None,
+                        plugin_display_names: Vec::new(),
+                    },
+                ),
+                (
+                    "mcp__codex_apps__calendar-list-events".to_string(),
+                    ToolInfo {
+                        server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                        tool_name: "-list-events".to_string(),
+                        tool_namespace: "mcp__codex_apps__calendar".to_string(),
+                        tool: mcp_tool(
+                            "calendar-list-events",
+                            "List calendar events",
+                            serde_json::json!({"type": "object"}),
+                        ),
+                        connector_id: Some("calendar".to_string()),
+                        connector_name: Some("Calendar".to_string()),
+                        connector_description: None,
                         plugin_display_names: Vec::new(),
                     },
                 ),
@@ -3243,12 +4247,10 @@ mod tests {
         )
         .build();
 
-        let search_tool = find_tool(&tools, SEARCH_TOOL_BM25_TOOL_NAME);
-        let ToolSpec::Function(ResponsesApiTool { description, .. }) = &search_tool.spec else {
-            panic!("expected function tool");
-        };
-        assert!(description.contains("Calendar"));
-        assert!(!description.contains("mcp__rmcp__echo"));
+        let alias = tool_handler_key("-create-event", Some("mcp__codex_apps__calendar"));
+
+        assert!(registry.has_handler(TOOL_SEARCH_TOOL_NAME, None));
+        assert!(registry.has_handler(alias.as_str(), None));
     }
 
     #[test]
@@ -3258,8 +4260,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3302,6 +4306,8 @@ mod tests {
                 },
                 description: "Search docs".to_string(),
                 strict: false,
+                output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
+                defer_loading: None,
             })
         );
     }
@@ -3313,8 +4319,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3353,6 +4361,8 @@ mod tests {
                 },
                 description: "Pagination".to_string(),
                 strict: false,
+                output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
+                defer_loading: None,
             })
         );
     }
@@ -3365,8 +4375,10 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::ApplyPatchFreeform);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3408,6 +4420,8 @@ mod tests {
                 },
                 description: "Tags".to_string(),
                 strict: false,
+                output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
+                defer_loading: None,
             })
         );
     }
@@ -3419,8 +4433,10 @@ mod tests {
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3461,6 +4477,8 @@ mod tests {
                 },
                 description: "AnyOf Value".to_string(),
                 strict: false,
+                output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
+                defer_loading: None,
             })
         );
     }
@@ -3529,6 +4547,67 @@ Examples of valid command strings:
     }
 
     #[test]
+    fn request_permissions_tool_includes_full_permission_schema() {
+        let tool = super::create_request_permissions_tool();
+        let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
+            panic!("expected function tool");
+        };
+        let JsonSchema::Object { properties, .. } = parameters else {
+            panic!("expected object parameters");
+        };
+        let Some(JsonSchema::Object {
+            properties: permission_properties,
+            additional_properties,
+            ..
+        }) = properties.get("permissions")
+        else {
+            panic!("expected permissions object");
+        };
+
+        assert_eq!(additional_properties, &Some(false.into()));
+        assert!(permission_properties.contains_key("network"));
+        assert!(permission_properties.contains_key("file_system"));
+        assert!(permission_properties.contains_key("macos"));
+
+        let Some(JsonSchema::Object {
+            properties: network_properties,
+            additional_properties,
+            ..
+        }) = permission_properties.get("network")
+        else {
+            panic!("expected network object");
+        };
+        assert_eq!(additional_properties, &Some(false.into()));
+        assert!(network_properties.contains_key("enabled"));
+
+        let Some(JsonSchema::Object {
+            properties: file_system_properties,
+            additional_properties,
+            ..
+        }) = permission_properties.get("file_system")
+        else {
+            panic!("expected file_system object");
+        };
+        assert_eq!(additional_properties, &Some(false.into()));
+        assert!(file_system_properties.contains_key("read"));
+        assert!(file_system_properties.contains_key("write"));
+
+        let Some(JsonSchema::Object {
+            properties: macos_properties,
+            additional_properties,
+            ..
+        }) = permission_properties.get("macos")
+        else {
+            panic!("expected macos object");
+        };
+        assert_eq!(additional_properties, &Some(false.into()));
+        assert!(macos_properties.contains_key("preferences"));
+        assert!(macos_properties.contains_key("automations"));
+        assert!(macos_properties.contains_key("accessibility"));
+        assert!(macos_properties.contains_key("calendar"));
+    }
+
+    #[test]
     fn test_shell_command_tool() {
         let tool = super::create_shell_command_tool(true, false);
         let ToolSpec::Function(ResponsesApiTool {
@@ -3564,8 +4643,10 @@ Examples of valid command strings:
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
+            available_models: &available_models,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
             session_source: SessionSource::Cli,
@@ -3658,7 +4739,90 @@ Examples of valid command strings:
                 },
                 description: "Do something cool".to_string(),
                 strict: false,
+                output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
+                defer_loading: None,
             })
+        );
+    }
+
+    #[test]
+    fn code_mode_augments_builtin_tool_descriptions_with_typed_sample() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CodeMode);
+        features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        let ToolSpec::Function(ResponsesApiTool { description, .. }) =
+            &find_tool(&tools, "view_image").spec
+        else {
+            panic!("expected function tool");
+        };
+
+        assert_eq!(
+            description,
+            "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nCode mode declaration:\n```ts\nimport { view_image } from \"tools.js\";\ndeclare function view_image(args: {\n  path: string;\n}): Promise<unknown>;\n```"
+        );
+    }
+
+    #[test]
+    fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CodeMode);
+        features.enable(Feature::UnifiedExec);
+        let available_models = Vec::new();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+
+        let (tools, _) = build_specs(
+            &tools_config,
+            Some(HashMap::from([(
+                "mcp__sample__echo".to_string(),
+                mcp_tool(
+                    "echo",
+                    "Echo text",
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "message": {"type": "string"}
+                        },
+                        "required": ["message"],
+                        "additionalProperties": false
+                    }),
+                ),
+            )])),
+            None,
+            &[],
+        )
+        .build();
+
+        let ToolSpec::Function(ResponsesApiTool { description, .. }) =
+            &find_tool(&tools, "mcp__sample__echo").spec
+        else {
+            panic!("expected function tool");
+        };
+
+        assert_eq!(
+            description,
+            "Echo text\n\nCode mode declaration:\n```ts\nimport { echo } from \"tools/mcp/sample.js\";\ndeclare function echo(args: {\n  message: string;\n}): Promise<{\n  _meta?: unknown;\n  content: Array<unknown>;\n  isError?: boolean;\n  structuredContent?: unknown;\n}>;\n```"
         );
     }
 
@@ -3670,11 +4834,13 @@ Examples of valid command strings:
             name: "demo".to_string(),
             description: "A demo tool".to_string(),
             strict: false,
+            defer_loading: None,
             parameters: JsonSchema::Object {
                 properties,
                 required: None,
                 additional_properties: None,
             },
+            output_schema: None,
         })];
 
         let responses_json = create_tools_json_for_responses_api(&tools).unwrap();

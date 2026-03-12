@@ -35,15 +35,27 @@
         "calendar": {
           "type": "boolean"
         },
+        "contacts": {
+          "$ref": "#/definitions/MacOsContactsPermission"
+        },
+        "launchServices": {
+          "type": "boolean"
+        },
         "preferences": {
           "$ref": "#/definitions/MacOsPreferencesPermission"
+        },
+        "reminders": {
+          "type": "boolean"
         }
       },
       "required": [
         "accessibility",
         "automations",
         "calendar",
-        "preferences"
+        "contacts",
+        "launchServices",
+        "preferences",
+        "reminders"
       ],
       "type": "object"
     },
@@ -858,6 +870,30 @@
             "params"
           ],
           "title": "Plugin/installRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "plugin/uninstall"
+              ],
+              "title": "Plugin/uninstallRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginUninstallParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/uninstallRequest",
           "type": "object"
         },
         {
@@ -1760,6 +1796,17 @@
         "decision"
       ],
       "title": "CommandExecutionRequestApprovalResponse",
+      "type": "object"
+    },
+    "CommandExecutionRequestApprovalSkillMetadata": {
+      "properties": {
+        "pathToSkillsMd": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pathToSkillsMd"
+      ],
       "type": "object"
     },
     "CustomPrompt": {
@@ -3182,6 +3229,17 @@
                 "null"
               ]
             },
+            "skill_metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ExecApprovalRequestSkillMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional skill metadata when the approval was triggered by a skill script."
+            },
             "turn_id": {
               "default": "",
               "description": "Turn ID that this command belongs to. Uses `#[serde(default)]` for backwards compatibility.",
@@ -3203,6 +3261,42 @@
             "type"
           ],
           "title": "ExecApprovalRequestEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "description": "Responses API call id for the associated tool call, if available.",
+              "type": "string"
+            },
+            "permissions": {
+              "$ref": "#/definitions/PermissionProfile"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "turn_id": {
+              "default": "",
+              "description": "Turn ID that this request belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "request_permissions"
+              ],
+              "title": "RequestPermissionsEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "call_id",
+            "permissions",
+            "type"
+          ],
+          "title": "RequestPermissionsEventMsg",
           "type": "object"
         },
         {
@@ -4089,6 +4183,58 @@
         },
         {
           "properties": {
+            "run": {
+              "$ref": "#/definitions/v2/HookRunSummary"
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "hook_started"
+              ],
+              "title": "HookStartedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run",
+            "type"
+          ],
+          "title": "HookStartedEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "run": {
+              "$ref": "#/definitions/v2/HookRunSummary"
+            },
+            "turn_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "hook_completed"
+              ],
+              "title": "HookCompletedEventMsgType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run",
+            "type"
+          ],
+          "title": "HookCompletedEventMsg",
+          "type": "object"
+        },
+        {
+          "properties": {
             "delta": {
               "type": "string"
             },
@@ -4232,9 +4378,15 @@
               "description": "Identifier for the collab tool call.",
               "type": "string"
             },
+            "model": {
+              "type": "string"
+            },
             "prompt": {
               "description": "Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
               "type": "string"
+            },
+            "reasoning_effort": {
+              "$ref": "#/definitions/v2/ReasoningEffort"
             },
             "sender_thread_id": {
               "allOf": [
@@ -4254,7 +4406,9 @@
           },
           "required": [
             "call_id",
+            "model",
             "prompt",
+            "reasoning_effort",
             "sender_thread_id",
             "type"
           ],
@@ -4266,6 +4420,10 @@
           "properties": {
             "call_id": {
               "description": "Identifier for the collab tool call.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Model requested for the spawned agent.",
               "type": "string"
             },
             "new_agent_nickname": {
@@ -4297,6 +4455,14 @@
               "description": "Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
               "type": "string"
             },
+            "reasoning_effort": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/v2/ReasoningEffort"
+                }
+              ],
+              "description": "Reasoning effort requested for the spawned agent."
+            },
             "sender_thread_id": {
               "allOf": [
                 {
@@ -4323,7 +4489,9 @@
           },
           "required": [
             "call_id",
+            "model",
             "prompt",
+            "reasoning_effort",
             "sender_thread_id",
             "status",
             "type"
@@ -4759,6 +4927,17 @@
       ],
       "title": "EventMsg"
     },
+    "ExecApprovalRequestSkillMetadata": {
+      "properties": {
+        "path_to_skills_md": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path_to_skills_md"
+      ],
+      "type": "object"
+    },
     "ExecCommandApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -5134,6 +5313,100 @@
       "title": "FuzzyFileSearchSessionUpdatedNotification",
       "type": "object"
     },
+    "GrantedMacOsPermissions": {
+      "properties": {
+        "accessibility": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "automations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsAutomationPermission"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "calendar": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "contacts": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsContactsPermission"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "launchServices": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "preferences": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsPreferencesPermission"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reminders": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "GrantedPermissionProfile": {
+      "properties": {
+        "fileSystem": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalFileSystemPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "macos": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GrantedMacOsPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalNetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "HistoryEntry": {
       "properties": {
         "conversation_id": {
@@ -5164,7 +5437,7 @@
           "type": "boolean"
         },
         "optOutNotificationMethods": {
-          "description": "Exact notification method names that should be suppressed for this connection (for example `codex/event/session_configured`).",
+          "description": "Exact notification method names that should be suppressed for this connection (for example `thread/started`).",
           "items": {
             "type": "string"
           },
@@ -5356,6 +5629,14 @@
         }
       ]
     },
+    "MacOsContactsPermission": {
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ],
+      "type": "string"
+    },
     "MacOsPreferencesPermission": {
       "enum": [
         "none",
@@ -5382,6 +5663,18 @@
           "default": false,
           "type": "boolean"
         },
+        "macos_contacts": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/MacOsContactsPermission"
+            }
+          ],
+          "default": "none"
+        },
+        "macos_launch_services": {
+          "default": false,
+          "type": "boolean"
+        },
         "macos_preferences": {
           "allOf": [
             {
@@ -5389,6 +5682,10 @@
             }
           ],
           "default": "read_only"
+        },
+        "macos_reminders": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -6297,6 +6594,13 @@
         }
       ]
     },
+    "PermissionGrantScope": {
+      "enum": [
+        "turn",
+        "session"
+      ],
+      "type": "string"
+    },
     "PermissionProfile": {
       "properties": {
         "file_system": {
@@ -6330,6 +6634,58 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "PermissionsRequestApprovalParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "itemId": {
+          "type": "string"
+        },
+        "permissions": {
+          "$ref": "#/definitions/AdditionalPermissionProfile"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "permissions",
+        "threadId",
+        "turnId"
+      ],
+      "title": "PermissionsRequestApprovalParams",
+      "type": "object"
+    },
+    "PermissionsRequestApprovalResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "permissions": {
+          "$ref": "#/definitions/GrantedPermissionProfile"
+        },
+        "scope": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PermissionGrantScope"
+            }
+          ],
+          "default": "turn"
+        }
+      },
+      "required": [
+        "permissions"
+      ],
+      "title": "PermissionsRequestApprovalResponse",
       "type": "object"
     },
     "PlanItemArg": {
@@ -6411,6 +6767,32 @@
         {
           "additionalProperties": false,
           "properties": {
+            "InputTranscriptDelta": {
+              "$ref": "#/definitions/RealtimeTranscriptDelta"
+            }
+          },
+          "required": [
+            "InputTranscriptDelta"
+          ],
+          "title": "InputTranscriptDeltaRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "OutputTranscriptDelta": {
+              "$ref": "#/definitions/RealtimeTranscriptDelta"
+            }
+          },
+          "required": [
+            "OutputTranscriptDelta"
+          ],
+          "title": "OutputTranscriptDeltaRealtimeEvent",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "AudioOut": {
               "$ref": "#/definitions/RealtimeAudioFrame"
             }
@@ -6481,7 +6863,44 @@
         }
       ]
     },
-    "RealtimeHandoffMessage": {
+    "RealtimeHandoffRequested": {
+      "properties": {
+        "active_transcript": {
+          "items": {
+            "$ref": "#/definitions/RealtimeTranscriptEntry"
+          },
+          "type": "array"
+        },
+        "handoff_id": {
+          "type": "string"
+        },
+        "input_transcript": {
+          "type": "string"
+        },
+        "item_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "active_transcript",
+        "handoff_id",
+        "input_transcript",
+        "item_id"
+      ],
+      "type": "object"
+    },
+    "RealtimeTranscriptDelta": {
+      "properties": {
+        "delta": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "delta"
+      ],
+      "type": "object"
+    },
+    "RealtimeTranscriptEntry": {
       "properties": {
         "role": {
           "type": "string"
@@ -6496,36 +6915,15 @@
       ],
       "type": "object"
     },
-    "RealtimeHandoffRequested": {
-      "properties": {
-        "handoff_id": {
-          "type": "string"
-        },
-        "input_transcript": {
-          "type": "string"
-        },
-        "item_id": {
-          "type": "string"
-        },
-        "messages": {
-          "items": {
-            "$ref": "#/definitions/RealtimeHandoffMessage"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "handoff_id",
-        "input_transcript",
-        "item_id",
-        "messages"
-      ],
-      "type": "object"
-    },
     "RejectConfig": {
       "properties": {
         "mcp_elicitations": {
           "description": "Reject MCP elicitation prompts.",
+          "type": "boolean"
+        },
+        "request_permissions": {
+          "default": false,
+          "description": "Reject approval prompts related to built-in permission requests.",
           "type": "boolean"
         },
         "rules": {
@@ -6534,6 +6932,11 @@
         },
         "sandbox_approval": {
           "description": "Reject approval prompts related to sandbox escalation.",
+          "type": "boolean"
+        },
+        "skill_approval": {
+          "default": false,
+          "description": "Reject approval prompts triggered by skill script execution.",
           "type": "boolean"
         }
       },
@@ -7019,6 +7422,26 @@
           "properties": {
             "method": {
               "enum": [
+                "hook/started"
+              ],
+              "title": "Hook/startedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/HookStartedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Hook/startedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "turn/completed"
               ],
               "title": "Turn/completedNotificationMethod",
@@ -7033,6 +7456,26 @@
             "params"
           ],
           "title": "Turn/completedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "hook/completed"
+              ],
+              "title": "Hook/completedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/HookCompletedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Hook/completedNotification",
           "type": "object"
         },
         {
@@ -7804,6 +8247,31 @@
             "params"
           ],
           "title": "McpServer/elicitation/requestRequest",
+          "type": "object"
+        },
+        {
+          "description": "Request approval for additional permissions from the user.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "item/permissions/requestApproval"
+              ],
+              "title": "Item/permissions/requestApprovalRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PermissionsRequestApprovalParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Item/permissions/requestApprovalRequest",
           "type": "object"
         },
         {
@@ -8983,10 +9451,18 @@
                   "mcp_elicitations": {
                     "type": "boolean"
                   },
+                  "request_permissions": {
+                    "default": false,
+                    "type": "boolean"
+                  },
                   "rules": {
                     "type": "boolean"
                   },
                   "sandbox_approval": {
+                    "type": "boolean"
+                  },
+                  "skill_approval": {
+                    "default": false,
                     "type": "boolean"
                   }
                 },
@@ -9943,6 +10419,10 @@
               "string",
               "null"
             ]
+          },
+          "reloadUserConfig": {
+            "description": "When true, hot-reload the updated user config into all loaded threads after writing.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -11144,6 +11624,188 @@
         ],
         "type": "string"
       },
+      "HookCompletedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "run": {
+            "$ref": "#/definitions/v2/HookRunSummary"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "run",
+          "threadId"
+        ],
+        "title": "HookCompletedNotification",
+        "type": "object"
+      },
+      "HookEventName": {
+        "enum": [
+          "sessionStart",
+          "stop"
+        ],
+        "type": "string"
+      },
+      "HookExecutionMode": {
+        "enum": [
+          "sync",
+          "async"
+        ],
+        "type": "string"
+      },
+      "HookHandlerType": {
+        "enum": [
+          "command",
+          "prompt",
+          "agent"
+        ],
+        "type": "string"
+      },
+      "HookOutputEntry": {
+        "properties": {
+          "kind": {
+            "$ref": "#/definitions/v2/HookOutputEntryKind"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "text"
+        ],
+        "type": "object"
+      },
+      "HookOutputEntryKind": {
+        "enum": [
+          "warning",
+          "stop",
+          "feedback",
+          "context",
+          "error"
+        ],
+        "type": "string"
+      },
+      "HookRunStatus": {
+        "enum": [
+          "running",
+          "completed",
+          "failed",
+          "blocked",
+          "stopped"
+        ],
+        "type": "string"
+      },
+      "HookRunSummary": {
+        "properties": {
+          "completedAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "displayOrder": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "durationMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/definitions/v2/HookOutputEntry"
+            },
+            "type": "array"
+          },
+          "eventName": {
+            "$ref": "#/definitions/v2/HookEventName"
+          },
+          "executionMode": {
+            "$ref": "#/definitions/v2/HookExecutionMode"
+          },
+          "handlerType": {
+            "$ref": "#/definitions/v2/HookHandlerType"
+          },
+          "id": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/definitions/v2/HookScope"
+          },
+          "sourcePath": {
+            "type": "string"
+          },
+          "startedAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/definitions/v2/HookRunStatus"
+          },
+          "statusMessage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "displayOrder",
+          "entries",
+          "eventName",
+          "executionMode",
+          "handlerType",
+          "id",
+          "scope",
+          "sourcePath",
+          "startedAt",
+          "status"
+        ],
+        "type": "object"
+      },
+      "HookScope": {
+        "enum": [
+          "thread",
+          "turn"
+        ],
+        "type": "string"
+      },
+      "HookStartedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "run": {
+            "$ref": "#/definitions/v2/HookRunSummary"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "run",
+          "threadId"
+        ],
+        "title": "HookStartedNotification",
+        "type": "object"
+      },
       "ImageDetail": {
         "enum": [
           "auto",
@@ -12101,6 +12763,13 @@
         ],
         "type": "string"
       },
+      "PluginAuthPolicy": {
+        "enum": [
+          "ON_INSTALL",
+          "ON_USE"
+        ],
+        "type": "string"
+      },
       "PluginInstallParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -12118,6 +12787,14 @@
         "title": "PluginInstallParams",
         "type": "object"
       },
+      "PluginInstallPolicy": {
+        "enum": [
+          "NOT_AVAILABLE",
+          "AVAILABLE",
+          "INSTALLED_BY_DEFAULT"
+        ],
+        "type": "string"
+      },
       "PluginInstallResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -12126,10 +12803,14 @@
               "$ref": "#/definitions/v2/AppSummary"
             },
             "type": "array"
+          },
+          "authPolicy": {
+            "$ref": "#/definitions/v2/PluginAuthPolicy"
           }
         },
         "required": [
-          "appsNeedingAuth"
+          "appsNeedingAuth",
+          "authPolicy"
         ],
         "title": "PluginInstallResponse",
         "type": "object"
@@ -12247,6 +12928,10 @@
               "array",
               "null"
             ]
+          },
+          "forceRemoteSync": {
+            "description": "When true, reconcile the official curated marketplace against the remote plugin state before listing marketplaces.",
+            "type": "boolean"
           }
         },
         "title": "PluginListParams",
@@ -12260,6 +12945,12 @@
               "$ref": "#/definitions/v2/PluginMarketplaceEntry"
             },
             "type": "array"
+          },
+          "remoteSyncError": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -12316,11 +13007,17 @@
       },
       "PluginSummary": {
         "properties": {
+          "authPolicy": {
+            "$ref": "#/definitions/v2/PluginAuthPolicy"
+          },
           "enabled": {
             "type": "boolean"
           },
           "id": {
             "type": "string"
+          },
+          "installPolicy": {
+            "$ref": "#/definitions/v2/PluginInstallPolicy"
           },
           "installed": {
             "type": "boolean"
@@ -12343,12 +13040,32 @@
           }
         },
         "required": [
+          "authPolicy",
           "enabled",
           "id",
+          "installPolicy",
           "installed",
           "name",
           "source"
         ],
+        "type": "object"
+      },
+      "PluginUninstallParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "pluginId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pluginId"
+        ],
+        "title": "PluginUninstallParams",
+        "type": "object"
+      },
+      "PluginUninstallResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "PluginUninstallResponse",
         "type": "object"
       },
       "ProductSurface": {
@@ -13080,6 +13797,12 @@
               "name": {
                 "type": "string"
               },
+              "namespace": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "type": {
                 "enum": [
                   "function_call"
@@ -13095,6 +13818,47 @@
               "type"
             ],
             "title": "FunctionCallResponseItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "arguments": true,
+              "call_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "execution": {
+                "type": "string"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "writeOnly": true
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "tool_search_call"
+                ],
+                "title": "ToolSearchCallResponseItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "arguments",
+              "execution",
+              "type"
+            ],
+            "title": "ToolSearchCallResponseItem",
             "type": "object"
           },
           {
@@ -13184,6 +13948,41 @@
               "type"
             ],
             "title": "CustomToolCallOutputResponseItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "call_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "execution": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "tools": {
+                "items": true,
+                "type": "array"
+              },
+              "type": {
+                "enum": [
+                  "tool_search_output"
+                ],
+                "title": "ToolSearchOutputResponseItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "execution",
+              "status",
+              "tools",
+              "type"
+            ],
+            "title": "ToolSearchOutputResponseItem",
             "type": "object"
           },
           {
@@ -14536,6 +15335,9 @@
               "null"
             ]
           },
+          "ephemeral": {
+            "type": "boolean"
+          },
           "model": {
             "description": "Configuration overrides for the forked thread, if any.",
             "type": [
@@ -14996,12 +15798,30 @@
                 "description": "Unique identifier for this collab tool call.",
                 "type": "string"
               },
+              "model": {
+                "description": "Model requested for the spawned agent, when applicable.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "prompt": {
                 "description": "Prompt text sent as part of the collab tool call, when available.",
                 "type": [
                   "string",
                   "null"
                 ]
+              },
+              "reasoningEffort": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ReasoningEffort"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Reasoning effort requested for the spawned agent, when applicable."
               },
               "receiverThreadIds": {
                 "description": "Thread ID of the receiving agent, when applicable. In case of spawn operation, this corresponds to the newly spawned agent.",

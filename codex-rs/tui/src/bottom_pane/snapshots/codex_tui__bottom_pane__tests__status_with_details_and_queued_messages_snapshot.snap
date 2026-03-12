@@ -6,8 +6,9 @@ expression: "render_snapshot(&pane, area)"
   └ First detail line                           
     Second detail line                          
                                                 
+• Queued follow-up messages                     
   ↳ Queued follow-up question                   
-    ⌥ + ↑ edit                                  
+    ⌥ + ↑ edit last queued message              
                                                 
 › Ask Codex to do anything                      
                                                 

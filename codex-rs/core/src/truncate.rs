@@ -94,6 +94,51 @@ pub(crate) fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
         }
     }
 }
+
+pub(crate) fn formatted_truncate_text_content_items_with_policy(
+    items: &[FunctionCallOutputContentItem],
+    policy: TruncationPolicy,
+) -> (Vec<FunctionCallOutputContentItem>, Option<usize>) {
+    let text_segments = items
+        .iter()
+        .filter_map(|item| match item {
+            FunctionCallOutputContentItem::InputText { text } => Some(text.as_str()),
+            FunctionCallOutputContentItem::InputImage { .. } => None,
+        })
+        .collect::<Vec<_>>();
+
+    if text_segments.is_empty() {
+        return (items.to_vec(), None);
+    }
+
+    let mut combined = String::new();
+    for text in &text_segments {
+        if !combined.is_empty() {
+            combined.push('\n');
+        }
+        combined.push_str(text);
+    }
+
+    if combined.len() <= policy.byte_budget() {
+        return (items.to_vec(), None);
+    }
+
+    let mut out = vec![FunctionCallOutputContentItem::InputText {
+        text: formatted_truncate_text(&combined, policy),
+    }];
+    out.extend(items.iter().filter_map(|item| match item {
+        FunctionCallOutputContentItem::InputImage { image_url, detail } => {
+            Some(FunctionCallOutputContentItem::InputImage {
+                image_url: image_url.clone(),
+                detail: *detail,
+            })
+        }
+        FunctionCallOutputContentItem::InputText { .. } => None,
+    }));
+
+    (out, Some(approx_token_count(&combined)))
+}
+
 /// Globally truncate function output items to fit within the given
 /// truncation policy's budget, preserving as many text/image items as
 /// possible and appending a summary for any omitted text items.
@@ -319,6 +364,7 @@ mod tests {
     use super::TruncationPolicy;
     use super::approx_token_count;
     use super::formatted_truncate_text;
+    use super::formatted_truncate_text_content_items_with_policy;
     use super::split_string;
     use super::truncate_function_output_items_with_policy;
     use super::truncate_text;
@@ -539,5 +585,93 @@ mod tests {
             other => panic!("unexpected summary item: {other:?}"),
         };
         assert!(summary_text.contains("omitted 2 text items"));
+    }
+
+    #[test]
+    fn formatted_truncate_text_content_items_with_policy_returns_original_under_limit() {
+        let items = vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "alpha".to_string(),
+            },
+            FunctionCallOutputContentItem::InputText {
+                text: String::new(),
+            },
+            FunctionCallOutputContentItem::InputText {
+                text: "beta".to_string(),
+            },
+        ];
+
+        let (output, original_token_count) =
+            formatted_truncate_text_content_items_with_policy(&items, TruncationPolicy::Bytes(32));
+
+        assert_eq!(output, items);
+        assert_eq!(original_token_count, None);
+    }
+
+    #[test]
+    fn formatted_truncate_text_content_items_with_policy_merges_text_and_appends_images() {
+        let items = vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "abcd".to_string(),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "img:one".to_string(),
+                detail: None,
+            },
+            FunctionCallOutputContentItem::InputText {
+                text: "efgh".to_string(),
+            },
+            FunctionCallOutputContentItem::InputText {
+                text: "ijkl".to_string(),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image_url: "img:two".to_string(),
+                detail: None,
+            },
+        ];
+
+        let (output, original_token_count) =
+            formatted_truncate_text_content_items_with_policy(&items, TruncationPolicy::Bytes(8));
+
+        assert_eq!(
+            output,
+            vec![
+                FunctionCallOutputContentItem::InputText {
+                    text: "Total output lines: 3\n\nabcd…6 chars truncated…ijkl".to_string(),
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "img:one".to_string(),
+                    detail: None,
+                },
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "img:two".to_string(),
+                    detail: None,
+                },
+            ]
+        );
+        assert_eq!(original_token_count, Some(4));
+    }
+
+    #[test]
+    fn formatted_truncate_text_content_items_with_policy_merges_all_text_for_token_budget() {
+        let items = vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "abcdefgh".to_string(),
+            },
+            FunctionCallOutputContentItem::InputText {
+                text: "ijklmnop".to_string(),
+            },
+        ];
+
+        let (output, original_token_count) =
+            formatted_truncate_text_content_items_with_policy(&items, TruncationPolicy::Tokens(2));
+
+        assert_eq!(
+            output,
+            vec![FunctionCallOutputContentItem::InputText {
+                text: "Total output lines: 2\n\nabcd…3 tokens truncated…mnop".to_string(),
+            }]
+        );
+        assert_eq!(original_token_count, Some(5));
     }
 }

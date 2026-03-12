@@ -1056,6 +1056,184 @@
       },
       "type": "object"
     },
+    "HookCompletedNotification": {
+      "properties": {
+        "run": {
+          "$ref": "#/definitions/HookRunSummary"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "HookEventName": {
+      "enum": [
+        "sessionStart",
+        "stop"
+      ],
+      "type": "string"
+    },
+    "HookExecutionMode": {
+      "enum": [
+        "sync",
+        "async"
+      ],
+      "type": "string"
+    },
+    "HookHandlerType": {
+      "enum": [
+        "command",
+        "prompt",
+        "agent"
+      ],
+      "type": "string"
+    },
+    "HookOutputEntry": {
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/HookOutputEntryKind"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "type": "object"
+    },
+    "HookOutputEntryKind": {
+      "enum": [
+        "warning",
+        "stop",
+        "feedback",
+        "context",
+        "error"
+      ],
+      "type": "string"
+    },
+    "HookRunStatus": {
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "blocked",
+        "stopped"
+      ],
+      "type": "string"
+    },
+    "HookRunSummary": {
+      "properties": {
+        "completedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "displayOrder": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "durationMs": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/definitions/HookOutputEntry"
+          },
+          "type": "array"
+        },
+        "eventName": {
+          "$ref": "#/definitions/HookEventName"
+        },
+        "executionMode": {
+          "$ref": "#/definitions/HookExecutionMode"
+        },
+        "handlerType": {
+          "$ref": "#/definitions/HookHandlerType"
+        },
+        "id": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/definitions/HookScope"
+        },
+        "sourcePath": {
+          "type": "string"
+        },
+        "startedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/definitions/HookRunStatus"
+        },
+        "statusMessage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "displayOrder",
+        "entries",
+        "eventName",
+        "executionMode",
+        "handlerType",
+        "id",
+        "scope",
+        "sourcePath",
+        "startedAt",
+        "status"
+      ],
+      "type": "object"
+    },
+    "HookScope": {
+      "enum": [
+        "thread",
+        "turn"
+      ],
+      "type": "string"
+    },
+    "HookStartedNotification": {
+      "properties": {
+        "run": {
+          "$ref": "#/definitions/HookRunSummary"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ItemCompletedNotification": {
       "properties": {
         "item": {
@@ -1409,6 +1587,18 @@
         "usedPercent"
       ],
       "type": "object"
+    },
+    "ReasoningEffort": {
+      "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
+      "enum": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "type": "string"
     },
     "ReasoningSummaryPartAddedNotification": {
       "properties": {
@@ -2197,12 +2387,30 @@
               "description": "Unique identifier for this collab tool call.",
               "type": "string"
             },
+            "model": {
+              "description": "Model requested for the spawned agent, when applicable.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "prompt": {
               "description": "Prompt text sent as part of the collab tool call, when available.",
               "type": [
                 "string",
                 "null"
               ]
+            },
+            "reasoningEffort": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningEffort"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reasoning effort requested for the spawned agent, when applicable."
             },
             "receiverThreadIds": {
               "description": "Thread ID of the receiving agent, when applicable. In case of spawn operation, this corresponds to the newly spawned agent.",
@@ -3382,6 +3590,26 @@
       "properties": {
         "method": {
           "enum": [
+            "hook/started"
+          ],
+          "title": "Hook/startedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/HookStartedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Hook/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
             "turn/completed"
           ],
           "title": "Turn/completedNotificationMethod",
@@ -3396,6 +3624,26 @@
         "params"
       ],
       "title": "Turn/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "hook/completed"
+          ],
+          "title": "Hook/completedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/HookCompletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Hook/completedNotification",
       "type": "object"
     },
     {

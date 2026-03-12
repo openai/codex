@@ -120,9 +120,10 @@ mod tests {
             },
             ResponseItem::FunctionCall {
                 id: None,
-                name: "tool".to_string(),
-                arguments: "{}".to_string(),
                 call_id: "c1".to_string(),
+                name: "tool".to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
             },
             assistant_msg("a4"),
         ];

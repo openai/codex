@@ -120,7 +120,7 @@ impl ToolOrchestrator {
         let mut already_approved = false;
 
         let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
-            default_exec_approval_requirement(approval_policy, &turn_ctx.sandbox_policy)
+            default_exec_approval_requirement(approval_policy, &turn_ctx.file_system_sandbox_policy)
         });
         match requirement {
             ExecApprovalRequirement::Skip { .. } => {
@@ -249,7 +249,7 @@ impl ToolOrchestrator {
                             && matches!(
                                 default_exec_approval_requirement(
                                     approval_policy,
-                                    &turn_ctx.sandbox_policy
+                                    &turn_ctx.file_system_sandbox_policy
                                 ),
                                 ExecApprovalRequirement::NeedsApproval { .. }
                             );

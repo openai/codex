@@ -39,15 +39,27 @@
         "calendar": {
           "type": "boolean"
         },
+        "contacts": {
+          "$ref": "#/definitions/MacOsContactsPermission"
+        },
+        "launchServices": {
+          "type": "boolean"
+        },
         "preferences": {
           "$ref": "#/definitions/MacOsPreferencesPermission"
+        },
+        "reminders": {
+          "type": "boolean"
         }
       },
       "required": [
         "accessibility",
         "automations",
         "calendar",
-        "preferences"
+        "contacts",
+        "launchServices",
+        "preferences",
+        "reminders"
       ],
       "type": "object"
     },
@@ -440,6 +452,17 @@
       ],
       "type": "object"
     },
+    "CommandExecutionRequestApprovalSkillMetadata": {
+      "properties": {
+        "pathToSkillsMd": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pathToSkillsMd"
+      ],
+      "type": "object"
+    },
     "DynamicToolCallParams": {
       "properties": {
         "arguments": true,
@@ -641,6 +664,14 @@
           "type": "object"
         }
       ]
+    },
+    "MacOsContactsPermission": {
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ],
+      "type": "string"
     },
     "MacOsPreferencesPermission": {
       "enum": [
@@ -1412,6 +1443,35 @@
         }
       ]
     },
+    "PermissionsRequestApprovalParams": {
+      "properties": {
+        "itemId": {
+          "type": "string"
+        },
+        "permissions": {
+          "$ref": "#/definitions/AdditionalPermissionProfile"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "permissions",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
     "RequestId": {
       "anyOf": [
         {
@@ -1607,6 +1667,31 @@
         "params"
       ],
       "title": "McpServer/elicitation/requestRequest",
+      "type": "object"
+    },
+    {
+      "description": "Request approval for additional permissions from the user.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "item/permissions/requestApproval"
+          ],
+          "title": "Item/permissions/requestApprovalRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PermissionsRequestApprovalParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Item/permissions/requestApprovalRequest",
       "type": "object"
     },
     {

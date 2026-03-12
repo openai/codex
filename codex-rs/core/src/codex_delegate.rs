@@ -13,6 +13,10 @@ use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionsArgs;
+use codex_protocol::request_permissions::RequestPermissionsEvent;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
@@ -23,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::AuthManager;
 use crate::codex::Codex;
+use crate::codex::CodexSpawnArgs;
 use crate::codex::CodexSpawnOk;
 use crate::codex::SUBMISSION_CHANNEL_CAPACITY;
 use crate::codex::Session;
@@ -31,6 +36,9 @@ use crate::config::Config;
 use crate::error::CodexErr;
 use crate::models_manager::manager::ModelsManager;
 use codex_protocol::protocol::InitialHistory;
+
+#[cfg(test)]
+use crate::codex::completed_session_loop_termination;
 
 /// Start an interactive sub-Codex thread and return IO channels.
 ///
@@ -51,22 +59,23 @@ pub(crate) async fn run_codex_thread_interactive(
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
 
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
+    let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
         models_manager,
-        Arc::clone(&parent_session.services.skills_manager),
-        Arc::clone(&parent_session.services.plugins_manager),
-        Arc::clone(&parent_session.services.mcp_manager),
-        Arc::clone(&parent_session.services.file_watcher),
-        initial_history.unwrap_or(InitialHistory::New),
-        SessionSource::SubAgent(subagent_source),
-        parent_session.services.agent_control.clone(),
-        Vec::new(),
-        false,
-        None,
-        None,
-    )
+        skills_manager: Arc::clone(&parent_session.services.skills_manager),
+        plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
+        mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
+        file_watcher: Arc::clone(&parent_session.services.file_watcher),
+        conversation_history: initial_history.unwrap_or(InitialHistory::New),
+        session_source: SessionSource::SubAgent(subagent_source),
+        agent_control: parent_session.services.agent_control.clone(),
+        dynamic_tools: Vec::new(),
+        persist_extended_history: false,
+        metrics_service_name: None,
+        inherited_shell_snapshot: None,
+        parent_trace: None,
+    })
     .await?;
     let codex = Arc::new(codex);
 
@@ -101,6 +110,7 @@ pub(crate) async fn run_codex_thread_interactive(
         rx_event: rx_sub,
         agent_status: codex.agent_status.clone(),
         session: Arc::clone(&codex.session),
+        session_loop_termination: codex.session_loop_termination.clone(),
     })
 }
 
@@ -147,6 +157,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     let ops_tx = io.tx_sub.clone();
     let agent_status = io.agent_status.clone();
     let session = Arc::clone(&io.session);
+    let session_loop_termination = io.session_loop_termination.clone();
     let io_for_bridge = io;
     tokio::spawn(async move {
         while let Ok(event) = io_for_bridge.next_event().await {
@@ -180,6 +191,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         tx_sub: tx_closed,
         agent_status,
         session,
+        session_loop_termination,
     })
 }
 
@@ -244,6 +256,19 @@ async fn forward_events(
                         handle_patch_approval(
                             &codex,
                             id,
+                            &parent_session,
+                            &parent_ctx,
+                            event,
+                            &cancel_token,
+                        )
+                        .await;
+                    }
+                    Event {
+                        msg: EventMsg::RequestPermissions(event),
+                        ..
+                    } => {
+                        handle_request_permissions(
+                            &codex,
                             &parent_session,
                             &parent_ctx,
                             event,
@@ -332,6 +357,7 @@ async fn handle_exec_approval(
         network_approval_context,
         proposed_execpolicy_amendment,
         additional_permissions,
+        skill_metadata,
         available_decisions,
         ..
     } = event;
@@ -346,6 +372,7 @@ async fn handle_exec_approval(
         network_approval_context,
         proposed_execpolicy_amendment,
         additional_permissions,
+        skill_metadata,
         available_decisions,
     );
     let decision = await_approval_with_cancel(
@@ -423,6 +450,30 @@ async fn handle_request_user_input(
     let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
 }
 
+async fn handle_request_permissions(
+    codex: &Codex,
+    parent_session: &Session,
+    parent_ctx: &TurnContext,
+    event: RequestPermissionsEvent,
+    cancel_token: &CancellationToken,
+) {
+    let call_id = event.call_id;
+    let args = RequestPermissionsArgs {
+        reason: event.reason,
+        permissions: event.permissions,
+    };
+    let response_fut = parent_session.request_permissions(parent_ctx, call_id.clone(), args);
+    let response =
+        await_request_permissions_with_cancel(response_fut, parent_session, &call_id, cancel_token)
+            .await;
+    let _ = codex
+        .submit(Op::RequestPermissionsResponse {
+            id: call_id,
+            response,
+        })
+        .await;
+}
+
 async fn await_user_input_with_cancel<F>(
     fut: F,
     parent_session: &Session,
@@ -445,6 +496,34 @@ where
         }
         response = fut => response.unwrap_or_else(|| RequestUserInputResponse {
             answers: HashMap::new(),
+        }),
+    }
+}
+
+async fn await_request_permissions_with_cancel<F>(
+    fut: F,
+    parent_session: &Session,
+    call_id: &str,
+    cancel_token: &CancellationToken,
+) -> RequestPermissionsResponse
+where
+    F: core::future::Future<Output = Option<RequestPermissionsResponse>>,
+{
+    tokio::select! {
+        biased;
+        _ = cancel_token.cancelled() => {
+            let empty = RequestPermissionsResponse {
+                permissions: Default::default(),
+                scope: PermissionGrantScope::Turn,
+            };
+            parent_session
+                .notify_request_permissions_response(call_id, empty.clone())
+                .await;
+            empty
+        }
+        response = fut => response.unwrap_or_else(|| RequestPermissionsResponse {
+            permissions: Default::default(),
+            scope: PermissionGrantScope::Turn,
         }),
     }
 }
@@ -477,11 +556,16 @@ where
 mod tests {
     use super::*;
     use async_channel::bounded;
+    use codex_protocol::models::NetworkPermissions;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::protocol::AgentStatus;
+    use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::RawResponseItemEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
+    use codex_protocol::request_permissions::RequestPermissionsEvent;
+    use codex_protocol::request_permissions::RequestPermissionsResponse;
     use pretty_assertions::assert_eq;
     use tokio::sync::watch;
 
@@ -496,6 +580,7 @@ mod tests {
             rx_event: rx_events,
             agent_status,
             session: Arc::clone(&session),
+            session_loop_termination: completed_session_loop_termination(),
         });
 
         let (tx_out, rx_out) = bounded(1);
@@ -569,6 +654,7 @@ mod tests {
             rx_event: rx_events,
             agent_status,
             session,
+            session_loop_termination: completed_session_loop_termination(),
         });
         let (tx_ops, rx_ops) = bounded(1);
         let cancel = CancellationToken::new();
@@ -599,5 +685,93 @@ mod tests {
             .await
             .expect("forward_ops did not exit")
             .expect("forward_ops join error");
+    }
+
+    #[tokio::test]
+    async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
+        let (parent_session, parent_ctx, rx_events) =
+            crate::codex::make_session_and_context_with_rx().await;
+        *parent_session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+        let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+        let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+        let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+        let codex = Arc::new(Codex {
+            tx_sub,
+            rx_event: rx_events_child,
+            agent_status,
+            session: Arc::clone(&parent_session),
+            session_loop_termination: completed_session_loop_termination(),
+        });
+
+        let call_id = "tool-call-1".to_string();
+        let expected_response = RequestPermissionsResponse {
+            permissions: PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                ..PermissionProfile::default()
+            },
+            scope: PermissionGrantScope::Turn,
+        };
+        let cancel_token = CancellationToken::new();
+        let request_call_id = call_id.clone();
+
+        let handle = tokio::spawn({
+            let codex = Arc::clone(&codex);
+            let parent_session = Arc::clone(&parent_session);
+            let parent_ctx = Arc::clone(&parent_ctx);
+            let cancel_token = cancel_token.clone();
+            async move {
+                handle_request_permissions(
+                    codex.as_ref(),
+                    parent_session.as_ref(),
+                    parent_ctx.as_ref(),
+                    RequestPermissionsEvent {
+                        call_id: request_call_id,
+                        turn_id: "child-turn-1".to_string(),
+                        reason: Some("need access".to_string()),
+                        permissions: PermissionProfile {
+                            network: Some(NetworkPermissions {
+                                enabled: Some(true),
+                            }),
+                            ..PermissionProfile::default()
+                        },
+                    },
+                    &cancel_token,
+                )
+                .await;
+            }
+        });
+
+        let request_event = timeout(Duration::from_secs(1), rx_events.recv())
+            .await
+            .expect("request_permissions event timed out")
+            .expect("request_permissions event missing");
+        let EventMsg::RequestPermissions(request) = request_event.msg else {
+            panic!("expected RequestPermissions event");
+        };
+        assert_eq!(request.call_id, call_id.clone());
+
+        parent_session
+            .notify_request_permissions_response(&call_id, expected_response.clone())
+            .await;
+
+        timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("handle_request_permissions hung")
+            .expect("handle_request_permissions join error");
+
+        let submission = timeout(Duration::from_secs(1), rx_sub.recv())
+            .await
+            .expect("request_permissions response timed out")
+            .expect("request_permissions response missing");
+        assert_eq!(
+            submission.op,
+            Op::RequestPermissionsResponse {
+                id: call_id,
+                response: expected_response,
+            }
+        );
     }
 }

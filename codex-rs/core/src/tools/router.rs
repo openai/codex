@@ -4,18 +4,21 @@ use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::sandboxing::SandboxPermissions;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::ToolSearchOutput;
+use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::build_specs;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use rmcp::model::Tool;
 use std::collections::HashMap;
@@ -27,6 +30,7 @@ pub use crate::tools::context::ToolCallSource;
 #[derive(Clone, Debug)]
 pub struct ToolCall {
     pub tool_name: String,
+    pub tool_namespace: Option<String>,
     pub call_id: String,
     pub payload: ToolPayload,
 }
@@ -71,13 +75,15 @@ impl ToolRouter {
         match item {
             ResponseItem::FunctionCall {
                 name,
+                namespace,
                 arguments,
                 call_id,
                 ..
             } => {
-                if let Some((server, tool)) = session.parse_mcp_tool_name(&name).await {
+                if let Some((server, tool)) = session.parse_mcp_tool_name(&name, &namespace).await {
                     Ok(Some(ToolCall {
                         tool_name: name,
+                        tool_namespace: namespace,
                         call_id,
                         payload: ToolPayload::Mcp {
                             server,
@@ -88,11 +94,32 @@ impl ToolRouter {
                 } else {
                     Ok(Some(ToolCall {
                         tool_name: name,
+                        tool_namespace: namespace,
                         call_id,
                         payload: ToolPayload::Function { arguments },
                     }))
                 }
             }
+            ResponseItem::ToolSearchCall {
+                call_id: Some(call_id),
+                execution,
+                arguments,
+                ..
+            } if execution == "client" => {
+                let arguments: SearchToolCallParams =
+                    serde_json::from_value(arguments).map_err(|err| {
+                        FunctionCallError::RespondToModel(format!(
+                            "failed to parse tool_search arguments: {err}"
+                        ))
+                    })?;
+                Ok(Some(ToolCall {
+                    tool_name: "tool_search".to_string(),
+                    tool_namespace: None,
+                    call_id,
+                    payload: ToolPayload::ToolSearch { arguments },
+                }))
+            }
+            ResponseItem::ToolSearchCall { .. } => Ok(None),
             ResponseItem::CustomToolCall {
                 name,
                 input,
@@ -100,6 +127,7 @@ impl ToolRouter {
                 ..
             } => Ok(Some(ToolCall {
                 tool_name: name,
+                tool_namespace: None,
                 call_id,
                 payload: ToolPayload::Custom { input },
             })),
@@ -126,6 +154,7 @@ impl ToolRouter {
                         };
                         Ok(Some(ToolCall {
                             tool_name: "local_shell".to_string(),
+                            tool_namespace: None,
                             call_id,
                             payload: ToolPayload::LocalShell { params },
                         }))
@@ -145,12 +174,29 @@ impl ToolRouter {
         call: ToolCall,
         source: ToolCallSource,
     ) -> Result<ResponseInputItem, FunctionCallError> {
+        Ok(self
+            .dispatch_tool_call_with_code_mode_result(session, turn, tracker, call, source)
+            .await?
+            .into_response())
+    }
+
+    #[instrument(level = "trace", skip_all, err)]
+    pub async fn dispatch_tool_call_with_code_mode_result(
+        &self,
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        tracker: SharedTurnDiffTracker,
+        call: ToolCall,
+        source: ToolCallSource,
+    ) -> Result<AnyToolResult, FunctionCallError> {
         let ToolCall {
             tool_name,
+            tool_namespace,
             call_id,
             payload,
         } = call;
         let payload_outputs_custom = matches!(payload, ToolPayload::Custom { .. });
+        let payload_outputs_tool_search = matches!(payload, ToolPayload::ToolSearch { .. });
         let failure_call_id = call_id.clone();
 
         if source == ToolCallSource::Direct
@@ -161,9 +207,10 @@ impl ToolRouter {
                 "direct tool calls are disabled; use js_repl and codex.tool(...) instead"
                     .to_string(),
             );
-            return Ok(Self::failure_response(
+            return Ok(Self::failure_result(
                 failure_call_id,
                 payload_outputs_custom,
+                payload_outputs_tool_search,
                 err,
             ));
         }
@@ -174,41 +221,55 @@ impl ToolRouter {
             tracker,
             call_id,
             tool_name,
+            tool_namespace,
             payload,
         };
 
-        match self.registry.dispatch(invocation).await {
+        match self.registry.dispatch_any(invocation).await {
             Ok(response) => Ok(response),
             Err(FunctionCallError::Fatal(message)) => Err(FunctionCallError::Fatal(message)),
-            Err(err) => Ok(Self::failure_response(
+            Err(err) => Ok(Self::failure_result(
                 failure_call_id,
                 payload_outputs_custom,
+                payload_outputs_tool_search,
                 err,
             )),
         }
     }
 
-    fn failure_response(
+    fn failure_result(
         call_id: String,
         payload_outputs_custom: bool,
+        payload_outputs_tool_search: bool,
         err: FunctionCallError,
-    ) -> ResponseInputItem {
+    ) -> AnyToolResult {
         let message = err.to_string();
-        if payload_outputs_custom {
-            ResponseInputItem::CustomToolCallOutput {
+        if payload_outputs_tool_search {
+            AnyToolResult {
                 call_id,
-                output: codex_protocol::models::FunctionCallOutputPayload {
-                    body: FunctionCallOutputBody::Text(message),
-                    success: Some(false),
+                payload: ToolPayload::ToolSearch {
+                    arguments: SearchToolCallParams {
+                        query: String::new(),
+                        limit: None,
+                    },
                 },
+                result: Box::new(ToolSearchOutput { tools: Vec::new() }),
+            }
+        } else if payload_outputs_custom {
+            AnyToolResult {
+                call_id,
+                payload: ToolPayload::Custom {
+                    input: String::new(),
+                },
+                result: Box::new(FunctionToolOutput::from_text(message, Some(false))),
             }
         } else {
-            ResponseInputItem::FunctionCallOutput {
+            AnyToolResult {
                 call_id,
-                output: codex_protocol::models::FunctionCallOutputPayload {
-                    body: FunctionCallOutputBody::Text(message),
-                    success: Some(false),
+                payload: ToolPayload::Function {
+                    arguments: "{}".to_string(),
                 },
+                result: Box::new(FunctionToolOutput::from_text(message, Some(false))),
             }
         }
     }
@@ -221,6 +282,7 @@ mod tests {
     use crate::tools::context::ToolPayload;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::models::ResponseInputItem;
+    use codex_protocol::models::ResponseItem;
 
     use super::ToolCall;
     use super::ToolCallSource;
@@ -255,6 +317,7 @@ mod tests {
 
         let call = ToolCall {
             tool_name: "shell".to_string(),
+            tool_namespace: None,
             call_id: "call-1".to_string(),
             payload: ToolPayload::Function {
                 arguments: "{}".to_string(),
@@ -308,6 +371,7 @@ mod tests {
 
         let call = ToolCall {
             tool_name: "shell".to_string(),
+            tool_namespace: None,
             call_id: "call-2".to_string(),
             payload: ToolPayload::Function {
                 arguments: "{}".to_string(),
@@ -327,6 +391,41 @@ mod tests {
                 );
             }
             other => panic!("expected function call output, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()> {
+        let (session, _) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let tool_name = "create_event".to_string();
+
+        let call = ToolRouter::build_tool_call(
+            &session,
+            ResponseItem::FunctionCall {
+                id: None,
+                name: tool_name.clone(),
+                namespace: Some("mcp__codex_apps__calendar".to_string()),
+                arguments: "{}".to_string(),
+                call_id: "call-namespace".to_string(),
+            },
+        )
+        .await?
+        .expect("function_call should produce a tool call");
+
+        assert_eq!(call.tool_name, tool_name);
+        assert_eq!(
+            call.tool_namespace,
+            Some("mcp__codex_apps__calendar".to_string())
+        );
+        assert_eq!(call.call_id, "call-namespace");
+        match call.payload {
+            ToolPayload::Function { arguments } => {
+                assert_eq!(arguments, "{}");
+            }
+            other => panic!("expected function payload, got {other:?}"),
         }
 
         Ok(())

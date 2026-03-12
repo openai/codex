@@ -155,12 +155,12 @@ fn strip_total_output_header(output: &str) -> Option<(&str, u32)> {
 pub(crate) mod tools {
     use crate::tools::spec::JsonSchema;
     use codex_protocol::config_types::WebSearchContextSize;
-    use codex_protocol::config_types::WebSearchFilters;
-    use codex_protocol::config_types::WebSearchUserLocation;
+    use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
+    use codex_protocol::config_types::WebSearchUserLocation as ConfigWebSearchUserLocation;
     use codex_protocol::config_types::WebSearchUserLocationType;
     use serde::Deserialize;
     use serde::Serialize;
-    use serde::Serializer;
+    use serde_json::Value;
 
     /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
     /// Responses API.
@@ -169,6 +169,12 @@ pub(crate) mod tools {
     pub(crate) enum ToolSpec {
         #[serde(rename = "function")]
         Function(ResponsesApiTool),
+        #[serde(rename = "tool_search")]
+        ToolSearch {
+            execution: String,
+            description: String,
+            parameters: JsonSchema,
+        },
         #[serde(rename = "local_shell")]
         LocalShell {},
         #[serde(rename = "image_generation")]
@@ -181,16 +187,10 @@ pub(crate) mod tools {
         WebSearch {
             #[serde(skip_serializing_if = "Option::is_none")]
             external_web_access: Option<bool>,
-            #[serde(
-                skip_serializing_if = "Option::is_none",
-                serialize_with = "serialize_web_search_filters"
-            )]
-            filters: Option<WebSearchFilters>,
-            #[serde(
-                skip_serializing_if = "Option::is_none",
-                serialize_with = "serialize_web_search_user_location"
-            )]
-            user_location: Option<WebSearchUserLocation>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            filters: Option<ResponsesApiWebSearchFilters>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            user_location: Option<ResponsesApiWebSearchUserLocation>,
             #[serde(skip_serializing_if = "Option::is_none")]
             search_context_size: Option<WebSearchContextSize>,
             #[serde(skip_serializing_if = "Option::is_none")]
@@ -204,6 +204,7 @@ pub(crate) mod tools {
         pub(crate) fn name(&self) -> &str {
             match self {
                 ToolSpec::Function(tool) => tool.name.as_str(),
+                ToolSpec::ToolSearch { .. } => "tool_search",
                 ToolSpec::LocalShell {} => "local_shell",
                 ToolSpec::ImageGeneration { .. } => "image_generation",
                 ToolSpec::WebSearch { .. } => "web_search",
@@ -212,63 +213,43 @@ pub(crate) mod tools {
         }
     }
 
-    fn serialize_web_search_filters<S>(
-        filters: &Option<WebSearchFilters>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match filters {
-            Some(filters) => {
-                #[derive(Serialize)]
-                struct SerializableWebSearchFilters<'a> {
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    allowed_domains: Option<&'a Vec<String>>,
-                }
+    #[derive(Debug, Clone, Serialize, PartialEq)]
+    pub(crate) struct ResponsesApiWebSearchFilters {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) allowed_domains: Option<Vec<String>>,
+    }
 
-                SerializableWebSearchFilters {
-                    allowed_domains: filters.allowed_domains.as_ref(),
-                }
-                .serialize(serializer)
+    impl From<ConfigWebSearchFilters> for ResponsesApiWebSearchFilters {
+        fn from(filters: ConfigWebSearchFilters) -> Self {
+            Self {
+                allowed_domains: filters.allowed_domains,
             }
-            None => serializer.serialize_none(),
         }
     }
 
-    fn serialize_web_search_user_location<S>(
-        user_location: &Option<WebSearchUserLocation>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match user_location {
-            Some(user_location) => {
-                #[derive(Serialize)]
-                struct SerializableWebSearchUserLocation<'a> {
-                    #[serde(rename = "type")]
-                    r#type: WebSearchUserLocationType,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    country: Option<&'a String>,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    region: Option<&'a String>,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    city: Option<&'a String>,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    timezone: Option<&'a String>,
-                }
+    #[derive(Debug, Clone, Serialize, PartialEq)]
+    pub(crate) struct ResponsesApiWebSearchUserLocation {
+        #[serde(rename = "type")]
+        pub(crate) r#type: WebSearchUserLocationType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) country: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) region: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) city: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) timezone: Option<String>,
+    }
 
-                SerializableWebSearchUserLocation {
-                    r#type: user_location.r#type,
-                    country: user_location.country.as_ref(),
-                    region: user_location.region.as_ref(),
-                    city: user_location.city.as_ref(),
-                    timezone: user_location.timezone.as_ref(),
-                }
-                .serialize(serializer)
+    impl From<ConfigWebSearchUserLocation> for ResponsesApiWebSearchUserLocation {
+        fn from(user_location: ConfigWebSearchUserLocation) -> Self {
+            Self {
+                r#type: user_location.r#type,
+                country: user_location.country,
+                region: user_location.region,
+                city: user_location.city,
+                timezone: user_location.timezone,
             }
-            None => serializer.serialize_none(),
         }
     }
 
@@ -294,7 +275,35 @@ pub(crate) mod tools {
         /// `required` and `additional_properties` must be present. All fields in
         /// `properties` must be present in `required`.
         pub(crate) strict: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) defer_loading: Option<bool>,
         pub(crate) parameters: JsonSchema,
+        #[serde(skip)]
+        pub(crate) output_schema: Option<Value>,
+    }
+
+    #[derive(Debug, Clone, Serialize, PartialEq)]
+    #[serde(tag = "type")]
+    pub(crate) enum ToolSearchOutputTool {
+        #[allow(dead_code)]
+        #[serde(rename = "function")]
+        Function(ResponsesApiTool),
+        #[serde(rename = "namespace")]
+        Namespace(ResponsesApiNamespace),
+    }
+
+    #[derive(Debug, Clone, Serialize, PartialEq)]
+    pub(crate) struct ResponsesApiNamespace {
+        pub(crate) name: String,
+        pub(crate) description: String,
+        pub(crate) tools: Vec<ResponsesApiNamespaceTool>,
+    }
+
+    #[derive(Debug, Clone, Serialize, PartialEq)]
+    #[serde(tag = "type")]
+    pub(crate) enum ResponsesApiNamespaceTool {
+        #[serde(rename = "function")]
+        Function(ResponsesApiTool),
     }
 }
 
@@ -458,6 +467,7 @@ mod tests {
             ResponseItem::FunctionCall {
                 id: None,
                 name: "shell".to_string(),
+                namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-1".to_string(),
             },
@@ -486,6 +496,7 @@ mod tests {
                 ResponseItem::FunctionCall {
                     id: None,
                     name: "shell".to_string(),
+                    namespace: None,
                     arguments: "{}".to_string(),
                     call_id: "call-1".to_string(),
                 },
@@ -505,6 +516,52 @@ mod tests {
                     output: FunctionCallOutputPayload::from_text(expected_output.to_string()),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn tool_search_output_namespace_serializes_with_deferred_child_tools() {
+        let namespace = tools::ToolSearchOutputTool::Namespace(tools::ResponsesApiNamespace {
+            name: "mcp__codex_apps__calendar".to_string(),
+            description: "Plan events".to_string(),
+            tools: vec![tools::ResponsesApiNamespaceTool::Function(
+                tools::ResponsesApiTool {
+                    name: "create_event".to_string(),
+                    description: "Create a calendar event.".to_string(),
+                    strict: false,
+                    defer_loading: Some(true),
+                    parameters: crate::tools::spec::JsonSchema::Object {
+                        properties: Default::default(),
+                        required: None,
+                        additional_properties: None,
+                    },
+                    output_schema: None,
+                },
+            )],
+        });
+
+        let value = serde_json::to_value(namespace).expect("serialize namespace");
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "type": "namespace",
+                "name": "mcp__codex_apps__calendar",
+                "description": "Plan events",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "create_event",
+                        "description": "Create a calendar event.",
+                        "strict": false,
+                        "defer_loading": true,
+                        "parameters": {
+                            "type": "object",
+                            "properties": {}
+                        }
+                    }
+                ]
+            })
         );
     }
 }

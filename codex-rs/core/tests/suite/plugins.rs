@@ -114,7 +114,7 @@ async fn build_apps_enabled_plugin_test_codex(
 ) -> Result<Arc<codex_core::CodexThread>> {
     let mut builder = test_codex()
         .with_home(codex_home)
-        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
             config
                 .features
@@ -277,7 +277,7 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
     assert!(
         request_tools
             .iter()
-            .any(|name| name == "mcp__codex_apps__calendar_create_event"),
+            .any(|name| name == "mcp__codex_apps__google-calendar-create-event"),
         "expected plugin app tools to become visible for this turn: {request_tools:?}"
     );
     let echo_description = tool_description(&request_body, "mcp__sample__echo")
@@ -286,9 +286,11 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
         echo_description.contains("This tool is part of plugin `sample`."),
         "expected plugin MCP provenance in tool description: {echo_description:?}"
     );
-    let calendar_description =
-        tool_description(&request_body, "mcp__codex_apps__calendar_create_event")
-            .expect("plugin app tool description should be present");
+    let calendar_description = tool_description(
+        &request_body,
+        "mcp__codex_apps__google-calendar-create-event",
+    )
+    .expect("plugin app tool description should be present");
     assert!(
         calendar_description.contains("This tool is part of plugin `sample`."),
         "expected plugin app provenance in tool description: {calendar_description:?}"

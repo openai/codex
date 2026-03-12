@@ -1,0 +1,16 @@
+---
+source: tui/src/bottom_pane/approval_overlay.rs
+expression: "normalize_snapshot_paths(render_overlay_lines(&view, 120))"
+---
+
+  Would you like to grant these permissions?
+
+  Reason: need workspace access
+
+  Permission rule: network; read `/tmp/readme.txt`; write `/tmp/out.txt`
+
+› 1. Yes, grant these permissions (y)
+  2. Yes, grant these permissions for this session (a)
+  3. No, continue without permissions (n)
+
+  Press enter to confirm or esc to cancel

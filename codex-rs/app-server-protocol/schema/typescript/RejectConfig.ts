@@ -12,6 +12,14 @@ sandbox_approval: boolean,
  */
 rules: boolean, 
 /**
+ * Reject approval prompts triggered by skill script execution.
+ */
+skill_approval: boolean, 
+/**
+ * Reject approval prompts related to built-in permission requests.
+ */
+request_permissions: boolean, 
+/**
  * Reject MCP elicitation prompts.
  */
 mcp_elicitations: boolean, };

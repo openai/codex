@@ -49,4 +49,11 @@ Plan preset. The string value `none` means "no reasoning" (an explicit Plan
 override), not "inherit the global default". There is currently no separate
 config value for "follow the global default in Plan mode".
 
+## Realtime start instructions
+
+`experimental_realtime_start_instructions` lets you replace the built-in
+developer message Codex inserts when realtime becomes active. It only affects
+the realtime start message in prompt history and does not change websocket
+backend prompt settings or the realtime end/inactive message.
+
 Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).

@@ -5,9 +5,8 @@ use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::is_likely_sandbox_denied;
-use crate::exec_policy::prompt_is_rejected_by_policy;
 use crate::features::Feature;
-use crate::guardian::GuardianReviewRequest;
+use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::ExecRequest;
@@ -31,6 +30,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ExecApprovalRequestSkillMetadata;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
@@ -49,7 +49,6 @@ use codex_shell_escalation::PreparedExec;
 use codex_shell_escalation::ShellCommandExecutor;
 use codex_shell_escalation::Stopwatch;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -62,6 +61,15 @@ pub(crate) struct PreparedUnifiedExecZshFork {
     pub(crate) exec_request: ExecRequest,
     pub(crate) escalation_session: EscalationSession,
 }
+
+const PROMPT_CONFLICT_REASON: &str =
+    "approval required by policy, but AskForApproval is set to Never";
+const REJECT_SANDBOX_APPROVAL_REASON: &str =
+    "approval required by policy, but AskForApproval::Reject.sandbox_approval is set";
+const REJECT_RULES_APPROVAL_REASON: &str =
+    "approval required by policy rule, but AskForApproval::Reject.rules is set";
+const REJECT_SKILL_APPROVAL_REASON: &str =
+    "approval required by skill, but AskForApproval::Reject.skill_approval is set";
 
 pub(super) async fn try_run_zsh_fork(
     req: &ShellRequest,
@@ -318,6 +326,31 @@ enum DecisionSource {
     UnmatchedCommandFallback,
 }
 
+fn execve_prompt_is_rejected_by_policy(
+    approval_policy: AskForApproval,
+    decision_source: &DecisionSource,
+) -> Option<&'static str> {
+    match (approval_policy, decision_source) {
+        (AskForApproval::Never, _) => Some(PROMPT_CONFLICT_REASON),
+        (AskForApproval::Reject(reject_config), DecisionSource::SkillScript { .. })
+            if reject_config.rejects_skill_approval() =>
+        {
+            Some(REJECT_SKILL_APPROVAL_REASON)
+        }
+        (AskForApproval::Reject(reject_config), DecisionSource::PrefixRule)
+            if reject_config.rejects_rules_approval() =>
+        {
+            Some(REJECT_RULES_APPROVAL_REASON)
+        }
+        (AskForApproval::Reject(reject_config), DecisionSource::UnmatchedCommandFallback)
+            if reject_config.rejects_sandbox_approval() =>
+        {
+            Some(REJECT_SANDBOX_APPROVAL_REASON)
+        }
+        _ => None,
+    }
+}
+
 impl CoreShellActionProvider {
     fn decision_driven_by_policy(matched_rules: &[RuleMatch], decision: Decision) -> bool {
         matched_rules.iter().any(|rule_match| {
@@ -385,16 +418,19 @@ impl CoreShellActionProvider {
         Ok(stopwatch
             .pause_for(async move {
                 if routes_approval_to_guardian(&turn) {
-                    let request = GuardianReviewRequest {
-                        action: json!({
-                            "tool": tool_name,
-                            "program": program,
-                            "argv": argv,
-                            "cwd": workdir,
-                            "additional_permissions": additional_permissions,
-                        }),
-                    };
-                    return review_approval_request(&session, &turn, request, None).await;
+                    return review_approval_request(
+                        &session,
+                        &turn,
+                        GuardianApprovalRequest::Execve {
+                            tool_name: tool_name.to_string(),
+                            program: program.to_string_lossy().into_owned(),
+                            argv: argv.to_vec(),
+                            cwd: workdir,
+                            additional_permissions,
+                        },
+                        None,
+                    )
+                    .await;
                 }
                 let available_decisions = vec![
                     Some(ReviewDecision::Approved),
@@ -410,6 +446,14 @@ impl CoreShellActionProvider {
                 .into_iter()
                 .flatten()
                 .collect();
+                let skill_metadata = match decision_source {
+                    DecisionSource::SkillScript { skill } => {
+                        Some(ExecApprovalRequestSkillMetadata {
+                            path_to_skills_md: skill.path_to_skills_md.clone(),
+                        })
+                    }
+                    DecisionSource::PrefixRule | DecisionSource::UnmatchedCommandFallback => None,
+                };
                 session
                     .request_command_approval(
                         &turn,
@@ -421,6 +465,7 @@ impl CoreShellActionProvider {
                         None,
                         None,
                         additional_permissions,
+                        skill_metadata,
                         Some(available_decisions),
                     )
                     .await
@@ -471,11 +516,8 @@ impl CoreShellActionProvider {
                 EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
             }
             Decision::Prompt => {
-                if prompt_is_rejected_by_policy(
-                    self.approval_policy,
-                    matches!(decision_source, DecisionSource::PrefixRule),
-                )
-                .is_some()
+                if execve_prompt_is_rejected_by_policy(self.approval_policy, &decision_source)
+                    .is_some()
                 {
                     EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
                 } else {
@@ -650,10 +692,14 @@ impl EscalationPolicy for CoreShellActionProvider {
                 &policy,
                 program,
                 argv,
-                self.approval_policy,
-                &self.sandbox_policy,
-                self.sandbox_permissions,
-                ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
+                InterceptedExecPolicyContext {
+                    approval_policy: self.approval_policy,
+                    sandbox_policy: &self.sandbox_policy,
+                    file_system_sandbox_policy: &self.file_system_sandbox_policy,
+                    sandbox_permissions: self.sandbox_permissions,
+                    enable_shell_wrapper_parsing:
+                        ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
+                },
             )
         };
         // When true, means the Evaluation was due to *.rules, not the
@@ -702,15 +748,19 @@ fn evaluate_intercepted_exec_policy(
     policy: &Policy,
     program: &AbsolutePathBuf,
     argv: &[String],
-    approval_policy: AskForApproval,
-    sandbox_policy: &SandboxPolicy,
-    sandbox_permissions: SandboxPermissions,
-    enable_intercepted_exec_policy_shell_wrapper_parsing: bool,
+    context: InterceptedExecPolicyContext<'_>,
 ) -> Evaluation {
+    let InterceptedExecPolicyContext {
+        approval_policy,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        sandbox_permissions,
+        enable_shell_wrapper_parsing,
+    } = context;
     let CandidateCommands {
         commands,
         used_complex_parsing,
-    } = if enable_intercepted_exec_policy_shell_wrapper_parsing {
+    } = if enable_shell_wrapper_parsing {
         // In this codepath, the first argument in `commands` could be a bare
         // name like `find` instead of an absolute path like `/usr/bin/find`.
         // It could also be a shell built-in like `echo`.
@@ -728,6 +778,7 @@ fn evaluate_intercepted_exec_policy(
         crate::exec_policy::render_decision_for_unmatched_command(
             approval_policy,
             sandbox_policy,
+            file_system_sandbox_policy,
             cmd,
             sandbox_permissions,
             used_complex_parsing,
@@ -741,6 +792,15 @@ fn evaluate_intercepted_exec_policy(
             resolve_host_executables: true,
         },
     )
+}
+
+#[derive(Clone, Copy)]
+struct InterceptedExecPolicyContext<'a> {
+    approval_policy: AskForApproval,
+    sandbox_policy: &'a SandboxPolicy,
+    file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
+    sandbox_permissions: SandboxPermissions,
+    enable_shell_wrapper_parsing: bool,
 }
 
 struct CandidateCommands {

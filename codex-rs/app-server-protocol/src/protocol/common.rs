@@ -44,15 +44,15 @@ pub enum AuthMode {
 
 macro_rules! experimental_reason_expr {
     // If a request variant is explicitly marked experimental, that reason wins.
-    (#[experimental($reason:expr)] $params:ident $(, $inspect_params:tt)?) => {
+    (variant $variant:ident, #[experimental($reason:expr)] $params:ident $(, $inspect_params:tt)?) => {
         Some($reason)
     };
     // `inspect_params: true` is used when a method is mostly stable but needs
     // field-level gating from its params type (for example, ThreadStart).
-    ($params:ident, true) => {
+    (variant $variant:ident, $params:ident, true) => {
         crate::experimental_api::ExperimentalApi::experimental_reason($params)
     };
-    ($params:ident $(, $inspect_params:tt)?) => {
+    (variant $variant:ident, $params:ident $(, $inspect_params:tt)?) => {
         None
     };
 }
@@ -110,12 +110,33 @@ macro_rules! client_request_definitions {
             )*
         }
 
+        impl ClientRequest {
+            pub fn id(&self) -> &RequestId {
+                match self {
+                    $(Self::$variant { request_id, .. } => request_id,)*
+                }
+            }
+
+            pub fn method(&self) -> String {
+                serde_json::to_value(self)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("method")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_else(|| "<unknown>".to_string())
+            }
+        }
+
         impl crate::experimental_api::ExperimentalApi for ClientRequest {
             fn experimental_reason(&self) -> Option<&'static str> {
                 match self {
                     $(
                         Self::$variant { params: _params, .. } => {
                             experimental_reason_expr!(
+                                variant $variant,
                                 $(#[experimental($reason)])?
                                 _params
                                 $(, $inspect_params)?
@@ -149,6 +170,12 @@ macro_rules! client_request_definitions {
                 <$response as ::ts_rs::TS>::export_all_to(out_dir)?;
             )*
             Ok(())
+        }
+
+        pub(crate) fn visit_client_response_types(v: &mut impl ::ts_rs::TypeVisitor) {
+            $(
+                v.visit::<$response>();
+            )*
         }
 
         #[allow(clippy::vec_init_then_push)]
@@ -206,6 +233,23 @@ client_request_definitions! {
     ThreadUnsubscribe => "thread/unsubscribe" {
         params: v2::ThreadUnsubscribeParams,
         response: v2::ThreadUnsubscribeResponse,
+    },
+    #[experimental("thread/increment_elicitation")]
+    /// Increment the thread-local out-of-band elicitation counter.
+    ///
+    /// This is used by external helpers to pause timeout accounting while a user
+    /// approval or other elicitation is pending outside the app-server request flow.
+    ThreadIncrementElicitation => "thread/increment_elicitation" {
+        params: v2::ThreadIncrementElicitationParams,
+        response: v2::ThreadIncrementElicitationResponse,
+    },
+    #[experimental("thread/decrement_elicitation")]
+    /// Decrement the thread-local out-of-band elicitation counter.
+    ///
+    /// When the count reaches zero, timeout accounting resumes for the thread.
+    ThreadDecrementElicitation => "thread/decrement_elicitation" {
+        params: v2::ThreadDecrementElicitationParams,
+        response: v2::ThreadDecrementElicitationResponse,
     },
     ThreadSetName => "thread/name/set" {
         params: v2::ThreadSetNameParams,
@@ -271,6 +315,10 @@ client_request_definitions! {
     PluginInstall => "plugin/install" {
         params: v2::PluginInstallParams,
         response: v2::PluginInstallResponse,
+    },
+    PluginUninstall => "plugin/uninstall" {
+        params: v2::PluginUninstallParams,
+        response: v2::PluginUninstallResponse,
     },
     TurnStart => "turn/start" {
         params: v2::TurnStartParams,
@@ -525,6 +573,12 @@ macro_rules! server_request_definitions {
             Ok(())
         }
 
+        pub(crate) fn visit_server_response_types(v: &mut impl ::ts_rs::TypeVisitor) {
+            $(
+                v.visit::<$response>();
+            )*
+        }
+
         #[allow(clippy::vec_init_then_push)]
         pub fn export_server_response_schemas(
             out_dir: &Path,
@@ -675,6 +729,12 @@ server_request_definitions! {
         response: v2::McpServerElicitationRequestResponse,
     },
 
+    /// Request approval for additional permissions from the user.
+    PermissionsRequestApproval => "item/permissions/requestApproval" {
+        params: v2::PermissionsRequestApprovalParams,
+        response: v2::PermissionsRequestApprovalResponse,
+    },
+
     /// Execute a dynamic tool call on the client.
     DynamicToolCall => "item/tool/call" {
         params: v2::DynamicToolCallParams,
@@ -786,7 +846,9 @@ server_notification_definitions! {
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
+    HookStarted => "hook/started" (v2::HookStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
+    HookCompleted => "hook/completed" (v2::HookCompletedNotification),
     TurnDiffUpdated => "turn/diff/updated" (v2::TurnDiffUpdatedNotification),
     TurnPlanUpdated => "turn/plan/updated" (v2::TurnPlanUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
@@ -893,7 +955,7 @@ mod tests {
                 capabilities: Some(v1::InitializeCapabilities {
                     experimental_api: true,
                     opt_out_notification_methods: Some(vec![
-                        "codex/event/session_configured".to_string(),
+                        "thread/started".to_string(),
                         "item/agentMessage/delta".to_string(),
                     ]),
                 }),
@@ -913,7 +975,7 @@ mod tests {
                     "capabilities": {
                         "experimentalApi": true,
                         "optOutNotificationMethods": [
-                            "codex/event/session_configured",
+                            "thread/started",
                             "item/agentMessage/delta"
                         ]
                     }
@@ -938,7 +1000,7 @@ mod tests {
                 "capabilities": {
                     "experimentalApi": true,
                     "optOutNotificationMethods": [
-                        "codex/event/session_configured",
+                        "thread/started",
                         "item/agentMessage/delta"
                     ]
                 }
@@ -958,7 +1020,7 @@ mod tests {
                     capabilities: Some(v1::InitializeCapabilities {
                         experimental_api: true,
                         opt_out_notification_methods: Some(vec![
-                            "codex/event/session_configured".to_string(),
+                            "thread/started".to_string(),
                             "item/agentMessage/delta".to_string(),
                         ]),
                     }),
@@ -1136,6 +1198,8 @@ mod tests {
             request_id: RequestId::Integer(1),
             params: None,
         };
+        assert_eq!(request.id(), &RequestId::Integer(1));
+        assert_eq!(request.method(), "account/rateLimits/read");
         assert_eq!(
             json!({
                 "method": "account/rateLimits/read",
@@ -1540,6 +1604,7 @@ mod tests {
                 }),
                 macos: None,
             }),
+            skill_metadata: None,
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
             available_decisions: None,
@@ -1548,6 +1613,33 @@ mod tests {
         assert_eq!(
             reason,
             Some("item/commandExecution/requestApproval.additionalPermissions")
+        );
+    }
+
+    #[test]
+    fn command_execution_request_approval_skill_metadata_is_marked_experimental() {
+        let params = v2::CommandExecutionRequestApprovalParams {
+            thread_id: "thr_123".to_string(),
+            turn_id: "turn_123".to_string(),
+            item_id: "call_123".to_string(),
+            approval_id: None,
+            reason: None,
+            network_approval_context: None,
+            command: Some("cat file".to_string()),
+            cwd: None,
+            command_actions: None,
+            additional_permissions: None,
+            skill_metadata: Some(v2::CommandExecutionRequestApprovalSkillMetadata {
+                path_to_skills_md: PathBuf::from("/tmp/SKILLS.md"),
+            }),
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            available_decisions: None,
+        };
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&params);
+        assert_eq!(
+            reason,
+            Some("item/commandExecution/requestApproval.skillMetadata")
         );
     }
 }

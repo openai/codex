@@ -447,14 +447,16 @@ impl ModelClient {
         turn_metadata_header: Option<&str>,
     ) -> ApiHeaderMap {
         let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
+        let conversation_id = self.state.conversation_id.to_string();
         let mut headers = build_responses_headers(
             self.state.beta_features_header.as_deref(),
             turn_state,
             turn_metadata_header.as_ref(),
         );
-        headers.extend(build_conversation_headers(Some(
-            self.state.conversation_id.to_string(),
-        )));
+        if let Ok(header_value) = HeaderValue::from_str(&conversation_id) {
+            headers.insert("x-client-request-id", header_value);
+        }
+        headers.extend(build_conversation_headers(Some(conversation_id)));
         headers.insert(
             OPENAI_BETA_HEADER,
             HeaderValue::from_static(RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE),

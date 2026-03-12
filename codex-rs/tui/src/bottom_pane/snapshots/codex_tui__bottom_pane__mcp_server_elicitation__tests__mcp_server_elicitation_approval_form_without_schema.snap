@@ -5,8 +5,8 @@ expression: "render_snapshot(&overlay, Rect::new(0, 0, 120, 16))"
                                                                                                                         
   Field 1/1                                                                                                             
   Allow this request?                                                                                                   
-  › 1. Approve Once  Run the tool and continue.                                                                         
-    2. Cancel        Cancel this tool call                                                                              
+  › 1. Allow   Run the tool and continue.                                                                               
+    2. Cancel  Cancel this tool call                                                                                    
                                                                                                                         
                                                                                                                         
                                                                                                                         
