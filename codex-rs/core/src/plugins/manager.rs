@@ -19,6 +19,7 @@ use super::store::PluginInstallResult as StorePluginInstallResult;
 use super::store::PluginStore;
 use super::store::PluginStoreError;
 use super::sync_openai_plugins_repo;
+use crate::analytics_client::AnalyticsEventsClient;
 use crate::auth::CodexAuth;
 use crate::config::Config;
 use crate::config::ConfigService;
@@ -127,6 +128,29 @@ pub struct PluginCapabilitySummary {
     pub app_connector_ids: Vec<AppConnectorId>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginTelemetryMetadata {
+    pub plugin_id: String,
+    pub plugin_name: Option<String>,
+    pub marketplace_name: Option<String>,
+    pub has_skills: Option<bool>,
+    pub mcp_server_count: Option<usize>,
+    pub connector_ids: Option<Vec<String>>,
+}
+
+impl PluginTelemetryMetadata {
+    pub fn from_plugin_id(plugin_id: &PluginId) -> Self {
+        Self {
+            plugin_id: plugin_id.as_key(),
+            plugin_name: Some(plugin_id.plugin_name.clone()),
+            marketplace_name: Some(plugin_id.marketplace_name.clone()),
+            has_skills: None,
+            mcp_server_count: None,
+            connector_ids: None,
+        }
+    }
+}
+
 impl PluginCapabilitySummary {
     fn from_plugin(plugin: &LoadedPlugin) -> Option<Self> {
         if !plugin.is_active() {
@@ -152,6 +176,37 @@ impl PluginCapabilitySummary {
             || !summary.mcp_server_names.is_empty()
             || !summary.app_connector_ids.is_empty())
         .then_some(summary)
+    }
+
+    pub fn telemetry_metadata(&self) -> PluginTelemetryMetadata {
+        match PluginId::parse(&self.config_name) {
+            Ok(plugin_id) => PluginTelemetryMetadata {
+                plugin_id: plugin_id.as_key(),
+                plugin_name: Some(plugin_id.plugin_name),
+                marketplace_name: Some(plugin_id.marketplace_name),
+                has_skills: Some(self.has_skills),
+                mcp_server_count: Some(self.mcp_server_names.len()),
+                connector_ids: Some(
+                    self.app_connector_ids
+                        .iter()
+                        .map(|connector_id| connector_id.0.clone())
+                        .collect(),
+                ),
+            },
+            Err(_) => PluginTelemetryMetadata {
+                plugin_id: self.config_name.clone(),
+                plugin_name: Some(self.display_name.clone()),
+                marketplace_name: None,
+                has_skills: Some(self.has_skills),
+                mcp_server_count: Some(self.mcp_server_names.len()),
+                connector_ids: Some(
+                    self.app_connector_ids
+                        .iter()
+                        .map(|connector_id| connector_id.0.clone())
+                        .collect(),
+                ),
+            },
+        }
     }
 }
 
@@ -336,6 +391,7 @@ pub struct PluginsManager {
     codex_home: PathBuf,
     store: PluginStore,
     cache_by_cwd: RwLock<HashMap<PathBuf, PluginLoadOutcome>>,
+    analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
 }
 
 impl PluginsManager {
@@ -344,6 +400,22 @@ impl PluginsManager {
             codex_home: codex_home.clone(),
             store: PluginStore::new(codex_home),
             cache_by_cwd: RwLock::new(HashMap::new()),
+            analytics_events_client: RwLock::new(None),
+        }
+    }
+
+    pub fn set_analytics_events_client(&self, analytics_events_client: AnalyticsEventsClient) {
+        let mut stored_client = match self.analytics_events_client.write() {
+            Ok(client_guard) => client_guard,
+            Err(err) => err.into_inner(),
+        };
+        *stored_client = Some(analytics_events_client);
+    }
+
+    fn analytics_events_client(&self) -> Option<AnalyticsEventsClient> {
+        match self.analytics_events_client.read() {
+            Ok(client) => client.clone(),
+            Err(err) => err.into_inner().clone(),
         }
     }
 
@@ -433,6 +505,13 @@ impl PluginsManager {
             .map(|_| ())
             .map_err(PluginInstallError::from)?;
 
+        if let Some(analytics_events_client) = self.analytics_events_client() {
+            analytics_events_client.track_plugin_installed(plugin_telemetry_metadata_from_root(
+                &result.plugin_id,
+                result.installed_path.as_path(),
+            ));
+        }
+
         Ok(PluginInstallOutcome {
             plugin_id: result.plugin_id,
             plugin_version: result.plugin_version,
@@ -443,6 +522,10 @@ impl PluginsManager {
 
     pub async fn uninstall_plugin(&self, plugin_id: String) -> Result<(), PluginUninstallError> {
         let plugin_id = PluginId::parse(&plugin_id)?;
+        let plugin_telemetry = self
+            .store
+            .active_plugin_root(&plugin_id)
+            .map(|_| installed_plugin_telemetry_metadata(self.codex_home.as_path(), &plugin_id));
         let store = self.store.clone();
         let plugin_id_for_store = plugin_id.clone();
         tokio::task::spawn_blocking(move || store.uninstall(&plugin_id_for_store))
@@ -455,6 +538,12 @@ impl PluginsManager {
             }])
             .apply()
             .await?;
+
+        if let Some(plugin_telemetry) = plugin_telemetry
+            && let Some(analytics_events_client) = self.analytics_events_client()
+        {
+            analytics_events_client.track_plugin_uninstalled(plugin_telemetry);
+        }
 
         Ok(())
     }
@@ -1240,6 +1329,52 @@ fn load_apps_from_paths(
     }
     connector_ids.dedup();
     connector_ids
+}
+
+pub fn plugin_telemetry_metadata_from_root(
+    plugin_id: &PluginId,
+    plugin_root: &Path,
+) -> PluginTelemetryMetadata {
+    let Some(manifest) = load_plugin_manifest(plugin_root) else {
+        return PluginTelemetryMetadata::from_plugin_id(plugin_id);
+    };
+
+    let manifest_paths = plugin_manifest_paths(&manifest, plugin_root);
+    let has_skills = !plugin_skill_roots(plugin_root, &manifest_paths).is_empty();
+    let mcp_server_count = manifest_paths
+        .mcp_servers
+        .as_ref()
+        .map(|path| {
+            load_mcp_servers_from_file(plugin_root, path)
+                .mcp_servers
+                .len()
+        })
+        .unwrap_or(0);
+    let connector_ids = load_plugin_apps(plugin_root)
+        .into_iter()
+        .map(|connector_id| connector_id.0)
+        .collect();
+
+    PluginTelemetryMetadata {
+        plugin_id: plugin_id.as_key(),
+        plugin_name: Some(plugin_id.plugin_name.clone()),
+        marketplace_name: Some(plugin_id.marketplace_name.clone()),
+        has_skills: Some(has_skills),
+        mcp_server_count: Some(mcp_server_count),
+        connector_ids: Some(connector_ids),
+    }
+}
+
+pub fn installed_plugin_telemetry_metadata(
+    codex_home: &Path,
+    plugin_id: &PluginId,
+) -> PluginTelemetryMetadata {
+    let store = PluginStore::new(codex_home.to_path_buf());
+    let Some(plugin_root) = store.active_plugin_root(plugin_id) else {
+        return PluginTelemetryMetadata::from_plugin_id(plugin_id);
+    };
+
+    plugin_telemetry_metadata_from_root(plugin_id, plugin_root.as_path())
 }
 
 fn load_mcp_servers_from_file(

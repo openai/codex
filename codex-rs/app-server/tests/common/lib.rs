@@ -1,3 +1,4 @@
+mod analytics_server;
 mod auth_fixtures;
 mod config;
 mod mcp_process;
@@ -6,6 +7,7 @@ mod models_cache;
 mod responses;
 mod rollout;
 
+pub use analytics_server::start_analytics_events_server;
 pub use auth_fixtures::ChatGptAuthFixture;
 pub use auth_fixtures::ChatGptIdTokenClaims;
 pub use auth_fixtures::encode_id_token;
