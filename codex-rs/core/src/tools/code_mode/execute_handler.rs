@@ -32,7 +32,7 @@ impl CodeModeExecuteHandler {
         let stored_values = service.stored_values().await;
         let source =
             build_source(&code, &enabled_tools).map_err(FunctionCallError::RespondToModel)?;
-        let session_id = service.allocate_session_id().await;
+        let cell_id = service.allocate_cell_id().await;
         let request_id = service.allocate_request_id().await;
         let process_slot = service
             .ensure_started()
@@ -41,7 +41,7 @@ impl CodeModeExecuteHandler {
         let started_at = std::time::Instant::now();
         let message = HostToNodeMessage::Start {
             request_id: request_id.clone(),
-            session_id,
+            cell_id: cell_id.clone(),
             default_yield_time_ms: super::DEFAULT_EXEC_YIELD_TIME_MS,
             enabled_tools,
             stored_values,
@@ -62,7 +62,7 @@ impl CodeModeExecuteHandler {
                 Ok(message) => message,
                 Err(error) => return Err(FunctionCallError::RespondToModel(error)),
             };
-            handle_node_message(&exec, session_id, message, None, started_at).await
+            handle_node_message(&exec, cell_id, message, None, started_at).await
         };
         match result {
             Ok(CodeModeSessionProgress::Finished(output))
