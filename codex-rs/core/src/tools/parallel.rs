@@ -13,6 +13,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
+use crate::client_common::tools::ToolSpec;
 use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::registry::AnyToolResult;
@@ -44,6 +45,10 @@ impl ToolCallRuntime {
             tracker,
             parallel_execution: Arc::new(RwLock::new(())),
         }
+    }
+
+    pub(crate) fn find_spec(&self, tool_name: &str) -> Option<ToolSpec> {
+        self.router.find_spec(tool_name)
     }
 
     #[instrument(level = "trace", skip_all)]

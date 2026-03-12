@@ -280,8 +280,6 @@ async fn call_nested_tool(
         return JsonValue::String(format!("{PUBLIC_TOOL_NAME} cannot invoke itself"));
     }
 
-    let router = build_nested_router(&exec).await;
-    let specs = router.specs();
     let payload =
         if let Some((server, tool)) = exec.session.parse_mcp_tool_name(&tool_name, &None).await {
             match serialize_function_tool_arguments(&tool_name, input) {
@@ -293,7 +291,7 @@ async fn call_nested_tool(
                 Err(error) => return JsonValue::String(error),
             }
         } else {
-            match build_nested_tool_payload(&specs, &tool_name, input) {
+            match build_nested_tool_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
                 Ok(payload) => payload,
                 Err(error) => return JsonValue::String(error),
             }
@@ -324,22 +322,20 @@ fn tool_kind_for_spec(spec: &ToolSpec) -> protocol::CodeModeToolKind {
 }
 
 fn tool_kind_for_name(
-    specs: &[ToolSpec],
+    spec: Option<ToolSpec>,
     tool_name: &str,
 ) -> Result<protocol::CodeModeToolKind, String> {
-    specs
-        .iter()
-        .find(|spec| spec.name() == tool_name)
+    spec.as_ref()
         .map(tool_kind_for_spec)
         .ok_or_else(|| format!("tool `{tool_name}` is not enabled in {PUBLIC_TOOL_NAME}"))
 }
 
 fn build_nested_tool_payload(
-    specs: &[ToolSpec],
+    spec: Option<ToolSpec>,
     tool_name: &str,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
-    let actual_kind = tool_kind_for_name(specs, tool_name)?;
+    let actual_kind = tool_kind_for_name(spec, tool_name)?;
     match actual_kind {
         protocol::CodeModeToolKind::Function => build_function_tool_payload(tool_name, input),
         protocol::CodeModeToolKind::Freeform => build_freeform_tool_payload(tool_name, input),

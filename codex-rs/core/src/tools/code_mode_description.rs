@@ -74,13 +74,39 @@ fn append_code_mode_sample(
     input_type: String,
     output_type: String,
 ) -> String {
-    let reference = code_mode_tool_reference(tool_name);
-    let local_name = normalize_code_mode_identifier(&reference.tool_key);
     let declaration = format!(
-        "import {{ {local_name} }} from \"{}\";\ndeclare function {local_name}({input_name}: {input_type}): Promise<{output_type}>;",
-        reference.module_path
+        "declare const tools: {{\n  {}\n}};",
+        render_code_mode_tool_declaration(tool_name, input_name, input_type, output_type)
     );
     format!("{description}\n\nCode mode declaration:\n```ts\n{declaration}\n```")
+}
+
+fn render_code_mode_tool_declaration(
+    tool_name: &str,
+    input_name: &str,
+    input_type: String,
+    output_type: String,
+) -> String {
+    let input_type = indent_multiline_type(&input_type, 2);
+    let output_type = indent_multiline_type(&output_type, 2);
+    let tool_name = normalize_code_mode_identifier(tool_name);
+    format!("{tool_name}({input_name}: {input_type}): Promise<{output_type}>;")
+}
+
+fn indent_multiline_type(type_name: &str, spaces: usize) -> String {
+    let indent = " ".repeat(spaces);
+    type_name
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            if index == 0 {
+                line.to_string()
+            } else {
+                format!("{indent}{line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(crate) fn normalize_code_mode_identifier(tool_key: &str) -> String {
