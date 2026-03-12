@@ -239,6 +239,7 @@ fn loads_skills_from_home_agents_dir_for_user_scope() -> anyhow::Result<()> {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
         }]
@@ -390,6 +391,7 @@ async fn loads_skill_dependencies_metadata_from_yaml() {
             }),
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
         }]
@@ -446,6 +448,7 @@ interface:
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(skill_path.as_path()),
             scope: SkillScope::User,
         }]
@@ -568,6 +571,7 @@ permissions:
             macos: None,
         })
     );
+    assert_eq!(outcome.skills[0].managed_network_override, None);
 }
 
 #[tokio::test]
@@ -596,6 +600,70 @@ permissions: {}
 }
 
 #[test]
+fn normalize_permissions_splits_managed_network_overrides() {
+    let (permission_profile, managed_network_override) =
+        normalize_permissions(Some(SkillPermissionProfile {
+            network: Some(SkillNetworkPermissions {
+                enabled: Some(true),
+                allowed_domains: Some(vec!["skill.example.com".to_string()]),
+                denied_domains: Some(vec!["blocked.skill.example.com".to_string()]),
+            }),
+            file_system: None,
+            macos: None,
+        }));
+
+    assert_eq!(
+        permission_profile,
+        Some(PermissionProfile {
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
+            }),
+            file_system: None,
+            macos: None,
+        })
+    );
+    assert_eq!(
+        managed_network_override,
+        Some(SkillManagedNetworkOverride {
+            allowed_domains: Some(vec!["skill.example.com".to_string()]),
+            denied_domains: Some(vec!["blocked.skill.example.com".to_string()]),
+        })
+    );
+}
+
+#[test]
+fn normalize_permissions_preserves_network_gate_separately_from_overrides() {
+    let (permission_profile, managed_network_override) =
+        normalize_permissions(Some(SkillPermissionProfile {
+            network: Some(SkillNetworkPermissions {
+                enabled: Some(false),
+                allowed_domains: Some(vec!["skill.example.com".to_string()]),
+                denied_domains: None,
+            }),
+            file_system: None,
+            macos: None,
+        }));
+
+    assert_eq!(
+        permission_profile,
+        Some(PermissionProfile {
+            network: Some(NetworkPermissions {
+                enabled: Some(false),
+            }),
+            file_system: None,
+            macos: None,
+        })
+    );
+    assert_eq!(
+        managed_network_override,
+        Some(SkillManagedNetworkOverride {
+            allowed_domains: Some(vec!["skill.example.com".to_string()]),
+            denied_domains: None,
+        })
+    );
+}
+
+#[test]
 fn skill_metadata_parses_macos_permissions_yaml() {
     let parsed = serde_yaml::from_str::<SkillMetadataFile>(
         r#"
@@ -613,7 +681,9 @@ permissions:
 
     assert_eq!(
         parsed.permissions,
-        Some(PermissionProfile {
+        Some(SkillPermissionProfile {
+            network: None,
+            file_system: None,
             macos: Some(MacOsSeatbeltProfileExtensions {
                 macos_preferences: MacOsPreferencesPermission::ReadWrite,
                 macos_automation: MacOsAutomationPermission::BundleIds(vec![
@@ -625,7 +695,6 @@ permissions:
                 macos_reminders: false,
                 macos_contacts: MacOsContactsPermission::None,
             }),
-            ..Default::default()
         })
     );
 }
@@ -643,7 +712,9 @@ permissions:
 
     assert_eq!(
         parsed.permissions,
-        Some(PermissionProfile {
+        Some(SkillPermissionProfile {
+            network: None,
+            file_system: None,
             macos: Some(MacOsSeatbeltProfileExtensions {
                 macos_preferences: MacOsPreferencesPermission::ReadOnly,
                 macos_automation: MacOsAutomationPermission::None,
@@ -653,7 +724,35 @@ permissions:
                 macos_reminders: true,
                 macos_contacts: MacOsContactsPermission::None,
             }),
-            ..Default::default()
+        })
+    );
+}
+
+#[test]
+fn skill_metadata_parses_network_domain_overrides_under_permissions() {
+    let parsed = serde_yaml::from_str::<SkillMetadataFile>(
+        r#"
+permissions:
+  network:
+    enabled: true
+    allowed_domains:
+      - "skill.example.com"
+    denied_domains:
+      - "blocked.skill.example.com"
+"#,
+    )
+    .expect("parse network skill metadata");
+
+    assert_eq!(
+        parsed.permissions,
+        Some(SkillPermissionProfile {
+            network: Some(SkillNetworkPermissions {
+                enabled: Some(true),
+                allowed_domains: Some(vec!["skill.example.com".to_string()]),
+                denied_domains: Some(vec!["blocked.skill.example.com".to_string()]),
+            }),
+            file_system: None,
+            macos: None,
         })
     );
 }
@@ -801,6 +900,7 @@ async fn accepts_icon_paths_under_assets_dir() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
         }]
@@ -842,6 +942,7 @@ async fn ignores_invalid_brand_color() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
         }]
@@ -896,6 +997,7 @@ async fn ignores_default_prompt_over_max_length() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
         }]
@@ -938,6 +1040,7 @@ async fn drops_interface_when_icons_are_invalid() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
         }]
@@ -983,6 +1086,7 @@ async fn loads_skills_via_symlinked_subdir_for_user_scope() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&shared_skill_path),
             scope: SkillScope::User,
         }]
@@ -1043,6 +1147,7 @@ async fn does_not_loop_on_symlink_cycle_for_user_scope() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
         }]
@@ -1080,6 +1185,7 @@ fn loads_skills_via_symlinked_subdir_for_admin_scope() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&shared_skill_path),
             scope: SkillScope::Admin,
         }]
@@ -1120,6 +1226,7 @@ async fn loads_skills_via_symlinked_subdir_for_repo_scope() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&linked_skill_path),
             scope: SkillScope::Repo,
         }]
@@ -1188,6 +1295,7 @@ async fn respects_max_scan_depth_for_user_scope() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&within_depth_path),
             scope: SkillScope::User,
         }]
@@ -1216,6 +1324,7 @@ async fn loads_valid_skill() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
         }]
@@ -1249,6 +1358,7 @@ async fn falls_back_to_directory_name_when_skill_name_is_missing() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
         }]
@@ -1291,6 +1401,7 @@ async fn namespaces_plugin_skills_using_plugin_name() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
         }]
@@ -1323,6 +1434,7 @@ async fn loads_short_description_from_metadata() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::User,
         }]
@@ -1436,6 +1548,7 @@ async fn loads_skills_from_repo_root() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::Repo,
         }]
@@ -1472,6 +1585,7 @@ async fn loads_skills_from_agents_dir_without_codex_dir() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::Repo,
         }]
@@ -1526,6 +1640,7 @@ async fn loads_skills_from_all_codex_dirs_under_project_root() {
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                managed_network_override: None,
                 path_to_skills_md: normalized(&nested_skill_path),
                 scope: SkillScope::Repo,
             },
@@ -1537,6 +1652,7 @@ async fn loads_skills_from_all_codex_dirs_under_project_root() {
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                managed_network_override: None,
                 path_to_skills_md: normalized(&root_skill_path),
                 scope: SkillScope::Repo,
             },
@@ -1577,6 +1693,7 @@ async fn loads_skills_from_codex_dir_when_not_git_repo() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::Repo,
         }]
@@ -1615,6 +1732,7 @@ async fn deduplicates_by_path_preferring_first_root() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::Repo,
         }]
@@ -1657,6 +1775,7 @@ async fn keeps_duplicate_names_from_repo_and_user() {
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                managed_network_override: None,
                 path_to_skills_md: normalized(&repo_skill_path),
                 scope: SkillScope::Repo,
             },
@@ -1668,6 +1787,7 @@ async fn keeps_duplicate_names_from_repo_and_user() {
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                managed_network_override: None,
                 path_to_skills_md: normalized(&user_skill_path),
                 scope: SkillScope::User,
             },
@@ -1732,6 +1852,7 @@ async fn keeps_duplicate_names_from_nested_codex_dirs() {
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                managed_network_override: None,
                 path_to_skills_md: first_path,
                 scope: SkillScope::Repo,
             },
@@ -1743,6 +1864,7 @@ async fn keeps_duplicate_names_from_nested_codex_dirs() {
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                managed_network_override: None,
                 path_to_skills_md: second_path,
                 scope: SkillScope::Repo,
             },
@@ -1815,6 +1937,7 @@ async fn loads_skills_when_cwd_is_file_in_repo() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::Repo,
         }]
@@ -1874,6 +1997,7 @@ async fn loads_skills_from_system_cache_when_present() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: normalized(&skill_path),
             scope: SkillScope::System,
         }]
