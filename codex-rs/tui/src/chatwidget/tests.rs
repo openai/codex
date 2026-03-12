@@ -1893,6 +1893,7 @@ async fn make_chatwidget_manual(
         retry_status_header: None,
         pending_status_indicator_restore: false,
         suppress_queue_autosend: false,
+        resume_queued_inputs_when_idle: false,
         thread_id: None,
         thread_name: None,
         forked_from: None,
@@ -8133,6 +8134,7 @@ async fn feedback_selection_popup_emits_serialized_slash_draft() {
         rx.try_recv(),
         Ok(AppEvent::HandleSlashCommandDraft(UserMessage { text, .. })) if text == "/feedback bug"
     );
+    assert_matches!(rx.try_recv(), Ok(AppEvent::BottomPaneViewCompleted));
 }
 
 #[tokio::test]
@@ -8147,6 +8149,7 @@ async fn skills_menu_emits_serialized_slash_drafts() {
         Ok(AppEvent::HandleSlashCommandDraft(UserMessage { text, .. }))
             if text == "/skills list"
     );
+    assert_matches!(rx.try_recv(), Ok(AppEvent::BottomPaneViewCompleted));
 
     chat.open_skills_menu();
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -8157,6 +8160,7 @@ async fn skills_menu_emits_serialized_slash_drafts() {
         Ok(AppEvent::HandleSlashCommandDraft(UserMessage { text, .. }))
             if text == "/skills manage"
     );
+    assert_matches!(rx.try_recv(), Ok(AppEvent::BottomPaneViewCompleted));
 }
 
 #[tokio::test]
@@ -11671,6 +11675,153 @@ async fn queued_bare_theme_command_restores_to_composer_instead_of_opening_popup
         !drain_insert_history(&mut rx).is_empty(),
         "expected replay failure to be surfaced to the user"
     );
+}
+
+#[tokio::test]
+async fn queued_theme_selection_resumes_followup_after_idle_resume() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.handle_codex_event(Event {
+        id: "configured".into(),
+        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: "test-model".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: PathBuf::from("/home/user/project"),
+            reasoning_effort: Some(ReasoningEffortConfig::default()),
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: None,
+        }),
+    });
+    chat.on_task_started();
+
+    chat.handle_serialized_slash_command(UserMessage::from("/theme ansi".to_string()));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("followup".to_string()));
+
+    chat.on_task_complete(None, false);
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["followup".to_string()]
+    );
+    assert!(chat.resume_queued_inputs_when_idle);
+    loop {
+        match rx.try_recv() {
+            Ok(AppEvent::SyntaxThemeSelected { name }) => {
+                assert_eq!(name, "ansi");
+                break;
+            }
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected AppEvent::SyntaxThemeSelected"),
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected AppEvent::SyntaxThemeSelected")
+            }
+        }
+    }
+    assert_no_submit_op(&mut op_rx);
+
+    chat.maybe_resume_queued_inputs_when_idle();
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "followup".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(!chat.resume_queued_inputs_when_idle);
+}
+
+#[tokio::test]
+async fn queued_followup_waits_for_popup_dismissal_before_idle_resume() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.handle_codex_event(Event {
+        id: "configured".into(),
+        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: "test-model".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: PathBuf::from("/home/user/project"),
+            reasoning_effort: Some(ReasoningEffortConfig::default()),
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: None,
+        }),
+    });
+    chat.queued_user_messages
+        .push_back(UserMessage::from("/theme ansi".to_string()));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("followup".to_string()));
+
+    chat.drain_queued_inputs_until_blocked();
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["followup".to_string()]
+    );
+    assert!(chat.resume_queued_inputs_when_idle);
+    loop {
+        match rx.try_recv() {
+            Ok(AppEvent::SyntaxThemeSelected { name }) => {
+                assert_eq!(name, "ansi");
+                break;
+            }
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected AppEvent::SyntaxThemeSelected"),
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected AppEvent::SyntaxThemeSelected")
+            }
+        }
+    }
+
+    chat.open_feedback_consent(crate::app_event::FeedbackCategory::Bug);
+    chat.maybe_resume_queued_inputs_when_idle();
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["followup".to_string()]
+    );
+    assert_no_submit_op(&mut op_rx);
+
+    let _ = chat
+        .bottom_pane
+        .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!chat.has_active_view());
+    assert_matches!(rx.try_recv(), Ok(AppEvent::BottomPaneViewCompleted));
+
+    chat.maybe_resume_queued_inputs_when_idle();
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "followup".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(!chat.resume_queued_inputs_when_idle);
 }
 
 #[tokio::test]

@@ -190,6 +190,10 @@ pub(crate) enum AppEvent {
     /// draft is queued and replayed later through the same path as queued composer input.
     HandleSlashCommandDraft(UserMessage),
 
+    /// Notify the app that an interactive bottom-pane view finished, so queued replay can resume
+    /// once the UI is idle again.
+    BottomPaneViewCompleted,
+
     /// Update the active collaboration mask in the running app and widget.
     UpdateCollaborationMode(CollaborationModeMask),
 

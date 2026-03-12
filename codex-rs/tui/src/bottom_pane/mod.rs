@@ -1008,6 +1008,7 @@ impl BottomPane {
     fn on_active_view_complete(&mut self) {
         self.resume_status_timer_after_modal();
         self.set_composer_input_enabled(true, None);
+        self.app_event_tx.send(AppEvent::BottomPaneViewCompleted);
     }
 
     fn pause_status_timer_for_modal(&mut self) {

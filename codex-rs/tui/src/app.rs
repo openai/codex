@@ -2405,6 +2405,13 @@ impl App {
                 ) {
                     waiting_for_initial_session_configured = false;
                 }
+                // Some replayed slash commands pause queue draining until their app-side updates
+                // or popup flows settle. Only resume once the app-event queue is fully drained so
+                // multi-event commands (for example approvals updates) cannot interleave later
+                // queued input.
+                if app_event_rx.is_empty() {
+                    app.chat_widget.maybe_resume_queued_inputs_when_idle();
+                }
                 match control {
                     AppRunControl::Continue => {}
                     AppRunControl::Exit(reason) => break Ok(reason),
@@ -2749,6 +2756,7 @@ impl App {
                 self.chat_widget.handle_serialized_slash_command(draft);
                 self.refresh_status_line();
             }
+            AppEvent::BottomPaneViewCompleted => {}
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
                 self.refresh_status_line();

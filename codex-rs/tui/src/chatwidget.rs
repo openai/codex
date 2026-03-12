@@ -720,6 +720,7 @@ pub(crate) struct ChatWidget {
     // Set when commentary output completes; once stream queues go idle we restore the status row.
     pending_status_indicator_restore: bool,
     suppress_queue_autosend: bool,
+    resume_queued_inputs_when_idle: bool,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
@@ -877,6 +878,7 @@ impl ThreadComposerState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum QueueReplayControl {
     Continue,
+    ResumeWhenIdle,
     Stop,
 }
 
@@ -3650,6 +3652,7 @@ impl ChatWidget {
             retry_status_header: None,
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
+            resume_queued_inputs_when_idle: false,
             thread_id: None,
             thread_name: None,
             forked_from: None,
@@ -3836,6 +3839,7 @@ impl ChatWidget {
             retry_status_header: None,
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
+            resume_queued_inputs_when_idle: false,
             thread_id: None,
             thread_name: None,
             forked_from: None,
@@ -4014,6 +4018,7 @@ impl ChatWidget {
             retry_status_header: None,
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
+            resume_queued_inputs_when_idle: false,
             thread_id: None,
             thread_name: None,
             forked_from: None,
@@ -4333,9 +4338,11 @@ impl ChatWidget {
     ///
     /// Live callers usually ignore the return value, but queued replay uses it to decide whether
     /// draining can continue after this command. `Continue` means the command only changed local
-    /// UI/config state. `Stop` means it submitted or queued work, changed session/navigation
-    /// state, or otherwise hit a boundary where queued draining must stop. Commands that require
-    /// interactive UI are resolved before queueing and should not open that UI during replay.
+    /// state synchronously inside `ChatWidget`. `ResumeWhenIdle` means queued replay should pause
+    /// until app-side work or popup interaction finishes. `Stop` means it submitted or queued
+    /// work, changed session/navigation state, or otherwise hit a boundary where queued draining
+    /// must stop entirely. Commands that require interactive UI are resolved before queueing and
+    /// should not open that UI during replay.
     fn dispatch_command(&mut self, cmd: SlashCommand) -> QueueReplayControl {
         if self.bottom_pane.is_task_running()
             && !cmd.available_during_task()
@@ -4942,7 +4949,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                     history_cell::new_info_event(format!("Permissions updated to {label}"), None),
                 )));
-                QueueReplayControl::Stop
+                QueueReplayControl::ResumeWhenIdle
             }
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 match ThreadId::from_string(&args_message.text) {
@@ -5012,7 +5019,7 @@ impl ChatWidget {
                 }
                 self.app_event_tx
                     .send(AppEvent::UpdateFeatureFlags { updates });
-                QueueReplayControl::Stop
+                QueueReplayControl::ResumeWhenIdle
             }
             SlashCommand::Fast => match args_message.text.to_ascii_lowercase().as_str() {
                 "on" => {
@@ -5056,7 +5063,7 @@ impl ChatWidget {
                 };
                 self.app_event_tx
                     .send(AppEvent::OpenFeedbackConsent { category });
-                QueueReplayControl::Stop
+                QueueReplayControl::ResumeWhenIdle
             }
             SlashCommand::Model => match Self::parse_model_selection_args(&args_message.text) {
                 Ok((model, effort, scope)) => {
@@ -5192,16 +5199,16 @@ impl ChatWidget {
                 };
                 self.app_event_tx
                     .send(AppEvent::PersistRealtimeAudioDeviceSelection { kind, name });
-                QueueReplayControl::Stop
+                QueueReplayControl::ResumeWhenIdle
             }
             SlashCommand::Skills => match args_message.text.trim().to_ascii_lowercase().as_str() {
                 "list" => {
                     self.open_skills_list();
-                    QueueReplayControl::Stop
+                    QueueReplayControl::ResumeWhenIdle
                 }
                 "manage" => {
                     self.app_event_tx.send(AppEvent::OpenManageSkillsPopup);
-                    QueueReplayControl::Stop
+                    QueueReplayControl::ResumeWhenIdle
                 }
                 _ => self.restore_invalid_inline_slash_command(
                     cmd,
@@ -5234,7 +5241,7 @@ impl ChatWidget {
                     }
                 };
                 self.app_event_tx.send(AppEvent::StatusLineSetup { items });
-                QueueReplayControl::Stop
+                QueueReplayControl::ResumeWhenIdle
             }
             SlashCommand::Theme => {
                 if crate::render::highlight::resolve_theme_by_name(
@@ -5252,7 +5259,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::SyntaxThemeSelected {
                     name: args_message.text.trim().to_string(),
                 });
-                QueueReplayControl::Stop
+                QueueReplayControl::ResumeWhenIdle
             }
             SlashCommand::New
             | SlashCommand::Fork
@@ -5574,10 +5581,23 @@ impl ChatWidget {
             {
                 return QueueReplayControl::Continue;
             }
-            return QueueReplayControl::Stop;
+            return replay_control;
         }
         let args_message = Self::slash_command_args_message_from_draft(draft, rest_offset);
         self.execute_slash_command_with_args(cmd, args_message)
+    }
+
+    pub(crate) fn maybe_resume_queued_inputs_when_idle(&mut self) {
+        if !self.resume_queued_inputs_when_idle
+            || self.suppress_queue_autosend
+            || self.bottom_pane.is_task_running()
+            || !self.bottom_pane.no_modal_or_popup_active()
+        {
+            return;
+        }
+
+        self.resume_queued_inputs_when_idle = false;
+        self.drain_queued_inputs_until_blocked();
     }
 
     fn slash_command_args_message_from_draft(
@@ -6638,6 +6658,7 @@ impl ChatWidget {
         if self.bottom_pane.is_task_running() {
             return;
         }
+        let mut resume_when_idle = false;
         while !self.bottom_pane.is_task_running() {
             let Some(queued_message) = self.queued_user_messages.pop_front() else {
                 break;
@@ -6648,12 +6669,19 @@ impl ChatWidget {
                 self.submit_user_message(queued_message);
                 QueueReplayControl::Stop
             };
-            if replay_control == QueueReplayControl::Stop
+            if replay_control == QueueReplayControl::Stop {
+                break;
+            }
+            if replay_control == QueueReplayControl::ResumeWhenIdle
                 || !self.bottom_pane.no_modal_or_popup_active()
             {
+                resume_when_idle = true;
                 break;
             }
         }
+        self.resume_queued_inputs_when_idle = resume_when_idle
+            && !self.bottom_pane.is_task_running()
+            && !self.queued_user_messages.is_empty();
         self.refresh_pending_input_preview();
     }
 
