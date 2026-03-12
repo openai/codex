@@ -10,19 +10,12 @@ Note that `codex-core` makes some assumptions about certain helper utilities bei
 
 Expects `/usr/bin/sandbox-exec` to be present.
 
-Legacy `SandboxPolicy` / `sandbox_mode` configs continue to behave the same on
-macOS. When those legacy configs are compiled into the split
-`FileSystemSandboxPolicy` / `NetworkSandboxPolicy` view, Seatbelt still
-preserves the legacy workspace-write defaults around `.git` and `.codex`.
-
 When using the workspace-write sandbox policy, the Seatbelt profile allows
 writes under the configured writable roots while keeping `.git` (directory or
 pointer file), the resolved `gitdir:` target, and `.codex` read-only.
 
-New `[permissions]` profiles are enforced through the split
-`FileSystemSandboxPolicy` and `NetworkSandboxPolicy` views. On macOS, Seatbelt
-enforces overlapping path rules with the most specific entry winning, so a
-broader writable root can still contain nested read-only or denied carveouts.
+Network access and filesystem read/write roots are controlled by
+`SandboxPolicy`. Seatbelt consumes the resolved policy and enforces it.
 
 Seatbelt also supports macOS permission-profile extensions layered on top of
 `SandboxPolicy`:
@@ -54,18 +47,6 @@ Seatbelt also supports macOS permission-profile extensions layered on top of
 ### Linux
 
 Expects the binary containing `codex-core` to run the equivalent of `codex sandbox linux` (legacy alias: `codex debug landlock`) when `arg0` is `codex-linux-sandbox`. See the `codex-arg0` crate for details.
-
-Legacy `SandboxPolicy` / `sandbox_mode` configs are still supported on Linux.
-They can continue to use the legacy Landlock path when the split filesystem
-policy is sandbox-equivalent to the legacy model after `cwd` resolution.
-
-Split filesystem policies that need direct `FileSystemSandboxPolicy`
-enforcement, such as read-only or denied carveouts under a broader writable
-root, automatically route through bubblewrap. The legacy Landlock path is used
-only when the split filesystem policy round-trips through the legacy
-`SandboxPolicy` model without changing semantics. That includes overlapping
-cases like `/repo = write`, `/repo/a = none`, `/repo/a/b = write`, where the
-more specific writable child must reopen under a denied parent.
 
 ### Windows
 

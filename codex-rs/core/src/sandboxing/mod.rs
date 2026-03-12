@@ -13,6 +13,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::execute_exec_request;
+use crate::exec::unsupported_windows_restricted_token_sandbox_reason;
 use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args_for_policies;
 use crate::protocol::SandboxPolicy;
@@ -64,7 +65,6 @@ pub struct CommandSpec {
 pub struct ExecRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
-    pub sandbox_policy_cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub expiration: ExecExpiration,
@@ -109,6 +109,8 @@ pub enum SandboxPreference {
 pub(crate) enum SandboxTransformError {
     #[error("missing codex-linux-sandbox executable path")]
     MissingLinuxSandboxExecutable,
+    #[error("{0}")]
+    UnsupportedWindowsRestrictedToken(String),
     #[cfg(not(target_os = "macos"))]
     #[error("seatbelt sandbox is only available on macOS")]
     SeatbeltUnavailable,
@@ -630,6 +632,17 @@ impl SandboxManager {
             } else {
                 (file_system_policy.clone(), network_policy)
             };
+        if let Some(reason) = unsupported_windows_restricted_token_sandbox_reason(
+            sandbox,
+            &effective_policy,
+            &effective_file_system_policy,
+            effective_network_policy,
+            sandbox_policy_cwd,
+        ) {
+            return Err(SandboxTransformError::UnsupportedWindowsRestrictedToken(
+                reason,
+            ));
+        }
         let mut env = spec.env;
         if !effective_network_policy.is_enabled() {
             env.insert(
@@ -701,7 +714,6 @@ impl SandboxManager {
         Ok(ExecRequest {
             command,
             cwd: spec.cwd,
-            sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
             env,
             network: network.cloned(),
             expiration: spec.expiration,
