@@ -12,7 +12,7 @@ pub enum CloudRequirementsLoadErrorCode {
     Timeout,
     Parse,
     RequestFailed,
-    TaskFailed,
+    Internal,
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -24,15 +24,7 @@ pub struct CloudRequirementsLoadError {
 }
 
 impl CloudRequirementsLoadError {
-    pub fn with_code(code: CloudRequirementsLoadErrorCode, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-            status_code: None,
-        }
-    }
-
-    pub fn with_status(
+    pub fn new(
         code: CloudRequirementsLoadErrorCode,
         status_code: Option<u16>,
         message: impl Into<String>,

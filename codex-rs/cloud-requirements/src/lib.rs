@@ -283,8 +283,9 @@ impl CloudRequirementsService {
                 emit_load_metric("startup", "error");
             })
             .map_err(|_| {
-                CloudRequirementsLoadError::with_code(
+                CloudRequirementsLoadError::new(
                     CloudRequirementsLoadErrorCode::Timeout,
+                    None,
                     format!(
                         "timed out waiting for cloud requirements after {}s",
                         self.timeout.as_secs()
@@ -410,7 +411,7 @@ impl CloudRequirementsService {
                                         attempt,
                                         status_code,
                                     );
-                                    return Err(CloudRequirementsLoadError::with_status(
+                                    return Err(CloudRequirementsLoadError::new(
                                         CloudRequirementsLoadErrorCode::Auth,
                                         status_code,
                                         CLOUD_REQUIREMENTS_AUTH_RECOVERY_FAILED_MESSAGE,
@@ -431,7 +432,7 @@ impl CloudRequirementsService {
                                     attempt,
                                     status_code,
                                 );
-                                return Err(CloudRequirementsLoadError::with_status(
+                                return Err(CloudRequirementsLoadError::new(
                                     CloudRequirementsLoadErrorCode::Auth,
                                     status_code,
                                     failed.message,
@@ -464,7 +465,7 @@ impl CloudRequirementsService {
                         attempt,
                         status_code,
                     );
-                    return Err(CloudRequirementsLoadError::with_status(
+                    return Err(CloudRequirementsLoadError::new(
                         CloudRequirementsLoadErrorCode::Auth,
                         status_code,
                         CLOUD_REQUIREMENTS_AUTH_RECOVERY_FAILED_MESSAGE,
@@ -484,8 +485,9 @@ impl CloudRequirementsService {
                             attempt,
                             last_status_code,
                         );
-                        return Err(CloudRequirementsLoadError::with_code(
+                        return Err(CloudRequirementsLoadError::new(
                             CloudRequirementsLoadErrorCode::Parse,
+                            None,
                             CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE,
                         ));
                     }
@@ -513,7 +515,7 @@ impl CloudRequirementsService {
             path = %self.cache_path.display(),
             "{CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE}"
         );
-        Err(CloudRequirementsLoadError::with_status(
+        Err(CloudRequirementsLoadError::new(
             CloudRequirementsLoadErrorCode::RequestFailed,
             last_status_code,
             CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE,
@@ -704,8 +706,9 @@ pub fn cloud_requirements_loader(
     CloudRequirementsLoader::new(async move {
         task.await.map_err(|err| {
             tracing::error!(error = %err, "Cloud requirements task failed");
-            CloudRequirementsLoadError::with_code(
-                CloudRequirementsLoadErrorCode::TaskFailed,
+            CloudRequirementsLoadError::new(
+                CloudRequirementsLoadErrorCode::Internal,
+                None,
                 format!("cloud requirements load failed: {err}"),
             )
         })?
