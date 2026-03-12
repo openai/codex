@@ -108,8 +108,12 @@ pub enum Feature {
     WebSearchCached,
     /// Legacy search-tool feature flag kept for backward compatibility.
     SearchTool,
-    /// Use the bubblewrap-based Linux sandbox pipeline.
+    /// Removed legacy Linux bubblewrap opt-in flag retained as a no-op so old
+    /// wrappers and config can still parse it.
     UseLinuxSandboxBwrap,
+    /// Use the legacy Landlock Linux sandbox fallback instead of the default
+    /// bubblewrap pipeline.
+    UseLegacyLandlock,
     /// Allow the model to request approval and propose exec rules.
     RequestRule,
     /// Enable Windows sandbox (restricted token) on Windows.
@@ -142,6 +146,8 @@ pub enum Feature {
     SpawnCsv,
     /// Enable apps.
     Apps,
+    /// Enable discoverable tool suggestions for apps.
+    ToolSuggest,
     /// Enable plugins.
     Plugins,
     /// Allow the model to invoke the built-in image generation tool.
@@ -280,6 +286,10 @@ impl Features {
 
     pub(crate) fn apps_enabled_for_auth(&self, auth: Option<&CodexAuth>) -> bool {
         self.enabled(Feature::Apps) && auth.is_some_and(CodexAuth::is_chatgpt_auth)
+    }
+
+    pub fn use_legacy_landlock(&self) -> bool {
+        self.enabled(Feature::UseLegacyLandlock)
     }
 
     pub fn enable(&mut self, f: Feature) -> &mut Self {
@@ -636,14 +646,13 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::UseLinuxSandboxBwrap,
         key: "use_linux_sandbox_bwrap",
-        #[cfg(target_os = "linux")]
-        stage: Stage::Experimental {
-            name: "Bubblewrap sandbox",
-            menu_description: "Try the new linux sandbox based on bubblewrap.",
-            announcement: "NEW: Linux bubblewrap sandbox offers stronger filesystem and network controls than Landlock alone, including keeping .git and .codex read-only inside writable workspaces. Enable it in /experimental and restart Codex to try it.",
-        },
-        #[cfg(not(target_os = "linux"))]
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::UseLegacyLandlock,
+        key: "use_legacy_landlock",
+        stage: Stage::Stable,
         default_enabled: false,
     },
     FeatureSpec {
@@ -700,7 +709,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::SpawnCsv,
-        key: "spawn_csv",
+        key: "enable_fanout",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -712,6 +721,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Use a connected ChatGPT App using \"$\". Install Apps via /apps command. Restart Codex after enabling.",
             announcement: "NEW: Use ChatGPT Apps (Connectors) in Codex via $ mentions. Enable in /experimental and restart Codex!",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ToolSuggest,
+        key: "tool_suggest",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -892,164 +907,5 @@ pub fn maybe_push_unstable_features_warning(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn under_development_features_are_disabled_by_default() {
-        for spec in FEATURES {
-            if matches!(spec.stage, Stage::UnderDevelopment) {
-                assert_eq!(
-                    spec.default_enabled, false,
-                    "feature `{}` is under development and must be disabled by default",
-                    spec.key
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn default_enabled_features_are_stable() {
-        for spec in FEATURES {
-            if spec.default_enabled {
-                assert!(
-                    matches!(spec.stage, Stage::Stable | Stage::Removed),
-                    "feature `{}` is enabled by default but is not stable/removed ({:?})",
-                    spec.key,
-                    spec.stage
-                );
-            }
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn use_linux_sandbox_bwrap_is_experimental_on_linux() {
-        assert!(matches!(
-            Feature::UseLinuxSandboxBwrap.stage(),
-            Stage::Experimental { .. }
-        ));
-        assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn use_linux_sandbox_bwrap_is_under_development_off_linux() {
-        assert_eq!(
-            Feature::UseLinuxSandboxBwrap.stage(),
-            Stage::UnderDevelopment
-        );
-        assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
-    }
-
-    #[test]
-    fn js_repl_is_experimental_and_user_toggleable() {
-        let spec = Feature::JsRepl.info();
-        let stage = spec.stage;
-        let expected_node_version = include_str!("../../node-version.txt").trim_end();
-
-        assert!(matches!(stage, Stage::Experimental { .. }));
-        assert_eq!(stage.experimental_menu_name(), Some("JavaScript REPL"));
-        assert_eq!(
-            stage.experimental_menu_description().map(str::to_owned),
-            Some(format!(
-                "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities. Requires Node >= v{expected_node_version} installed."
-            ))
-        );
-        assert_eq!(Feature::JsRepl.default_enabled(), false);
-    }
-
-    #[test]
-    fn guardian_approval_is_experimental_and_user_toggleable() {
-        let spec = Feature::GuardianApproval.info();
-        let stage = spec.stage;
-
-        assert!(matches!(stage, Stage::Experimental { .. }));
-        assert_eq!(
-            stage.experimental_menu_name(),
-            Some("Automatic approval review")
-        );
-        assert_eq!(
-            stage.experimental_menu_description().map(str::to_owned),
-            Some(
-                "Dispatch `on-request` approval prompts (for e.g. sandbox escapes or blocked network access) to a carefully-prompted security reviewer subagent rather than blocking the agent on your input.".to_string()
-            )
-        );
-        assert_eq!(stage.experimental_announcement(), None);
-        assert_eq!(Feature::GuardianApproval.default_enabled(), false);
-    }
-
-    #[test]
-    fn request_permissions_is_under_development() {
-        assert_eq!(Feature::RequestPermissions.stage(), Stage::UnderDevelopment);
-        assert_eq!(Feature::RequestPermissions.default_enabled(), false);
-    }
-
-    #[test]
-    fn request_permissions_tool_is_under_development() {
-        assert_eq!(
-            Feature::RequestPermissionsTool.stage(),
-            Stage::UnderDevelopment
-        );
-        assert_eq!(Feature::RequestPermissionsTool.default_enabled(), false);
-    }
-
-    #[test]
-    fn image_generation_is_under_development() {
-        assert_eq!(Feature::ImageGeneration.stage(), Stage::UnderDevelopment);
-        assert_eq!(Feature::ImageGeneration.default_enabled(), false);
-    }
-
-    #[test]
-    fn image_detail_original_feature_is_under_development() {
-        assert_eq!(
-            Feature::ImageDetailOriginal.stage(),
-            Stage::UnderDevelopment
-        );
-        assert_eq!(Feature::ImageDetailOriginal.default_enabled(), false);
-    }
-
-    #[test]
-    fn collab_is_legacy_alias_for_multi_agent() {
-        assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
-        assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
-    }
-
-    #[test]
-    fn spawn_csv_is_under_development() {
-        assert_eq!(Feature::SpawnCsv.stage(), Stage::UnderDevelopment);
-        assert_eq!(Feature::SpawnCsv.default_enabled(), false);
-    }
-
-    #[test]
-    fn spawn_csv_normalization_enables_multi_agent_one_way() {
-        let mut spawn_csv_features = Features::with_defaults();
-        spawn_csv_features.enable(Feature::SpawnCsv);
-        spawn_csv_features.normalize_dependencies();
-        assert_eq!(spawn_csv_features.enabled(Feature::SpawnCsv), true);
-        assert_eq!(spawn_csv_features.enabled(Feature::Collab), true);
-
-        let mut collab_features = Features::with_defaults();
-        collab_features.enable(Feature::Collab);
-        collab_features.normalize_dependencies();
-        assert_eq!(collab_features.enabled(Feature::Collab), true);
-        assert_eq!(collab_features.enabled(Feature::SpawnCsv), false);
-    }
-
-    #[test]
-    fn apps_require_feature_flag_and_chatgpt_auth() {
-        let mut features = Features::with_defaults();
-        assert!(!features.apps_enabled_for_auth(None));
-
-        features.enable(Feature::Apps);
-        assert!(!features.apps_enabled_for_auth(None));
-
-        let api_key_auth = CodexAuth::from_api_key("test-api-key");
-        assert!(!features.apps_enabled_for_auth(Some(&api_key_auth)));
-
-        let chatgpt_auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-        assert!(features.apps_enabled_for_auth(Some(&chatgpt_auth)));
-    }
-}
+#[path = "features_tests.rs"]
+mod tests;

@@ -1,7 +1,6 @@
 pub(crate) mod agent_jobs;
 pub mod apply_patch;
 mod artifacts;
-mod code_mode;
 mod dynamic;
 mod grep_files;
 mod js_repl;
@@ -16,6 +15,7 @@ mod request_user_input;
 mod shell;
 mod test_sync;
 mod tool_search;
+mod tool_suggest;
 pub(crate) mod unified_exec;
 mod view_image;
 
@@ -31,9 +31,10 @@ use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::merge_permission_profiles;
 use crate::sandboxing::normalize_additional_permissions;
+pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
+pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
 pub use apply_patch::ApplyPatchHandler;
 pub use artifacts::ArtifactsHandler;
-pub use code_mode::CodeModeHandler;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use dynamic::DynamicToolHandler;
@@ -56,6 +57,8 @@ pub use test_sync::TestSyncHandler;
 pub(crate) use tool_search::DEFAULT_LIMIT as TOOL_SEARCH_DEFAULT_LIMIT;
 pub(crate) use tool_search::TOOL_SEARCH_TOOL_NAME;
 pub use tool_search::ToolSearchHandler;
+pub(crate) use tool_suggest::TOOL_SUGGEST_TOOL_NAME;
+pub use tool_suggest::ToolSuggestHandler;
 pub use unified_exec::UnifiedExecHandler;
 pub use view_image::ViewImageHandler;
 

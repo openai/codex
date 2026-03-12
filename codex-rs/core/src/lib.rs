@@ -47,6 +47,7 @@ pub mod instructions;
 pub mod landlock;
 pub mod mcp;
 mod mcp_connection_manager;
+mod mcp_tool_approval_templates;
 pub mod models_manager;
 mod network_policy_decision;
 pub mod network_proxy_loader;

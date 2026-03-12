@@ -71,6 +71,22 @@ const REJECT_RULES_APPROVAL_REASON: &str =
 const REJECT_SKILL_APPROVAL_REASON: &str =
     "approval required by skill, but AskForApproval::Reject.skill_approval is set";
 
+fn approval_sandbox_permissions(
+    sandbox_permissions: SandboxPermissions,
+    additional_permissions_preapproved: bool,
+) -> SandboxPermissions {
+    if additional_permissions_preapproved
+        && matches!(
+            sandbox_permissions,
+            SandboxPermissions::WithAdditionalPermissions
+        )
+    {
+        SandboxPermissions::UseDefault
+    } else {
+        sandbox_permissions
+    }
+}
+
 pub(super) async fn try_run_zsh_fork(
     req: &ShellRequest,
     attempt: &SandboxAttempt<'_>,
@@ -146,7 +162,7 @@ pub(super) async fn try_run_zsh_fork(
             .macos_seatbelt_profile_extensions
             .clone(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
-        use_linux_sandbox_bwrap: ctx.turn.features.enabled(Feature::UseLinuxSandboxBwrap),
+        use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
     let main_execve_wrapper_exe = ctx
         .session
@@ -170,6 +186,10 @@ pub(super) async fn try_run_zsh_fork(
     // escalation server.
     let stopwatch = Stopwatch::new(effective_timeout);
     let cancel_token = stopwatch.cancellation_token();
+    let approval_sandbox_permissions = approval_sandbox_permissions(
+        req.sandbox_permissions,
+        req.additional_permissions_preapproved,
+    );
     let escalation_policy = CoreShellActionProvider {
         policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
@@ -181,6 +201,7 @@ pub(super) async fn try_run_zsh_fork(
         file_system_sandbox_policy: command_executor.file_system_sandbox_policy.clone(),
         network_sandbox_policy: command_executor.network_sandbox_policy,
         sandbox_permissions: req.sandbox_permissions,
+        approval_sandbox_permissions,
         prompt_permissions: req.additional_permissions.clone(),
         stopwatch: stopwatch.clone(),
     };
@@ -258,7 +279,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
             .macos_seatbelt_profile_extensions
             .clone(),
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
-        use_linux_sandbox_bwrap: ctx.turn.features.enabled(Feature::UseLinuxSandboxBwrap),
+        use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
     let main_execve_wrapper_exe = ctx
         .session
@@ -281,6 +302,10 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
         network_sandbox_policy: exec_request.network_sandbox_policy,
         sandbox_permissions: req.sandbox_permissions,
+        approval_sandbox_permissions: approval_sandbox_permissions(
+            req.sandbox_permissions,
+            req.additional_permissions_preapproved,
+        ),
         prompt_permissions: req.additional_permissions.clone(),
         stopwatch: Stopwatch::unlimited(),
     };
@@ -312,6 +337,7 @@ struct CoreShellActionProvider {
     file_system_sandbox_policy: FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
     sandbox_permissions: SandboxPermissions,
+    approval_sandbox_permissions: SandboxPermissions,
     prompt_permissions: Option<PermissionProfile>,
     stopwatch: Stopwatch,
 }
@@ -692,10 +718,14 @@ impl EscalationPolicy for CoreShellActionProvider {
                 &policy,
                 program,
                 argv,
-                self.approval_policy,
-                &self.sandbox_policy,
-                self.sandbox_permissions,
-                ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
+                InterceptedExecPolicyContext {
+                    approval_policy: self.approval_policy,
+                    sandbox_policy: &self.sandbox_policy,
+                    file_system_sandbox_policy: &self.file_system_sandbox_policy,
+                    sandbox_permissions: self.approval_sandbox_permissions,
+                    enable_shell_wrapper_parsing:
+                        ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
+                },
             )
         };
         // When true, means the Evaluation was due to *.rules, not the
@@ -744,15 +774,19 @@ fn evaluate_intercepted_exec_policy(
     policy: &Policy,
     program: &AbsolutePathBuf,
     argv: &[String],
-    approval_policy: AskForApproval,
-    sandbox_policy: &SandboxPolicy,
-    sandbox_permissions: SandboxPermissions,
-    enable_intercepted_exec_policy_shell_wrapper_parsing: bool,
+    context: InterceptedExecPolicyContext<'_>,
 ) -> Evaluation {
+    let InterceptedExecPolicyContext {
+        approval_policy,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        sandbox_permissions,
+        enable_shell_wrapper_parsing,
+    } = context;
     let CandidateCommands {
         commands,
         used_complex_parsing,
-    } = if enable_intercepted_exec_policy_shell_wrapper_parsing {
+    } = if enable_shell_wrapper_parsing {
         // In this codepath, the first argument in `commands` could be a bare
         // name like `find` instead of an absolute path like `/usr/bin/find`.
         // It could also be a shell built-in like `echo`.
@@ -770,6 +804,7 @@ fn evaluate_intercepted_exec_policy(
         crate::exec_policy::render_decision_for_unmatched_command(
             approval_policy,
             sandbox_policy,
+            file_system_sandbox_policy,
             cmd,
             sandbox_permissions,
             used_complex_parsing,
@@ -783,6 +818,15 @@ fn evaluate_intercepted_exec_policy(
             resolve_host_executables: true,
         },
     )
+}
+
+#[derive(Clone, Copy)]
+struct InterceptedExecPolicyContext<'a> {
+    approval_policy: AskForApproval,
+    sandbox_policy: &'a SandboxPolicy,
+    file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
+    sandbox_permissions: SandboxPermissions,
+    enable_shell_wrapper_parsing: bool,
 }
 
 struct CandidateCommands {
@@ -837,7 +881,7 @@ struct CoreShellCommandExecutor {
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
     codex_linux_sandbox_exe: Option<PathBuf>,
-    use_linux_sandbox_bwrap: bool,
+    use_legacy_landlock: bool,
 }
 
 struct PrepareSandboxedExecParams<'a> {
@@ -1034,7 +1078,7 @@ impl CoreShellCommandExecutor {
                 #[cfg(target_os = "macos")]
                 macos_seatbelt_profile_extensions,
                 codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_ref(),
-                use_linux_sandbox_bwrap: self.use_linux_sandbox_bwrap,
+                use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
             })?;
         if let Some(network) = exec_request.network.as_ref() {

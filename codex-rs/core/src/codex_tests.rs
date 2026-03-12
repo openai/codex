@@ -165,9 +165,12 @@ fn default_image_save_developer_message_text() -> String {
 fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
     let router = Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
-        None,
-        None,
-        turn_context.dynamic_tools.as_slice(),
+        crate::tools::router::ToolRouterParams {
+            mcp_tools: None,
+            app_tools: None,
+            discoverable_tools: None,
+            dynamic_tools: turn_context.dynamic_tools.as_slice(),
+        },
     ));
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     ToolCallRuntime::new(router, session, turn_context, tracker)
@@ -2162,7 +2165,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
         ),
-        code_mode_store: Default::default(),
+        code_mode_service: crate::tools::code_mode::CodeModeService::new(
+            config.js_repl_node_path.clone(),
+        ),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -2362,6 +2367,7 @@ async fn submit_with_id_captures_current_span_trace_context() {
         rx_event,
         agent_status,
         session: Arc::new(session),
+        session_loop_termination: completed_session_loop_termination(),
     };
 
     init_test_tracing();
@@ -2589,6 +2595,81 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
     );
 }
 
+#[tokio::test]
+async fn shutdown_and_wait_allows_multiple_waiters() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let (tx_sub, rx_sub) = async_channel::bounded(4);
+    let (_tx_event, rx_event) = async_channel::unbounded();
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let session_loop_handle = tokio::spawn(async move {
+        let shutdown: Submission = rx_sub.recv().await.expect("shutdown submission");
+        assert_eq!(shutdown.op, Op::Shutdown);
+        tokio::time::sleep(StdDuration::from_millis(50)).await;
+    });
+    let codex = Arc::new(Codex {
+        tx_sub,
+        rx_event,
+        agent_status,
+        session: Arc::new(session),
+        session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
+    });
+
+    let waiter_1 = {
+        let codex = Arc::clone(&codex);
+        tokio::spawn(async move { codex.shutdown_and_wait().await })
+    };
+    let waiter_2 = {
+        let codex = Arc::clone(&codex);
+        tokio::spawn(async move { codex.shutdown_and_wait().await })
+    };
+
+    waiter_1
+        .await
+        .expect("first shutdown waiter join")
+        .expect("first shutdown waiter");
+    waiter_2
+        .await
+        .expect("second shutdown waiter join")
+        .expect("second shutdown waiter");
+}
+
+#[tokio::test]
+async fn shutdown_and_wait_waits_when_shutdown_is_already_in_progress() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let (tx_sub, rx_sub) = async_channel::bounded(4);
+    drop(rx_sub);
+    let (_tx_event, rx_event) = async_channel::unbounded();
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (shutdown_complete_tx, shutdown_complete_rx) = tokio::sync::oneshot::channel();
+    let session_loop_handle = tokio::spawn(async move {
+        let _ = shutdown_complete_rx.await;
+    });
+    let codex = Arc::new(Codex {
+        tx_sub,
+        rx_event,
+        agent_status,
+        session: Arc::new(session),
+        session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
+    });
+
+    let waiter = {
+        let codex = Arc::clone(&codex);
+        tokio::spawn(async move { codex.shutdown_and_wait().await })
+    };
+
+    tokio::time::sleep(StdDuration::from_millis(10)).await;
+    assert!(!waiter.is_finished());
+
+    shutdown_complete_tx
+        .send(())
+        .expect("session loop should still be waiting to terminate");
+
+    waiter
+        .await
+        .expect("shutdown waiter join")
+        .expect("shutdown waiter");
+}
+
 pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     dynamic_tools: Vec<DynamicToolSpec>,
 ) -> (
@@ -2723,7 +2804,9 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
         ),
-        code_mode_store: Default::default(),
+        code_mode_service: crate::tools::code_mode::CodeModeService::new(
+            config.js_repl_node_path.clone(),
+        ),
     };
     let js_repl = Arc::new(JsReplHandle::with_node_path(
         config.js_repl_node_path.clone(),
@@ -3878,14 +3961,17 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
     let app_tools = Some(tools.clone());
     let router = ToolRouter::from_config(
         &turn_context.tools_config,
-        Some(
-            tools
-                .into_iter()
-                .map(|(name, tool)| (name, tool.tool))
-                .collect(),
-        ),
-        app_tools,
-        turn_context.dynamic_tools.as_slice(),
+        crate::tools::router::ToolRouterParams {
+            mcp_tools: Some(
+                tools
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect(),
+            ),
+            app_tools,
+            discoverable_tools: None,
+            dynamic_tools: turn_context.dynamic_tools.as_slice(),
+        },
     );
     let item = ResponseItem::CustomToolCall {
         id: None,

@@ -468,6 +468,14 @@ pub async fn run_main_with_transport(
     if let Some(warning) = project_config_warning(&config) {
         config_warnings.push(warning);
     }
+    for warning in &config.startup_warnings {
+        config_warnings.push(ConfigWarningNotification {
+            summary: warning.clone(),
+            details: None,
+            path: None,
+            range: None,
+        });
+    }
 
     let feedback = CodexFeedback::new();
 
@@ -809,6 +817,10 @@ pub async fn run_main_with_transport(
                 }
             }
 
+            if !shutdown_state.forced() {
+                processor.drain_background_tasks().await;
+                processor.shutdown_threads().await;
+            }
             info!("processor task exited (channel closed)");
         }
     });

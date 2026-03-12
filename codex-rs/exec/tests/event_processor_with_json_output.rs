@@ -579,6 +579,8 @@ fn collab_spawn_begin_and_end_emit_item_events() {
             new_agent_nickname: None,
             new_agent_role: None,
             prompt: prompt.clone(),
+            model: "gpt-5".to_string(),
+            reasoning_effort: ReasoningEffortConfig::default(),
             status: AgentStatus::Running,
         }),
     );

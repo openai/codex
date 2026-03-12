@@ -157,13 +157,13 @@ Example with notification opt-out:
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
-- `plugin/list` — list discovered plugin marketplaces and plugin state, including marketplace install/auth policy metadata. `interface.category` uses the marketplace category when present; otherwise it falls back to the plugin manifest category. Pass `forceRemoteSync: true` to refresh curated plugin state before listing (**under development; do not call from production clients yet**).
+- `plugin/list` — list discovered plugin marketplaces and plugin state, including effective marketplace install/auth policy metadata. `interface.category` uses the marketplace category when present; otherwise it falls back to the plugin manifest category. Pass `forceRemoteSync: true` to refresh curated plugin state before listing (**under development; do not call from production clients yet**).
 - `skills/changed` — notification emitted when watched local skill files change.
 - `skills/remote/list` — list public remote skills (**under development; do not call from production clients yet**).
 - `skills/remote/export` — download a remote skill by `hazelnutId` into `skills` under `codex_home` (**under development; do not call from production clients yet**).
 - `app/list` — list available apps.
 - `skills/config/write` — write user-level skill config by path.
-- `plugin/install` — install a plugin from a discovered marketplace entry, rejecting marketplace entries marked unavailable for install, and return the plugin auth policy plus any apps that still need auth (**under development; do not call from production clients yet**).
+- `plugin/install` — install a plugin from a discovered marketplace entry, rejecting marketplace entries marked unavailable for install, and return the effective plugin auth policy plus any apps that still need auth (**under development; do not call from production clients yet**).
 - `plugin/uninstall` — uninstall a plugin by id by removing its cached files and clearing its user-level config entry (**under development; do not call from production clients yet**).
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
 - `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).

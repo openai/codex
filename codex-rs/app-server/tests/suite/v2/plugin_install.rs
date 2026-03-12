@@ -191,7 +191,7 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
         "sample-plugin",
         "./sample-plugin",
         None,
-        Some("ON_INSTALL"),
+        None,
     )?;
     write_plugin_source(repo_root.path(), "sample-plugin", &["alpha", "beta"])?;
     let marketplace_path =
@@ -217,7 +217,7 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
     assert_eq!(
         response,
         PluginInstallResponse {
-            auth_policy: Some(PluginAuthPolicy::OnInstall),
+            auth_policy: PluginAuthPolicy::OnInstall,
             apps_needing_auth: vec![AppSummary {
                 id: "alpha".to_string(),
                 name: "Alpha".to_string(),
@@ -299,7 +299,7 @@ async fn plugin_install_filters_disallowed_apps_needing_auth() -> Result<()> {
     assert_eq!(
         response,
         PluginInstallResponse {
-            auth_policy: Some(PluginAuthPolicy::OnUse),
+            auth_policy: PluginAuthPolicy::OnUse,
             apps_needing_auth: vec![AppSummary {
                 id: "alpha".to_string(),
                 name: "Alpha".to_string(),
