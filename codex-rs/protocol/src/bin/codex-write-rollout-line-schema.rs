@@ -43,9 +43,6 @@ fn main() -> io::Result<()> {
 
 fn rollout_line_schema_json() -> io::Result<Vec<u8>> {
     let schema = SchemaSettings::draft07()
-        .with(|settings| {
-            settings.option_add_null_type = false;
-        })
         .into_generator()
         .into_root_schema_for::<RolloutLine>();
     let value = serde_json::to_value(schema).map_err(io::Error::other)?;
