@@ -1394,9 +1394,7 @@ mod tests {
                 access: FileSystemAccessMode::Read,
             },
             FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: denied_path.clone(),
-                },
+                path: FileSystemPath::Path { path: denied_path },
                 access: FileSystemAccessMode::None,
             },
         ]);
