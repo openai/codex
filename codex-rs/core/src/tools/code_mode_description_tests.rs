@@ -1,5 +1,5 @@
-use super::render_json_schema_to_typescript;
 use super::append_code_mode_sample;
+use super::render_json_schema_to_typescript;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
