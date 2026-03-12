@@ -2,7 +2,10 @@
 
 Suggests a discoverable connector or plugin when the user clearly wants a capability that is not currently available in the active `tools` list.
 
-Use this ONLY after `search_tool_bm25` fails to find a good match and the user's request strongly matches one of the discoverable tools listed below.
+Use this ONLY when:
+- There's no available tool to handle the user's request
+- And tool_search fails to find a good match
+- AND the user's request strongly matches one of the discoverable tools listed below.
 
 Tool suggestions should only use the discoverable tools listed here. DO NOT explore or recommend tools that are not on this list.
 
