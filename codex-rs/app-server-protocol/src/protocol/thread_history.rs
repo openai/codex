@@ -67,6 +67,10 @@ use uuid::Uuid;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
 #[cfg(test)]
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
+#[cfg(test)]
+use codex_protocol::request_user_input::RequestUserInputQuestion;
+
+const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_approval_";
 
 /// Convert persisted [`RolloutItem`] entries into a sequence of [`Turn`] values.
 ///
@@ -599,6 +603,13 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_request_user_input(&mut self, payload: &RequestUserInputEvent) {
+        if !payload.questions.iter().any(|question| {
+            question
+                .id
+                .starts_with(MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX)
+        }) {
+            return;
+        }
         let turn_id = (!payload.turn_id.is_empty()).then_some(payload.turn_id.as_str());
         self.update_mcp_tool_call_approval(
             turn_id,
@@ -2528,7 +2539,14 @@ mod tests {
             EventMsg::RequestUserInput(RequestUserInputEvent {
                 call_id: "mcp-1".into(),
                 turn_id: String::new(),
-                questions: Vec::new(),
+                questions: vec![RequestUserInputQuestion {
+                    id: format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}mcp-1"),
+                    header: "Approve app tool call?".into(),
+                    question: "Run tool?".into(),
+                    is_other: false,
+                    is_secret: false,
+                    options: None,
+                }],
             }),
         ];
 
@@ -2551,6 +2569,60 @@ mod tests {
                 error: None,
                 duration_ms: None,
                 approval: Some(pending_manual_approval_state()),
+            }
+        );
+    }
+
+    #[test]
+    fn ignores_non_approval_request_user_input_for_mcp_call() {
+        let invocation = McpInvocation {
+            server: "docs".into(),
+            tool: "lookup".into(),
+            arguments: Some(serde_json::json!({"id":"123"})),
+        };
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
+                call_id: "mcp-1".into(),
+                invocation,
+            }),
+            EventMsg::RequestUserInput(RequestUserInputEvent {
+                call_id: "mcp-1".into(),
+                turn_id: String::new(),
+                questions: vec![RequestUserInputQuestion {
+                    id: "other_prompt".into(),
+                    header: "Unrelated question".into(),
+                    question: "Continue?".into(),
+                    is_other: false,
+                    is_secret: false,
+                    options: None,
+                }],
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0].items[0],
+            ThreadItem::McpToolCall {
+                id: "mcp-1".into(),
+                server: "docs".into(),
+                tool: "lookup".into(),
+                status: McpToolCallStatus::InProgress,
+                arguments: serde_json::json!({"id":"123"}),
+                result: None,
+                error: None,
+                duration_ms: None,
+                approval: None,
             }
         );
     }
