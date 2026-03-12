@@ -44,6 +44,14 @@ fn discoverable_connector(id: &str, name: &str, description: &str) -> Discoverab
     }))
 }
 
+fn search_capable_model_info() -> ModelInfo {
+    let config = test_config();
+    let mut model_info =
+        ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    model_info.supports_search_tool = true;
+    model_info
+}
+
 #[test]
 fn mcp_tool_to_openai_tool_inserts_empty_properties() {
     let mut schema = rmcp::model::JsonObject::new();
@@ -1582,8 +1590,7 @@ fn test_build_specs_mcp_tools_sorted_by_name() {
 
 #[test]
 fn search_tool_description_includes_only_codex_apps_connector_names() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
     let available_models = Vec::new();
@@ -1659,9 +1666,8 @@ fn search_tool_description_includes_only_codex_apps_connector_names() {
 }
 
 #[test]
-fn search_tool_requires_apps_feature_flag_only() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+fn search_tool_requires_model_capability_only() {
+    let model_info = search_capable_model_info();
     let app_tools = Some(HashMap::from([(
         "mcp__codex_apps__calendar_create_event".to_string(),
         ToolInfo {
@@ -1683,7 +1689,10 @@ fn search_tool_requires_apps_feature_flag_only() {
     let features = Features::with_defaults();
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
+        model_info: &ModelInfo {
+            supports_search_tool: false,
+            ..model_info.clone()
+        },
         available_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
@@ -1693,8 +1702,6 @@ fn search_tool_requires_apps_feature_flag_only() {
     });
     let (tools, _) = build_specs(&tools_config, None, app_tools.clone(), &[]).build();
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::Apps);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -1711,8 +1718,7 @@ fn search_tool_requires_apps_feature_flag_only() {
 
 #[test]
 fn tool_suggest_is_not_registered_without_feature_flag() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
     let available_models = Vec::new();
@@ -1747,8 +1753,7 @@ fn tool_suggest_is_not_registered_without_feature_flag() {
 
 #[test]
 fn search_tool_description_handles_no_enabled_apps() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
     let available_models = Vec::new();
@@ -1774,8 +1779,7 @@ fn search_tool_description_handles_no_enabled_apps() {
 
 #[test]
 fn search_tool_registers_namespaced_app_tool_aliases() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
     let available_models = Vec::new();
@@ -1840,8 +1844,7 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
 
 #[test]
 fn tool_suggest_description_lists_discoverable_tools() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
     features.enable(Feature::ToolSuggest);
