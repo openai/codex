@@ -362,6 +362,12 @@ impl Features {
                         Feature::WebSearchCached,
                     );
                 }
+                // Bubblewrap used to be opt-in; the replacement flag opts back into legacy Landlock.
+                "use_linux_sandbox_bwrap" => {
+                    self.record_legacy_usage_force(k.as_str(), Feature::UseLegacyLandlock);
+                    self.set_enabled(Feature::UseLegacyLandlock, !*v);
+                    continue;
+                }
                 _ => {}
             }
             match feature_for_key(k) {
@@ -902,6 +908,7 @@ mod tests {
     use super::*;
 
     use pretty_assertions::assert_eq;
+    use std::collections::BTreeMap;
 
     #[test]
     fn under_development_features_are_disabled_by_default() {
@@ -934,6 +941,31 @@ mod tests {
     fn use_legacy_landlock_is_stable_and_disabled_by_default() {
         assert_eq!(Feature::UseLegacyLandlock.stage(), Stage::Stable);
         assert_eq!(Feature::UseLegacyLandlock.default_enabled(), false);
+    }
+
+    #[test]
+    fn legacy_use_linux_sandbox_bwrap_true_disables_legacy_landlock() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UseLegacyLandlock);
+
+        features.apply_map(&BTreeMap::from([(
+            "use_linux_sandbox_bwrap".to_string(),
+            true,
+        )]));
+
+        assert_eq!(features.use_legacy_landlock(), false);
+    }
+
+    #[test]
+    fn legacy_use_linux_sandbox_bwrap_false_enables_legacy_landlock() {
+        let mut features = Features::with_defaults();
+
+        features.apply_map(&BTreeMap::from([(
+            "use_linux_sandbox_bwrap".to_string(),
+            false,
+        )]));
+
+        assert_eq!(features.use_legacy_landlock(), true);
     }
 
     #[test]
@@ -992,6 +1024,18 @@ mod tests {
     fn tool_suggest_is_under_development() {
         assert_eq!(Feature::ToolSuggest.stage(), Stage::UnderDevelopment);
         assert_eq!(Feature::ToolSuggest.default_enabled(), false);
+    }
+
+    #[test]
+    fn use_linux_sandbox_bwrap_is_legacy_alias_for_use_legacy_landlock() {
+        assert_eq!(
+            feature_for_key("use_legacy_landlock"),
+            Some(Feature::UseLegacyLandlock)
+        );
+        assert_eq!(
+            feature_for_key("use_linux_sandbox_bwrap"),
+            Some(Feature::UseLegacyLandlock)
+        );
     }
 
     #[test]
