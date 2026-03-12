@@ -251,7 +251,8 @@ fn resolve_sandbox_policies_derives_split_policies_from_legacy_policy() {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
 
     let resolved =
-        resolve_sandbox_policies(Path::new("/tmp"), Some(sandbox_policy.clone()), None, None);
+        resolve_sandbox_policies(Path::new("/tmp"), Some(sandbox_policy.clone()), None, None)
+            .expect("legacy policy should resolve");
 
     assert_eq!(resolved.sandbox_policy, sandbox_policy);
     assert_eq!(
@@ -275,7 +276,8 @@ fn resolve_sandbox_policies_derives_legacy_policy_from_split_policies() {
         None,
         Some(file_system_sandbox_policy.clone()),
         Some(network_sandbox_policy),
-    );
+    )
+    .expect("split policies should resolve");
 
     assert_eq!(resolved.sandbox_policy, sandbox_policy);
     assert_eq!(
@@ -287,30 +289,33 @@ fn resolve_sandbox_policies_derives_legacy_policy_from_split_policies() {
 
 #[test]
 fn resolve_sandbox_policies_rejects_partial_split_policies() {
-    let result = std::panic::catch_unwind(|| {
-        resolve_sandbox_policies(
-            Path::new("/tmp"),
-            Some(SandboxPolicy::new_read_only_policy()),
-            Some(FileSystemSandboxPolicy::default()),
-            None,
-        )
-    });
+    let err = resolve_sandbox_policies(
+        Path::new("/tmp"),
+        Some(SandboxPolicy::new_read_only_policy()),
+        Some(FileSystemSandboxPolicy::default()),
+        None,
+    )
+    .expect_err("partial split policies should fail");
 
-    assert!(result.is_err());
+    assert_eq!(err, ResolveSandboxPoliciesError::PartialSplitPolicies);
 }
 
 #[test]
 fn resolve_sandbox_policies_rejects_mismatched_legacy_and_split_inputs() {
-    let result = std::panic::catch_unwind(|| {
-        resolve_sandbox_policies(
-            Path::new("/tmp"),
-            Some(SandboxPolicy::new_read_only_policy()),
-            Some(FileSystemSandboxPolicy::unrestricted()),
-            Some(NetworkSandboxPolicy::Enabled),
-        )
-    });
-
-    assert!(result.is_err());
+    let err = resolve_sandbox_policies(
+        Path::new("/tmp"),
+        Some(SandboxPolicy::new_read_only_policy()),
+        Some(FileSystemSandboxPolicy::unrestricted()),
+        Some(NetworkSandboxPolicy::Enabled),
+    )
+    .expect_err("mismatched legacy and split policies should fail");
+    assert!(
+        matches!(
+            err,
+            ResolveSandboxPoliciesError::MismatchedLegacyPolicy { .. }
+        ),
+        "{err}"
+    );
 }
 
 #[test]

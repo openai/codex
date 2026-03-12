@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::ffi::CString;
+use std::fmt;
 use std::fs::File;
 use std::io::Read;
 use std::os::fd::FromRawFd;
@@ -113,7 +114,8 @@ pub fn run_main() -> ! {
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
-    );
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
     let use_bwrap_sandbox = should_use_bwrap_sandbox(
         use_bwrap_sandbox,
         &file_system_sandbox_policy,
@@ -213,12 +215,56 @@ struct EffectiveSandboxPolicies {
     network_sandbox_policy: NetworkSandboxPolicy,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ResolveSandboxPoliciesError {
+    PartialSplitPolicies,
+    SplitPoliciesRequireDirectRuntimeEnforcement(String),
+    FailedToDeriveLegacyPolicy(String),
+    MismatchedLegacyPolicy {
+        provided: SandboxPolicy,
+        derived: SandboxPolicy,
+    },
+    MissingConfiguration,
+}
+
+impl fmt::Display for ResolveSandboxPoliciesError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PartialSplitPolicies => {
+                write!(
+                    f,
+                    "file-system and network sandbox policies must be provided together"
+                )
+            }
+            Self::SplitPoliciesRequireDirectRuntimeEnforcement(err) => {
+                write!(
+                    f,
+                    "split sandbox policies require direct runtime enforcement and cannot be paired with legacy sandbox policy: {err}"
+                )
+            }
+            Self::FailedToDeriveLegacyPolicy(err) => {
+                write!(
+                    f,
+                    "failed to derive legacy sandbox policy from split policies: {err}"
+                )
+            }
+            Self::MismatchedLegacyPolicy { provided, derived } => {
+                write!(
+                    f,
+                    "legacy sandbox policy must match split sandbox policies: provided={provided:?}, derived={derived:?}"
+                )
+            }
+            Self::MissingConfiguration => write!(f, "missing sandbox policy configuration"),
+        }
+    }
+}
+
 fn resolve_sandbox_policies(
     sandbox_policy_cwd: &Path,
     sandbox_policy: Option<SandboxPolicy>,
     file_system_sandbox_policy: Option<FileSystemSandboxPolicy>,
     network_sandbox_policy: Option<NetworkSandboxPolicy>,
-) -> EffectiveSandboxPolicies {
+) -> Result<EffectiveSandboxPolicies, ResolveSandboxPoliciesError> {
     // Accept either a fully legacy policy, a fully split policy pair, or all
     // three views together. Reject partial split-policy input so the helper
     // never runs with mismatched filesystem/network state.
@@ -227,49 +273,51 @@ fn resolve_sandbox_policies(
             Some((file_system_sandbox_policy, network_sandbox_policy))
         }
         (None, None) => None,
-        _ => panic!("file-system and network sandbox policies must be provided together"),
+        _ => return Err(ResolveSandboxPoliciesError::PartialSplitPolicies),
     };
 
     match (sandbox_policy, split_policies) {
         (Some(sandbox_policy), Some((file_system_sandbox_policy, network_sandbox_policy))) => {
             let derived_legacy_policy = file_system_sandbox_policy
                 .to_legacy_sandbox_policy(network_sandbox_policy, sandbox_policy_cwd)
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "split sandbox policies require direct runtime enforcement and cannot be paired with legacy sandbox policy: {err}"
+                .map_err(|err| {
+                    ResolveSandboxPoliciesError::SplitPoliciesRequireDirectRuntimeEnforcement(
+                        err.to_string(),
                     )
+                })?;
+            if derived_legacy_policy != sandbox_policy {
+                return Err(ResolveSandboxPoliciesError::MismatchedLegacyPolicy {
+                    provided: sandbox_policy,
+                    derived: derived_legacy_policy,
                 });
-            assert_eq!(
-                derived_legacy_policy, sandbox_policy,
-                "legacy sandbox policy must match split sandbox policies"
-            );
-            EffectiveSandboxPolicies {
+            }
+            Ok(EffectiveSandboxPolicies {
                 sandbox_policy,
                 file_system_sandbox_policy,
                 network_sandbox_policy,
-            }
+            })
         }
-        (Some(sandbox_policy), None) => EffectiveSandboxPolicies {
+        (Some(sandbox_policy), None) => Ok(EffectiveSandboxPolicies {
             file_system_sandbox_policy: FileSystemSandboxPolicy::from_legacy_sandbox_policy(
                 &sandbox_policy,
                 sandbox_policy_cwd,
             ),
             network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
             sandbox_policy,
-        },
+        }),
         (None, Some((file_system_sandbox_policy, network_sandbox_policy))) => {
             let sandbox_policy = file_system_sandbox_policy
                 .to_legacy_sandbox_policy(network_sandbox_policy, sandbox_policy_cwd)
-                .unwrap_or_else(|err| {
-                    panic!("failed to derive legacy sandbox policy from split policies: {err}")
-                });
-            EffectiveSandboxPolicies {
+                .map_err(|err| {
+                    ResolveSandboxPoliciesError::FailedToDeriveLegacyPolicy(err.to_string())
+                })?;
+            Ok(EffectiveSandboxPolicies {
                 sandbox_policy,
                 file_system_sandbox_policy,
                 network_sandbox_policy,
-            }
+            })
         }
-        (None, None) => panic!("missing sandbox policy configuration"),
+        (None, None) => Err(ResolveSandboxPoliciesError::MissingConfiguration),
     }
 }
 
