@@ -832,7 +832,7 @@ fn build_mcp_tool_approval_fallback_message(
                 format!("the {server} MCP server")
             }
         });
-    format!("Allow {actor} to run tool {tool_name}?")
+    format!("Allow {actor} to run tool \"{tool_name}\"?")
 }
 
 fn mcp_tool_approval_question_text(question: String, monitor_reason: Option<&str>) -> String {
@@ -1422,7 +1422,7 @@ mod tests {
         assert_eq!(question.header, "Approve app tool call?");
         assert_eq!(
             question.question,
-            "Allow the custom_server MCP server to run tool run_action?"
+            "Allow the custom_server MCP server to run tool \"run_action\"?"
         );
         assert!(
             !question
@@ -1445,7 +1445,10 @@ mod tests {
             None,
         );
 
-        assert_eq!(question.question, "Allow this app to run tool run_action?");
+        assert_eq!(
+            question.question,
+            "Allow this app to run tool \"run_action\"?"
+        );
     }
 
     #[test]

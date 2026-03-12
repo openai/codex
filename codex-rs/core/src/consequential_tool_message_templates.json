@@ -325,7 +325,7 @@
       "template_params": [
         {
           "name": "comment_id",
-          "label": "Comment"
+          "label": "Comment ID"
         },
         {
           "name": "repo_full_name",
@@ -367,7 +367,7 @@
       "template_params": [
         {
           "name": "comment_id",
-          "label": "Comment"
+          "label": "Comment ID"
         },
         {
           "name": "repo_full_name",
@@ -585,23 +585,7 @@
       ],
       "template": "Allow {connector_name} to change file sharing?"
     },
-    {
-      "source_tool_index": 32,
-      "connector_id": "asdk_app_69a1d78e929881919bba0dbda1f6436d",
-      "server_name": "codex_apps",
-      "tool_title": "slack_send_message",
-      "template_params": [
-        {
-          "name": "channel_id",
-          "label": "Conversation"
-        },
-        {
-          "name": "message",
-          "label": "Message"
-        }
-      ],
-      "template": "Allow {connector_name} to send a message?"
-    },
+  
     {
       "source_tool_index": 33,
       "connector_id": "asdk_app_69a1d78e929881919bba0dbda1f6436d",
