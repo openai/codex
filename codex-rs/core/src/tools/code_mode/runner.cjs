@@ -382,6 +382,24 @@ function codeModeWorkerMain() {
     };
   }
 
+  async function resolveDynamicModule(specifier, resolveModule) {
+    const module = resolveModule(specifier);
+
+    if (module.status === 'unlinked') {
+      await module.link(resolveModule);
+    }
+
+    if (module.status === 'linked' || module.status === 'evaluating') {
+      await module.evaluate();
+    }
+
+    if (module.status === 'errored') {
+      throw module.error;
+    }
+
+    return module;
+  }
+
   async function runModule(context, start, state, callTool) {
     const resolveModule = createModuleResolver(
       context,
@@ -392,7 +410,8 @@ function codeModeWorkerMain() {
     const mainModule = new SourceTextModule(start.source, {
       context,
       identifier: 'exec_main.mjs',
-      importModuleDynamically: async (specifier) => resolveModule(specifier),
+      importModuleDynamically: async (specifier) =>
+        resolveDynamicModule(specifier, resolveModule),
     });
 
     await mainModule.link(resolveModule);

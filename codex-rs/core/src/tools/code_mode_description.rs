@@ -75,10 +75,21 @@ fn append_code_mode_sample(
     output_type: String,
 ) -> String {
     let reference = code_mode_tool_reference(tool_name);
-    format!(
-        "{description}\n\nCode mode declaration:\n```ts\nimport {{ {} }} from \"{}\";\ndeclare function {}({input_name}: {input_type}): Promise<{output_type}>;\n```",
-        reference.tool_key, reference.module_path, reference.tool_key
-    )
+    let local_name = code_mode_local_name(&reference.tool_key);
+    let declaration = if local_name == reference.tool_key {
+        format!(
+            "import {{ {local_name} }} from \"{}\";\ndeclare function {local_name}({input_name}: {input_type}): Promise<{output_type}>;",
+            reference.module_path
+        )
+    } else {
+        let tool_key = serde_json::to_string(&reference.tool_key)
+            .unwrap_or_else(|_| format!("\"{}\"", reference.tool_key.replace('"', "\\\"")));
+        format!(
+            "const {{ [{tool_key}]: {local_name} }} = await import(\"{}\");\ndeclare function {local_name}({input_name}: {input_type}): Promise<{output_type}>;",
+            reference.module_path
+        )
+    };
+    format!("{description}\n\nCode mode declaration:\n```ts\n{declaration}\n```")
 }
 
 fn code_mode_local_name(tool_key: &str) -> String {
