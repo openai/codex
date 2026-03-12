@@ -1,11 +1,8 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
-use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
