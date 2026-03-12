@@ -561,7 +561,7 @@
       "type": "object"
     },
     "AppSummary": {
-      "description": "EXPERIMENTAL - app metadata summary for plugin-install responses.",
+      "description": "EXPERIMENTAL - app metadata summary for plugin responses.",
       "properties": {
         "description": {
           "type": [
@@ -9135,33 +9135,6 @@
       ],
       "type": "string"
     },
-    "PluginAppSummary": {
-      "properties": {
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "id": {
-          "type": "string"
-        },
-        "installUrl": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "name"
-      ],
-      "type": "object"
-    },
     "PluginAuthPolicy": {
       "enum": [
         "ON_INSTALL",
@@ -9173,7 +9146,7 @@
       "properties": {
         "apps": {
           "items": {
-            "$ref": "#/definitions/PluginAppSummary"
+            "$ref": "#/definitions/AppSummary"
           },
           "type": "array"
         },
@@ -9191,7 +9164,7 @@
         },
         "mcpServers": {
           "items": {
-            "$ref": "#/definitions/PluginMcpServerSummary"
+            "type": "string"
           },
           "type": "array"
         },
@@ -9423,17 +9396,6 @@
         "name",
         "path",
         "plugins"
-      ],
-      "type": "object"
-    },
-    "PluginMcpServerSummary": {
-      "properties": {
-        "name": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name"
       ],
       "type": "object"
     },

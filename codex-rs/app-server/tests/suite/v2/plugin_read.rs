@@ -179,7 +179,7 @@ enabled = true
         Some("https://chatgpt.com/apps/gmail/gmail")
     );
     assert_eq!(response.plugin.mcp_servers.len(), 1);
-    assert_eq!(response.plugin.mcp_servers[0].name, "demo");
+    assert_eq!(response.plugin.mcp_servers[0], "demo");
     Ok(())
 }
 
@@ -228,6 +228,57 @@ async fn plugin_read_returns_invalid_request_when_plugin_is_missing() -> Result<
         err.error
             .message
             .contains("plugin `missing-plugin` was not found")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_read_returns_invalid_request_when_plugin_manifest_is_missing() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    let plugin_root = repo_root.path().join("plugins/demo-plugin");
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    std::fs::create_dir_all(&plugin_root)?;
+    std::fs::write(
+        repo_root.path().join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "demo-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugins/demo-plugin"
+      }
+    }
+  ]
+}"#,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: AbsolutePathBuf::try_from(
+                repo_root.path().join(".agents/plugins/marketplace.json"),
+            )?,
+            plugin_name: "demo-plugin".to_string(),
+        })
+        .await?;
+
+    let err = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, -32600);
+    assert!(
+        err.error
+            .message
+            .contains("missing or invalid .codex-plugin/plugin.json")
     );
     Ok(())
 }

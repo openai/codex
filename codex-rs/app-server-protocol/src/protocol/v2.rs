@@ -1979,7 +1979,7 @@ pub struct AppInfo {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// EXPERIMENTAL - app metadata summary for plugin-install responses.
+/// EXPERIMENTAL - app metadata summary for plugin responses.
 pub struct AppSummary {
     pub id: String,
     pub name: String,
@@ -3116,8 +3116,8 @@ pub struct PluginDetail {
     pub summary: PluginSummary,
     pub description: Option<String>,
     pub skills: Vec<PluginSkillSummary>,
-    pub apps: Vec<PluginAppSummary>,
-    pub mcp_servers: Vec<PluginMcpServerSummary>,
+    pub apps: Vec<AppSummary>,
+    pub mcp_servers: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3129,23 +3129,6 @@ pub struct PluginSkillSummary {
     pub short_description: Option<String>,
     pub interface: Option<SkillInterface>,
     pub path: PathBuf,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct PluginAppSummary {
-    pub id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub install_url: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct PluginMcpServerSummary {
-    pub name: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

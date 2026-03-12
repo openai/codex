@@ -753,27 +753,21 @@ impl PluginsManager {
         let source_path = match &plugin.source {
             MarketplacePluginSourceSummary::Local { path } => path.clone(),
         };
-        let manifest = load_plugin_manifest(source_path.as_path());
-        let description = manifest
-            .as_ref()
-            .and_then(|manifest| manifest.description.clone());
-        let manifest_paths = manifest
-            .as_ref()
-            .map(|manifest| plugin_manifest_paths(manifest, source_path.as_path()));
-        let skill_roots = match &manifest_paths {
-            Some(manifest_paths) => plugin_skill_roots(source_path.as_path(), manifest_paths),
-            None => default_skill_roots(source_path.as_path()),
-        };
+        let manifest = load_plugin_manifest(source_path.as_path()).ok_or_else(|| {
+            MarketplaceError::InvalidPlugin(
+                "missing or invalid .codex-plugin/plugin.json".to_string(),
+            )
+        })?;
+        let description = manifest.description.clone();
+        let manifest_paths = plugin_manifest_paths(&manifest, source_path.as_path());
+        let skill_roots = plugin_skill_roots(source_path.as_path(), &manifest_paths);
         let skills = load_skills_from_roots(skill_roots.into_iter().map(|path| SkillRoot {
             path,
             scope: SkillScope::User,
         }))
         .skills;
         let apps = load_plugin_apps(source_path.as_path());
-        let mcp_config_paths = match &manifest_paths {
-            Some(manifest_paths) => plugin_mcp_config_paths(source_path.as_path(), manifest_paths),
-            None => default_mcp_config_paths(source_path.as_path()),
-        };
+        let mcp_config_paths = plugin_mcp_config_paths(source_path.as_path(), &manifest_paths);
         let mut mcp_server_names = Vec::new();
         for mcp_config_path in mcp_config_paths {
             mcp_server_names.extend(

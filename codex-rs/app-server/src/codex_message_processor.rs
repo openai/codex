@@ -83,7 +83,6 @@ use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::MockExperimentalMethodResponse;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
-use codex_app_server_protocol::PluginAppSummary;
 use codex_app_server_protocol::PluginDetail;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
@@ -91,7 +90,6 @@ use codex_app_server_protocol::PluginInterface;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
-use codex_app_server_protocol::PluginMcpServerSummary;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginSkillSummary;
@@ -206,8 +204,6 @@ use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config_loader::CloudRequirementsLoader;
-use codex_core::connectors::filter_disallowed_connectors;
-use codex_core::connectors::merge_plugin_apps;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::error::CodexErr;
 use codex_core::error::Result as CodexResult;
@@ -5266,8 +5262,7 @@ impl CodexMessageProcessor {
     async fn load_plugin_app_summaries(
         config: &Config,
         plugin_apps: &[AppConnectorId],
-        plugin_id: &str,
-    ) -> Vec<PluginAppSummary> {
+    ) -> Vec<AppSummary> {
         if plugin_apps.is_empty() {
             return Vec::new();
         }
@@ -5275,29 +5270,16 @@ impl CodexMessageProcessor {
         let connectors = match connectors::list_all_connectors_with_options(config, false).await {
             Ok(connectors) => connectors,
             Err(err) => {
-                warn!(
-                    plugin = plugin_id,
-                    "failed to load app metadata for plugin/read: {err:#}"
-                );
+                warn!("failed to load app metadata for plugin/read: {err:#}");
                 connectors::list_cached_all_connectors(config)
                     .await
                     .unwrap_or_default()
             }
         };
-        let plugin_app_ids = plugin_apps
-            .iter()
-            .map(|connector_id| connector_id.0.as_str())
-            .collect::<HashSet<_>>();
 
-        filter_disallowed_connectors(merge_plugin_apps(connectors, plugin_apps.to_vec()))
+        connectors::connectors_for_plugin_apps(connectors, plugin_apps)
             .into_iter()
-            .filter(|connector| plugin_app_ids.contains(connector.id.as_str()))
-            .map(|connector| PluginAppSummary {
-                id: connector.id,
-                name: connector.name,
-                description: connector.description,
-                install_url: connector.install_url,
-            })
+            .map(AppSummary::from)
             .collect()
     }
 
@@ -5589,9 +5571,7 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        let app_summaries =
-            Self::load_plugin_app_summaries(&config, &outcome.plugin.apps, &outcome.plugin.id)
-                .await;
+        let app_summaries = Self::load_plugin_app_summaries(&config, &outcome.plugin.apps).await;
         let plugin = PluginDetail {
             marketplace_name: outcome.marketplace_name,
             marketplace_path: outcome.marketplace_path,
@@ -5608,12 +5588,7 @@ impl CodexMessageProcessor {
             description: outcome.plugin.description,
             skills: plugin_skills_to_info(&outcome.plugin.skills),
             apps: app_summaries,
-            mcp_servers: outcome
-                .plugin
-                .mcp_server_names
-                .into_iter()
-                .map(|name| PluginMcpServerSummary { name })
-                .collect(),
+            mcp_servers: outcome.plugin.mcp_server_names,
         };
 
         self.outgoing
@@ -5767,23 +5742,19 @@ impl CodexMessageProcessor {
                     );
 
                     let all_connectors = match all_connectors_result {
-                        Ok(connectors) => filter_disallowed_connectors(merge_plugin_apps(
-                            connectors,
-                            plugin_apps.clone(),
-                        )),
+                        Ok(connectors) => connectors,
                         Err(err) => {
                             warn!(
                                 plugin = result.plugin_id.as_key(),
                                 "failed to load app metadata after plugin install: {err:#}"
                             );
-                            filter_disallowed_connectors(merge_plugin_apps(
-                                connectors::list_cached_all_connectors(&config)
-                                    .await
-                                    .unwrap_or_default(),
-                                plugin_apps.clone(),
-                            ))
+                            connectors::list_cached_all_connectors(&config)
+                                .await
+                                .unwrap_or_default()
                         }
                     };
+                    let all_connectors =
+                        connectors::connectors_for_plugin_apps(all_connectors, &plugin_apps);
                     let (accessible_connectors, codex_apps_ready) =
                         match accessible_connectors_result {
                             Ok(status) => (status.connectors, status.codex_apps_ready),
