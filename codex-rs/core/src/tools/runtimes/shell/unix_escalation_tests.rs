@@ -166,6 +166,22 @@ fn execve_prompt_rejection_keeps_unmatched_commands_on_sandbox_flag() {
 }
 
 #[test]
+fn approval_sandbox_permissions_only_downgrades_preapproved_additional_permissions() {
+    assert_eq!(
+        super::approval_sandbox_permissions(SandboxPermissions::WithAdditionalPermissions, true),
+        SandboxPermissions::UseDefault,
+    );
+    assert_eq!(
+        super::approval_sandbox_permissions(SandboxPermissions::WithAdditionalPermissions, false),
+        SandboxPermissions::WithAdditionalPermissions,
+    );
+    assert_eq!(
+        super::approval_sandbox_permissions(SandboxPermissions::RequireEscalated, true),
+        SandboxPermissions::RequireEscalated,
+    );
+}
+
+#[test]
 fn extract_shell_script_preserves_login_flag() {
     assert_eq!(
         extract_shell_script(&["/bin/zsh".into(), "-lc".into(), "echo hi".into()]).unwrap(),
@@ -546,6 +562,47 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
         &evaluation.matched_rules,
         evaluation.decision
     ));
+}
+
+#[test]
+fn intercepted_exec_policy_treats_preapproved_additional_permissions_as_default() {
+    let policy = PolicyParser::new().build();
+    let program = AbsolutePathBuf::try_from(host_absolute_path(&["usr", "bin", "printf"])).unwrap();
+    let argv = ["printf".to_string(), "hello".to_string()];
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+    let file_system_sandbox_policy = read_only_file_system_sandbox_policy();
+
+    let preapproved = evaluate_intercepted_exec_policy(
+        &policy,
+        &program,
+        &argv,
+        InterceptedExecPolicyContext {
+            approval_policy,
+            sandbox_policy: &sandbox_policy,
+            file_system_sandbox_policy: &file_system_sandbox_policy,
+            sandbox_permissions: super::approval_sandbox_permissions(
+                SandboxPermissions::WithAdditionalPermissions,
+                true,
+            ),
+            enable_shell_wrapper_parsing: false,
+        },
+    );
+    let fresh_request = evaluate_intercepted_exec_policy(
+        &policy,
+        &program,
+        &argv,
+        InterceptedExecPolicyContext {
+            approval_policy,
+            sandbox_policy: &sandbox_policy,
+            file_system_sandbox_policy: &file_system_sandbox_policy,
+            sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
+            enable_shell_wrapper_parsing: false,
+        },
+    );
+
+    assert_eq!(preapproved.decision, Decision::Allow);
+    assert_eq!(fresh_request.decision, Decision::Prompt);
 }
 
 #[test]

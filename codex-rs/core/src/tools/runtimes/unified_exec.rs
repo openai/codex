@@ -54,6 +54,7 @@ pub struct UnifiedExecRequest {
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
+    pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
 }
