@@ -1484,6 +1484,82 @@ contentLength=0"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_normalizes_illegal_namespaced_mcp_tool_identifiers() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+import { echo_tool } from "tools/mcp/rmcp.js";
+
+const result = await echo_tool({ message: "ping" });
+add_content(`echo=${result.structuredContent.echo}`);
+"#;
+
+    let (_test, second_mock) = run_code_mode_turn_with_rmcp(
+        &server,
+        "use exec to import a normalized rmcp tool name",
+        code,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec normalized rmcp import failed unexpectedly: {output}"
+    );
+    assert_eq!(output, "echo=ECHOING: ping");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_normalizes_illegal_top_level_mcp_tool_identifiers() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+import { ALL_TOOLS, mcp__rmcp__echo_tool } from "tools.js";
+
+const tool = ALL_TOOLS.find(
+  ({ module, name }) => module === "tools/mcp/rmcp.js" && name === "echo_tool"
+);
+
+add_content(JSON.stringify({
+  enabled: codex.enabledTools.includes("mcp__rmcp__echo_tool"),
+  metadataName: tool?.name,
+  result: (await mcp__rmcp__echo_tool({ message: "ping" })).structuredContent.echo,
+}));
+"#;
+
+    let (_test, second_mock) = run_code_mode_turn_with_rmcp(
+        &server,
+        "use exec to import a normalized top-level rmcp tool name",
+        code,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec normalized top-level rmcp import failed unexpectedly: {output}"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&output)?,
+        serde_json::json!({
+            "enabled": true,
+            "metadataName": "echo_tool",
+            "result": "ECHOING: ping",
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_exports_all_tools_metadata_for_builtin_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

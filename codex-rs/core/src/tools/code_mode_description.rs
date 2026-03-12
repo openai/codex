@@ -75,24 +75,15 @@ fn append_code_mode_sample(
     output_type: String,
 ) -> String {
     let reference = code_mode_tool_reference(tool_name);
-    let local_name = code_mode_local_name(&reference.tool_key);
-    let declaration = if local_name == reference.tool_key {
-        format!(
-            "import {{ {local_name} }} from \"{}\";\ndeclare function {local_name}({input_name}: {input_type}): Promise<{output_type}>;",
-            reference.module_path
-        )
-    } else {
-        let tool_key = serde_json::to_string(&reference.tool_key)
-            .unwrap_or_else(|_| format!("\"{}\"", reference.tool_key.replace('"', "\\\"")));
-        format!(
-            "const {{ [{tool_key}]: {local_name} }} = await import(\"{}\");\ndeclare function {local_name}({input_name}: {input_type}): Promise<{output_type}>;",
-            reference.module_path
-        )
-    };
+    let local_name = normalize_code_mode_identifier(&reference.tool_key);
+    let declaration = format!(
+        "import {{ {local_name} }} from \"{}\";\ndeclare function {local_name}({input_name}: {input_type}): Promise<{output_type}>;",
+        reference.module_path
+    );
     format!("{description}\n\nCode mode declaration:\n```ts\n{declaration}\n```")
 }
 
-fn code_mode_local_name(tool_key: &str) -> String {
+pub(crate) fn normalize_code_mode_identifier(tool_key: &str) -> String {
     let mut identifier = String::new();
 
     for (index, ch) in tool_key.chars().enumerate() {
@@ -109,7 +100,11 @@ fn code_mode_local_name(tool_key: &str) -> String {
         }
     }
 
-    identifier
+    if identifier.is_empty() {
+        "_".to_string()
+    } else {
+        identifier
+    }
 }
 
 fn render_json_schema_to_typescript(schema: &JsonValue) -> String {
@@ -290,7 +285,7 @@ fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>, indent: u
 }
 
 fn render_json_schema_property_name(name: &str) -> String {
-    if code_mode_local_name(name) == name {
+    if normalize_code_mode_identifier(name) == name {
         name.to_string()
     } else {
         serde_json::to_string(name).unwrap_or_else(|_| format!("\"{}\"", name.replace('"', "\\\"")))

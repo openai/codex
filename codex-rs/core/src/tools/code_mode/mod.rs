@@ -17,6 +17,7 @@ use crate::codex::TurnContext;
 use crate::tools::ToolRouter;
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::code_mode_description::code_mode_tool_reference;
+use crate::tools::code_mode_description::normalize_code_mode_identifier;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
@@ -233,10 +234,11 @@ fn enabled_tool_from_spec(spec: ToolSpec) -> Option<protocol::EnabledTool> {
     };
 
     Some(protocol::EnabledTool {
+        global_name: normalize_code_mode_identifier(&tool_name),
         tool_name,
         module_path: reference.module_path,
         namespace: reference.namespace,
-        name: reference.tool_key,
+        name: normalize_code_mode_identifier(&reference.tool_key),
         description,
         kind,
     })

@@ -134,8 +134,8 @@ function codeModeWorkerMain() {
   function createToolsNamespace(callTool, enabledTools) {
     const tools = Object.create(null);
 
-    for (const { tool_name } of enabledTools) {
-      Object.defineProperty(tools, tool_name, {
+    for (const { tool_name, global_name } of enabledTools) {
+      Object.defineProperty(tools, global_name, {
         value: async (args) => callTool(tool_name, args),
         configurable: false,
         enumerable: true,
@@ -163,9 +163,9 @@ function codeModeWorkerMain() {
     const allTools = createAllToolsMetadata(enabledTools);
     const exportNames = ['ALL_TOOLS'];
 
-    for (const { tool_name } of enabledTools) {
-      if (tool_name !== 'ALL_TOOLS') {
-        exportNames.push(tool_name);
+    for (const { global_name } of enabledTools) {
+      if (global_name !== 'ALL_TOOLS') {
+        exportNames.push(global_name);
       }
     }
 

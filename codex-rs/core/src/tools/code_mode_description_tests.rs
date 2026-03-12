@@ -90,7 +90,7 @@ fn append_code_mode_sample_uses_static_import_for_valid_identifiers() {
 }
 
 #[test]
-fn append_code_mode_sample_uses_dynamic_import_for_non_identifier_tool_names() {
+fn append_code_mode_sample_normalizes_non_identifier_tool_names() {
     assert_eq!(
         append_code_mode_sample(
             "desc",
@@ -99,6 +99,6 @@ fn append_code_mode_sample_uses_dynamic_import_for_non_identifier_tool_names() {
             "{ foo: string }".to_string(),
             "unknown".to_string(),
         ),
-        "desc\n\nCode mode declaration:\n```ts\nconst { [\"echo-tool\"]: echo_tool } = await import(\"tools/mcp/rmcp.js\");\ndeclare function echo_tool(args: { foo: string }): Promise<unknown>;\n```"
+        "desc\n\nCode mode declaration:\n```ts\nimport { echo_tool } from \"tools/mcp/rmcp.js\";\ndeclare function echo_tool(args: { foo: string }): Promise<unknown>;\n```"
     );
 }

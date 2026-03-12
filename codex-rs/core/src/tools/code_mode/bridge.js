@@ -1,5 +1,5 @@
 const __codexEnabledTools = __CODE_MODE_ENABLED_TOOLS_PLACEHOLDER__;
-const __codexEnabledToolNames = __codexEnabledTools.map((tool) => tool.tool_name);
+const __codexEnabledToolNames = __codexEnabledTools.map((tool) => tool.global_name);
 const __codexContentItems = Array.isArray(globalThis.__codexContentItems)
   ? globalThis.__codexContentItems
   : [];
@@ -63,10 +63,10 @@ globalThis.console = Object.freeze({
   debug() {},
 });
 
-for (const name of __codexEnabledToolNames) {
-  if (!(name in globalThis)) {
-    Object.defineProperty(globalThis, name, {
-      value: async (args) => __codex_tool_call(name, args),
+for (const tool of __codexEnabledTools) {
+  if (!(tool.global_name in globalThis)) {
+    Object.defineProperty(globalThis, tool.global_name, {
+      value: async (args) => __codex_tool_call(tool.tool_name, args),
       configurable: true,
       enumerable: false,
       writable: false,
