@@ -746,9 +746,7 @@ mod tests {
                 access: FileSystemAccessMode::Write,
             },
             FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: blocked.clone(),
-                },
+                path: FileSystemPath::Path { path: blocked },
                 access: FileSystemAccessMode::None,
             },
         ]);
@@ -998,30 +996,26 @@ mod tests {
             AbsolutePathBuf::from_absolute_path(&writable_root).expect("absolute writable root");
         let blocked = AbsolutePathBuf::from_absolute_path(&blocked).expect("absolute blocked dir");
         let allowed = AbsolutePathBuf::from_absolute_path(&allowed).expect("absolute allowed dir");
+        let blocked_str = path_to_string(blocked.as_path());
+        let allowed_str = path_to_string(allowed.as_path());
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
-                    path: writable_root.clone(),
+                    path: writable_root,
                 },
                 access: FileSystemAccessMode::Write,
             },
             FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: blocked.clone(),
-                },
+                path: FileSystemPath::Path { path: blocked },
                 access: FileSystemAccessMode::None,
             },
             FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: allowed.clone(),
-                },
+                path: FileSystemPath::Path { path: allowed },
                 access: FileSystemAccessMode::Write,
             },
         ]);
 
         let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
-        let blocked_str = path_to_string(blocked.as_path());
-        let allowed_str = path_to_string(allowed.as_path());
         let blocked_none_index = args
             .args
             .windows(4)
