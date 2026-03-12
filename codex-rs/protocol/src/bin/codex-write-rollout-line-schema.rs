@@ -6,7 +6,6 @@ use std::any::TypeId;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::io;
-use std::path::Path;
 use std::path::PathBuf;
 use ts_rs::TS;
 use ts_rs::TypeVisitor;
@@ -21,8 +20,8 @@ fn main() -> io::Result<()> {
         .nth(1)
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-            let codex_rs_dir = manifest_dir.parent().unwrap_or(manifest_dir);
+            let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let codex_rs_dir = manifest_dir.parent().unwrap_or(&manifest_dir);
             codex_rs_dir.join("out/rollout-line-schema")
         });
 
