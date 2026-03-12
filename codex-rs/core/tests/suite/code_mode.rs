@@ -1795,7 +1795,7 @@ text(JSON.stringify(tool));
         parsed,
         serde_json::json!({
             "name": "view_image",
-            "description": "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nCode mode declaration:\n```ts\ndeclare const tools: {\n  view_image(args: {\n    path: string;\n  }): Promise<unknown>;\n};\n```",
+            "description": "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: { path: string; }): Promise<unknown>; };\n```",
         })
     );
 
@@ -1830,7 +1830,7 @@ text(JSON.stringify(tool));
         parsed,
         serde_json::json!({
             "name": "mcp__rmcp__echo",
-            "description": "Echo back the provided message and include environment data.\n\nCode mode declaration:\n```ts\ndeclare const tools: {\n  mcp__rmcp__echo(args: {\n    env_var?: string;\n    message: string;\n  }): Promise<{\n    _meta?: unknown;\n    content: Array<unknown>;\n    isError?: boolean;\n    structuredContent?: unknown;\n  }>;\n};\n```",
+            "description": "Echo back the provided message and include environment data.\n\nexec tool declaration:\n```ts\ndeclare const tools: { mcp__rmcp__echo(args: { env_var?: string; message: string; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };\n```",
         })
     );
 
