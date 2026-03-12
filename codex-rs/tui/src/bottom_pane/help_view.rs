@@ -226,11 +226,7 @@ impl SlashHelpView {
         if !self.search.active_query.is_empty() {
             spans.push("n/p match  ".dim());
         }
-        spans.extend([
-            "q/".dim(),
-            key_hint::plain(KeyCode::Esc).into(),
-            " close".dim(),
-        ]);
+        spans.extend([key_hint::plain(KeyCode::Esc).into(), " close".dim()]);
         Line::from(spans)
     }
 
