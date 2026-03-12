@@ -239,5 +239,5 @@ expression: searching
     Usage:
         /debug-m-drop
 
-  /debug-m-update
-  Search: /maintainers  enter apply  esc cancel                                1 match | 1-233/239
+
+  Search: /maintainers  enter apply  esc cancel                                1 match | 1-232/239

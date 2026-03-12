@@ -239,5 +239,5 @@ expression: popup
     Usage:
         /debug-m-drop
 
-  /debug-m-update
-  ↑/↓ scroll  pgup/pgdn page  / search  q/esc close                                      1-233/239
+
+  ↑/↓ scroll  ctrl + p/ctrl + n page  / search  q/esc close                              1-232/239

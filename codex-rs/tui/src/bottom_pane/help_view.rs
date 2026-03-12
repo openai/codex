@@ -217,9 +217,9 @@ impl SlashHelpView {
             "/".into(),
             key_hint::plain(KeyCode::Down).into(),
             " scroll  ".dim(),
-            key_hint::plain(KeyCode::PageUp).into(),
+            key_hint::ctrl(KeyCode::Char('p')).into(),
             "/".into(),
-            key_hint::plain(KeyCode::PageDown).into(),
+            key_hint::ctrl(KeyCode::Char('n')).into(),
             " page  ".dim(),
             "/ search  ".dim(),
         ];
@@ -411,9 +411,11 @@ impl crate::render::renderable::Renderable for SlashHelpView {
         let [header_area, body_area, footer_area] = Layout::vertical([
             Constraint::Length(2),
             Constraint::Fill(1),
-            Constraint::Length(1),
+            Constraint::Length(2),
         ])
         .areas(content_area);
+        let [_footer_gap_area, footer_line_area] =
+            Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(footer_area);
 
         let rows = Self::build_document();
         let (lines, row_starts, row_ends) = Self::wrap_rows(&rows, body_area.width);
@@ -453,17 +455,17 @@ impl crate::render::renderable::Renderable for SlashHelpView {
             .render(body_area, buf);
 
         let footer_line = self.footer_line();
-        Paragraph::new(footer_line.clone()).render(footer_area, buf);
+        Paragraph::new(footer_line.clone()).render(footer_line_area, buf);
         let indicator = self.search_indicator(&rows, body_lines.len(), visible_rows, scroll_top);
         let indicator_width = UnicodeWidthStr::width(indicator.as_str()) as u16;
         let footer_width = footer_line.width() as u16;
-        if footer_width + indicator_width + 2 <= footer_area.width {
+        if footer_width + indicator_width + 2 <= footer_line_area.width {
             Paragraph::new(indicator.dim()).render(
                 Rect::new(
-                    footer_area.x + footer_area.width - indicator_width,
-                    footer_area.y,
+                    footer_line_area.x + footer_line_area.width - indicator_width,
+                    footer_line_area.y,
                     indicator_width,
-                    footer_area.height,
+                    footer_line_area.height,
                 ),
                 buf,
             );
@@ -474,6 +476,6 @@ impl crate::render::renderable::Renderable for SlashHelpView {
         let rows = Self::build_document();
         let (wrapped_rows, _, _) = Self::wrap_rows(&rows, width.saturating_sub(4));
         let content_rows = wrapped_rows.len() as u16;
-        content_rows.max(HELP_VIEW_MIN_BODY_ROWS + 3)
+        content_rows.max(HELP_VIEW_MIN_BODY_ROWS + 4)
     }
 }
