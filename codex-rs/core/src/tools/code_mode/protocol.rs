@@ -17,6 +17,7 @@ pub(super) enum CodeModeToolKind {
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct EnabledTool {
     pub(super) tool_name: String,
+    pub(super) global_name: String,
     #[serde(rename = "module")]
     pub(super) module_path: String,
     pub(super) namespace: Vec<String>,
@@ -40,7 +41,7 @@ pub(super) struct CodeModeToolCall {
 pub(super) enum HostToNodeMessage {
     Start {
         request_id: String,
-        session_id: i32,
+        cell_id: String,
         default_yield_time_ms: u64,
         enabled_tools: Vec<EnabledTool>,
         stored_values: HashMap<String, JsonValue>,
@@ -48,12 +49,12 @@ pub(super) enum HostToNodeMessage {
     },
     Poll {
         request_id: String,
-        session_id: i32,
+        cell_id: String,
         yield_time_ms: u64,
     },
     Terminate {
         request_id: String,
-        session_id: i32,
+        cell_id: String,
     },
     Response {
         request_id: String,
