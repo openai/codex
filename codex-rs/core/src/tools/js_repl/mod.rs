@@ -3327,7 +3327,7 @@ await codex.emitImage(out);
             let code = format!(
                 r#"
 const out = await codex.tool("{tool_name}", {{}});
-const text = Array.isArray(out.output) ? out.output[0]?.text : undefined;
+const text = typeof out === "string" ? out : out?.output;
 console.log(text === {literal});
 console.log(text);
 "#
