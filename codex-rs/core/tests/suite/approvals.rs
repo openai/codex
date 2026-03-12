@@ -46,6 +46,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -1587,6 +1588,10 @@ async fn approval_matrix_covers_all_modes() -> Result<()> {
 
 async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     eprintln!("running approval scenario: {}", scenario.name);
+    let diagnostic_scenario = scenario
+        .name
+        .starts_with("read_only_unless_trusted_requires_approval");
+    let scenario_start = Instant::now();
     let server = start_mock_server().await;
     let approval_policy = scenario.approval_policy;
     let sandbox_policy = scenario.sandbox_policy.clone();
@@ -1637,10 +1642,24 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
         scenario.sandbox_policy.clone(),
     )
     .await?;
+    if diagnostic_scenario {
+        eprintln!(
+            "[approval-diagnostic] scenario={} phase=submit_turn_done elapsed_ms={}",
+            scenario.name,
+            scenario_start.elapsed().as_millis()
+        );
+    }
 
     match &scenario.outcome {
         Outcome::Auto => {
             wait_for_completion_without_approval(&test).await;
+            if diagnostic_scenario {
+                eprintln!(
+                    "[approval-diagnostic] scenario={} phase=completion_without_approval elapsed_ms={}",
+                    scenario.name,
+                    scenario_start.elapsed().as_millis()
+                );
+            }
         }
         Outcome::ExecApproval {
             decision,
@@ -1650,6 +1669,15 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
                 .as_deref()
                 .expect("exec approval requires shell command");
             let approval = expect_exec_approval(&test, command).await;
+            if diagnostic_scenario {
+                eprintln!(
+                    "[approval-diagnostic] scenario={} phase=approval_received elapsed_ms={} approval_id={} command={:?}",
+                    scenario.name,
+                    scenario_start.elapsed().as_millis(),
+                    approval.effective_approval_id(),
+                    command
+                );
+            }
             if let Some(expected_reason) = expected_reason {
                 assert_eq!(
                     approval.reason.as_deref(),
@@ -1665,7 +1693,21 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
                     decision: decision.clone(),
                 })
                 .await?;
+            if diagnostic_scenario {
+                eprintln!(
+                    "[approval-diagnostic] scenario={} phase=approval_submitted elapsed_ms={}",
+                    scenario.name,
+                    scenario_start.elapsed().as_millis()
+                );
+            }
             wait_for_completion(&test).await;
+            if diagnostic_scenario {
+                eprintln!(
+                    "[approval-diagnostic] scenario={} phase=completion_after_approval elapsed_ms={}",
+                    scenario.name,
+                    scenario_start.elapsed().as_millis()
+                );
+            }
         }
         Outcome::PatchApproval {
             decision,
@@ -1692,6 +1734,17 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
 
     let output_item = results_mock.single_request().function_call_output(call_id);
     let result = parse_result(&output_item);
+    if diagnostic_scenario {
+        let output_preview = result.stdout.chars().take(200).collect::<String>();
+        eprintln!(
+            "[approval-diagnostic] scenario={} phase=result_parsed elapsed_ms={} exit_code={:?} stdout_len={} stdout_preview={:?}",
+            scenario.name,
+            scenario_start.elapsed().as_millis(),
+            result.exit_code,
+            result.stdout.len(),
+            output_preview
+        );
+    }
     scenario.expectation.verify(&test, &result)?;
 
     Ok(())
