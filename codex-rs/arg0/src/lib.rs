@@ -270,7 +270,14 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
         .create(true)
         .truncate(false)
         .open(&lock_path)?;
-    lock_file.try_lock()?;
+    match lock_file.try_lock() {
+        Ok(()) => {}
+        // Android currently reports try_lock as unsupported in std; run without
+        // advisory locking in that case.
+        Err(std::fs::TryLockError::Error(err)) if err.kind() == std::io::ErrorKind::Unsupported => {
+        }
+        Err(err) => return Err(err.into()),
+    }
 
     for filename in &[
         APPLY_PATCH_ARG0,
@@ -389,6 +396,10 @@ fn try_lock_dir(dir: &Path) -> std::io::Result<Option<File>> {
     match lock_file.try_lock() {
         Ok(()) => Ok(Some(lock_file)),
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        // No per-dir locking support on this platform; skip janitor cleanup.
+        Err(std::fs::TryLockError::Error(err)) if err.kind() == std::io::ErrorKind::Unsupported => {
+            Ok(None)
+        }
         Err(err) => Err(err.into()),
     }
 }
@@ -400,6 +411,18 @@ mod tests {
     use std::fs;
     use std::fs::File;
     use std::path::Path;
+
+    fn try_lock_supported(file: &File) -> std::io::Result<bool> {
+        match file.try_lock() {
+            Ok(()) => Ok(true),
+            Err(std::fs::TryLockError::Error(err))
+                if err.kind() == std::io::ErrorKind::Unsupported =>
+            {
+                Ok(false)
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
 
     fn create_lock(dir: &Path) -> std::io::Result<File> {
         let lock_path = dir.join(LOCK_FILENAME);
@@ -429,7 +452,7 @@ mod tests {
         let dir = root.path().join("locked");
         fs::create_dir(&dir)?;
         let lock_file = create_lock(&dir)?;
-        lock_file.try_lock()?;
+        let _ = try_lock_supported(&lock_file)?;
 
         janitor_cleanup(root.path())?;
 
@@ -442,11 +465,19 @@ mod tests {
         let root = tempfile::tempdir()?;
         let dir = root.path().join("stale");
         fs::create_dir(&dir)?;
-        create_lock(&dir)?;
+        let lock_file = create_lock(&dir)?;
+        let lock_supported = try_lock_supported(&lock_file)?;
+        if lock_supported {
+            lock_file.unlock()?;
+        }
 
         janitor_cleanup(root.path())?;
 
-        assert!(!dir.exists());
+        if lock_supported {
+            assert!(!dir.exists());
+        } else {
+            assert!(dir.exists());
+        }
         Ok(())
     }
 }

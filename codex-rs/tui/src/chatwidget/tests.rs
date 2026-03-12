@@ -32,8 +32,8 @@ use codex_core::models_manager::collaboration_mode_presets::CollaborationModesCo
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
-use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricsSummary;
+use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::CollaborationMode;
@@ -1688,7 +1688,7 @@ async fn helpers_are_available_and_do_not_panic() {
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config().await;
     let resolved_model = codex_core::test_support::get_model_offline(cfg.model.as_deref());
-    let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
+    let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let thread_manager = Arc::new(
         codex_core::test_support::thread_manager_with_models_provider(
             CodexAuth::from_api_key("test"),
@@ -1711,16 +1711,16 @@ async fn helpers_are_available_and_do_not_panic() {
         model: Some(resolved_model),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
-        otel_manager,
+        session_telemetry,
     };
     let mut w = ChatWidget::new(init, thread_manager);
     // Basic construction sanity.
     let _ = &mut w;
 }
 
-fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
+fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
     let model_info = codex_core::test_support::construct_model_info_offline(model, config);
-    OtelManager::new(
+    SessionTelemetry::new(
         ThreadId::new(),
         model,
         model_info.slug.as_str(),
@@ -1753,7 +1753,7 @@ async fn make_chatwidget_manual(
         cfg.model = Some(model.to_string());
     }
     let prevent_idle_sleep = cfg.features.enabled(Feature::PreventIdleSleep);
-    let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
+    let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let mut bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
         frame_requester: FrameRequester::test_dummy(),
@@ -1796,7 +1796,7 @@ async fn make_chatwidget_manual(
         active_collaboration_mask,
         auth_manager,
         models_manager,
-        otel_manager,
+        session_telemetry,
         session_header: SessionHeader::new(resolved_model.clone()),
         initial_user_message: None,
         token_info: None,
@@ -1976,6 +1976,10 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
         s.push('\n');
     }
     s
+}
+
+fn status_line_text(chat: &ChatWidget) -> Option<String> {
+    chat.bottom_pane.status_line_text()
 }
 
 fn make_token_info(total_tokens: i64, context_window: i64) -> TokenUsageInfo {
@@ -4206,6 +4210,76 @@ async fn item_completed_pops_pending_steer_with_local_image_and_text_elements() 
     assert!(stored_remote_image_urls.is_empty());
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    chat.set_feature_enabled(Feature::Plugins, true);
+    chat.bottom_pane.set_plugin_mentions(Some(vec![
+        codex_core::plugins::PluginCapabilitySummary {
+            config_name: "sample@test".to_string(),
+            display_name: "Sample Plugin".to_string(),
+            description: None,
+            has_skills: true,
+            mcp_server_names: Vec::new(),
+            app_connector_ids: Vec::new(),
+        },
+    ]));
+
+    chat.submit_user_message(UserMessage {
+        text: "$sample".to_string(),
+        local_images: Vec::new(),
+        remote_image_urls: Vec::new(),
+        text_elements: Vec::new(),
+        mention_bindings: vec![MentionBinding {
+            mention: "sample".to_string(),
+            path: "plugin://sample@test".to_string(),
+        }],
+        repeat_mode: false,
+        steer_mode: false,
+        enqueue_seq: 0,
+    });
+
+    let Op::UserTurn { items, .. } = next_submit_op(&mut op_rx) else {
+        panic!("expected Op::UserTurn");
+    };
+    assert_eq!(
+        items,
+        vec![
+            UserInput::Text {
+                text: "$sample".to_string(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Mention {
+                name: "Sample Plugin".to_string(),
+                path: "plugin://sample@test".to_string(),
+            },
+        ]
+    );
+}
+
 #[tokio::test]
 async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
@@ -5420,7 +5494,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         .await
         .expect("config");
     let resolved_model = codex_core::test_support::get_model_offline(cfg.model.as_deref());
-    let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
+    let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let thread_manager = Arc::new(
         codex_core::test_support::thread_manager_with_models_provider(
             CodexAuth::from_api_key("test"),
@@ -5443,7 +5517,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
-        otel_manager,
+        session_telemetry,
     };
 
     let chat = ChatWidget::new(init, thread_manager);
@@ -5470,7 +5544,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         .await
         .expect("config");
     let resolved_model = codex_core::test_support::get_model_offline(cfg.model.as_deref());
-    let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
+    let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let thread_manager = Arc::new(
         codex_core::test_support::thread_manager_with_models_provider(
             CodexAuth::from_api_key("test"),
@@ -5493,7 +5567,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
-        otel_manager,
+        session_telemetry,
     };
 
     let chat = ChatWidget::new(init, thread_manager);
@@ -6997,6 +7071,21 @@ async fn experimental_popup_shows_js_repl_node_requirement() {
         popup.contains(node_requirement),
         "expected js_repl feature description to mention the required Node version, got:\n{popup}"
     );
+}
+
+#[tokio::test]
+async fn experimental_popup_includes_guardian_approval() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_experimental_popup();
+
+    let popup = render_bottom_popup(&chat, 120);
+    #[cfg(target_os = "linux")]
+    insta::with_settings!({ snapshot_suffix => "linux" }, {
+        assert_snapshot!("experimental_popup_includes_guardian_approval", popup);
+    });
+    #[cfg(not(target_os = "linux"))]
+    assert_snapshot!("experimental_popup_includes_guardian_approval", popup);
 }
 
 #[tokio::test]
@@ -9819,6 +9908,39 @@ async fn status_line_branch_refreshes_after_interrupt() {
     });
 
     assert!(chat.status_line_branch_pending);
+}
+
+#[tokio::test]
+async fn status_line_fast_mode_renders_on_and_off() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.tui_status_line = Some(vec!["fast-mode".to_string()]);
+
+    chat.refresh_status_line();
+    assert_eq!(status_line_text(&chat), Some("Fast off".to_string()));
+
+    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.refresh_status_line();
+    assert_eq!(status_line_text(&chat), Some("Fast on".to_string()));
+}
+
+#[tokio::test]
+async fn status_line_fast_mode_footer_snapshot() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.show_welcome_banner = false;
+    chat.config.tui_status_line = Some(vec!["fast-mode".to_string()]);
+    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.refresh_status_line();
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw fast-mode footer");
+    assert_snapshot!("status_line_fast_mode_footer", terminal.backend());
 }
 
 #[tokio::test]

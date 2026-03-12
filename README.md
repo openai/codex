@@ -9,17 +9,22 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 </br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
 
 > [!NOTE]
-> **Exomind fork status**
+> Exomind fork status
+>
 > This fork tracks `openai/codex` and carries a small set of workflow-level changes on top of upstream.
-> - README section updated on `2026-03-07`
-> - Latest `upstream/main` observed at update time: `9a4787c24`
-> - Current fork/upstream merge-base: `b6d43ec8`
+>
+> - README section updated on `2026-03-08`
+> - Exomind release versions use `<openai-version>-exomind`; current release line: `0.112.0-alpha.11-exomind`
+> - Formal Exomind release tags use `rust-v<openai-version>-exomind`
+> - Latest `upstream/main` observed at update time: `b9a2e4000`
+> - Current fork/upstream merge-base: `e84ee33cc`
 > - Fork-specific additions currently include:
 >   - a shared pending-input queue for repeating queue and repeating steer messages, with distinct preview colors
 >   - `Shift+Tab` cycling collaboration mode when the composer is empty, and enqueuing a repeating queue message otherwise
->   - `Alt+↑` recalling the most recently enqueued queue or steer draft by enqueue order
+>   - `Alt+Up` recalling the most recently enqueued queue or steer draft by enqueue order
 >   - Termux compatibility work and a stable Android build path
 >   - fork-specific CI compatibility adjustments plus governance/task-tracking experiments
+> - This snapshot is currently `29` commits ahead of the sync merge-base and `1` upstream commit behind latest observed `upstream/main`
 > - When this block changes, update the `upstream/main` hash in the same PR so the fork baseline stays auditable
 
 ---

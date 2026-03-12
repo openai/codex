@@ -32,7 +32,10 @@ pub enum UserInput {
         name: String,
         path: std::path::PathBuf,
     },
-    /// Explicit mention selected by the user (name + app://connector id).
+    /// Explicit structured mention selected by the user.
+    ///
+    /// `path` identifies the exact mention target, for example
+    /// `app://<connector-id>` or `plugin://<plugin-name>@<marketplace-name>`.
     Mention { name: String, path: String },
 }
 

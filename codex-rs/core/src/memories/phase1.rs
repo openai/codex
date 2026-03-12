@@ -7,11 +7,12 @@ use crate::config::types::MemoriesConfig;
 use crate::error::CodexErr;
 use crate::memories::metrics;
 use crate::memories::phase_one;
+use crate::memories::phase_one::PRUNE_BATCH_SIZE;
 use crate::memories::prompts::build_stage_one_input_message;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::policy::should_persist_response_item_for_memories;
 use codex_api::ResponseEvent;
-use codex_otel::OtelManager;
+use codex_otel::SessionTelemetry;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::BaseInstructions;
@@ -34,7 +35,7 @@ use tracing::warn;
 #[derive(Clone, Debug)]
 pub(in crate::memories) struct RequestContext {
     pub(in crate::memories) model_info: ModelInfo,
-    pub(in crate::memories) otel_manager: OtelManager,
+    pub(in crate::memories) session_telemetry: SessionTelemetry,
     pub(in crate::memories) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(in crate::memories) reasoning_summary: ReasoningSummaryConfig,
     pub(in crate::memories) service_tier: Option<ServiceTier>,
@@ -84,7 +85,7 @@ struct StageOneOutput {
 pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
     let _phase_one_e2e_timer = session
         .services
-        .otel_manager
+        .session_telemetry
         .start_timer(metrics::MEMORY_PHASE_ONE_E2E_MS, &[])
         .ok();
 
@@ -93,7 +94,7 @@ pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
         return;
     };
     if claimed_candidates.is_empty() {
-        session.services.otel_manager.counter(
+        session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_ONE_JOBS,
             1,
             &[("status", "skipped_no_candidates")],
@@ -120,6 +121,30 @@ pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
     );
 }
 
+/// Prune old un-used "dead" raw memories.
+pub(in crate::memories) async fn prune(session: &Arc<Session>, config: &Config) {
+    if let Some(db) = session.services.state_db.as_deref() {
+        let max_unused_days = config.memories.max_unused_days;
+        match db
+            .prune_stage1_outputs_for_retention(max_unused_days, PRUNE_BATCH_SIZE)
+            .await
+        {
+            Ok(pruned) => {
+                if pruned > 0 {
+                    info!(
+                        "memory startup pruned {pruned} stale stage-1 output row(s) older than {max_unused_days} days"
+                    );
+                }
+            }
+            Err(err) => {
+                warn!(
+                    "state db prune_stage1_outputs_for_retention failed during memories startup: {err}"
+                );
+            }
+        }
+    }
+}
+
 /// JSON schema used to constrain phase-1 model output.
 pub fn output_schema() -> Value {
     json!({
@@ -143,7 +168,7 @@ impl RequestContext {
         Self {
             model_info,
             turn_metadata_header,
-            otel_manager: turn_context.otel_manager.clone(),
+            session_telemetry: turn_context.session_telemetry.clone(),
             reasoning_effort: Some(phase_one::REASONING_EFFORT),
             reasoning_summary: turn_context.reasoning_summary,
             service_tier: turn_context.config.service_tier,
@@ -183,7 +208,7 @@ async fn claim_startup_jobs(
         Ok(claims) => Some(claims),
         Err(err) => {
             warn!("state db claim_stage1_jobs_for_startup failed during memories startup: {err}");
-            session.services.otel_manager.counter(
+            session.services.session_telemetry.counter(
                 metrics::MEMORY_PHASE_ONE_JOBS,
                 1,
                 &[("status", "failed_claim")],
@@ -322,7 +347,7 @@ mod job {
             .stream(
                 &prompt,
                 &stage_one_context.model_info,
-                &stage_one_context.otel_manager,
+                &stage_one_context.session_telemetry,
                 stage_one_context.reasoning_effort,
                 stage_one_context.reasoning_summary,
                 stage_one_context.service_tier,
@@ -491,60 +516,60 @@ fn aggregate_stats(outcomes: Vec<JobResult>) -> Stats {
 
 fn emit_metrics(session: &Session, counts: &Stats) {
     if counts.claimed > 0 {
-        session.services.otel_manager.counter(
+        session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_ONE_JOBS,
             counts.claimed as i64,
             &[("status", "claimed")],
         );
     }
     if counts.succeeded_with_output > 0 {
-        session.services.otel_manager.counter(
+        session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_ONE_JOBS,
             counts.succeeded_with_output as i64,
             &[("status", "succeeded")],
         );
-        session.services.otel_manager.counter(
+        session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_ONE_OUTPUT,
             counts.succeeded_with_output as i64,
             &[],
         );
     }
     if counts.succeeded_no_output > 0 {
-        session.services.otel_manager.counter(
+        session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_ONE_JOBS,
             counts.succeeded_no_output as i64,
             &[("status", "succeeded_no_output")],
         );
     }
     if counts.failed > 0 {
-        session.services.otel_manager.counter(
+        session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_ONE_JOBS,
             counts.failed as i64,
             &[("status", "failed")],
         );
     }
     if let Some(token_usage) = counts.total_token_usage.as_ref() {
-        session.services.otel_manager.histogram(
+        session.services.session_telemetry.histogram(
             metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
             token_usage.total_tokens.max(0),
             &[("token_type", "total")],
         );
-        session.services.otel_manager.histogram(
+        session.services.session_telemetry.histogram(
             metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
             token_usage.input_tokens.max(0),
             &[("token_type", "input")],
         );
-        session.services.otel_manager.histogram(
+        session.services.session_telemetry.histogram(
             metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
             token_usage.cached_input(),
             &[("token_type", "cached_input")],
         );
-        session.services.otel_manager.histogram(
+        session.services.session_telemetry.histogram(
             metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
             token_usage.output_tokens.max(0),
             &[("token_type", "output")],
         );
-        session.services.otel_manager.histogram(
+        session.services.session_telemetry.histogram(
             metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
             token_usage.reasoning_output_tokens.max(0),
             &[("token_type", "reasoning_output")],

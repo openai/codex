@@ -9,6 +9,8 @@ use codex_core::exec::process_exec_tool_call;
 use codex_core::exec_env::create_env;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -102,6 +104,8 @@ async fn run_cmd_result_with_writable_roots(
     process_exec_tool_call(
         params,
         &sandbox_policy,
+        &FileSystemSandboxPolicy::from(&sandbox_policy),
+        NetworkSandboxPolicy::from(&sandbox_policy),
         sandbox_cwd.as_path(),
         &codex_linux_sandbox_exe,
         use_bwrap_sandbox,
@@ -333,6 +337,8 @@ async fn assert_network_blocked(cmd: &[&str]) {
     let result = process_exec_tool_call(
         params,
         &sandbox_policy,
+        &FileSystemSandboxPolicy::from(&sandbox_policy),
+        NetworkSandboxPolicy::from(&sandbox_policy),
         sandbox_cwd.as_path(),
         &codex_linux_sandbox_exe,
         false,

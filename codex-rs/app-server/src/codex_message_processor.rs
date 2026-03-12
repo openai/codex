@@ -1,4 +1,6 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
+use crate::command_exec::CommandExecManager;
+use crate::command_exec::StartCommandExecParams;
 use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_PARAMS_ERROR_CODE;
@@ -34,10 +36,12 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::CommandExecParams;
+use codex_app_server_protocol::CommandExecResizeParams;
+use codex_app_server_protocol::CommandExecTerminateParams;
+use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
-use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::ExperimentalFeature as ApiExperimentalFeature;
 use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::ExperimentalFeatureListResponse;
@@ -80,6 +84,7 @@ use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
+use codex_app_server_protocol::PluginInterface;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
@@ -192,6 +197,7 @@ use codex_core::connectors::filter_disallowed_connectors;
 use codex_core::connectors::merge_plugin_apps;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::error::CodexErr;
+use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
 use codex_core::features::FEATURES;
@@ -263,6 +269,7 @@ use codex_state::StateRuntime;
 use codex_state::ThreadMetadataBuilder;
 use codex_state::log_db::LogDbLayer;
 use codex_utils_json_to_toml::json_to_toml;
+use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -281,6 +288,7 @@ use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 use tracing::error;
 use tracing::info;
@@ -368,6 +376,7 @@ pub(crate) struct CodexMessageProcessor {
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
+    command_exec_manager: CommandExecManager,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
     feedback: CodexFeedback,
@@ -411,6 +420,21 @@ pub(crate) struct CodexMessageProcessorArgs {
 }
 
 impl CodexMessageProcessor {
+    pub(crate) fn clear_plugin_related_caches(&self) {
+        self.thread_manager.plugins_manager().clear_cache();
+        self.thread_manager.skills_manager().clear_cache();
+    }
+
+    pub(crate) async fn maybe_start_curated_repo_sync_for_latest_config(&self) {
+        match self.load_latest_config(None).await {
+            Ok(config) => self
+                .thread_manager
+                .plugins_manager()
+                .maybe_start_curated_repo_sync_for_config(&config),
+            Err(err) => warn!("failed to load latest config for curated plugin sync: {err:?}"),
+        }
+    }
+
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
         let auth = self.auth_manager.auth_cached();
         AccountUpdatedNotification {
@@ -466,6 +490,7 @@ impl CodexMessageProcessor {
             pending_thread_unloads: Arc::new(Mutex::new(HashSet::new())),
             thread_state_manager: ThreadStateManager::new(),
             thread_watch_manager: ThreadWatchManager::new_with_outgoing(outgoing),
+            command_exec_manager: CommandExecManager::default(),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
             feedback,
@@ -813,6 +838,18 @@ impl CodexMessageProcessor {
             }
             ClientRequest::OneOffCommandExec { request_id, params } => {
                 self.exec_one_off_command(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::CommandExecWrite { request_id, params } => {
+                self.command_exec_write(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::CommandExecResize { request_id, params } => {
+                self.command_exec_resize(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::CommandExecTerminate { request_id, params } => {
+                self.command_exec_terminate(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ConfigRead { .. }
@@ -1487,11 +1524,84 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let cwd = params.cwd.unwrap_or_else(|| self.config.cwd.clone());
-        let env = create_env(&self.config.permissions.shell_environment_policy, None);
-        let timeout_ms = params
-            .timeout_ms
-            .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
+        let CommandExecParams {
+            command,
+            process_id,
+            tty,
+            stream_stdin,
+            stream_stdout_stderr,
+            output_bytes_cap,
+            disable_output_cap,
+            disable_timeout,
+            timeout_ms,
+            cwd,
+            env: env_overrides,
+            size,
+            sandbox_policy,
+        } = params;
+
+        if size.is_some() && !tty {
+            let error = JSONRPCErrorError {
+                code: INVALID_PARAMS_ERROR_CODE,
+                message: "command/exec size requires tty: true".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request, error).await;
+            return;
+        }
+
+        if disable_output_cap && output_bytes_cap.is_some() {
+            let error = JSONRPCErrorError {
+                code: INVALID_PARAMS_ERROR_CODE,
+                message: "command/exec cannot set both outputBytesCap and disableOutputCap"
+                    .to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request, error).await;
+            return;
+        }
+
+        if disable_timeout && timeout_ms.is_some() {
+            let error = JSONRPCErrorError {
+                code: INVALID_PARAMS_ERROR_CODE,
+                message: "command/exec cannot set both timeoutMs and disableTimeout".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request, error).await;
+            return;
+        }
+
+        let cwd = cwd.unwrap_or_else(|| self.config.cwd.clone());
+        let mut env = create_env(&self.config.permissions.shell_environment_policy, None);
+        if let Some(env_overrides) = env_overrides {
+            for (key, value) in env_overrides {
+                match value {
+                    Some(value) => {
+                        env.insert(key, value);
+                    }
+                    None => {
+                        env.remove(&key);
+                    }
+                }
+            }
+        }
+        let timeout_ms = match timeout_ms {
+            Some(timeout_ms) => match u64::try_from(timeout_ms) {
+                Ok(timeout_ms) => Some(timeout_ms),
+                Err(_) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_PARAMS_ERROR_CODE,
+                        message: format!(
+                            "command/exec timeoutMs must be non-negative, got {timeout_ms}"
+                        ),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request, error).await;
+                    return;
+                }
+            },
+            None => None,
+        };
         let managed_network_requirements_enabled =
             self.config.managed_network_requirements_enabled();
         let started_network_proxy = match self.config.permissions.network.as_ref() {
@@ -1519,10 +1629,23 @@ impl CodexMessageProcessor {
             None => None,
         };
         let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+        let output_bytes_cap = if disable_output_cap {
+            None
+        } else {
+            Some(output_bytes_cap.unwrap_or(DEFAULT_OUTPUT_BYTES_CAP))
+        };
+        let expiration = if disable_timeout {
+            ExecExpiration::Cancellation(CancellationToken::new())
+        } else {
+            match timeout_ms {
+                Some(timeout_ms) => timeout_ms.into(),
+                None => ExecExpiration::DefaultTimeout,
+            }
+        };
         let exec_params = ExecParams {
-            command: params.command,
+            command,
             cwd,
-            expiration: timeout_ms.into(),
+            expiration,
             env,
             network: started_network_proxy
                 .as_ref()
@@ -1533,10 +1656,20 @@ impl CodexMessageProcessor {
             arg0: None,
         };
 
-        let requested_policy = params.sandbox_policy.map(|policy| policy.to_core());
-        let effective_policy = match requested_policy {
+        let requested_policy = sandbox_policy.map(|policy| policy.to_core());
+        let (
+            effective_policy,
+            effective_file_system_sandbox_policy,
+            effective_network_sandbox_policy,
+        ) = match requested_policy {
             Some(policy) => match self.config.permissions.sandbox_policy.can_set(&policy) {
-                Ok(()) => policy,
+                Ok(()) => {
+                    let file_system_sandbox_policy =
+                        codex_protocol::permissions::FileSystemSandboxPolicy::from(&policy);
+                    let network_sandbox_policy =
+                        codex_protocol::permissions::NetworkSandboxPolicy::from(&policy);
+                    (policy, file_system_sandbox_policy, network_sandbox_policy)
+                }
                 Err(err) => {
                     let error = JSONRPCErrorError {
                         code: INVALID_REQUEST_ERROR_CODE,
@@ -1547,46 +1680,111 @@ impl CodexMessageProcessor {
                     return;
                 }
             },
-            None => self.config.permissions.sandbox_policy.get().clone(),
+            None => (
+                self.config.permissions.sandbox_policy.get().clone(),
+                self.config.permissions.file_system_sandbox_policy.clone(),
+                self.config.permissions.network_sandbox_policy,
+            ),
         };
 
         let codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
-        let request_for_task = request;
+        let request_for_task = request.clone();
         let sandbox_cwd = self.config.cwd.clone();
         let started_network_proxy_for_task = started_network_proxy;
         let use_linux_sandbox_bwrap = self.config.features.enabled(Feature::UseLinuxSandboxBwrap);
+        let size = match size.map(crate::command_exec::terminal_size_from_protocol) {
+            Some(Ok(size)) => Some(size),
+            Some(Err(error)) => {
+                self.outgoing.send_error(request, error).await;
+                return;
+            }
+            None => None,
+        };
 
-        tokio::spawn(async move {
-            let _started_network_proxy = started_network_proxy_for_task;
-            match codex_core::exec::process_exec_tool_call(
-                exec_params,
-                &effective_policy,
-                sandbox_cwd.as_path(),
-                &codex_linux_sandbox_exe,
-                use_linux_sandbox_bwrap,
-                None,
-            )
-            .await
-            {
-                Ok(output) => {
-                    let response = ExecOneOffCommandResponse {
-                        exit_code: output.exit_code,
-                        stdout: output.stdout.text,
-                        stderr: output.stderr.text,
-                    };
-                    outgoing.send_response(request_for_task, response).await;
-                }
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!("exec failed: {err}"),
-                        data: None,
-                    };
-                    outgoing.send_error(request_for_task, error).await;
+        match codex_core::exec::build_exec_request(
+            exec_params,
+            &effective_policy,
+            &effective_file_system_sandbox_policy,
+            effective_network_sandbox_policy,
+            sandbox_cwd.as_path(),
+            &codex_linux_sandbox_exe,
+            use_linux_sandbox_bwrap,
+        ) {
+            Ok(exec_request) => {
+                if let Err(error) = self
+                    .command_exec_manager
+                    .start(StartCommandExecParams {
+                        outgoing,
+                        request_id: request_for_task,
+                        process_id,
+                        exec_request,
+                        started_network_proxy: started_network_proxy_for_task,
+                        tty,
+                        stream_stdin,
+                        stream_stdout_stderr,
+                        output_bytes_cap,
+                        size,
+                    })
+                    .await
+                {
+                    self.outgoing.send_error(request, error).await;
                 }
             }
-        });
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("exec failed: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request, error).await;
+            }
+        }
+    }
+
+    async fn command_exec_write(
+        &self,
+        request_id: ConnectionRequestId,
+        params: CommandExecWriteParams,
+    ) {
+        match self
+            .command_exec_manager
+            .write(request_id.clone(), params)
+            .await
+        {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn command_exec_resize(
+        &self,
+        request_id: ConnectionRequestId,
+        params: CommandExecResizeParams,
+    ) {
+        match self
+            .command_exec_manager
+            .resize(request_id.clone(), params)
+            .await
+        {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn command_exec_terminate(
+        &self,
+        request_id: ConnectionRequestId,
+        params: CommandExecTerminateParams,
+    ) {
+        match self
+            .command_exec_manager
+            .terminate(request_id.clone(), params)
+            .await
+        {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
     }
 
     async fn thread_start(&self, request_id: ConnectionRequestId, params: ThreadStartParams) {
@@ -2007,7 +2205,7 @@ impl CodexMessageProcessor {
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
         let mut state_db_ctx = loaded_thread.as_ref().and_then(|thread| thread.state_db());
         if state_db_ctx.is_none() {
-            state_db_ctx = get_state_db(&self.config, None).await;
+            state_db_ctx = get_state_db(&self.config).await;
         }
         let Some(state_db_ctx) = state_db_ctx else {
             self.send_internal_error(
@@ -2308,7 +2506,7 @@ impl CodexMessageProcessor {
 
         let rollout_path_display = archived_path.display().to_string();
         let fallback_provider = self.config.model_provider_id.clone();
-        let state_db_ctx = get_state_db(&self.config, None).await;
+        let state_db_ctx = get_state_db(&self.config).await;
         let archived_folder = self
             .config
             .codex_home
@@ -2856,6 +3054,9 @@ impl CodexMessageProcessor {
     }
 
     pub(crate) async fn connection_closed(&mut self, connection_id: ConnectionId) {
+        self.command_exec_manager
+            .connection_closed(connection_id)
+            .await;
         self.thread_state_manager
             .remove_connection(connection_id)
             .await;
@@ -3740,7 +3941,7 @@ impl CodexMessageProcessor {
         let fallback_provider = self.config.model_provider_id.clone();
         let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
         let allowed_sources = allowed_sources_vec.as_slice();
-        let state_db_ctx = get_state_db(&self.config, None).await;
+        let state_db_ctx = get_state_db(&self.config).await;
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
@@ -4596,7 +4797,7 @@ impl CodexMessageProcessor {
         self.finalize_thread_teardown(thread_id).await;
 
         if state_db_ctx.is_none() {
-            state_db_ctx = get_state_db(&self.config, None).await;
+            state_db_ctx = get_state_db(&self.config).await;
         }
 
         // Move the rollout file to archived.
@@ -5022,6 +5223,8 @@ impl CodexMessageProcessor {
                             .plugins
                             .into_iter()
                             .map(|plugin| PluginSummary {
+                                id: plugin.id,
+                                installed: plugin.installed,
                                 enabled: plugin.enabled,
                                 name: plugin.name,
                                 source: match plugin.source {
@@ -5029,6 +5232,22 @@ impl CodexMessageProcessor {
                                         PluginSource::Local { path }
                                     }
                                 },
+                                interface: plugin.interface.map(|interface| PluginInterface {
+                                    display_name: interface.display_name,
+                                    short_description: interface.short_description,
+                                    long_description: interface.long_description,
+                                    developer_name: interface.developer_name,
+                                    category: interface.category,
+                                    capabilities: interface.capabilities,
+                                    website_url: interface.website_url,
+                                    privacy_policy_url: interface.privacy_policy_url,
+                                    terms_of_service_url: interface.terms_of_service_url,
+                                    default_prompt: interface.default_prompt,
+                                    brand_color: interface.brand_color,
+                                    composer_icon: interface.composer_icon,
+                                    logo: interface.logo,
+                                    screenshots: interface.screenshots,
+                                }),
                             })
                             .collect(),
                     })
@@ -5190,7 +5409,7 @@ impl CodexMessageProcessor {
                         self.config.as_ref().clone()
                     }
                 };
-                let plugin_apps = load_plugin_apps(&result.installed_path);
+                let plugin_apps = load_plugin_apps(result.installed_path.as_path());
                 let apps_needing_auth = if plugin_apps.is_empty()
                     || !config.features.enabled(Feature::Apps)
                 {
@@ -5254,8 +5473,7 @@ impl CodexMessageProcessor {
                     )
                 };
 
-                plugins_manager.clear_cache();
-                self.thread_manager.skills_manager().clear_cache();
+                self.clear_plugin_related_caches();
                 self.outgoing
                     .send_response(request_id, PluginInstallResponse { apps_needing_auth })
                     .await;
@@ -6339,7 +6557,7 @@ impl CodexMessageProcessor {
             if let Some(log_db) = self.log_db.as_ref() {
                 log_db.flush().await;
             }
-            let state_db_ctx = get_state_db(&self.config, None).await;
+            let state_db_ctx = get_state_db(&self.config).await;
             match (state_db_ctx.as_ref(), conversation_id) {
                 (Some(state_db_ctx), Some(conversation_id)) => {
                     let thread_id_text = conversation_id.to_string();
@@ -6435,7 +6653,10 @@ impl CodexMessageProcessor {
         let config = Arc::clone(&self.config);
         let cli_overrides = self.cli_overrides.clone();
         let cloud_requirements = self.current_cloud_requirements();
-        let command_cwd = params.cwd.unwrap_or_else(|| config.cwd.clone());
+        let command_cwd = params
+            .cwd
+            .map(PathBuf::from)
+            .unwrap_or_else(|| config.cwd.clone());
         let outgoing = Arc::clone(&self.outgoing);
         let connection_id = request_id.connection_id;
 
@@ -6980,7 +7201,7 @@ async fn read_history_cwd_from_state_db(
     thread_id: Option<ThreadId>,
     rollout_path: &Path,
 ) -> Option<PathBuf> {
-    if let Some(state_db_ctx) = get_state_db(config, None).await
+    if let Some(state_db_ctx) = get_state_db(config).await
         && let Some(thread_id) = thread_id
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
     {
@@ -7001,7 +7222,7 @@ async fn read_summary_from_state_db_by_thread_id(
     config: &Config,
     thread_id: ThreadId,
 ) -> Option<ConversationSummary> {
-    let state_db_ctx = get_state_db(config, None).await;
+    let state_db_ctx = get_state_db(config).await;
     read_summary_from_state_db_context_by_thread_id(state_db_ctx.as_ref(), thread_id).await
 }
 
