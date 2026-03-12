@@ -646,6 +646,43 @@ async fn local_requirements_disable_connector_applies_without_user_apps_table() 
     );
 }
 
+#[tokio::test]
+async fn with_app_enabled_state_preserves_unrelated_disabled_connector() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await
+        .expect("config should build");
+
+    let requirements = ConfigRequirementsToml {
+        apps: Some(AppsRequirementsToml {
+            apps: BTreeMap::from([(
+                "connector_drive".to_string(),
+                AppRequirementToml {
+                    enabled: Some(false),
+                },
+            )]),
+        }),
+        ..Default::default()
+    };
+    config.config_layer_stack =
+        ConfigLayerStack::new(Vec::new(), ConfigRequirements::default(), requirements)
+            .expect("requirements stack");
+
+    let mut slack = app("connector_slack");
+    slack.is_enabled = false;
+
+    let mut drive = app("connector_drive");
+    drive.is_enabled = false;
+
+    assert_eq!(
+        with_app_enabled_state(vec![slack.clone(), app("connector_drive")], &config),
+        vec![slack, drive]
+    );
+}
+
 #[test]
 fn app_tool_policy_honors_default_app_enabled_false() {
     let apps_config = AppsConfigToml {
