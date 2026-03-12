@@ -98,6 +98,9 @@ pub(crate) enum AppEvent {
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 
+    /// Resume a saved session by thread id.
+    ResumeSession(ThreadId),
+
     /// Fork the current session into a new thread.
     ForkCurrentSession,
 
@@ -365,9 +368,6 @@ pub(crate) enum AppEvent {
 
     /// Re-open the approval presets popup.
     OpenApprovalsPopup,
-
-    /// Open the skills list popup.
-    OpenSkillsList,
 
     /// Open the skills enable/disable picker.
     OpenManageSkillsPopup,

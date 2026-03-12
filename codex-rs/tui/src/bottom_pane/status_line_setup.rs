@@ -34,6 +34,7 @@ use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::multi_select_picker::MultiSelectItem;
 use crate::bottom_pane::multi_select_picker::MultiSelectPicker;
 use crate::render::renderable::Renderable;
+use crate::slash_command::SlashCommand;
 
 /// Available items that can be displayed in the status line.
 ///
@@ -231,12 +232,14 @@ impl StatusLineSetupView {
             .enable_ordering()
             .on_preview(move |items| preview_data.line_for_items(items))
             .on_confirm(|ids, app_event| {
-                let items = ids
-                    .iter()
-                    .map(|id| id.parse::<StatusLineItem>())
-                    .collect::<Result<Vec<_>, _>>()
-                    .unwrap_or_default();
-                app_event.send(AppEvent::StatusLineSetup { items });
+                let args = if ids.is_empty() {
+                    "none".to_string()
+                } else {
+                    ids.join(" ")
+                };
+                app_event.send(AppEvent::HandleSlashCommandDraft(
+                    format!("/{} {args}", SlashCommand::Statusline.command()).into(),
+                ));
             })
             .on_cancel(|app_event| {
                 app_event.send(AppEvent::StatusLineSetupCancelled);

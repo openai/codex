@@ -40,6 +40,7 @@ use std::time::Instant;
 
 use self::realtime::PendingSteerCompareKey;
 use crate::app_event::RealtimeAudioDeviceKind;
+use crate::app_event::WindowsSandboxEnableMode;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::BuiltinCommandFlags;
@@ -4712,11 +4713,6 @@ impl ChatWidget {
         args: String,
         text_elements: Vec<TextElement>,
     ) {
-        if !cmd.supports_inline_args() {
-            self.dispatch_command(cmd);
-            return;
-        }
-
         let trimmed = args.trim();
         let should_queue = self.bottom_pane.is_task_running() && !cmd.available_during_task();
         if trimmed.is_empty() {
@@ -4771,15 +4767,253 @@ impl ChatWidget {
             self.queue_user_message(Self::inline_slash_command_draft(cmd, args_message));
             return;
         }
-        let _ = self.execute_inline_slash_command(cmd, args_message);
+        let _ = self.execute_slash_command_with_args(cmd, args_message);
     }
 
-    fn execute_inline_slash_command(
+    fn execute_slash_command_with_args(
         &mut self,
         cmd: SlashCommand,
         args_message: UserMessage,
     ) -> QueueReplayControl {
         match cmd {
+            SlashCommand::Approvals | SlashCommand::Permissions => {
+                let args = args_message
+                    .text
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
+                if args.is_empty() {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Usage: /approvals <read-only|auto|full-access> [--confirm-full-access] [--remember-full-access] [--confirm-world-writable] [--remember-world-writable] [--enable-windows-sandbox=elevated|legacy]".to_string(),
+                    );
+                }
+                let preset_id = args[0].as_str();
+                let Some(preset) = builtin_approval_presets()
+                    .into_iter()
+                    .find(|preset| preset.id == preset_id)
+                else {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        format!("Unknown approval preset: {preset_id}"),
+                    );
+                };
+
+                let mut confirm_full_access = false;
+                let mut remember_full_access = false;
+                let mut confirm_world_writable = false;
+                let mut remember_world_writable = false;
+                let mut windows_sandbox_mode = None;
+                for token in args.iter().skip(1) {
+                    match token.as_str() {
+                        "--confirm-full-access" => confirm_full_access = true,
+                        "--remember-full-access" => remember_full_access = true,
+                        "--confirm-world-writable" => confirm_world_writable = true,
+                        "--remember-world-writable" => remember_world_writable = true,
+                        "--enable-windows-sandbox=elevated" => {
+                            windows_sandbox_mode = Some(WindowsSandboxEnableMode::Elevated);
+                        }
+                        "--enable-windows-sandbox=legacy" => {
+                            windows_sandbox_mode = Some(WindowsSandboxEnableMode::Legacy);
+                        }
+                        _ => {
+                            return self.restore_invalid_inline_slash_command(
+                                cmd,
+                                args_message,
+                                format!("Unrecognized /approvals option: {token}"),
+                            );
+                        }
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                let _ = windows_sandbox_mode;
+
+                if remember_full_access && !confirm_full_access {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "--remember-full-access requires --confirm-full-access".to_string(),
+                    );
+                }
+                if remember_world_writable && !confirm_world_writable {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "--remember-world-writable requires --confirm-world-writable".to_string(),
+                    );
+                }
+
+                #[cfg(target_os = "windows")]
+                let label = if preset.id == "auto"
+                    && matches!(
+                        WindowsSandboxLevel::from_config(&self.config),
+                        WindowsSandboxLevel::RestrictedToken
+                    ) {
+                    "Default (non-admin sandbox)".to_string()
+                } else {
+                    preset.label.to_string()
+                };
+                #[cfg(not(target_os = "windows"))]
+                let label = preset.label.to_string();
+
+                if preset.id == "full-access"
+                    && !confirm_full_access
+                    && !self
+                        .config
+                        .notices
+                        .hide_full_access_warning
+                        .unwrap_or(false)
+                {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Full access requires confirmation. Re-run with --confirm-full-access."
+                            .to_string(),
+                    );
+                }
+
+                #[cfg(target_os = "windows")]
+                {
+                    if preset.id == "auto"
+                        && WindowsSandboxLevel::from_config(&self.config)
+                            == WindowsSandboxLevel::Disabled
+                    {
+                        let Some(mode) = windows_sandbox_mode else {
+                            return self.restore_invalid_inline_slash_command(
+                                cmd,
+                                args_message,
+                                "Default permissions require Windows sandbox setup. Re-run with --enable-windows-sandbox=elevated or --enable-windows-sandbox=legacy.".to_string(),
+                            );
+                        };
+                        self.app_event_tx
+                            .send(AppEvent::EnableWindowsSandboxForAgentMode { preset, mode });
+                        return QueueReplayControl::Stop;
+                    }
+                    if preset.id == "auto"
+                        && self.world_writable_warning_details().is_some()
+                        && !confirm_world_writable
+                    {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            "Default permissions require confirming the Windows sandbox warning. Re-run with --confirm-world-writable.".to_string(),
+                        );
+                    }
+                    if confirm_world_writable {
+                        self.app_event_tx.send(AppEvent::SkipNextWorldWritableScan);
+                        if remember_world_writable {
+                            self.app_event_tx
+                                .send(AppEvent::UpdateWorldWritableWarningAcknowledged(true));
+                            self.app_event_tx
+                                .send(AppEvent::PersistWorldWritableWarningAcknowledged);
+                        }
+                    }
+                }
+
+                if confirm_full_access {
+                    self.app_event_tx
+                        .send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
+                    if remember_full_access {
+                        self.app_event_tx
+                            .send(AppEvent::PersistFullAccessWarningAcknowledged);
+                    }
+                }
+
+                let sandbox = preset.sandbox.clone();
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                        cwd: None,
+                        approval_policy: Some(preset.approval),
+                        sandbox_policy: Some(sandbox.clone()),
+                        windows_sandbox_level: None,
+                        model: None,
+                        effort: None,
+                        summary: None,
+                        service_tier: None,
+                        collaboration_mode: None,
+                        personality: None,
+                    }));
+                self.app_event_tx
+                    .send(AppEvent::UpdateAskForApprovalPolicy(preset.approval));
+                self.app_event_tx
+                    .send(AppEvent::UpdateSandboxPolicy(sandbox));
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_info_event(format!("Permissions updated to {label}"), None),
+                )));
+                QueueReplayControl::Stop
+            }
+            SlashCommand::Agent | SlashCommand::MultiAgents => {
+                match ThreadId::from_string(&args_message.text) {
+                    Ok(thread_id) => {
+                        self.app_event_tx
+                            .send(AppEvent::SelectAgentThread(thread_id));
+                        QueueReplayControl::Stop
+                    }
+                    Err(_) => self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Usage: /agent <thread-id>".to_string(),
+                    ),
+                }
+            }
+            SlashCommand::Collab => {
+                let mode = args_message.text.trim().to_ascii_lowercase();
+                let Some(mask) = collaboration_modes::presets_for_tui(self.models_manager.as_ref())
+                    .into_iter()
+                    .find(|mask| mask.name.eq_ignore_ascii_case(&mode))
+                else {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Usage: /collab <default|plan>".to_string(),
+                    );
+                };
+                self.app_event_tx
+                    .send(AppEvent::UpdateCollaborationMode(mask.clone()));
+                self.set_collaboration_mask(mask);
+                QueueReplayControl::Continue
+            }
+            SlashCommand::Experimental => {
+                let tokens = args_message
+                    .text
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
+                let mut updates = Vec::new();
+                for token in tokens {
+                    let Some((key, value)) = token.split_once('=') else {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            "Usage: /experimental <feature-key>=on|off ...".to_string(),
+                        );
+                    };
+                    let Some(spec) = FEATURES.iter().find(|spec| spec.key == key) else {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            format!("Unknown experimental feature: {key}"),
+                        );
+                    };
+                    let enabled = match value {
+                        "on" => true,
+                        "off" => false,
+                        _ => {
+                            return self.restore_invalid_inline_slash_command(
+                                cmd,
+                                args_message,
+                                format!("Experimental feature {key} must be set to on or off."),
+                            );
+                        }
+                    };
+                    updates.push((spec.id, enabled));
+                }
+                self.app_event_tx
+                    .send(AppEvent::UpdateFeatureFlags { updates });
+                QueueReplayControl::Stop
+            }
             SlashCommand::Fast => match args_message.text.to_ascii_lowercase().as_str() {
                 "on" => {
                     self.set_service_tier_selection(Some(ServiceTier::Fast));
@@ -4804,6 +5038,26 @@ impl ChatWidget {
                     "Usage: /fast [on|off|status]".to_string(),
                 ),
             },
+            SlashCommand::Feedback => {
+                let category = match args_message.text.trim().to_ascii_lowercase().as_str() {
+                    "bad-result" => crate::app_event::FeedbackCategory::BadResult,
+                    "good-result" => crate::app_event::FeedbackCategory::GoodResult,
+                    "bug" => crate::app_event::FeedbackCategory::Bug,
+                    "safety-check" => crate::app_event::FeedbackCategory::SafetyCheck,
+                    "other" => crate::app_event::FeedbackCategory::Other,
+                    _ => {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            "Usage: /feedback <bug|bad-result|good-result|safety-check|other>"
+                                .to_string(),
+                        );
+                    }
+                };
+                self.app_event_tx
+                    .send(AppEvent::OpenFeedbackConsent { category });
+                QueueReplayControl::Stop
+            }
             SlashCommand::Model => match Self::parse_model_selection_args(&args_message.text) {
                 Ok((model, effort, scope)) => {
                     self.apply_model_selection(model, effort, scope);
@@ -4813,6 +5067,48 @@ impl ChatWidget {
                     self.restore_invalid_inline_slash_command(cmd, args_message, message)
                 }
             },
+            SlashCommand::Personality => {
+                let personality = match args_message.text.trim().to_ascii_lowercase().as_str() {
+                    "none" => Personality::None,
+                    "friendly" => Personality::Friendly,
+                    "pragmatic" => Personality::Pragmatic,
+                    _ => {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            "Usage: /personality <none|friendly|pragmatic>".to_string(),
+                        );
+                    }
+                };
+                if !self.current_model_supports_personality() {
+                    let current_model = self.current_model();
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        format!(
+                            "Current model ({current_model}) doesn't support personalities. Try /model to pick a different model."
+                        ),
+                    );
+                }
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                        cwd: None,
+                        approval_policy: None,
+                        sandbox_policy: None,
+                        model: None,
+                        effort: None,
+                        summary: None,
+                        service_tier: None,
+                        collaboration_mode: None,
+                        windows_sandbox_level: None,
+                        personality: Some(personality),
+                    }));
+                self.app_event_tx
+                    .send(AppEvent::UpdatePersonality(personality));
+                self.app_event_tx
+                    .send(AppEvent::PersistPersonalitySelection { personality });
+                QueueReplayControl::Continue
+            }
             SlashCommand::Rename => {
                 self.session_telemetry
                     .counter("codex.thread.rename", 1, &[]);
@@ -4851,6 +5147,17 @@ impl ChatWidget {
                     self.restore_invalid_inline_slash_command(cmd, args_message, message)
                 }
             },
+            SlashCommand::Resume => match ThreadId::from_string(args_message.text.trim()) {
+                Ok(thread_id) => {
+                    self.app_event_tx.send(AppEvent::ResumeSession(thread_id));
+                    QueueReplayControl::Stop
+                }
+                Err(_) => self.restore_invalid_inline_slash_command(
+                    cmd,
+                    args_message,
+                    "Usage: /resume <thread-id>".to_string(),
+                ),
+            },
             SlashCommand::SandboxReadRoot => {
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
@@ -4858,7 +5165,122 @@ impl ChatWidget {
                     });
                 QueueReplayControl::Stop
             }
-            _ => self.dispatch_command(cmd),
+            SlashCommand::Settings => {
+                let mut tokens = args_message.text.trim().splitn(2, char::is_whitespace);
+                let Some(kind_name) = tokens.next() else {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Usage: /settings <microphone|speaker> [default|<device-name>]".to_string(),
+                    );
+                };
+                let kind = match kind_name.to_ascii_lowercase().as_str() {
+                    "microphone" => RealtimeAudioDeviceKind::Microphone,
+                    "speaker" => RealtimeAudioDeviceKind::Speaker,
+                    _ => {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            "Usage: /settings <microphone|speaker> [default|<device-name>]"
+                                .to_string(),
+                        );
+                    }
+                };
+                let name = match tokens.next().map(str::trim) {
+                    None | Some("") | Some("default") => None,
+                    Some(other) => Some(other.to_string()),
+                };
+                self.app_event_tx
+                    .send(AppEvent::PersistRealtimeAudioDeviceSelection { kind, name });
+                QueueReplayControl::Stop
+            }
+            SlashCommand::Skills => match args_message.text.trim().to_ascii_lowercase().as_str() {
+                "list" => {
+                    self.open_skills_list();
+                    QueueReplayControl::Stop
+                }
+                "manage" => {
+                    self.app_event_tx.send(AppEvent::OpenManageSkillsPopup);
+                    QueueReplayControl::Stop
+                }
+                _ => self.restore_invalid_inline_slash_command(
+                    cmd,
+                    args_message,
+                    "Usage: /skills <list|manage>".to_string(),
+                ),
+            },
+            SlashCommand::Statusline => {
+                let trimmed = args_message.text.trim();
+                let item_ids = if trimmed.eq_ignore_ascii_case("none") {
+                    Vec::new()
+                } else {
+                    trimmed
+                        .split_whitespace()
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                };
+                let items = match item_ids
+                    .iter()
+                    .map(|item_id| item_id.parse::<StatusLineItem>())
+                    .collect::<Result<Vec<_>, _>>()
+                {
+                    Ok(items) => items,
+                    Err(_) => {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            "Usage: /statusline <item-id>... | /statusline none".to_string(),
+                        );
+                    }
+                };
+                self.app_event_tx.send(AppEvent::StatusLineSetup { items });
+                QueueReplayControl::Stop
+            }
+            SlashCommand::Theme => {
+                if crate::render::highlight::resolve_theme_by_name(
+                    args_message.text.trim(),
+                    Some(&self.config.codex_home),
+                )
+                .is_none()
+                {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Usage: /theme <theme-name>".to_string(),
+                    );
+                }
+                self.app_event_tx.send(AppEvent::SyntaxThemeSelected {
+                    name: args_message.text.trim().to_string(),
+                });
+                QueueReplayControl::Stop
+            }
+            SlashCommand::New
+            | SlashCommand::Fork
+            | SlashCommand::Init
+            | SlashCommand::Compact
+            | SlashCommand::Diff
+            | SlashCommand::Copy
+            | SlashCommand::Mention
+            | SlashCommand::Status
+            | SlashCommand::DebugConfig
+            | SlashCommand::Mcp
+            | SlashCommand::Apps
+            | SlashCommand::Logout
+            | SlashCommand::Quit
+            | SlashCommand::Exit
+            | SlashCommand::Rollout
+            | SlashCommand::Ps
+            | SlashCommand::Clean
+            | SlashCommand::Clear
+            | SlashCommand::Realtime
+            | SlashCommand::TestApproval
+            | SlashCommand::MemoryDrop
+            | SlashCommand::MemoryUpdate
+            | SlashCommand::ElevateSandbox => self.restore_invalid_inline_slash_command(
+                cmd,
+                args_message,
+                format!("`/{}` does not accept inline arguments.", cmd.command()),
+            ),
         }
     }
 
@@ -4928,6 +5350,32 @@ impl ChatWidget {
             text_elements,
             mention_bindings,
         }
+    }
+
+    fn plain_slash_command_draft(cmd: SlashCommand, args: &str) -> UserMessage {
+        if args.is_empty() {
+            format!("/{}", cmd.command()).into()
+        } else {
+            format!("/{} {args}", cmd.command()).into()
+        }
+    }
+
+    fn approval_preset_draft(preset_id: &str, flags: &[&str]) -> UserMessage {
+        let mut args = vec![preset_id.to_string()];
+        args.extend(flags.iter().map(|flag| (*flag).to_string()));
+        Self::plain_slash_command_draft(SlashCommand::Approvals, &args.join(" "))
+    }
+
+    fn settings_device_draft(kind: RealtimeAudioDeviceKind, name: Option<&str>) -> UserMessage {
+        let kind_name = match kind {
+            RealtimeAudioDeviceKind::Microphone => "microphone",
+            RealtimeAudioDeviceKind::Speaker => "speaker",
+        };
+        let args = match name {
+            Some(name) => format!("{kind_name} {name}"),
+            None => format!("{kind_name} default"),
+        };
+        Self::plain_slash_command_draft(SlashCommand::Settings, &args)
     }
 
     fn queue_current_inline_bare_slash_command(&mut self, cmd: SlashCommand) {
@@ -5013,7 +5461,19 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_serialized_slash_command(&mut self, draft: UserMessage) {
-        if self.bottom_pane.is_task_running() {
+        let Some((cmd, _, _)) = self.parse_builtin_slash_command(&draft.text) else {
+            if let Some((name, _, _)) = parse_slash_name(&draft.text)
+                && !name.contains('/')
+                && SlashCommand::from_str(name).is_ok()
+            {
+                self.queue_user_message(draft);
+                return;
+            }
+            self.add_error_message(format!("Failed to handle slash command: {}", draft.text));
+            self.restore_user_message_to_composer(draft);
+            return;
+        };
+        if self.bottom_pane.is_task_running() && !cmd.available_during_task() {
             self.queue_user_message(draft);
             return;
         }
@@ -5089,6 +5549,13 @@ impl ChatWidget {
     fn execute_serialized_slash_command(&mut self, draft: UserMessage) -> QueueReplayControl {
         let preview = draft.text.clone();
         let Some((cmd, rest, rest_offset)) = self.parse_builtin_slash_command(&preview) else {
+            if let Some((name, _, _)) = parse_slash_name(&preview)
+                && !name.contains('/')
+                && SlashCommand::from_str(name).is_ok()
+            {
+                self.submit_user_message(draft);
+                return QueueReplayControl::Stop;
+            }
             self.add_error_message(format!("Failed to replay queued slash command: {preview}"));
             self.restore_user_message_to_composer(draft);
             return QueueReplayControl::Stop;
@@ -5109,13 +5576,8 @@ impl ChatWidget {
             }
             return QueueReplayControl::Stop;
         }
-        if !cmd.supports_inline_args() {
-            self.add_error_message(format!("Failed to replay queued slash command: {preview}"));
-            self.restore_user_message_to_composer(draft);
-            return QueueReplayControl::Stop;
-        }
         let args_message = Self::slash_command_args_message_from_draft(draft, rest_offset);
-        self.execute_inline_slash_command(cmd, args_message)
+        self.execute_slash_command_with_args(cmd, args_message)
     }
 
     fn slash_command_args_message_from_draft(
@@ -6834,21 +7296,14 @@ impl ChatWidget {
                 let name = Self::personality_label(personality).to_string();
                 let description = Some(Self::personality_description(personality).to_string());
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                        cwd: None,
-                        approval_policy: None,
-                        approvals_reviewer: None,
-                        sandbox_policy: None,
-                        model: None,
-                        effort: None,
-                        summary: None,
-                        service_tier: None,
-                        collaboration_mode: None,
-                        windows_sandbox_level: None,
-                        personality: Some(personality),
-                    }));
-                    tx.send(AppEvent::UpdatePersonality(personality));
-                    tx.send(AppEvent::PersistPersonalitySelection { personality });
+                    tx.send(AppEvent::HandleSlashCommandDraft(
+                        Self::plain_slash_command_draft(
+                            SlashCommand::Personality,
+                            Self::personality_label(personality)
+                                .to_ascii_lowercase()
+                                .as_str(),
+                        ),
+                    ));
                 })];
                 SelectionItem {
                     name,
@@ -6942,7 +7397,9 @@ impl ChatWidget {
             description: Some("Use your operating system default device.".to_string()),
             is_current: current_selection.is_none(),
             actions: vec![Box::new(move |tx| {
-                tx.send(AppEvent::PersistRealtimeAudioDeviceSelection { kind, name: None });
+                tx.send(AppEvent::HandleSlashCommandDraft(
+                    Self::settings_device_draft(kind, None),
+                ));
             })],
             dismiss_on_select: true,
             ..Default::default()
@@ -6964,10 +7421,9 @@ impl ChatWidget {
         items.extend(device_names.into_iter().map(|device_name| {
             let persisted_name = device_name.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                tx.send(AppEvent::PersistRealtimeAudioDeviceSelection {
-                    kind,
-                    name: Some(persisted_name.clone()),
-                });
+                tx.send(AppEvent::HandleSlashCommandDraft(
+                    Self::settings_device_draft(kind, Some(persisted_name.as_str())),
+                ));
             })];
             SelectionItem {
                 is_current: current_selection.as_deref() == Some(device_name.as_str()),
@@ -7234,8 +7690,14 @@ impl ChatWidget {
             .map(|mask| {
                 let name = mask.name.clone();
                 let is_current = current_kind == mask.mode;
+                let command_name = name.to_ascii_lowercase();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::UpdateCollaborationMode(mask.clone()));
+                    tx.send(AppEvent::HandleSlashCommandDraft(
+                        Self::plain_slash_command_draft(
+                            SlashCommand::Collab,
+                            command_name.as_str(),
+                        ),
+                    ));
                 })];
                 SelectionItem {
                     name,
@@ -7678,30 +8140,15 @@ impl ChatWidget {
                             });
                         })]
                     } else {
-                        Self::approval_preset_actions(
-                            preset.approval,
-                            preset.sandbox.clone(),
-                            base_name.clone(),
-                            ApprovalsReviewer::User,
-                        )
+                        Self::approval_preset_actions(preset.id, &[])
                     }
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    Self::approval_preset_actions(
-                        preset.approval,
-                        preset.sandbox.clone(),
-                        base_name.clone(),
-                        ApprovalsReviewer::User,
-                    )
+                    Self::approval_preset_actions(preset.id, &[])
                 }
             } else {
-                Self::approval_preset_actions(
-                    preset.approval,
-                    preset.sandbox.clone(),
-                    base_name.clone(),
-                    ApprovalsReviewer::User,
-                )
+                Self::approval_preset_actions(preset.id, &[])
             };
             if preset.id == "auto" {
                 items.push(SelectionItem {
@@ -7783,7 +8230,7 @@ impl ChatWidget {
                 let name = spec.stage.experimental_menu_name()?;
                 let description = spec.stage.experimental_menu_description()?;
                 Some(ExperimentalFeatureItem {
-                    feature: spec.id,
+                    key: spec.key.to_string(),
                     name: name.to_string(),
                     description: description.to_string(),
                     enabled: self.config.features.enabled(spec.id),
@@ -7796,32 +8243,13 @@ impl ChatWidget {
     }
 
     fn approval_preset_actions(
-        approval: AskForApproval,
-        sandbox: SandboxPolicy,
-        label: String,
-        approvals_reviewer: ApprovalsReviewer,
+        preset_id: &'static str,
+        flags: &'static [&'static str],
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
-            let sandbox_clone = sandbox.clone();
-            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                cwd: None,
-                approval_policy: Some(approval),
-                approvals_reviewer: Some(approvals_reviewer),
-                sandbox_policy: Some(sandbox_clone.clone()),
-                windows_sandbox_level: None,
-                model: None,
-                effort: None,
-                summary: None,
-                service_tier: None,
-                collaboration_mode: None,
-                personality: None,
-            }));
-            tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
-            tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
-            tx.send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
-            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                history_cell::new_info_event(format!("Permissions updated to {label}"), None),
-            )));
+            tx.send(AppEvent::HandleSlashCommandDraft(
+                Self::approval_preset_draft(preset_id, flags),
+            ));
         })]
     }
 
@@ -7895,9 +8323,6 @@ impl ChatWidget {
         preset: ApprovalPreset,
         return_to_permissions: bool,
     ) {
-        let selected_name = preset.label.to_string();
-        let approval = preset.approval;
-        let sandbox = preset.sandbox;
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let title_line = Line::from("Enable full access?").bold();
         let info_line = Line::from(vec![
@@ -7912,26 +8337,11 @@ impl ChatWidget {
         ));
         let header = ColumnRenderable::with(header_children);
 
-        let mut accept_actions = Self::approval_preset_actions(
-            approval,
-            sandbox.clone(),
-            selected_name.clone(),
-            ApprovalsReviewer::User,
+        let accept_actions = Self::approval_preset_actions(preset.id, &["--confirm-full-access"]);
+        let accept_and_remember_actions = Self::approval_preset_actions(
+            preset.id,
+            &["--confirm-full-access", "--remember-full-access"],
         );
-        accept_actions.push(Box::new(|tx| {
-            tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
-        }));
-
-        let mut accept_and_remember_actions = Self::approval_preset_actions(
-            approval,
-            sandbox,
-            selected_name,
-            ApprovalsReviewer::User,
-        );
-        accept_and_remember_actions.push(Box::new(|tx| {
-            tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
-            tx.send(AppEvent::PersistFullAccessWarningAcknowledged);
-        }));
 
         let deny_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
             if return_to_permissions {
@@ -7981,10 +8391,6 @@ impl ChatWidget {
         extra_count: usize,
         failed_scan: bool,
     ) {
-        let (approval, sandbox) = match &preset {
-            Some(p) => (Some(p.approval), Some(p.sandbox.clone())),
-            None => (None, None),
-        };
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let describe_policy = |policy: &SandboxPolicy| match policy {
             SandboxPolicy::WorkspaceWrite { .. } => "Agent mode",
@@ -8028,36 +8434,21 @@ impl ChatWidget {
 
         // Build actions ensuring acknowledgement happens before applying the new sandbox policy,
         // so downstream policy-change hooks don't re-trigger the warning.
-        let mut accept_actions: Vec<SelectionAction> = Vec::new();
-        // Suppress the immediate re-scan only when a preset will be applied (i.e., via /approvals or
-        // /permissions), to avoid duplicate warnings from the ensuing policy change.
-        if preset.is_some() {
-            accept_actions.push(Box::new(|tx| {
-                tx.send(AppEvent::SkipNextWorldWritableScan);
-            }));
-        }
-        if let (Some(approval), Some(sandbox)) = (approval, sandbox.clone()) {
-            accept_actions.extend(Self::approval_preset_actions(
-                approval,
-                sandbox,
-                mode_label.to_string(),
-                ApprovalsReviewer::User,
-            ));
-        }
-
-        let mut accept_and_remember_actions: Vec<SelectionAction> = Vec::new();
-        accept_and_remember_actions.push(Box::new(|tx| {
-            tx.send(AppEvent::UpdateWorldWritableWarningAcknowledged(true));
-            tx.send(AppEvent::PersistWorldWritableWarningAcknowledged);
-        }));
-        if let (Some(approval), Some(sandbox)) = (approval, sandbox) {
-            accept_and_remember_actions.extend(Self::approval_preset_actions(
-                approval,
-                sandbox,
-                mode_label.to_string(),
-                ApprovalsReviewer::User,
-            ));
-        }
+        let accept_actions = preset
+            .as_ref()
+            .map(|preset| Self::approval_preset_actions(preset.id, &["--confirm-world-writable"]))
+            .unwrap_or_default();
+        let accept_and_remember_actions = if let Some(preset) = preset.as_ref() {
+            Self::approval_preset_actions(
+                preset.id,
+                &["--confirm-world-writable", "--remember-world-writable"],
+            )
+        } else {
+            vec![Box::new(|tx| {
+                tx.send(AppEvent::UpdateWorldWritableWarningAcknowledged(true));
+                tx.send(AppEvent::PersistWorldWritableWarningAcknowledged);
+            })]
+        };
 
         let items = vec![
             SelectionItem {
@@ -8166,9 +8557,12 @@ impl ChatWidget {
                 description: None,
                 actions: vec![Box::new(move |tx| {
                     accept_otel.counter("codex.windows_sandbox.elevated_prompt_accept", 1, &[]);
-                    tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
-                        preset: preset.clone(),
-                    });
+                    tx.send(AppEvent::HandleSlashCommandDraft(
+                        Self::approval_preset_draft(
+                            preset.id,
+                            &["--enable-windows-sandbox=elevated"],
+                        ),
+                    ));
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
@@ -8178,9 +8572,12 @@ impl ChatWidget {
                 description: None,
                 actions: vec![Box::new(move |tx| {
                     legacy_otel.counter("codex.windows_sandbox.elevated_prompt_use_legacy", 1, &[]);
-                    tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
-                        preset: legacy_preset.clone(),
-                    });
+                    tx.send(AppEvent::HandleSlashCommandDraft(
+                        Self::approval_preset_draft(
+                            legacy_preset.id,
+                            &["--enable-windows-sandbox=legacy"],
+                        ),
+                    ));
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
@@ -8240,9 +8637,12 @@ impl ChatWidget {
                     let preset = elevated_preset;
                     move |tx| {
                         otel.counter("codex.windows_sandbox.fallback_retry_elevated", 1, &[]);
-                        tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
-                            preset: preset.clone(),
-                        });
+                        tx.send(AppEvent::HandleSlashCommandDraft(
+                            Self::approval_preset_draft(
+                                preset.id,
+                                &["--enable-windows-sandbox=elevated"],
+                            ),
+                        ));
                     }
                 })],
                 dismiss_on_select: true,
@@ -8256,9 +8656,12 @@ impl ChatWidget {
                     let preset = legacy_preset;
                     move |tx| {
                         otel.counter("codex.windows_sandbox.fallback_use_legacy", 1, &[]);
-                        tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
-                            preset: preset.clone(),
-                        });
+                        tx.send(AppEvent::HandleSlashCommandDraft(
+                            Self::approval_preset_draft(
+                                preset.id,
+                                &["--enable-windows-sandbox=legacy"],
+                            ),
+                        ));
                     }
                 })],
                 dismiss_on_select: true,

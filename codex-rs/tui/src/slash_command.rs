@@ -119,54 +119,6 @@ impl SlashCommand {
         self.into()
     }
 
-    /// Whether this command supports inline args (for example `/model ...` or `/review ...`).
-    pub fn supports_inline_args(self) -> bool {
-        match self {
-            SlashCommand::Model
-            | SlashCommand::Review
-            | SlashCommand::Rename
-            | SlashCommand::Plan
-            | SlashCommand::Fast
-            | SlashCommand::SandboxReadRoot => true,
-            SlashCommand::Approvals
-            | SlashCommand::Permissions
-            | SlashCommand::ElevateSandbox
-            | SlashCommand::Experimental
-            | SlashCommand::Skills
-            | SlashCommand::New
-            | SlashCommand::Resume
-            | SlashCommand::Fork
-            | SlashCommand::Init
-            | SlashCommand::Compact
-            | SlashCommand::Collab
-            | SlashCommand::Agent
-            | SlashCommand::Diff
-            | SlashCommand::Copy
-            | SlashCommand::Mention
-            | SlashCommand::Status
-            | SlashCommand::DebugConfig
-            | SlashCommand::Statusline
-            | SlashCommand::Theme
-            | SlashCommand::Mcp
-            | SlashCommand::Apps
-            | SlashCommand::Logout
-            | SlashCommand::Quit
-            | SlashCommand::Exit
-            | SlashCommand::Feedback
-            | SlashCommand::Rollout
-            | SlashCommand::Ps
-            | SlashCommand::Clean
-            | SlashCommand::Clear
-            | SlashCommand::Personality
-            | SlashCommand::Realtime
-            | SlashCommand::Settings
-            | SlashCommand::TestApproval
-            | SlashCommand::MultiAgents
-            | SlashCommand::MemoryDrop
-            | SlashCommand::MemoryUpdate => false,
-        }
-    }
-
     /// Whether bare dispatch opens interactive UI that should be resolved before queueing.
     pub fn requires_interaction(self) -> bool {
         match self {

@@ -485,8 +485,17 @@ fn make_feedback_item(
     description: &str,
     category: FeedbackCategory,
 ) -> super::SelectionItem {
+    let token = match category {
+        FeedbackCategory::Bug => "bug",
+        FeedbackCategory::BadResult => "bad-result",
+        FeedbackCategory::GoodResult => "good-result",
+        FeedbackCategory::SafetyCheck => "safety-check",
+        FeedbackCategory::Other => "other",
+    };
     let action: super::SelectionAction = Box::new(move |_sender: &AppEventSender| {
-        app_event_tx.send(AppEvent::OpenFeedbackConsent { category });
+        app_event_tx.send(AppEvent::HandleSlashCommandDraft(
+            format!("/feedback {token}").into(),
+        ));
     });
     super::SelectionItem {
         name: name.to_string(),

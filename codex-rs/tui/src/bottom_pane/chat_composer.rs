@@ -2533,10 +2533,6 @@ impl ChatComposer {
 
         let cmd = slash_commands::find_builtin_command(name, self.builtin_command_flags())?;
 
-        if !cmd.supports_inline_args() {
-            return None;
-        }
-
         let mut args_elements =
             Self::slash_command_args_elements(rest, rest_offset, &self.textarea.text_elements());
         let trimmed_rest = rest.trim();

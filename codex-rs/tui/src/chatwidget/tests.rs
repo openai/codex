@@ -2034,6 +2034,19 @@ fn drain_insert_history(
     out
 }
 
+fn run_next_serialized_slash_draft(
+    chat: &mut ChatWidget,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) {
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::HandleSlashCommandDraft(draft) = event {
+            chat.handle_serialized_slash_command(draft);
+            return;
+        }
+    }
+    panic!("expected serialized slash draft event");
+}
+
 fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
     let mut s = String::new();
     for line in lines {
@@ -5534,11 +5547,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
     );
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    let selected_mask = match rx.try_recv() {
-        Ok(AppEvent::UpdateCollaborationMode(mask)) => mask,
-        other => panic!("expected UpdateCollaborationMode event, got {other:?}"),
-    };
-    chat.set_collaboration_mask(selected_mask);
+    run_next_serialized_slash_draft(&mut chat, &mut rx);
 
     chat.bottom_pane
         .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
@@ -7546,13 +7555,13 @@ async fn experimental_features_popup_snapshot() {
 
     let features = vec![
         ExperimentalFeatureItem {
-            feature: Feature::GhostCommit,
+            key: Feature::GhostCommit.key().to_string(),
             name: "Ghost snapshots".to_string(),
             description: "Capture undo snapshots each turn.".to_string(),
             enabled: false,
         },
         ExperimentalFeatureItem {
-            feature: Feature::ShellTool,
+            key: Feature::ShellTool.key().to_string(),
             name: "Shell tool".to_string(),
             description: "Allow the model to run shell commands.".to_string(),
             enabled: true,
@@ -7572,7 +7581,7 @@ async fn experimental_features_toggle_saves_on_exit() {
     let expected_feature = Feature::GhostCommit;
     let view = ExperimentalFeaturesView::new(
         vec![ExperimentalFeatureItem {
-            feature: expected_feature,
+            key: expected_feature.key().to_string(),
             name: "Ghost snapshots".to_string(),
             description: "Capture undo snapshots each turn.".to_string(),
             enabled: false,
@@ -7589,6 +7598,7 @@ async fn experimental_features_toggle_saves_on_exit() {
     );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    run_next_serialized_slash_draft(&mut chat, &mut rx);
 
     let mut updates = None;
     while let Ok(event) = rx.try_recv() {
@@ -7743,7 +7753,7 @@ async fn realtime_microphone_picker_popup_snapshot() {
 
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 #[tokio::test]
-async fn realtime_audio_picker_emits_persist_event() {
+async fn realtime_audio_picker_emits_serialized_slash_draft() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
     chat.open_realtime_audio_device_selection_with_names(
         RealtimeAudioDeviceKind::Speaker,
@@ -7756,10 +7766,8 @@ async fn realtime_audio_picker_emits_persist_event() {
 
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::PersistRealtimeAudioDeviceSelection {
-            kind: RealtimeAudioDeviceKind::Speaker,
-            name: Some(name),
-        }) if name == "Headphones"
+        Ok(AppEvent::HandleSlashCommandDraft(UserMessage { text, .. }))
+            if text == "/settings speaker Headphones"
     );
 }
 
@@ -8086,6 +8094,43 @@ async fn feedback_selection_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("feedback_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn feedback_selection_popup_emits_serialized_slash_draft() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Feedback);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::HandleSlashCommandDraft(UserMessage { text, .. })) if text == "/feedback bug"
+    );
+}
+
+#[tokio::test]
+async fn skills_menu_emits_serialized_slash_drafts() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_skills_menu();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::HandleSlashCommandDraft(UserMessage { text, .. }))
+            if text == "/skills list"
+    );
+
+    chat.open_skills_menu();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::HandleSlashCommandDraft(UserMessage { text, .. }))
+            if text == "/skills manage"
+    );
 }
 
 #[tokio::test]
@@ -8695,6 +8740,7 @@ async fn approvals_popup_navigation_skips_disabled() {
 
     // Press Enter; selection should land on an enabled preset and dispatch updates.
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    run_next_serialized_slash_draft(&mut chat, &mut rx);
     let mut app_events = Vec::new();
     while let Ok(ev) = rx.try_recv() {
         app_events.push(ev);
@@ -8736,6 +8782,7 @@ async fn permissions_selection_emits_history_cell_when_selection_changes() {
     chat.open_permissions_popup();
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    run_next_serialized_slash_draft(&mut chat, &mut rx);
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(
@@ -8765,6 +8812,7 @@ async fn permissions_selection_history_snapshot_after_mode_switch() {
     #[cfg(target_os = "windows")]
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    run_next_serialized_slash_draft(&mut chat, &mut rx);
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one mode-switch history cell");
@@ -8801,6 +8849,7 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
         chat.handle_key_event(KeyEvent::from(KeyCode::Up));
     }
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    run_next_serialized_slash_draft(&mut chat, &mut rx);
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one mode-switch history cell");
@@ -8839,6 +8888,7 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
 
     chat.open_permissions_popup();
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    run_next_serialized_slash_draft(&mut chat, &mut rx);
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(
@@ -9158,6 +9208,7 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
     );
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    run_next_serialized_slash_draft(&mut chat, &mut rx);
     let cells_after_confirmation = drain_insert_history(&mut rx);
     let total_history_cells = cells_before_confirmation.len() + cells_after_confirmation.len();
     assert_eq!(
