@@ -35,6 +35,7 @@ use crate::bottom_pane::multi_select_picker::MultiSelectItem;
 use crate::bottom_pane::multi_select_picker::MultiSelectPicker;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
+use crate::slash_command_invocation::SlashCommandInvocation;
 
 /// Available items that can be displayed in the status line.
 ///
@@ -232,13 +233,13 @@ impl StatusLineSetupView {
             .enable_ordering()
             .on_preview(move |items| preview_data.line_for_items(items))
             .on_confirm(|ids, app_event| {
-                let args = if ids.is_empty() {
-                    "none".to_string()
+                let invocation = if ids.is_empty() {
+                    SlashCommandInvocation::with_args(SlashCommand::Statusline, ["none"])
                 } else {
-                    ids.join(" ")
+                    SlashCommandInvocation::with_args(SlashCommand::Statusline, ids)
                 };
                 app_event.send(AppEvent::HandleSlashCommandDraft(
-                    format!("/{} {args}", SlashCommand::Statusline.command()).into(),
+                    invocation.into_user_message(),
                 ));
             })
             .on_cancel(|app_event| {

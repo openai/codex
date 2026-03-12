@@ -13,6 +13,7 @@ use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
 use crate::slash_command::SlashCommand;
+use crate::slash_command_invocation::SlashCommandInvocation;
 use codex_chatgpt::connectors::AppInfo;
 use codex_core::connectors::connector_mention_slug;
 use codex_core::mention_syntax::TOOL_MENTION_SIGIL;
@@ -36,7 +37,8 @@ impl ChatWidget {
                 description: Some("Tip: press $ to open this list directly.".to_string()),
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::HandleSlashCommandDraft(
-                        format!("/{} list", SlashCommand::Skills.command()).into(),
+                        SlashCommandInvocation::with_args(SlashCommand::Skills, ["list"])
+                            .into_user_message(),
                     ));
                 })],
                 dismiss_on_select: true,
@@ -47,7 +49,8 @@ impl ChatWidget {
                 description: Some("Enable or disable skills.".to_string()),
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::HandleSlashCommandDraft(
-                        format!("/{} manage", SlashCommand::Skills.command()).into(),
+                        SlashCommandInvocation::with_args(SlashCommand::Skills, ["manage"])
+                            .into_user_message(),
                     ));
                 })],
                 dismiss_on_select: true,

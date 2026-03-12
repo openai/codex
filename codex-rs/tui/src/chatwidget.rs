@@ -48,6 +48,7 @@ use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::bottom_pane::find_builtin_command;
+use crate::slash_command_invocation::SlashCommandInvocation;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
@@ -4348,7 +4349,7 @@ impl ChatWidget {
             && !cmd.available_during_task()
             && !cmd.requires_interaction()
         {
-            self.queue_user_message(format!("/{}", cmd.command()).into());
+            self.queue_user_message(SlashCommandInvocation::bare(cmd).into_user_message());
             // This busy-path queueing only happens for live command dispatch. Queued replay
             // executes slash drafts only while idle, and handle_serialized_slash_command() queues
             // instead of dispatching when a task is already running, so this Stop result is not
@@ -4784,11 +4785,19 @@ impl ChatWidget {
     ) -> QueueReplayControl {
         match cmd {
             SlashCommand::Approvals | SlashCommand::Permissions => {
-                let args = args_message
-                    .text
-                    .split_whitespace()
-                    .map(str::to_string)
-                    .collect::<Vec<_>>();
+                let args = match SlashCommandInvocation::parse_args(
+                    &args_message.text,
+                    "Usage: /approvals <read-only|auto|full-access> [--confirm-full-access] [--remember-full-access] [--confirm-world-writable] [--remember-world-writable] [--enable-windows-sandbox=elevated|legacy]",
+                ) {
+                    Ok(args) => args,
+                    Err(message) => {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            message,
+                        );
+                    }
+                };
                 if args.is_empty() {
                     return self.restore_invalid_inline_slash_command(
                         cmd,
@@ -4952,7 +4961,27 @@ impl ChatWidget {
                 QueueReplayControl::ResumeWhenIdle
             }
             SlashCommand::Agent | SlashCommand::MultiAgents => {
-                match ThreadId::from_string(&args_message.text) {
+                let args = match SlashCommandInvocation::parse_args(
+                    &args_message.text,
+                    "Usage: /agent <thread-id>",
+                ) {
+                    Ok(args) => args,
+                    Err(message) => {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            message,
+                        );
+                    }
+                };
+                if args.len() != 1 {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Usage: /agent <thread-id>".to_string(),
+                    );
+                }
+                match ThreadId::from_string(&args[0]) {
                     Ok(thread_id) => {
                         self.app_event_tx
                             .send(AppEvent::SelectAgentThread(thread_id));
@@ -4966,7 +4995,27 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Collab => {
-                let mode = args_message.text.trim().to_ascii_lowercase();
+                let args = match SlashCommandInvocation::parse_args(
+                    &args_message.text,
+                    "Usage: /collab <default|plan>",
+                ) {
+                    Ok(args) => args,
+                    Err(message) => {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            message,
+                        );
+                    }
+                };
+                if args.len() != 1 {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Usage: /collab <default|plan>".to_string(),
+                    );
+                }
+                let mode = args[0].to_ascii_lowercase();
                 let Some(mask) = collaboration_modes::presets_for_tui(self.models_manager.as_ref())
                     .into_iter()
                     .find(|mask| mask.name.eq_ignore_ascii_case(&mode))
@@ -4983,11 +5032,19 @@ impl ChatWidget {
                 QueueReplayControl::Continue
             }
             SlashCommand::Experimental => {
-                let tokens = args_message
-                    .text
-                    .split_whitespace()
-                    .map(str::to_string)
-                    .collect::<Vec<_>>();
+                let tokens = match SlashCommandInvocation::parse_args(
+                    &args_message.text,
+                    "Usage: /experimental <feature-key>=on|off ...",
+                ) {
+                    Ok(tokens) => tokens,
+                    Err(message) => {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            message,
+                        );
+                    }
+                };
                 let mut updates = Vec::new();
                 for token in tokens {
                     let Some((key, value)) = token.split_once('=') else {
@@ -5021,32 +5078,76 @@ impl ChatWidget {
                     .send(AppEvent::UpdateFeatureFlags { updates });
                 QueueReplayControl::ResumeWhenIdle
             }
-            SlashCommand::Fast => match args_message.text.to_ascii_lowercase().as_str() {
-                "on" => {
-                    self.set_service_tier_selection(Some(ServiceTier::Fast));
-                    QueueReplayControl::Continue
+            SlashCommand::Fast => {
+                let args = match SlashCommandInvocation::parse_args(
+                    &args_message.text,
+                    "Usage: /fast [on|off|status]",
+                ) {
+                    Ok(args) => args,
+                    Err(message) => {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            message,
+                        );
+                    }
+                };
+                if args.len() != 1 {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Usage: /fast [on|off|status]".to_string(),
+                    );
                 }
-                "off" => {
-                    self.set_service_tier_selection(None);
-                    QueueReplayControl::Continue
+                match args[0].to_ascii_lowercase().as_str() {
+                    "on" => {
+                        self.set_service_tier_selection(Some(ServiceTier::Fast));
+                        QueueReplayControl::Continue
+                    }
+                    "off" => {
+                        self.set_service_tier_selection(None);
+                        QueueReplayControl::Continue
+                    }
+                    "status" => {
+                        let status = if matches!(self.config.service_tier, Some(ServiceTier::Fast))
+                        {
+                            "on"
+                        } else {
+                            "off"
+                        };
+                        self.add_info_message(format!("Fast mode is {status}."), None);
+                        QueueReplayControl::Continue
+                    }
+                    _ => self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Usage: /fast [on|off|status]".to_string(),
+                    ),
                 }
-                "status" => {
-                    let status = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
-                        "on"
-                    } else {
-                        "off"
-                    };
-                    self.add_info_message(format!("Fast mode is {status}."), None);
-                    QueueReplayControl::Continue
-                }
-                _ => self.restore_invalid_inline_slash_command(
-                    cmd,
-                    args_message,
-                    "Usage: /fast [on|off|status]".to_string(),
-                ),
-            },
+            }
             SlashCommand::Feedback => {
-                let category = match args_message.text.trim().to_ascii_lowercase().as_str() {
+                let args = match SlashCommandInvocation::parse_args(
+                    &args_message.text,
+                    "Usage: /feedback <bug|bad-result|good-result|safety-check|other>",
+                ) {
+                    Ok(args) => args,
+                    Err(message) => {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            message,
+                        );
+                    }
+                };
+                if args.len() != 1 {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Usage: /feedback <bug|bad-result|good-result|safety-check|other>"
+                            .to_string(),
+                    );
+                }
+                let category = match args[0].to_ascii_lowercase().as_str() {
                     "bad-result" => crate::app_event::FeedbackCategory::BadResult,
                     "good-result" => crate::app_event::FeedbackCategory::GoodResult,
                     "bug" => crate::app_event::FeedbackCategory::Bug,
@@ -5065,17 +5166,45 @@ impl ChatWidget {
                     .send(AppEvent::OpenFeedbackConsent { category });
                 QueueReplayControl::ResumeWhenIdle
             }
-            SlashCommand::Model => match Self::parse_model_selection_args(&args_message.text) {
-                Ok((model, effort, scope)) => {
-                    self.apply_model_selection(model, effort, scope);
-                    QueueReplayControl::Continue
-                }
+            SlashCommand::Model => match SlashCommandInvocation::parse_args(
+                &args_message.text,
+                "Usage: /model <model> [default|none|minimal|low|medium|high|xhigh] [plan-only|all-modes]",
+            ) {
+                Ok(args) => match Self::parse_model_selection_args(&args) {
+                    Ok((model, effort, scope)) => {
+                        self.apply_model_selection(model, effort, scope);
+                        QueueReplayControl::Continue
+                    }
+                    Err(message) => {
+                        self.restore_invalid_inline_slash_command(cmd, args_message, message)
+                    }
+                },
                 Err(message) => {
                     self.restore_invalid_inline_slash_command(cmd, args_message, message)
                 }
             },
             SlashCommand::Personality => {
-                let personality = match args_message.text.trim().to_ascii_lowercase().as_str() {
+                let args = match SlashCommandInvocation::parse_args(
+                    &args_message.text,
+                    "Usage: /personality <none|friendly|pragmatic>",
+                ) {
+                    Ok(args) => args,
+                    Err(message) => {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            message,
+                        );
+                    }
+                };
+                if args.len() != 1 {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Usage: /personality <none|friendly|pragmatic>".to_string(),
+                    );
+                }
+                let personality = match args[0].to_ascii_lowercase().as_str() {
                     "none" => Personality::None,
                     "friendly" => Personality::Friendly,
                     "pragmatic" => Personality::Pragmatic,
@@ -5119,7 +5248,20 @@ impl ChatWidget {
             SlashCommand::Rename => {
                 self.session_telemetry
                     .counter("codex.thread.rename", 1, &[]);
-                let Some(name) = codex_core::util::normalize_thread_name(&args_message.text) else {
+                let args = match SlashCommandInvocation::parse_args(
+                    &args_message.text,
+                    "Thread name cannot be empty.",
+                ) {
+                    Ok(args) => args,
+                    Err(message) => {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            message,
+                        );
+                    }
+                };
+                let Some(name) = codex_core::util::normalize_thread_name(&args.join(" ")) else {
                     return self.restore_invalid_inline_slash_command(
                         cmd,
                         args_message,
@@ -5145,26 +5287,56 @@ impl ChatWidget {
                 }
                 QueueReplayControl::Stop
             }
-            SlashCommand::Review => match Self::parse_review_request(&args_message.text) {
-                Ok(review_request) => {
-                    self.submit_op(Op::Review { review_request });
-                    QueueReplayControl::Stop
-                }
+            SlashCommand::Review => match SlashCommandInvocation::parse_args(
+                &args_message.text,
+                "Usage: /review [uncommitted|branch <name>|commit <sha> [title]|<instructions>]",
+            ) {
+                Ok(args) => match Self::parse_review_request(&args) {
+                    Ok(review_request) => {
+                        self.submit_op(Op::Review { review_request });
+                        QueueReplayControl::Stop
+                    }
+                    Err(message) => {
+                        self.restore_invalid_inline_slash_command(cmd, args_message, message)
+                    }
+                },
                 Err(message) => {
                     self.restore_invalid_inline_slash_command(cmd, args_message, message)
                 }
             },
-            SlashCommand::Resume => match ThreadId::from_string(args_message.text.trim()) {
-                Ok(thread_id) => {
-                    self.app_event_tx.send(AppEvent::ResumeSession(thread_id));
-                    QueueReplayControl::Stop
+            SlashCommand::Resume => {
+                let args = match SlashCommandInvocation::parse_args(
+                    &args_message.text,
+                    "Usage: /resume <thread-id>",
+                ) {
+                    Ok(args) => args,
+                    Err(message) => {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            message,
+                        );
+                    }
+                };
+                if args.len() != 1 {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Usage: /resume <thread-id>".to_string(),
+                    );
                 }
-                Err(_) => self.restore_invalid_inline_slash_command(
-                    cmd,
-                    args_message,
-                    "Usage: /resume <thread-id>".to_string(),
-                ),
-            },
+                match ThreadId::from_string(&args[0]) {
+                    Ok(thread_id) => {
+                        self.app_event_tx.send(AppEvent::ResumeSession(thread_id));
+                        QueueReplayControl::Stop
+                    }
+                    Err(_) => self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Usage: /resume <thread-id>".to_string(),
+                    ),
+                }
+            }
             SlashCommand::SandboxReadRoot => {
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
@@ -5173,8 +5345,20 @@ impl ChatWidget {
                 QueueReplayControl::Stop
             }
             SlashCommand::Settings => {
-                let mut tokens = args_message.text.trim().splitn(2, char::is_whitespace);
-                let Some(kind_name) = tokens.next() else {
+                let args = match SlashCommandInvocation::parse_args(
+                    &args_message.text,
+                    "Usage: /settings <microphone|speaker> [default|<device-name>]",
+                ) {
+                    Ok(args) => args,
+                    Err(message) => {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            message,
+                        );
+                    }
+                };
+                let Some(kind_name) = args.first() else {
                     return self.restore_invalid_inline_slash_command(
                         cmd,
                         args_message,
@@ -5193,62 +5377,107 @@ impl ChatWidget {
                         );
                     }
                 };
-                let name = match tokens.next().map(str::trim) {
-                    None | Some("") | Some("default") => None,
-                    Some(other) => Some(other.to_string()),
+                let name = match args.get(1..).map(|rest| rest.join(" ")) {
+                    None => None,
+                    Some(device_name) if device_name.is_empty() || device_name == "default" => None,
+                    Some(device_name) => Some(device_name),
                 };
                 self.app_event_tx
                     .send(AppEvent::PersistRealtimeAudioDeviceSelection { kind, name });
                 QueueReplayControl::ResumeWhenIdle
             }
-            SlashCommand::Skills => match args_message.text.trim().to_ascii_lowercase().as_str() {
-                "list" => {
-                    self.open_skills_list();
-                    QueueReplayControl::ResumeWhenIdle
-                }
-                "manage" => {
-                    self.app_event_tx.send(AppEvent::OpenManageSkillsPopup);
-                    QueueReplayControl::ResumeWhenIdle
-                }
-                _ => self.restore_invalid_inline_slash_command(
-                    cmd,
-                    args_message,
-                    "Usage: /skills <list|manage>".to_string(),
-                ),
-            },
-            SlashCommand::Statusline => {
-                let trimmed = args_message.text.trim();
-                let item_ids = if trimmed.eq_ignore_ascii_case("none") {
-                    Vec::new()
-                } else {
-                    trimmed
-                        .split_whitespace()
-                        .map(str::to_string)
-                        .collect::<Vec<_>>()
-                };
-                let items = match item_ids
-                    .iter()
-                    .map(|item_id| item_id.parse::<StatusLineItem>())
-                    .collect::<Result<Vec<_>, _>>()
-                {
-                    Ok(items) => items,
-                    Err(_) => {
+            SlashCommand::Skills => {
+                let args = match SlashCommandInvocation::parse_args(
+                    &args_message.text,
+                    "Usage: /skills <list|manage>",
+                ) {
+                    Ok(args) => args,
+                    Err(message) => {
                         return self.restore_invalid_inline_slash_command(
                             cmd,
                             args_message,
-                            "Usage: /statusline <item-id>... | /statusline none".to_string(),
+                            message,
                         );
+                    }
+                };
+                if args.len() != 1 {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Usage: /skills <list|manage>".to_string(),
+                    );
+                }
+                match args[0].to_ascii_lowercase().as_str() {
+                    "list" => {
+                        self.open_skills_list();
+                        QueueReplayControl::ResumeWhenIdle
+                    }
+                    "manage" => {
+                        self.app_event_tx.send(AppEvent::OpenManageSkillsPopup);
+                        QueueReplayControl::ResumeWhenIdle
+                    }
+                    _ => self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Usage: /skills <list|manage>".to_string(),
+                    ),
+                }
+            }
+            SlashCommand::Statusline => {
+                let item_ids = match SlashCommandInvocation::parse_args(
+                    &args_message.text,
+                    "Usage: /statusline <item-id>... | /statusline none",
+                ) {
+                    Ok(item_ids) => item_ids,
+                    Err(message) => {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            message,
+                        );
+                    }
+                };
+                let items = if item_ids.len() == 1 && item_ids[0].eq_ignore_ascii_case("none") {
+                    Vec::new()
+                } else {
+                    match item_ids
+                        .iter()
+                        .map(|item_id| item_id.parse::<StatusLineItem>())
+                        .collect::<Result<Vec<_>, _>>()
+                    {
+                        Ok(items) => items,
+                        Err(_) => {
+                            return self.restore_invalid_inline_slash_command(
+                                cmd,
+                                args_message,
+                                "Usage: /statusline <item-id>... | /statusline none".to_string(),
+                            );
+                        }
                     }
                 };
                 self.app_event_tx.send(AppEvent::StatusLineSetup { items });
                 QueueReplayControl::ResumeWhenIdle
             }
             SlashCommand::Theme => {
-                if crate::render::highlight::resolve_theme_by_name(
-                    args_message.text.trim(),
-                    Some(&self.config.codex_home),
-                )
-                .is_none()
+                let args = match SlashCommandInvocation::parse_args(
+                    &args_message.text,
+                    "Usage: /theme <theme-name>",
+                ) {
+                    Ok(args) => args,
+                    Err(message) => {
+                        return self.restore_invalid_inline_slash_command(
+                            cmd,
+                            args_message,
+                            message,
+                        );
+                    }
+                };
+                if args.len() != 1
+                    || crate::render::highlight::resolve_theme_by_name(
+                        &args[0],
+                        Some(&self.config.codex_home),
+                    )
+                    .is_none()
                 {
                     return self.restore_invalid_inline_slash_command(
                         cmd,
@@ -5257,7 +5486,7 @@ impl ChatWidget {
                     );
                 }
                 self.app_event_tx.send(AppEvent::SyntaxThemeSelected {
-                    name: args_message.text.trim().to_string(),
+                    name: args[0].clone(),
                 });
                 QueueReplayControl::ResumeWhenIdle
             }
@@ -5359,18 +5588,10 @@ impl ChatWidget {
         }
     }
 
-    fn plain_slash_command_draft(cmd: SlashCommand, args: &str) -> UserMessage {
-        if args.is_empty() {
-            format!("/{}", cmd.command()).into()
-        } else {
-            format!("/{} {args}", cmd.command()).into()
-        }
-    }
-
     fn approval_preset_draft(preset_id: &str, flags: &[&str]) -> UserMessage {
         let mut args = vec![preset_id.to_string()];
         args.extend(flags.iter().map(|flag| (*flag).to_string()));
-        Self::plain_slash_command_draft(SlashCommand::Approvals, &args.join(" "))
+        SlashCommandInvocation::with_args(SlashCommand::Approvals, args).into_user_message()
     }
 
     fn settings_device_draft(kind: RealtimeAudioDeviceKind, name: Option<&str>) -> UserMessage {
@@ -5378,11 +5599,9 @@ impl ChatWidget {
             RealtimeAudioDeviceKind::Microphone => "microphone",
             RealtimeAudioDeviceKind::Speaker => "speaker",
         };
-        let args = match name {
-            Some(name) => format!("{kind_name} {name}"),
-            None => format!("{kind_name} default"),
-        };
-        Self::plain_slash_command_draft(SlashCommand::Settings, &args)
+        let device_name = name.unwrap_or("default");
+        SlashCommandInvocation::with_args(SlashCommand::Settings, [kind_name, device_name])
+            .into_user_message()
     }
 
     fn queue_current_inline_bare_slash_command(&mut self, cmd: SlashCommand) {
@@ -5401,16 +5620,14 @@ impl ChatWidget {
         effort: Option<ReasoningEffortConfig>,
         scope: ModelSelectionScope,
     ) -> UserMessage {
-        let mut text = format!("/model {model}");
+        let mut args = vec![model.to_string()];
         if let Some(token) = Self::model_reasoning_effort_token(effort) {
-            text.push(' ');
-            text.push_str(token);
+            args.push(token.to_string());
         }
         if let Some(token) = Self::model_selection_scope_token(scope) {
-            text.push(' ');
-            text.push_str(token);
+            args.push(token.to_string());
         }
-        text.into()
+        SlashCommandInvocation::with_args(SlashCommand::Model, args).into_user_message()
     }
 
     fn apply_model_selection(
@@ -5457,13 +5674,27 @@ impl ChatWidget {
 
     fn review_request_draft(review_request: &ReviewRequest) -> UserMessage {
         match &review_request.target {
-            ReviewTarget::UncommittedChanges => "/review uncommitted".into(),
-            ReviewTarget::BaseBranch { branch } => format!("/review branch {branch}").into(),
-            ReviewTarget::Commit { sha, title } => match title.as_deref().map(str::trim) {
-                Some("") | None => format!("/review commit {sha}").into(),
-                Some(title) => format!("/review commit {sha} {title}").into(),
-            },
-            ReviewTarget::Custom { instructions } => format!("/review -- {instructions}").into(),
+            ReviewTarget::UncommittedChanges => {
+                SlashCommandInvocation::with_args(SlashCommand::Review, ["uncommitted"])
+                    .into_user_message()
+            }
+            ReviewTarget::BaseBranch { branch } => {
+                SlashCommandInvocation::with_args(SlashCommand::Review, ["branch", branch.as_str()])
+                    .into_user_message()
+            }
+            ReviewTarget::Commit { sha, title } => {
+                let mut args = vec!["commit".to_string(), sha.clone()];
+                if let Some(title) = title.as_deref().map(str::trim)
+                    && !title.is_empty()
+                {
+                    args.push(title.to_string());
+                }
+                SlashCommandInvocation::with_args(SlashCommand::Review, args).into_user_message()
+            }
+            ReviewTarget::Custom { instructions } => {
+                SlashCommandInvocation::with_args(SlashCommand::Review, [instructions.as_str()])
+                    .into_user_message()
+            }
         }
     }
 
@@ -5637,60 +5868,37 @@ impl ChatWidget {
         }
     }
 
-    fn parse_review_request(args: &str) -> Result<ReviewRequest, String> {
-        const REVIEW_USAGE: &str = "Usage: /review [uncommitted|branch <name>|commit <sha> [title]|-- <instructions>|<instructions>]";
-        let trimmed = args.trim();
-        if let Some(instructions) = trimmed.strip_prefix("--") {
-            let instructions = instructions.trim_start();
-            if instructions.is_empty() {
-                return Err(REVIEW_USAGE.to_string());
-            }
-            return Ok(ReviewRequest {
-                target: ReviewTarget::Custom {
-                    instructions: instructions.to_string(),
-                },
-                user_facing_hint: None,
-            });
-        }
-        let lowered = trimmed.to_ascii_lowercase();
-        let target = if matches!(
-            lowered.as_str(),
-            "uncommitted" | "current" | "current changes" | "current-changes"
-        ) {
+    fn parse_review_request(args: &[String]) -> Result<ReviewRequest, String> {
+        const REVIEW_USAGE: &str =
+            "Usage: /review [uncommitted|branch <name>|commit <sha> [title]|<instructions>]";
+        let target = if args.len() == 1
+            && matches!(
+                args[0].to_ascii_lowercase().as_str(),
+                "uncommitted" | "current" | "current changes" | "current-changes"
+            ) {
             ReviewTarget::UncommittedChanges
-        } else if let Some((keyword, value)) = trimmed.split_once(char::is_whitespace) {
-            let value = value.trim();
+        } else if let Some(keyword) = args.first() {
             match keyword.to_ascii_lowercase().as_str() {
-                "branch" if !value.is_empty() => ReviewTarget::BaseBranch {
-                    branch: value.to_string(),
+                "branch" if args.len() > 1 => ReviewTarget::BaseBranch {
+                    branch: args[1..].join(" "),
                 },
                 "branch" => {
                     return Err(REVIEW_USAGE.to_string());
                 }
-                "commit" if !value.is_empty() => {
-                    let (sha, title) = value.split_once(char::is_whitespace).map_or(
-                        (value, None),
-                        |(sha, title)| {
-                            let title = title.trim();
-                            (sha, (!title.is_empty()).then_some(title.to_string()))
-                        },
-                    );
-                    ReviewTarget::Commit {
-                        sha: sha.to_string(),
-                        title,
-                    }
+                "commit" if args.len() > 1 => {
+                    let sha = args[1].clone();
+                    let title = (!args[2..].is_empty()).then(|| args[2..].join(" "));
+                    ReviewTarget::Commit { sha, title }
                 }
                 "commit" => {
                     return Err(REVIEW_USAGE.to_string());
                 }
                 _ => ReviewTarget::Custom {
-                    instructions: trimmed.to_string(),
+                    instructions: args.join(" "),
                 },
             }
         } else {
-            ReviewTarget::Custom {
-                instructions: trimmed.to_string(),
-            }
+            return Err(REVIEW_USAGE.to_string());
         };
 
         Ok(ReviewRequest {
@@ -5700,11 +5908,10 @@ impl ChatWidget {
     }
 
     fn parse_model_selection_args(
-        args: &str,
+        args: &[String],
     ) -> Result<(String, Option<ReasoningEffortConfig>, ModelSelectionScope), String> {
         const MODEL_USAGE: &str = "Usage: /model <model> [default|none|minimal|low|medium|high|xhigh] [plan-only|all-modes]";
-        let mut tokens = args.split_whitespace();
-        let Some(model) = tokens.next() else {
+        let Some(model) = args.first() else {
             return Err(MODEL_USAGE.to_string());
         };
 
@@ -5712,7 +5919,7 @@ impl ChatWidget {
         let mut saw_effort = false;
         let mut scope = ModelSelectionScope::Global;
         let mut saw_scope = false;
-        for token in tokens {
+        for token in &args[1..] {
             if let Some(parsed_effort) = Self::parse_model_reasoning_effort_token(token) {
                 if saw_effort {
                     return Err(MODEL_USAGE.to_string());
@@ -5732,7 +5939,7 @@ impl ChatWidget {
             return Err(MODEL_USAGE.to_string());
         }
 
-        Ok((model.to_string(), effort, scope))
+        Ok((model.clone(), effort, scope))
     }
 
     fn parse_model_reasoning_effort_token(token: &str) -> Option<Option<ReasoningEffortConfig>> {
@@ -7318,12 +7525,11 @@ impl ChatWidget {
                 let description = Some(Self::personality_description(personality).to_string());
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                     tx.send(AppEvent::HandleSlashCommandDraft(
-                        Self::plain_slash_command_draft(
+                        SlashCommandInvocation::with_args(
                             SlashCommand::Personality,
-                            Self::personality_label(personality)
-                                .to_ascii_lowercase()
-                                .as_str(),
-                        ),
+                            [Self::personality_label(personality).to_ascii_lowercase()],
+                        )
+                        .into_user_message(),
                     ));
                 })];
                 SelectionItem {
@@ -7714,10 +7920,11 @@ impl ChatWidget {
                 let command_name = name.to_ascii_lowercase();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                     tx.send(AppEvent::HandleSlashCommandDraft(
-                        Self::plain_slash_command_draft(
+                        SlashCommandInvocation::with_args(
                             SlashCommand::Collab,
-                            command_name.as_str(),
-                        ),
+                            [command_name.clone()],
+                        )
+                        .into_user_message(),
                     ));
                 })];
                 SelectionItem {

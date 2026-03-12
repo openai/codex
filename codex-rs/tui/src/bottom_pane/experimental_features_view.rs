@@ -18,6 +18,7 @@ use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
+use crate::slash_command_invocation::SlashCommandInvocation;
 use crate::style::user_message_style;
 
 use super::CancellationEvent;
@@ -198,14 +199,14 @@ impl BottomPaneView for ExperimentalFeaturesView {
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         if !self.features.is_empty() {
-            let args = self
-                .features
-                .iter()
-                .map(|item| format!("{}={}", item.key, if item.enabled { "on" } else { "off" }))
-                .collect::<Vec<_>>()
-                .join(" ");
+            let invocation = SlashCommandInvocation::with_args(
+                SlashCommand::Experimental,
+                self.features.iter().map(|item| {
+                    format!("{}={}", item.key, if item.enabled { "on" } else { "off" })
+                }),
+            );
             self.app_event_tx.send(AppEvent::HandleSlashCommandDraft(
-                format!("/{} {args}", SlashCommand::Experimental.command()).into(),
+                invocation.into_user_message(),
             ));
         }
 

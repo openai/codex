@@ -14,6 +14,7 @@ use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
 use crate::history_cell::UserHistoryCell;
+use crate::slash_command_invocation::SlashCommandInvocation;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
@@ -6417,7 +6418,15 @@ async fn custom_prompt_submit_serializes_review_draft() {
     let evt = rx.try_recv().expect("expected one app event");
     match evt {
         AppEvent::HandleSlashCommandDraft(UserMessage { text, .. }) => {
-            assert_eq!(text, "/review -- please audit dependencies");
+            assert_eq!(
+                text,
+                SlashCommandInvocation::with_args(
+                    SlashCommand::Review,
+                    ["please audit dependencies"],
+                )
+                .into_user_message()
+                .text
+            );
         }
         other => panic!("unexpected app event: {other:?}"),
     }
@@ -8088,7 +8097,11 @@ async fn single_reasoning_option_skips_selection() {
 
 #[test]
 fn model_parser_rejects_repeated_effort_when_first_token_is_default() {
-    let parsed = ChatWidget::parse_model_selection_args("gpt-5 default high");
+    let parsed = ChatWidget::parse_model_selection_args(&[
+        "gpt-5".to_string(),
+        "default".to_string(),
+        "high".to_string(),
+    ]);
 
     assert_eq!(
         parsed,
@@ -8101,7 +8114,11 @@ fn model_parser_rejects_repeated_effort_when_first_token_is_default() {
 
 #[test]
 fn model_parser_rejects_repeated_scope_when_first_token_is_global() {
-    let parsed = ChatWidget::parse_model_selection_args("gpt-5 global plan-only");
+    let parsed = ChatWidget::parse_model_selection_args(&[
+        "gpt-5".to_string(),
+        "global".to_string(),
+        "plan-only".to_string(),
+    ]);
 
     assert_eq!(
         parsed,
@@ -11838,7 +11855,14 @@ async fn queued_custom_review_selection_preserves_branch_like_instructions_after
 
     assert_eq!(
         chat.queued_user_message_texts(),
-        vec!["/review -- branch main but focus on risky migrations".to_string()]
+        vec![
+            SlashCommandInvocation::with_args(
+                SlashCommand::Review,
+                ["branch main but focus on risky migrations"],
+            )
+            .into_user_message()
+            .text,
+        ]
     );
 
     chat.on_task_complete(None, false);
@@ -11879,7 +11903,14 @@ async fn queued_commit_review_selection_preserves_title_after_turn_complete() {
 
     assert_eq!(
         chat.queued_user_message_texts(),
-        vec!["/review commit abc123 Preserve commit subject".to_string()]
+        vec![
+            SlashCommandInvocation::with_args(
+                SlashCommand::Review,
+                ["commit", "abc123", "Preserve commit subject"],
+            )
+            .into_user_message()
+            .text,
+        ]
     );
 
     chat.on_task_complete(None, false);

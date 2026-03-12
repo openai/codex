@@ -21,6 +21,8 @@ use crate::app_event::FeedbackCategory;
 use crate::app_event_sender::AppEventSender;
 use crate::history_cell;
 use crate::render::renderable::Renderable;
+use crate::slash_command::SlashCommand;
+use crate::slash_command_invocation::SlashCommandInvocation;
 use codex_protocol::protocol::SessionSource;
 
 use super::CancellationEvent;
@@ -494,7 +496,7 @@ fn make_feedback_item(
     };
     let action: super::SelectionAction = Box::new(move |_sender: &AppEventSender| {
         app_event_tx.send(AppEvent::HandleSlashCommandDraft(
-            format!("/feedback {token}").into(),
+            SlashCommandInvocation::with_args(SlashCommand::Feedback, [token]).into_user_message(),
         ));
     });
     super::SelectionItem {

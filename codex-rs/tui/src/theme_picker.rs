@@ -36,6 +36,7 @@ use crate::diff_render::push_wrapped_diff_line_with_syntax_and_style_context;
 use crate::render::highlight;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
+use crate::slash_command_invocation::SlashCommandInvocation;
 use crate::status::format_directory_display;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -346,7 +347,11 @@ pub(crate) fn build_theme_picker_params(
                 search_value: Some(entry.name.clone()),
                 actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::HandleSlashCommandDraft(
-                        format!("/{} {}", SlashCommand::Theme.command(), name_for_action).into(),
+                        SlashCommandInvocation::with_args(
+                            SlashCommand::Theme,
+                            [name_for_action.clone()],
+                        )
+                        .into_user_message(),
                     ));
                 })],
                 ..Default::default()

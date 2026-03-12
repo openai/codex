@@ -1748,11 +1748,11 @@ impl App {
                     is_current: self.active_thread_id == Some(*thread_id),
                     actions: vec![Box::new(move |tx| {
                         tx.send(AppEvent::HandleSlashCommandDraft(
-                            format!(
-                                "/{} {id}",
-                                crate::slash_command::SlashCommand::Agent.command()
+                            crate::slash_command_invocation::SlashCommandInvocation::with_args(
+                                crate::slash_command::SlashCommand::Agent,
+                                [id.to_string()],
                             )
-                            .into(),
+                            .into_user_message(),
                         ));
                     })],
                     dismiss_on_select: true,
