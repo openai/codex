@@ -12,6 +12,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::effective_file_system_sandbox_policy;
+use crate::sandboxing::merge_permission_profiles;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
@@ -100,6 +101,10 @@ async fn effective_patch_permissions(
     codex_protocol::permissions::FileSystemSandboxPolicy,
 ) {
     let file_paths = file_paths_for_action(action);
+    let granted_permissions = merge_permission_profiles(
+        session.granted_session_permissions().await.as_ref(),
+        session.granted_turn_permissions().await.as_ref(),
+    );
     let effective_additional_permissions = apply_granted_turn_permissions(
         session,
         crate::sandboxing::SandboxPermissions::UseDefault,
@@ -108,9 +113,7 @@ async fn effective_patch_permissions(
     .await;
     let file_system_sandbox_policy = effective_file_system_sandbox_policy(
         &turn.file_system_sandbox_policy,
-        effective_additional_permissions
-            .additional_permissions
-            .as_ref(),
+        granted_permissions.as_ref(),
     );
 
     (
