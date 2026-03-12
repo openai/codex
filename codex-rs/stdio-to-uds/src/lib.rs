@@ -39,8 +39,8 @@ pub fn run(socket_path: &Path) -> anyhow::Result<()> {
         io::copy(&mut handle, &mut stream).context("failed to copy data from stdin to socket")?;
     }
 
-    // The peer can close immediately after sending its response. On macOS that
-    // may surface as NotConnected when we half-close our write side.
+    // The peer can close immediately after sending its response; in that race,
+    // half-closing our write side can report NotConnected on some platforms.
     if let Err(err) = stream.shutdown(Shutdown::Write)
         && err.kind() != io::ErrorKind::NotConnected
     {

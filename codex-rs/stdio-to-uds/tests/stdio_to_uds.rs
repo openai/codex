@@ -20,6 +20,13 @@ use uds_windows::UnixListener;
 
 #[test]
 fn pipes_stdin_and_stdout_through_socket() -> anyhow::Result<()> {
+    // This test intentionally avoids `read_to_end()` on the server side because
+    // waiting for EOF can race with socket half-close behavior on slower runners.
+    // Reading the exact request length keeps the test deterministic.
+    //
+    // We also use `std::process::Command` (instead of `assert_cmd`) so we can
+    // poll/kill on timeout and include incremental server events + stderr in
+    // failure output, which makes flaky failures actionable to debug.
     let dir = tempfile::TempDir::new().context("failed to create temp dir")?;
     let socket_path = dir.path().join("socket");
     let request = b"request";
