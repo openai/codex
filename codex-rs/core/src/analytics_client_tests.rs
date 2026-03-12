@@ -2,11 +2,16 @@ use super::AnalyticsEventsQueue;
 use super::AppInvocation;
 use super::CodexAppMentionedEventRequest;
 use super::CodexAppUsedEventRequest;
+use super::CodexPluginEventRequest;
+use super::CodexPluginUsedEventRequest;
 use super::InvocationType;
 use super::TrackEventRequest;
 use super::TrackEventsContext;
 use super::codex_app_metadata;
+use super::codex_plugin_metadata;
+use super::codex_plugin_used_metadata;
 use super::normalize_path_for_skill_id;
+use crate::plugins::PluginTelemetryMetadata;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashSet;
@@ -153,6 +158,7 @@ fn app_used_dedupe_is_keyed_by_turn_and_connector() {
     let queue = AnalyticsEventsQueue {
         sender,
         app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+        plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
     };
     let app = AppInvocation {
         connector_id: Some("calendar".to_string()),
@@ -174,4 +180,101 @@ fn app_used_dedupe_is_keyed_by_turn_and_connector() {
     assert_eq!(queue.should_enqueue_app_used(&turn_1, &app), true);
     assert_eq!(queue.should_enqueue_app_used(&turn_1, &app), false);
     assert_eq!(queue.should_enqueue_app_used(&turn_2, &app), true);
+}
+
+#[test]
+fn plugin_used_event_serializes_expected_shape() {
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-3".to_string(),
+        turn_id: "turn-3".to_string(),
+    };
+    let event = TrackEventRequest::PluginUsed(CodexPluginUsedEventRequest {
+        event_type: "codex_plugin_used",
+        event_params: codex_plugin_used_metadata(&tracking, sample_plugin_metadata()),
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize plugin used event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_plugin_used",
+            "event_params": {
+                "plugin_id": "sample@test",
+                "plugin_name": "sample",
+                "marketplace_name": "test",
+                "has_skills": true,
+                "mcp_server_count": 2,
+                "connector_ids": ["calendar", "drive"],
+                "product_client_id": crate::default_client::originator().value,
+                "thread_id": "thread-3",
+                "turn_id": "turn-3",
+                "model_slug": "gpt-5"
+            }
+        })
+    );
+}
+
+#[test]
+fn plugin_management_event_serializes_expected_shape() {
+    let event = TrackEventRequest::PluginInstalled(CodexPluginEventRequest {
+        event_type: "codex_plugin_installed",
+        event_params: codex_plugin_metadata(sample_plugin_metadata()),
+    });
+
+    let payload = serde_json::to_value(&event).expect("serialize plugin installed event");
+
+    assert_eq!(
+        payload,
+        json!({
+            "event_type": "codex_plugin_installed",
+            "event_params": {
+                "plugin_id": "sample@test",
+                "plugin_name": "sample",
+                "marketplace_name": "test",
+                "has_skills": true,
+                "mcp_server_count": 2,
+                "connector_ids": ["calendar", "drive"],
+                "product_client_id": crate::default_client::originator().value
+            }
+        })
+    );
+}
+
+#[test]
+fn plugin_used_dedupe_is_keyed_by_turn_and_plugin() {
+    let (sender, _receiver) = mpsc::channel(1);
+    let queue = AnalyticsEventsQueue {
+        sender,
+        app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+        plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+    };
+    let plugin = sample_plugin_metadata();
+
+    let turn_1 = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+    };
+    let turn_2 = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-2".to_string(),
+    };
+
+    assert_eq!(queue.should_enqueue_plugin_used(&turn_1, &plugin), true);
+    assert_eq!(queue.should_enqueue_plugin_used(&turn_1, &plugin), false);
+    assert_eq!(queue.should_enqueue_plugin_used(&turn_2, &plugin), true);
+}
+
+fn sample_plugin_metadata() -> PluginTelemetryMetadata {
+    PluginTelemetryMetadata {
+        plugin_id: "sample@test".to_string(),
+        plugin_name: Some("sample".to_string()),
+        marketplace_name: Some("test".to_string()),
+        has_skills: Some(true),
+        mcp_server_count: Some(2),
+        connector_ids: Some(vec!["calendar".to_string(), "drive".to_string()]),
+    }
 }

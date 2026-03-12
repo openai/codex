@@ -107,6 +107,24 @@ async fn build_plugin_test_codex(
         .codex)
 }
 
+async fn build_analytics_plugin_test_codex(
+    server: &MockServer,
+    codex_home: Arc<TempDir>,
+) -> Result<Arc<codex_core::CodexThread>> {
+    let chatgpt_base_url = server.uri();
+    let mut builder = test_codex()
+        .with_home(codex_home)
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.chatgpt_base_url = chatgpt_base_url;
+        });
+    Ok(builder
+        .build(server)
+        .await
+        .expect("create new conversation")
+        .codex)
+}
+
 async fn build_apps_enabled_plugin_test_codex(
     server: &MockServer,
     codex_home: Arc<TempDir>,
@@ -295,6 +313,70 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
         calendar_description.contains("This tool is part of plugin `sample`."),
         "expected plugin app provenance in tool description: {calendar_description:?}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let _resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    write_plugin_skill_plugin(codex_home.as_ref());
+    let codex = build_analytics_plugin_test_codex(&server, codex_home).await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![codex_protocol::user_input::UserInput::Mention {
+                name: "sample".into(),
+                path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let analytics_request = loop {
+        let requests = server.received_requests().await.unwrap_or_default();
+        if let Some(request) = requests
+            .into_iter()
+            .find(|request| request.url.path() == "/codex/analytics-events/events")
+        {
+            break request;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for plugin analytics request");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+
+    let payload: serde_json::Value =
+        serde_json::from_slice(&analytics_request.body).expect("analytics payload");
+    let event = &payload["events"][0];
+    assert_eq!(event["event_type"], "codex_plugin_used");
+    assert_eq!(event["event_params"]["plugin_id"], "sample@test");
+    assert_eq!(event["event_params"]["plugin_name"], "sample");
+    assert_eq!(event["event_params"]["marketplace_name"], "test");
+    assert_eq!(event["event_params"]["has_skills"], true);
+    assert_eq!(event["event_params"]["mcp_server_count"], 0);
+    assert_eq!(
+        event["event_params"]["connector_ids"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        event["event_params"]["product_client_id"],
+        serde_json::json!(codex_core::default_client::originator().value)
+    );
+    assert_eq!(event["event_params"]["model_slug"], "gpt-5");
+    assert!(event["event_params"]["thread_id"].as_str().is_some());
+    assert!(event["event_params"]["turn_id"].as_str().is_some());
 
     Ok(())
 }
