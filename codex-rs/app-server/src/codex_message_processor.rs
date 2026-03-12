@@ -3228,6 +3228,10 @@ impl CodexMessageProcessor {
         self.thread_manager.subscribe_thread_created()
     }
 
+    pub(crate) fn thread_manager(&self) -> &Arc<ThreadManager> {
+        &self.thread_manager
+    }
+
     pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
         self.thread_state_manager
             .connection_initialized(connection_id)

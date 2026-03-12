@@ -14,9 +14,11 @@ use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
 use crate::history_cell::UserHistoryCell;
+use crate::streaming::controller::StreamController;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
+use codex_arg0::Arg0DispatchPaths;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -25,6 +27,7 @@ use codex_core::config::ConstraintError;
 use codex_core::config::types::Notifications;
 #[cfg(target_os = "windows")]
 use codex_core::config::types::WindowsSandboxModeToml;
+use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::RequirementSource;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
@@ -116,6 +119,7 @@ use pretty_assertions::assert_eq;
 #[cfg(target_os = "windows")]
 use serial_test::serial;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -1743,10 +1747,90 @@ async fn helpers_are_available_and_do_not_panic() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
+        in_process_context: InProcessAgentContext {
+            arg0_paths: Arg0DispatchPaths::default(),
+            cli_kv_overrides: Vec::new(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+        },
     };
     let mut w = ChatWidget::new(init, thread_manager);
     // Basic construction sanity.
     let _ = &mut w;
+}
+
+#[tokio::test]
+async fn new_from_existing_submits_ops_to_the_provided_thread() {
+    let codex_home = tempdir().expect("tempdir");
+    let cfg = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config");
+    let resolved_model = codex_core::test_support::get_model_offline(cfg.model.as_deref());
+    let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
+    let auth_manager = codex_core::test_support::auth_manager_from_auth_with_home(
+        CodexAuth::from_api_key("test"),
+        cfg.codex_home.clone(),
+    );
+    let thread_manager = Arc::new(
+        codex_core::test_support::thread_manager_with_models_provider_and_home(
+            CodexAuth::from_api_key("test"),
+            cfg.model_provider.clone(),
+            cfg.codex_home.clone(),
+        ),
+    );
+    let existing = thread_manager
+        .start_thread(cfg.clone())
+        .await
+        .expect("start thread");
+    let init = ChatWidgetInit {
+        config: cfg,
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        auth_manager,
+        models_manager: thread_manager.get_models_manager(),
+        feedback: codex_feedback::CodexFeedback::new(),
+        is_first_run: false,
+        feedback_audience: FeedbackAudience::External,
+        model: Some(resolved_model),
+        startup_tooltip_override: None,
+        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        session_telemetry,
+        in_process_context: InProcessAgentContext {
+            arg0_paths: Arg0DispatchPaths::default(),
+            cli_kv_overrides: Vec::new(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+        },
+    };
+
+    let mut chat =
+        ChatWidget::new_from_existing(init, existing.thread.clone(), existing.session_configured);
+    assert!(chat.submit_op(Op::Shutdown));
+
+    let shutdown_result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let event = existing.thread.next_event().await.expect("thread event");
+            if matches!(event.msg, EventMsg::ShutdownComplete) {
+                break;
+            }
+        }
+    })
+    .await;
+
+    if shutdown_result.is_err() {
+        existing
+            .thread
+            .submit(Op::Shutdown)
+            .await
+            .expect("cleanup shutdown");
+    }
+
+    assert!(
+        shutdown_result.is_ok(),
+        "expected reopened widget to forward shutdown to the provided thread"
+    );
 }
 
 fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
@@ -1819,6 +1903,8 @@ async fn make_chatwidget_manual(
     let mut widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
+        thread_scoped_op_tx: None,
+        app_server_thread_id: None,
         bottom_pane: bottom,
         active_cell: None,
         active_cell_revision: 0,
@@ -1864,6 +1950,7 @@ async fn make_chatwidget_manual(
         pending_status_indicator_restore: false,
         suppress_queue_autosend: false,
         thread_id: None,
+        current_turn_id: None,
         thread_name: None,
         forked_from: None,
         frame_requester: FrameRequester::test_dummy(),
@@ -1904,6 +1991,60 @@ async fn make_chatwidget_manual(
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
+}
+
+#[tokio::test]
+async fn submit_op_routes_selected_app_server_thread_via_thread_scoped_sender() {
+    let (mut chat, _app_event_tx, _app_event_rx, mut op_rx) =
+        make_chatwidget_manual_with_sender().await;
+    let (thread_scoped_op_tx, mut thread_scoped_op_rx) = tokio::sync::mpsc::unbounded_channel();
+    let thread_id = ThreadId::new();
+
+    chat.thread_scoped_op_tx = Some(thread_scoped_op_tx);
+    chat.app_server_thread_id = Some(thread_id);
+    chat.thread_id = Some(thread_id);
+    chat.current_turn_id = Some("turn-1".to_string());
+
+    assert_eq!(chat.submit_op(Op::ListMcpTools), true);
+    assert_eq!(
+        thread_scoped_op_rx.try_recv(),
+        Ok(ThreadScopedOp {
+            thread_id,
+            op: Op::ListMcpTools,
+            interrupt_turn_id: None,
+        })
+    );
+
+    while let Ok(op) = op_rx.try_recv() {
+        assert_ne!(op, Op::ListMcpTools);
+    }
+}
+
+#[tokio::test]
+async fn interrupt_routes_selected_app_server_thread_with_current_turn_id() {
+    let (mut chat, _app_event_tx, _app_event_rx, mut op_rx) =
+        make_chatwidget_manual_with_sender().await;
+    let (thread_scoped_op_tx, mut thread_scoped_op_rx) = tokio::sync::mpsc::unbounded_channel();
+    let thread_id = ThreadId::new();
+
+    chat.thread_scoped_op_tx = Some(thread_scoped_op_tx);
+    chat.app_server_thread_id = Some(thread_id);
+    chat.thread_id = Some(thread_id);
+    chat.current_turn_id = Some("turn-1".to_string());
+
+    assert_eq!(chat.submit_op(Op::Interrupt), true);
+    assert_eq!(
+        thread_scoped_op_rx.try_recv(),
+        Ok(ThreadScopedOp {
+            thread_id,
+            op: Op::Interrupt,
+            interrupt_turn_id: Some("turn-1".to_string()),
+        })
+    );
+
+    while let Ok(op) = op_rx.try_recv() {
+        assert_ne!(op, Op::Interrupt);
+    }
 }
 
 // ChatWidget may emit other `Op`s (e.g. history/logging updates) on the same channel; this helper
@@ -1951,6 +2092,23 @@ pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
     ));
 }
 
+fn next_submit_thread_op(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> (ThreadId, Op) {
+    loop {
+        match rx.try_recv() {
+            Ok(AppEvent::SubmitThreadOp { thread_id, op }) => return (thread_id, op),
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => {
+                panic!("expected submit-thread op event but queue was empty")
+            }
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected submit-thread op event but channel closed")
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn prefetch_rate_limits_is_gated_on_chatgpt_auth_provider() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -1993,12 +2151,15 @@ fn drain_insert_history(
 ) -> Vec<Vec<ratatui::text::Line<'static>>> {
     let mut out = Vec::new();
     while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = ev {
-            let mut lines = cell.display_lines(80);
-            if !cell.is_stream_continuation() && !out.is_empty() && !lines.is_empty() {
-                lines.insert(0, "".into());
+        match ev {
+            AppEvent::InsertHistoryCell(cell) | AppEvent::InsertThreadHistoryCell { cell, .. } => {
+                let mut lines = cell.display_lines(80);
+                if !cell.is_stream_continuation() && !out.is_empty() && !lines.is_empty() {
+                    lines.insert(0, "".into());
+                }
+                out.push(lines)
             }
-            out.push(lines)
+            _ => {}
         }
     }
     out
@@ -2740,20 +2901,23 @@ async fn user_input_notification_overrides_pending_agent_turn_complete_notificat
     chat.notify(Notification::AgentTurnComplete {
         response: "done".to_string(),
     });
-    chat.handle_request_user_input_now(RequestUserInputEvent {
-        call_id: "call-1".to_string(),
-        turn_id: "turn-1".to_string(),
-        questions: vec![RequestUserInputQuestion {
-            id: "reasoning_scope".to_string(),
-            header: "Reasoning scope".to_string(),
-            question: "Which reasoning scope should I use?".to_string(),
-            is_other: false,
-            is_secret: false,
-            options: Some(vec![RequestUserInputQuestionOption {
-                label: "Plan only".to_string(),
-                description: "Update only Plan mode.".to_string(),
-            }]),
-        }],
+    chat.handle_request_user_input_now(crate::bottom_pane::ThreadUserInputRequest {
+        thread_id: ThreadId::new(),
+        request: RequestUserInputEvent {
+            call_id: "call-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            questions: vec![RequestUserInputQuestion {
+                id: "reasoning_scope".to_string(),
+                header: "Reasoning scope".to_string(),
+                question: "Which reasoning scope should I use?".to_string(),
+                is_other: false,
+                is_secret: false,
+                options: Some(vec![RequestUserInputQuestionOption {
+                    label: "Plan only".to_string(),
+                    description: "Update only Plan mode.".to_string(),
+                }]),
+            }],
+        },
     });
 
     assert_matches!(
@@ -2770,20 +2934,23 @@ async fn handle_request_user_input_sets_pending_notification() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
     chat.config.tui_notifications = Notifications::Custom(vec!["user-input-requested".to_string()]);
 
-    chat.handle_request_user_input_now(RequestUserInputEvent {
-        call_id: "call-1".to_string(),
-        turn_id: "turn-1".to_string(),
-        questions: vec![RequestUserInputQuestion {
-            id: "reasoning_scope".to_string(),
-            header: "Reasoning scope".to_string(),
-            question: "Which reasoning scope should I use?".to_string(),
-            is_other: false,
-            is_secret: false,
-            options: Some(vec![RequestUserInputQuestionOption {
-                label: "Plan only".to_string(),
-                description: "Update only Plan mode.".to_string(),
-            }]),
-        }],
+    chat.handle_request_user_input_now(crate::bottom_pane::ThreadUserInputRequest {
+        thread_id: ThreadId::new(),
+        request: RequestUserInputEvent {
+            call_id: "call-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            questions: vec![RequestUserInputQuestion {
+                id: "reasoning_scope".to_string(),
+                header: "Reasoning scope".to_string(),
+                question: "Which reasoning scope should I use?".to_string(),
+                is_other: false,
+                is_secret: false,
+                options: Some(vec![RequestUserInputQuestionOption {
+                    label: "Plan only".to_string(),
+                    description: "Update only Plan mode.".to_string(),
+                }]),
+            }],
+        },
     });
 
     assert_matches!(
@@ -2793,6 +2960,148 @@ async fn handle_request_user_input_sets_pending_notification() {
             summary: Some(ref summary),
         }) if summary == "Reasoning scope"
     );
+}
+
+#[tokio::test]
+async fn deferred_request_user_input_keeps_originating_thread_after_switch() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let original_thread_id = ThreadId::new();
+    let switched_thread_id = ThreadId::new();
+    chat.thread_id = Some(original_thread_id);
+    chat.stream_controller = Some(StreamController::new(None, &chat.config.cwd));
+
+    chat.on_request_user_input(RequestUserInputEvent {
+        call_id: "call-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        questions: vec![RequestUserInputQuestion {
+            id: "q1".to_string(),
+            header: "Need input".to_string(),
+            question: "Need input".to_string(),
+            is_other: false,
+            is_secret: false,
+            options: Some(vec![RequestUserInputQuestionOption {
+                label: "Yes".to_string(),
+                description: String::new(),
+            }]),
+        }],
+    });
+
+    chat.thread_id = Some(switched_thread_id);
+    chat.stream_controller = None;
+    chat.flush_interrupt_queue();
+    let _ = chat.bottom_pane.on_ctrl_c();
+
+    let (thread_id, op) = next_submit_thread_op(&mut rx);
+    assert_eq!(thread_id, original_thread_id);
+    assert_eq!(op, Op::Interrupt);
+}
+
+#[tokio::test]
+async fn deferred_request_permissions_keeps_originating_thread_after_switch() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let original_thread_id = ThreadId::new();
+    let switched_thread_id = ThreadId::new();
+    chat.thread_id = Some(original_thread_id);
+    chat.stream_controller = Some(StreamController::new(None, &chat.config.cwd));
+
+    chat.on_request_permissions(
+        codex_protocol::request_permissions::RequestPermissionsEvent {
+            call_id: "perm-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            reason: Some("need access".to_string()),
+            permissions: codex_protocol::models::PermissionProfile::default(),
+        },
+    );
+
+    chat.thread_id = Some(switched_thread_id);
+    chat.stream_controller = None;
+    chat.flush_interrupt_queue();
+    let _ = chat.bottom_pane.on_ctrl_c();
+
+    let (thread_id, op) = next_submit_thread_op(&mut rx);
+    assert_eq!(thread_id, original_thread_id);
+    assert_matches!(
+        op,
+        Op::RequestPermissionsResponse {
+            id,
+            response: codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions,
+                ..
+            },
+        } if id == "perm-1"
+            && permissions == codex_protocol::models::PermissionProfile::default()
+    );
+}
+
+#[tokio::test]
+async fn approval_handlers_drop_requests_before_session_is_configured() {
+    let (mut exec_chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    exec_chat.on_exec_approval_request(
+        "call-1".to_string(),
+        ExecApprovalRequestEvent {
+            call_id: "call-1".to_string(),
+            approval_id: None,
+            turn_id: "turn-1".to_string(),
+            command: vec!["echo".to_string(), "hello".to_string()],
+            cwd: PathBuf::from("/tmp/project"),
+            reason: Some("needs approval".to_string()),
+            network_approval_context: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            additional_permissions: None,
+            skill_metadata: None,
+            available_decisions: None,
+            parsed_cmd: Vec::new(),
+        },
+    );
+    assert!(exec_chat.bottom_pane.no_modal_or_popup_active());
+    assert!(exec_chat.pending_notification.is_none());
+
+    let (mut patch_chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    patch_chat.on_apply_patch_approval_request(
+        "patch-1".to_string(),
+        ApplyPatchApprovalRequestEvent {
+            call_id: "patch-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            reason: Some("review patch".to_string()),
+            changes: HashMap::from([(
+                PathBuf::from("src/lib.rs"),
+                FileChange::Add {
+                    content: "fn main() {}".to_string(),
+                },
+            )]),
+            grant_root: None,
+        },
+    );
+    assert!(patch_chat.bottom_pane.no_modal_or_popup_active());
+    assert!(patch_chat.pending_notification.is_none());
+
+    let (mut elicitation_chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    elicitation_chat.on_elicitation_request(codex_protocol::approvals::ElicitationRequestEvent {
+        turn_id: Some("turn-1".to_string()),
+        server_name: "test-server".to_string(),
+        id: codex_protocol::mcp::RequestId::String("elicitation-1".to_string()),
+        request: codex_protocol::approvals::ElicitationRequest::Url {
+            meta: None,
+            message: "Need input".to_string(),
+            url: "https://example.com".to_string(),
+            elicitation_id: "elicitation-1".to_string(),
+        },
+    });
+    assert!(elicitation_chat.bottom_pane.no_modal_or_popup_active());
+    assert!(elicitation_chat.pending_notification.is_none());
+
+    let (mut permissions_chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    permissions_chat.on_request_permissions(
+        codex_protocol::request_permissions::RequestPermissionsEvent {
+            call_id: "perm-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            reason: Some("need access".to_string()),
+            permissions: codex_protocol::models::PermissionProfile::default(),
+        },
+    );
+    assert!(permissions_chat.bottom_pane.no_modal_or_popup_active());
+    assert!(permissions_chat.pending_notification.is_none());
 }
 
 #[tokio::test]
@@ -3234,6 +3543,7 @@ async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
 #[tokio::test]
 async fn exec_approval_emits_proposed_command_and_decision_history() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
 
     // Trigger an exec approval request with a short, single-line command
     let ev = ExecApprovalRequestEvent {
@@ -3284,6 +3594,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
 #[tokio::test]
 async fn exec_approval_uses_approval_id_when_present() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
 
     chat.handle_codex_event(Event {
         id: "sub-short".into(),
@@ -3325,8 +3636,72 @@ async fn exec_approval_uses_approval_id_when_present() {
 }
 
 #[tokio::test]
+async fn interrupted_turn_dismisses_pending_exec_approval_modal() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    chat.handle_codex_event(Event {
+        id: "sub-approve".into(),
+        msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+            call_id: "call-approve-exec".into(),
+            approval_id: Some("call-approve-exec".into()),
+            turn_id: "turn-1".into(),
+            command: vec![
+                "git".into(),
+                "fetch".into(),
+                "upstream".into(),
+                "main".into(),
+            ],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            reason: Some("need latest upstream".into()),
+            network_approval_context: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            additional_permissions: None,
+            skill_metadata: None,
+            available_decisions: None,
+            parsed_cmd: vec![],
+        }),
+    });
+
+    assert!(
+        chat.has_active_view(),
+        "expected approval modal to be visible"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert!(
+        !chat.has_active_view(),
+        "expected interrupted turn to dismiss the stale approval modal"
+    );
+    assert!(
+        op_rx.try_recv().is_err(),
+        "interrupting should dismiss the approval modal without submitting a stale approval op"
+    );
+
+    let _ = drain_insert_history(&mut rx);
+}
+
+#[tokio::test]
 async fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
 
     // Multiline command: modal should show full command, history records decision only
     let ev_multi = ExecApprovalRequestEvent {
@@ -4584,6 +4959,49 @@ async fn manual_interrupt_restores_pending_steer_mention_bindings_to_composer() 
 }
 
 #[tokio::test]
+async fn manual_interrupt_keeps_pending_mcp_elicitation_overlay_visible() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.on_task_started();
+    chat.bottom_pane.push_mcp_server_elicitation_request(
+        crate::bottom_pane::McpServerElicitationFormRequest::from_event(
+            thread_id,
+            codex_protocol::approvals::ElicitationRequestEvent {
+                turn_id: Some("turn-1".to_string()),
+                server_name: "test-server".to_string(),
+                id: codex_protocol::mcp::RequestId::String("elicitation-1".to_string()),
+                request: codex_protocol::approvals::ElicitationRequest::Form {
+                    meta: None,
+                    message: "Need input".to_string(),
+                    requested_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "answer": { "type": "string", "title": "Answer" }
+                        },
+                        "required": ["answer"]
+                    }),
+                },
+            },
+        )
+        .expect("supported MCP elicitation request"),
+    );
+
+    assert!(
+        chat.has_active_view(),
+        "expected MCP elicitation modal to be visible"
+    );
+
+    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+
+    assert!(
+        chat.has_active_view(),
+        "interrupting should preserve MCP elicitation overlays that can outlive the turn"
+    );
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
 async fn manual_interrupt_restores_pending_steers_before_queued_messages() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
@@ -5600,6 +6018,11 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
+        in_process_context: InProcessAgentContext {
+            arg0_paths: Arg0DispatchPaths::default(),
+            cli_kv_overrides: Vec::new(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+        },
     };
 
     let chat = ChatWidget::new(init, thread_manager);
@@ -5650,6 +6073,11 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
+        in_process_context: InProcessAgentContext {
+            arg0_paths: Arg0DispatchPaths::default(),
+            cli_kv_overrides: Vec::new(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+        },
     };
 
     let chat = ChatWidget::new(init, thread_manager);
@@ -8350,6 +8778,7 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
 async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
     // Build a chat widget with manual channels to avoid spawning the agent.
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
     // Ensure policy allows surfacing approvals explicitly (not strictly required for direct event).
     chat.config
         .permissions
@@ -8415,6 +8844,7 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
 #[tokio::test]
 async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
     chat.config
         .permissions
         .approval_policy
@@ -8466,6 +8896,7 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
 async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
 -> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
     chat.config
         .permissions
         .approval_policy
@@ -8515,6 +8946,7 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
 #[tokio::test]
 async fn approval_modal_patch_snapshot() -> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
     chat.config
         .permissions
         .approval_policy
@@ -8818,6 +9250,7 @@ async fn status_widget_and_approval_modal_snapshot() {
     use codex_protocol::protocol::ExecApprovalRequestEvent;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
     // Begin a running task so the status indicator would be active.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
@@ -8973,6 +9406,7 @@ async fn background_event_updates_status_header() {
 #[tokio::test]
 async fn apply_patch_events_emit_history_cells() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
 
     // 1) Approval request -> proposed patch summary cell
     let mut changes = HashMap::new();
@@ -9072,6 +9506,7 @@ async fn apply_patch_events_emit_history_cells() {
 #[tokio::test]
 async fn apply_patch_manual_approval_adjusts_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
 
     let mut proposed_changes = HashMap::new();
     proposed_changes.insert(
@@ -9121,6 +9556,7 @@ async fn apply_patch_manual_approval_adjusts_header() {
 #[tokio::test]
 async fn apply_patch_manual_flow_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
 
     let mut proposed_changes = HashMap::new();
     proposed_changes.insert(
@@ -9174,6 +9610,7 @@ async fn apply_patch_manual_flow_snapshot() {
 #[tokio::test]
 async fn apply_patch_approval_sends_op_with_call_id() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
     // Simulate receiving an approval request with a distinct event id and call id.
     let mut changes = HashMap::new();
     changes.insert(
@@ -9217,6 +9654,7 @@ async fn apply_patch_approval_sends_op_with_call_id() {
 #[tokio::test]
 async fn apply_patch_full_flow_integration_like() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
 
     // 1) Backend requests approval
     let mut changes = HashMap::new();
@@ -9296,6 +9734,7 @@ async fn apply_patch_full_flow_integration_like() {
 #[tokio::test]
 async fn apply_patch_untrusted_shows_approval_modal() -> anyhow::Result<()> {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
     // Ensure approval policy is untrusted (OnRequest)
     chat.config
         .permissions
@@ -9346,6 +9785,7 @@ async fn apply_patch_untrusted_shows_approval_modal() -> anyhow::Result<()> {
 #[tokio::test]
 async fn apply_patch_request_shows_diff_summary() -> anyhow::Result<()> {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
 
     // Ensure we are in OnRequest so an approval is surfaced
     chat.config

@@ -472,6 +472,11 @@ impl ListSelectionView {
         self.apply_filter();
     }
 
+    #[cfg(test)]
+    pub(crate) fn search_query_for_test(&self) -> &str {
+        &self.search_query
+    }
+
     pub(crate) fn take_last_selected_index(&mut self) -> Option<usize> {
         self.last_selected_actual_idx.take()
     }

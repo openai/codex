@@ -42,7 +42,15 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 
-/// Request coming from the agent that needs user approval.
+/// An interactive approval request from an agent thread awaiting user decision.
+///
+/// Each variant carries a `thread_id` and optional `thread_label` so the UI
+/// can display which thread originated the request and route the user's
+/// response back to the correct thread via [`ThreadScopedOp`].
+///
+/// Approval requests arrive both from the active thread (shown inline) and
+/// from inactive background threads (bubbled up via the pending-approval
+/// queue in `App`).
 #[derive(Clone, Debug)]
 pub(crate) enum ApprovalRequest {
     Exec {
@@ -97,6 +105,66 @@ impl ApprovalRequest {
             | ApprovalRequest::McpElicitation { thread_label, .. } => thread_label.as_deref(),
         }
     }
+
+    fn same_identity(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                ApprovalRequest::Exec {
+                    thread_id: left_thread_id,
+                    id: left_id,
+                    ..
+                },
+                ApprovalRequest::Exec {
+                    thread_id: right_thread_id,
+                    id: right_id,
+                    ..
+                },
+            ) => left_thread_id == right_thread_id && left_id == right_id,
+            (
+                ApprovalRequest::Permissions {
+                    thread_id: left_thread_id,
+                    call_id: left_call_id,
+                    ..
+                },
+                ApprovalRequest::Permissions {
+                    thread_id: right_thread_id,
+                    call_id: right_call_id,
+                    ..
+                },
+            ) => left_thread_id == right_thread_id && left_call_id == right_call_id,
+            (
+                ApprovalRequest::ApplyPatch {
+                    thread_id: left_thread_id,
+                    id: left_id,
+                    ..
+                },
+                ApprovalRequest::ApplyPatch {
+                    thread_id: right_thread_id,
+                    id: right_id,
+                    ..
+                },
+            ) => left_thread_id == right_thread_id && left_id == right_id,
+            (
+                ApprovalRequest::McpElicitation {
+                    thread_id: left_thread_id,
+                    server_name: left_server_name,
+                    request_id: left_request_id,
+                    ..
+                },
+                ApprovalRequest::McpElicitation {
+                    thread_id: right_thread_id,
+                    server_name: right_server_name,
+                    request_id: right_request_id,
+                    ..
+                },
+            ) => {
+                left_thread_id == right_thread_id
+                    && left_server_name == right_server_name
+                    && left_request_id == right_request_id
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Modal overlay asking the user to approve or deny one or more requests.
@@ -128,6 +196,14 @@ impl ApprovalOverlay {
     }
 
     pub fn enqueue_request(&mut self, req: ApprovalRequest) {
+        if self
+            .current_request
+            .as_ref()
+            .is_some_and(|current| current.same_identity(&req))
+            || self.queue.iter().any(|queued| queued.same_identity(&req))
+        {
+            return;
+        }
         self.queue.push(req);
     }
 
@@ -385,6 +461,12 @@ impl ApprovalOverlay {
                 code: KeyCode::Char('o'),
                 ..
             } => {
+                if matches!(
+                    self.current_request.as_ref(),
+                    Some(ApprovalRequest::Permissions { .. })
+                ) {
+                    return false;
+                }
                 if let Some(request) = self.current_request.as_ref() {
                     if request.thread_label().is_some() {
                         self.app_event_tx
@@ -414,6 +496,53 @@ impl ApprovalOverlay {
 }
 
 impl BottomPaneView for ApprovalOverlay {
+    fn thread_id(&self) -> Option<ThreadId> {
+        self.current_request
+            .as_ref()
+            .map(ApprovalRequest::thread_id)
+            .or_else(|| self.queue.first().map(ApprovalRequest::thread_id))
+    }
+
+    fn dismiss_on_turn_interrupt(&mut self, interrupted_thread_id: ThreadId) -> bool {
+        if self.preserve_on_turn_interrupt() {
+            return true;
+        }
+
+        self.queue
+            .retain(|request| request.thread_id() != interrupted_thread_id);
+
+        if self
+            .current_request
+            .as_ref()
+            .is_some_and(|request| request.thread_id() == interrupted_thread_id)
+        {
+            self.current_request = None;
+            self.current_complete = false;
+            self.options.clear();
+            self.advance_queue();
+        }
+
+        !self.done
+    }
+
+    fn dismiss_on_thread_finished(&mut self, finished_thread_id: ThreadId) -> bool {
+        self.queue
+            .retain(|request| request.thread_id() != finished_thread_id);
+
+        if self
+            .current_request
+            .as_ref()
+            .is_some_and(|request| request.thread_id() == finished_thread_id)
+        {
+            self.current_request = None;
+            self.current_complete = false;
+            self.options.clear();
+            self.advance_queue();
+        }
+
+        !self.done
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.try_handle_shortcut(&key_event) {
             return;
@@ -905,6 +1034,7 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc::error::TryRecvError;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn absolute_path(path: &str) -> AbsolutePathBuf {
@@ -1000,6 +1130,62 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_request_is_not_queued_twice() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let request = make_exec_request();
+        let mut view = ApprovalOverlay::new(request.clone(), tx, Features::with_defaults());
+
+        view.enqueue_request(request);
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        assert!(
+            view.is_complete(),
+            "expected duplicate approval request to be ignored instead of remaining queued"
+        );
+
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        let submit_count = events
+            .iter()
+            .filter(|event| matches!(event, AppEvent::SubmitThreadOp { .. }))
+            .count();
+        let history_count = events
+            .iter()
+            .filter(|event| matches!(event, AppEvent::InsertHistoryCell(_)))
+            .count();
+        assert_eq!(submit_count, 1);
+        assert_eq!(history_count, 1);
+    }
+
+    #[test]
+    fn duplicate_permissions_request_is_not_queued_twice() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let request = make_permissions_request();
+        let mut view = ApprovalOverlay::new(request.clone(), tx, Features::with_defaults());
+
+        view.enqueue_request(request);
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+        assert!(
+            view.is_complete(),
+            "expected duplicate permissions request to be ignored instead of remaining queued"
+        );
+
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        let submit_count = events
+            .iter()
+            .filter(|event| matches!(event, AppEvent::SubmitThreadOp { .. }))
+            .count();
+        let history_count = events
+            .iter()
+            .filter(|event| matches!(event, AppEvent::InsertHistoryCell(_)))
+            .count();
+        assert_eq!(submit_count, 1);
+        assert_eq!(history_count, 1);
+    }
+
+    #[test]
     fn o_opens_source_thread_for_cross_thread_approval() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
@@ -1026,6 +1212,34 @@ mod tests {
             matches!(event, AppEvent::SelectAgentThread(id) if id == thread_id),
             true
         );
+    }
+
+    #[test]
+    fn permissions_prompt_does_not_treat_o_as_cross_thread_shortcut() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(
+            ApprovalRequest::Permissions {
+                thread_id: ThreadId::new(),
+                thread_label: Some("Robie [explorer]".to_string()),
+                call_id: "permission-request".to_string(),
+                reason: Some("need permissions".to_string()),
+                permissions: PermissionProfile {
+                    macos: Some(MacOsSeatbeltProfileExtensions {
+                        macos_automation: MacOsAutomationPermission::All,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            },
+            tx,
+            Features::with_defaults(),
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        assert_eq!(view.list.search_query_for_test(), "");
     }
 
     #[test]

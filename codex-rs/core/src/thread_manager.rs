@@ -501,13 +501,27 @@ impl ThreadManager {
         AgentControl::new(Arc::downgrade(&self.state))
     }
 
-    #[cfg(test)]
-    pub(crate) fn captured_ops(&self) -> Vec<(ThreadId, Op)> {
+    /// Send an operation to an existing thread managed by this manager.
+    pub async fn send_op(&self, thread_id: ThreadId, op: Op) -> CodexResult<String> {
+        self.state.send_op(thread_id, op).await
+    }
+
+    pub fn auth_manager(&self) -> Arc<AuthManager> {
+        Arc::clone(&self.state.auth_manager)
+    }
+
+    #[doc(hidden)]
+    pub fn captured_ops_for_testing(&self) -> Vec<(ThreadId, Op)> {
         self.state
             .ops_log
             .as_ref()
             .and_then(|ops_log| ops_log.lock().ok().map(|log| log.clone()))
             .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn captured_ops(&self) -> Vec<(ThreadId, Op)> {
+        self.captured_ops_for_testing()
     }
 }
 

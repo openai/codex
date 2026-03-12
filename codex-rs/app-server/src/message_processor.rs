@@ -41,6 +41,7 @@ use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
+use codex_core::auth::ExternalAuthOverrideGuard;
 use codex_core::auth::ExternalAuthRefreshContext;
 use codex_core::auth::ExternalAuthRefreshReason;
 use codex_core::auth::ExternalAuthRefresher;
@@ -140,6 +141,7 @@ pub(crate) struct MessageProcessor {
     external_agent_config_api: ExternalAgentConfigApi,
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
+    _external_auth_override_guard: ExternalAuthOverrideGuard,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -155,6 +157,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
+    pub(crate) thread_manager: Option<Arc<ThreadManager>>,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) cloud_requirements: CloudRequirementsLoader,
@@ -173,6 +176,7 @@ impl MessageProcessor {
             outgoing,
             arg0_paths,
             config,
+            thread_manager,
             cli_overrides,
             loader_overrides,
             cloud_requirements,
@@ -182,25 +186,34 @@ impl MessageProcessor {
             session_source,
             enable_codex_api_key_env,
         } = args;
-        let auth_manager = AuthManager::shared(
-            config.codex_home.clone(),
-            enable_codex_api_key_env,
-            config.cli_auth_credentials_store_mode,
-        );
-        auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
-        auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
-            outgoing: outgoing.clone(),
-        }));
-        let thread_manager = Arc::new(ThreadManager::new(
-            config.as_ref(),
-            auth_manager.clone(),
-            session_source,
-            CollaborationModesConfig {
-                default_mode_request_user_input: config
-                    .features
-                    .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+        let auth_manager = thread_manager.as_ref().map_or_else(
+            || {
+                AuthManager::shared(
+                    config.codex_home.clone(),
+                    enable_codex_api_key_env,
+                    config.cli_auth_credentials_store_mode,
+                )
             },
-        ));
+            |thread_manager| thread_manager.auth_manager(),
+        );
+        let external_auth_override_guard = auth_manager.push_external_auth_override(
+            Arc::new(ExternalAuthRefreshBridge {
+                outgoing: outgoing.clone(),
+            }),
+            config.forced_chatgpt_workspace_id.clone(),
+        );
+        let thread_manager = thread_manager.unwrap_or_else(|| {
+            Arc::new(ThreadManager::new(
+                config.as_ref(),
+                auth_manager.clone(),
+                session_source,
+                CollaborationModesConfig {
+                    default_mode_request_user_input: config
+                        .features
+                        .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+                },
+            ))
+        });
         // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
         thread_manager
             .plugins_manager()
@@ -233,6 +246,7 @@ impl MessageProcessor {
             external_agent_config_api,
             config,
             config_warnings: Arc::new(config_warnings),
+            _external_auth_override_guard: external_auth_override_guard,
         }
     }
 
@@ -415,6 +429,10 @@ impl MessageProcessor {
         self.codex_message_processor
             .try_attach_thread_listener(thread_id, connection_ids)
             .await;
+    }
+
+    pub(crate) fn thread_manager(&self) -> &Arc<ThreadManager> {
+        self.codex_message_processor.thread_manager()
     }
 
     pub(crate) async fn drain_background_tasks(&self) {

@@ -13,7 +13,20 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde_json::json;
+use std::sync::Arc;
 use tempfile::tempdir;
+
+struct NoopExternalAuthRefresher;
+
+#[async_trait::async_trait]
+impl ExternalAuthRefresher for NoopExternalAuthRefresher {
+    async fn refresh(
+        &self,
+        _context: ExternalAuthRefreshContext,
+    ) -> std::io::Result<ExternalAuthTokens> {
+        unreachable!("test refresher should never be called")
+    }
+}
 
 #[tokio::test]
 async fn refresh_without_id_token() {
@@ -429,4 +442,39 @@ fn missing_plan_type_maps_to_unknown() {
         .expect("auth available");
 
     pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Unknown));
+}
+
+#[test]
+fn nested_external_auth_override_inherits_lower_workspace_when_unset() {
+    let codex_home = tempdir().unwrap();
+    let auth_manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        false,
+        AuthCredentialsStoreMode::File,
+    );
+    auth_manager.set_forced_chatgpt_workspace_id(Some("workspace-base".to_string()));
+
+    let outer_guard = auth_manager.push_external_auth_override(
+        Arc::new(NoopExternalAuthRefresher),
+        Some("workspace-outer".to_string()),
+    );
+    let inner_guard =
+        auth_manager.push_external_auth_override(Arc::new(NoopExternalAuthRefresher), None);
+
+    assert_eq!(
+        auth_manager.forced_chatgpt_workspace_id(),
+        Some("workspace-outer".to_string())
+    );
+
+    drop(inner_guard);
+    assert_eq!(
+        auth_manager.forced_chatgpt_workspace_id(),
+        Some("workspace-outer".to_string())
+    );
+
+    drop(outer_guard);
+    assert_eq!(
+        auth_manager.forced_chatgpt_workspace_id(),
+        Some("workspace-base".to_string())
+    );
 }

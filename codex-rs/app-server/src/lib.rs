@@ -596,6 +596,7 @@ pub async fn run_main_with_transport(
             outgoing: outgoing_message_sender,
             arg0_paths,
             config: Arc::new(config),
+            thread_manager: None,
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),

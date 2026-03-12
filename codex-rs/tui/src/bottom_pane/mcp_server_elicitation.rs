@@ -706,6 +706,15 @@ impl McpServerElicitationOverlay {
         overlay
     }
 
+    fn same_request_identity(
+        left: &McpServerElicitationFormRequest,
+        right: &McpServerElicitationFormRequest,
+    ) -> bool {
+        left.thread_id == right.thread_id
+            && left.server_name == right.server_name
+            && left.request_id == right.request_id
+    }
+
     fn reset_for_request(&mut self) {
         self.answers = self
             .request
@@ -1429,6 +1438,18 @@ impl Renderable for McpServerElicitationOverlay {
 }
 
 impl BottomPaneView for McpServerElicitationOverlay {
+    fn thread_id(&self) -> Option<ThreadId> {
+        Some(self.request.thread_id)
+    }
+
+    fn preserve_on_turn_interrupt(&self) -> bool {
+        true
+    }
+
+    fn dismiss_on_thread_finished(&mut self, finished_thread_id: ThreadId) -> bool {
+        self.request.thread_id != finished_thread_id
+    }
+
     fn prefer_esc_to_handle_key_event(&self) -> bool {
         true
     }
@@ -1581,6 +1602,14 @@ impl BottomPaneView for McpServerElicitationOverlay {
         &mut self,
         request: McpServerElicitationFormRequest,
     ) -> Option<McpServerElicitationFormRequest> {
+        if Self::same_request_identity(&self.request, &request)
+            || self
+                .queue
+                .iter()
+                .any(|queued| Self::same_request_identity(queued, &request))
+        {
+            return None;
+        }
         self.queue.push_back(request);
         None
     }
@@ -2252,6 +2281,39 @@ mod tests {
         overlay.submit_answers();
 
         assert_eq!(overlay.request.message, "Third");
+    }
+
+    #[test]
+    fn duplicate_request_is_not_queued_twice() {
+        let (tx, mut rx) = test_sender();
+        let request = McpServerElicitationFormRequest::from_event(
+            ThreadId::default(),
+            form_request(
+                "Allow this request?",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "confirmed": {
+                            "type": "boolean",
+                            "title": "Confirm",
+                        }
+                    },
+                }),
+                None,
+            ),
+        )
+        .expect("expected supported form");
+        let mut overlay = McpServerElicitationOverlay::new(request.clone(), tx, true, false, false);
+
+        overlay.try_consume_mcp_server_elicitation_request(request);
+        overlay.submit_answers();
+
+        assert!(overlay.done, "expected duplicate request to be ignored");
+
+        let submit_count = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter(|event| matches!(event, AppEvent::SubmitThreadOp { .. }))
+            .count();
+        assert_eq!(submit_count, 1);
     }
 
     #[test]

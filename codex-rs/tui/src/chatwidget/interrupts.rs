@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
@@ -9,17 +10,29 @@ use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
-use codex_protocol::request_user_input::RequestUserInputEvent;
 
 use super::ChatWidget;
+use crate::bottom_pane::ThreadUserInputRequest;
 
 #[derive(Debug)]
 pub(crate) enum QueuedInterrupt {
-    ExecApproval(ExecApprovalRequestEvent),
-    ApplyPatchApproval(ApplyPatchApprovalRequestEvent),
-    Elicitation(ElicitationRequestEvent),
-    RequestPermissions(RequestPermissionsEvent),
-    RequestUserInput(RequestUserInputEvent),
+    ExecApproval {
+        thread_id: ThreadId,
+        event: ExecApprovalRequestEvent,
+    },
+    ApplyPatchApproval {
+        thread_id: ThreadId,
+        event: ApplyPatchApprovalRequestEvent,
+    },
+    Elicitation {
+        thread_id: ThreadId,
+        event: ElicitationRequestEvent,
+    },
+    RequestPermissions {
+        thread_id: ThreadId,
+        event: RequestPermissionsEvent,
+    },
+    RequestUserInput(ThreadUserInputRequest),
     ExecBegin(ExecCommandBeginEvent),
     ExecEnd(ExecCommandEndEvent),
     McpBegin(McpToolCallBeginEvent),
@@ -44,26 +57,45 @@ impl InterruptManager {
         self.queue.is_empty()
     }
 
-    pub(crate) fn push_exec_approval(&mut self, ev: ExecApprovalRequestEvent) {
-        self.queue.push_back(QueuedInterrupt::ExecApproval(ev));
+    pub(crate) fn push_exec_approval(&mut self, thread_id: ThreadId, ev: ExecApprovalRequestEvent) {
+        self.queue.push_back(QueuedInterrupt::ExecApproval {
+            thread_id,
+            event: ev,
+        });
     }
 
-    pub(crate) fn push_apply_patch_approval(&mut self, ev: ApplyPatchApprovalRequestEvent) {
+    pub(crate) fn push_apply_patch_approval(
+        &mut self,
+        thread_id: ThreadId,
+        ev: ApplyPatchApprovalRequestEvent,
+    ) {
+        self.queue.push_back(QueuedInterrupt::ApplyPatchApproval {
+            thread_id,
+            event: ev,
+        });
+    }
+
+    pub(crate) fn push_elicitation(&mut self, thread_id: ThreadId, ev: ElicitationRequestEvent) {
+        self.queue.push_back(QueuedInterrupt::Elicitation {
+            thread_id,
+            event: ev,
+        });
+    }
+
+    pub(crate) fn push_request_permissions(
+        &mut self,
+        thread_id: ThreadId,
+        ev: RequestPermissionsEvent,
+    ) {
+        self.queue.push_back(QueuedInterrupt::RequestPermissions {
+            thread_id,
+            event: ev,
+        });
+    }
+
+    pub(crate) fn push_user_input(&mut self, request: ThreadUserInputRequest) {
         self.queue
-            .push_back(QueuedInterrupt::ApplyPatchApproval(ev));
-    }
-
-    pub(crate) fn push_elicitation(&mut self, ev: ElicitationRequestEvent) {
-        self.queue.push_back(QueuedInterrupt::Elicitation(ev));
-    }
-
-    pub(crate) fn push_request_permissions(&mut self, ev: RequestPermissionsEvent) {
-        self.queue
-            .push_back(QueuedInterrupt::RequestPermissions(ev));
-    }
-
-    pub(crate) fn push_user_input(&mut self, ev: RequestUserInputEvent) {
-        self.queue.push_back(QueuedInterrupt::RequestUserInput(ev));
+            .push_back(QueuedInterrupt::RequestUserInput(request));
     }
 
     pub(crate) fn push_exec_begin(&mut self, ev: ExecCommandBeginEvent) {
@@ -89,11 +121,21 @@ impl InterruptManager {
     pub(crate) fn flush_all(&mut self, chat: &mut ChatWidget) {
         while let Some(q) = self.queue.pop_front() {
             match q {
-                QueuedInterrupt::ExecApproval(ev) => chat.handle_exec_approval_now(ev),
-                QueuedInterrupt::ApplyPatchApproval(ev) => chat.handle_apply_patch_approval_now(ev),
-                QueuedInterrupt::Elicitation(ev) => chat.handle_elicitation_request_now(ev),
-                QueuedInterrupt::RequestPermissions(ev) => chat.handle_request_permissions_now(ev),
-                QueuedInterrupt::RequestUserInput(ev) => chat.handle_request_user_input_now(ev),
+                QueuedInterrupt::ExecApproval { thread_id, event } => {
+                    chat.handle_exec_approval_for_thread(thread_id, event)
+                }
+                QueuedInterrupt::ApplyPatchApproval { thread_id, event } => {
+                    chat.handle_apply_patch_approval_for_thread(thread_id, event)
+                }
+                QueuedInterrupt::Elicitation { thread_id, event } => {
+                    chat.handle_elicitation_request_for_thread(thread_id, event)
+                }
+                QueuedInterrupt::RequestPermissions { thread_id, event } => {
+                    chat.handle_request_permissions_for_thread(thread_id, event)
+                }
+                QueuedInterrupt::RequestUserInput(request) => {
+                    chat.handle_request_user_input_now(request);
+                }
                 QueuedInterrupt::ExecBegin(ev) => chat.handle_exec_begin_now(ev),
                 QueuedInterrupt::ExecEnd(ev) => chat.handle_exec_end_now(ev),
                 QueuedInterrupt::McpBegin(ev) => chat.handle_mcp_begin_now(ev),

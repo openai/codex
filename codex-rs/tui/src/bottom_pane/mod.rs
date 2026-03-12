@@ -31,6 +31,7 @@ use codex_core::features::Features;
 use codex_core::plugins::PluginCapabilitySummary;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
+use codex_protocol::ThreadId;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
@@ -58,6 +59,12 @@ pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 mod bottom_pane_view;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ThreadUserInputRequest {
+    pub(crate) thread_id: ThreadId,
+    pub(crate) request: RequestUserInputEvent,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LocalImageAttachment {
@@ -806,10 +813,11 @@ impl BottomPane {
     }
 
     pub(crate) fn selected_index_for_active_view(&self, view_id: &'static str) -> Option<usize> {
-        self.view_stack
-            .last()
-            .filter(|view| view.view_id() == Some(view_id))
-            .and_then(|view| view.selected_index())
+        self.view_stack.last().and_then(|view| {
+            (view.view_id() == Some(view_id))
+                .then(|| view.selected_index())
+                .flatten()
+        })
     }
 
     /// Update the pending-input preview shown above the composer.
@@ -828,6 +836,37 @@ impl BottomPane {
         if self.pending_thread_approvals.set_threads(threads) {
             self.request_redraw();
         }
+    }
+
+    /// Remove bottom-pane views owned by the interrupted thread unless they
+    /// explicitly outlive turn interrupts. Non-thread-scoped views are still
+    /// dismissed to preserve historical interrupt behavior.
+    pub(crate) fn dismiss_turn_scoped_views(&mut self, interrupted_thread_id: ThreadId) {
+        if self.view_stack.is_empty() {
+            return;
+        }
+
+        self.view_stack
+            .retain_mut(|view| view.dismiss_on_turn_interrupt(interrupted_thread_id));
+        if self.view_stack.is_empty() {
+            self.on_active_view_complete();
+        }
+        self.request_redraw();
+    }
+
+    /// Remove stale bottom-pane views owned by a thread that has finished its
+    /// turn while preserving unrelated or unscoped overlays.
+    pub(crate) fn dismiss_finished_thread_views(&mut self, finished_thread_id: ThreadId) {
+        if self.view_stack.is_empty() {
+            return;
+        }
+
+        self.view_stack
+            .retain_mut(|view| view.dismiss_on_thread_finished(finished_thread_id));
+        if self.view_stack.is_empty() {
+            self.on_active_view_complete();
+        }
+        self.request_redraw();
     }
 
     #[cfg(test)]
@@ -921,7 +960,7 @@ impl BottomPane {
     }
 
     /// Called when the agent requests user input.
-    pub fn push_user_input_request(&mut self, request: RequestUserInputEvent) {
+    pub fn push_user_input_request(&mut self, request: ThreadUserInputRequest) {
         let request = if let Some(view) = self.view_stack.last_mut() {
             match view.try_consume_user_input_request(request) {
                 Some(request) => request,
@@ -1242,6 +1281,7 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use std::cell::Cell;
+    use std::cell::RefCell;
     use std::path::PathBuf;
     use std::rc::Rc;
     use tokio::sync::mpsc::unbounded_channel;
@@ -1958,5 +1998,193 @@ mod tests {
         ));
 
         assert_eq!(handle_calls.get(), 1);
+    }
+
+    #[test]
+    fn dismiss_turn_scoped_views_only_clears_interrupted_thread() {
+        struct TestView {
+            label: &'static str,
+            thread_id: Option<ThreadId>,
+            preserve_on_interrupt: bool,
+            keep_on_interrupt: bool,
+            dropped: Rc<RefCell<Vec<&'static str>>>,
+        }
+
+        impl Drop for TestView {
+            fn drop(&mut self) {
+                self.dropped.borrow_mut().push(self.label);
+            }
+        }
+
+        impl Renderable for TestView {
+            fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+
+            fn desired_height(&self, _width: u16) -> u16 {
+                0
+            }
+        }
+
+        impl BottomPaneView for TestView {
+            fn preserve_on_turn_interrupt(&self) -> bool {
+                self.preserve_on_interrupt
+            }
+
+            fn thread_id(&self) -> Option<ThreadId> {
+                self.thread_id
+            }
+
+            fn dismiss_on_turn_interrupt(&mut self, interrupted_thread_id: ThreadId) -> bool {
+                if self.keep_on_interrupt && self.thread_id == Some(interrupted_thread_id) {
+                    self.thread_id = Some(ThreadId::new());
+                    return true;
+                }
+                self.preserve_on_turn_interrupt()
+                    || self
+                        .thread_id
+                        .is_some_and(|thread_id| thread_id != interrupted_thread_id)
+            }
+        }
+
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        let dropped = Rc::new(RefCell::new(Vec::new()));
+        let interrupted_thread_id = ThreadId::new();
+        let other_thread_id = ThreadId::new();
+        pane.push_view(Box::new(TestView {
+            label: "other-thread",
+            thread_id: Some(other_thread_id),
+            preserve_on_interrupt: false,
+            keep_on_interrupt: false,
+            dropped: Rc::clone(&dropped),
+        }));
+        pane.push_view(Box::new(TestView {
+            label: "preserved",
+            thread_id: Some(interrupted_thread_id),
+            preserve_on_interrupt: true,
+            keep_on_interrupt: false,
+            dropped: Rc::clone(&dropped),
+        }));
+        pane.push_view(Box::new(TestView {
+            label: "queued-other-thread",
+            thread_id: Some(interrupted_thread_id),
+            preserve_on_interrupt: false,
+            keep_on_interrupt: true,
+            dropped: Rc::clone(&dropped),
+        }));
+        pane.push_view(Box::new(TestView {
+            label: "interrupted-thread",
+            thread_id: Some(interrupted_thread_id),
+            preserve_on_interrupt: false,
+            keep_on_interrupt: false,
+            dropped: Rc::clone(&dropped),
+        }));
+        pane.push_view(Box::new(TestView {
+            label: "unscoped",
+            thread_id: None,
+            preserve_on_interrupt: false,
+            keep_on_interrupt: false,
+            dropped: Rc::clone(&dropped),
+        }));
+
+        pane.dismiss_turn_scoped_views(interrupted_thread_id);
+
+        assert_eq!(*dropped.borrow(), vec!["interrupted-thread", "unscoped"]);
+        assert!(pane.has_active_view());
+    }
+
+    #[test]
+    fn dismiss_finished_thread_views_only_clears_finished_thread() {
+        struct TestView {
+            label: &'static str,
+            thread_id: Option<ThreadId>,
+            keep_on_finish: bool,
+            dropped: Rc<RefCell<Vec<&'static str>>>,
+        }
+
+        impl Drop for TestView {
+            fn drop(&mut self) {
+                self.dropped.borrow_mut().push(self.label);
+            }
+        }
+
+        impl Renderable for TestView {
+            fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+
+            fn desired_height(&self, _width: u16) -> u16 {
+                0
+            }
+        }
+
+        impl BottomPaneView for TestView {
+            fn thread_id(&self) -> Option<ThreadId> {
+                self.thread_id
+            }
+
+            fn dismiss_on_thread_finished(&mut self, finished_thread_id: ThreadId) -> bool {
+                if self.keep_on_finish && self.thread_id == Some(finished_thread_id) {
+                    self.thread_id = Some(ThreadId::new());
+                    return true;
+                }
+
+                self.thread_id != Some(finished_thread_id)
+            }
+        }
+
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        let dropped = Rc::new(RefCell::new(Vec::new()));
+        let finished_thread_id = ThreadId::new();
+        let other_thread_id = ThreadId::new();
+        pane.push_view(Box::new(TestView {
+            label: "other-thread",
+            thread_id: Some(other_thread_id),
+            keep_on_finish: false,
+            dropped: Rc::clone(&dropped),
+        }));
+        pane.push_view(Box::new(TestView {
+            label: "keep-finished-thread",
+            thread_id: Some(finished_thread_id),
+            keep_on_finish: true,
+            dropped: Rc::clone(&dropped),
+        }));
+        pane.push_view(Box::new(TestView {
+            label: "finished-thread",
+            thread_id: Some(finished_thread_id),
+            keep_on_finish: false,
+            dropped: Rc::clone(&dropped),
+        }));
+        pane.push_view(Box::new(TestView {
+            label: "unscoped",
+            thread_id: None,
+            keep_on_finish: false,
+            dropped: Rc::clone(&dropped),
+        }));
+
+        pane.dismiss_finished_thread_views(finished_thread_id);
+
+        assert_eq!(*dropped.borrow(), vec!["finished-thread"]);
+        assert!(pane.has_active_view());
     }
 }

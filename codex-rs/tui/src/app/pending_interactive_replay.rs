@@ -20,19 +20,25 @@ impl ElicitationRequestKey {
 }
 
 #[derive(Debug, Default)]
-// Tracks which interactive prompts are still unresolved in the thread-event buffer.
-//
-// Thread snapshots are replayed when switching threads/agents. Most events should replay
-// verbatim, but interactive prompts (approvals, request_user_input, MCP elicitations) must
-// only replay if they are still pending. This state is updated from:
-// - inbound events (`note_event`)
-// - outbound ops that resolve a prompt (`note_outbound_op`)
-// - buffer eviction (`note_evicted_event`)
-//
-// We keep both fast lookup sets (for snapshot filtering by call_id/request key) and
-// turn-indexed queues/vectors so `TurnComplete`/`TurnAborted` can clear stale prompts tied
-// to a turn. `request_user_input` removal is FIFO because the overlay answers queued prompts
-// in FIFO order for a shared `turn_id`.
+/// Tracks which interactive prompts are still unresolved in the thread-event buffer.
+///
+/// Thread snapshots are replayed when switching threads/agents. Most events
+/// replay verbatim, but interactive prompts (approvals, user-input requests,
+/// MCP elicitations) must only replay if they are still pending — otherwise
+/// the user would see already-answered approval dialogs reappear on every
+/// thread switch.
+///
+/// State is updated from three sources:
+/// - inbound events ([`note_event`](Self::note_event)) — registers new prompts
+/// - outbound ops ([`note_outbound_op`](Self::note_outbound_op)) — marks prompts resolved
+/// - buffer eviction ([`note_evicted_event`](Self::note_evicted_event)) — cleans up when
+///   the replay timeline exceeds capacity
+///
+/// We maintain both fast-lookup `HashSet`s (keyed by `call_id` or
+/// `ElicitationRequestKey` for snapshot filtering) and turn-indexed `HashMap`s
+/// so that `TurnComplete`/`TurnAborted` can bulk-clear all prompts tied to a
+/// turn. `request_user_input` removal is FIFO because the overlay answers
+/// queued prompts in arrival order for a shared `turn_id`.
 pub(super) struct PendingInteractiveReplayState {
     exec_approval_call_ids: HashSet<String>,
     exec_approval_call_ids_by_turn_id: HashMap<String, Vec<String>>,
@@ -170,16 +176,16 @@ impl PendingInteractiveReplayState {
                     ev.id.clone(),
                 ));
             }
-            EventMsg::RequestUserInput(ev) => {
-                self.request_user_input_call_ids.insert(ev.call_id.clone());
-                self.request_user_input_call_ids_by_turn_id
+            EventMsg::RequestPermissions(ev) => {
+                self.request_permissions_call_ids.insert(ev.call_id.clone());
+                self.request_permissions_call_ids_by_turn_id
                     .entry(ev.turn_id.clone())
                     .or_default()
                     .push(ev.call_id.clone());
             }
-            EventMsg::RequestPermissions(ev) => {
-                self.request_permissions_call_ids.insert(ev.call_id.clone());
-                self.request_permissions_call_ids_by_turn_id
+            EventMsg::RequestUserInput(ev) => {
+                self.request_user_input_call_ids.insert(ev.call_id.clone());
+                self.request_user_input_call_ids_by_turn_id
                     .entry(ev.turn_id.clone())
                     .or_default()
                     .push(ev.call_id.clone());
@@ -231,6 +237,14 @@ impl PendingInteractiveReplayState {
                         ev.id.clone(),
                     ));
             }
+            EventMsg::RequestPermissions(ev) => {
+                self.request_permissions_call_ids.remove(&ev.call_id);
+                Self::remove_call_id_from_turn_map_entry(
+                    &mut self.request_permissions_call_ids_by_turn_id,
+                    &ev.turn_id,
+                    &ev.call_id,
+                );
+            }
             EventMsg::RequestUserInput(ev) => {
                 self.request_user_input_call_ids.remove(&ev.call_id);
                 let mut remove_turn_entry = false;
@@ -245,23 +259,6 @@ impl PendingInteractiveReplayState {
                 }
                 if remove_turn_entry {
                     self.request_user_input_call_ids_by_turn_id
-                        .remove(&ev.turn_id);
-                }
-            }
-            EventMsg::RequestPermissions(ev) => {
-                self.request_permissions_call_ids.remove(&ev.call_id);
-                let mut remove_turn_entry = false;
-                if let Some(call_ids) = self
-                    .request_permissions_call_ids_by_turn_id
-                    .get_mut(&ev.turn_id)
-                {
-                    call_ids.retain(|call_id| call_id != &ev.call_id);
-                    if call_ids.is_empty() {
-                        remove_turn_entry = true;
-                    }
-                }
-                if remove_turn_entry {
-                    self.request_permissions_call_ids_by_turn_id
                         .remove(&ev.turn_id);
                 }
             }
@@ -284,11 +281,11 @@ impl PendingInteractiveReplayState {
                         ev.id.clone(),
                     ))
             }
-            EventMsg::RequestUserInput(ev) => {
-                self.request_user_input_call_ids.contains(&ev.call_id)
-            }
             EventMsg::RequestPermissions(ev) => {
                 self.request_permissions_call_ids.contains(&ev.call_id)
+            }
+            EventMsg::RequestUserInput(ev) => {
+                self.request_user_input_call_ids.contains(&ev.call_id)
             }
             _ => true,
         }
@@ -376,6 +373,7 @@ impl PendingInteractiveReplayState {
 #[cfg(test)]
 mod tests {
     use super::super::ThreadEventStore;
+    use super::super::ThreadReplayItem;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::Op;
@@ -383,6 +381,31 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use std::path::PathBuf;
+
+    fn request_permissions_event(call_id: &str, turn_id: &str) -> Event {
+        Event {
+            id: format!("ev-{call_id}"),
+            msg: EventMsg::RequestPermissions(
+                codex_protocol::request_permissions::RequestPermissionsEvent {
+                    call_id: call_id.to_string(),
+                    turn_id: turn_id.to_string(),
+                    reason: Some("Select a root".to_string()),
+                    permissions: codex_protocol::models::PermissionProfile::default(),
+                },
+            ),
+        }
+    }
+
+    fn snapshot_events(snapshot: &super::super::ThreadEventSnapshot) -> Vec<&Event> {
+        snapshot
+            .replay_timeline
+            .iter()
+            .filter_map(|item| match item {
+                ThreadReplayItem::Event(event) => Some(event.as_ref()),
+                ThreadReplayItem::HistoryCell(_) => None,
+            })
+            .collect()
+    }
 
     #[test]
     fn thread_event_snapshot_keeps_pending_request_user_input() {
@@ -401,11 +424,46 @@ mod tests {
         store.push_event(request);
 
         let snapshot = store.snapshot();
-        assert_eq!(snapshot.events.len(), 1);
+        let events = snapshot_events(&snapshot);
+        assert_eq!(events.len(), 1);
         assert!(matches!(
-            snapshot.events.first().map(|event| &event.msg),
+            events.first().map(|event| &event.msg),
             Some(EventMsg::RequestUserInput(_))
         ));
+    }
+
+    #[test]
+    fn thread_event_snapshot_keeps_pending_request_permissions() {
+        let mut store = ThreadEventStore::new(8);
+        store.push_event(request_permissions_event("call-1", "turn-1"));
+
+        let snapshot = store.snapshot();
+        let events = snapshot_events(&snapshot);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events.first().map(|event| &event.msg),
+            Some(EventMsg::RequestPermissions(_))
+        ));
+    }
+
+    #[test]
+    fn thread_event_snapshot_drops_resolved_request_permissions_after_response() {
+        let mut store = ThreadEventStore::new(8);
+        store.push_event(request_permissions_event("call-1", "turn-1"));
+
+        store.note_outbound_op(&Op::RequestPermissionsResponse {
+            id: "call-1".to_string(),
+            response: codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: codex_protocol::models::PermissionProfile::default(),
+                scope: codex_protocol::request_permissions::PermissionGrantScope::Turn,
+            },
+        });
+
+        let snapshot = store.snapshot();
+        assert!(
+            snapshot_events(&snapshot).is_empty(),
+            "resolved request_permissions prompt should not replay on thread switch"
+        );
     }
 
     #[test]
@@ -431,7 +489,7 @@ mod tests {
 
         let snapshot = store.snapshot();
         assert!(
-            snapshot.events.is_empty(),
+            snapshot_events(&snapshot).is_empty(),
             "resolved request_user_input prompt should not replay on thread switch"
         );
     }
@@ -468,7 +526,7 @@ mod tests {
 
         let snapshot = store.snapshot();
         assert!(
-            snapshot.events.is_empty(),
+            snapshot_events(&snapshot).is_empty(),
             "resolved exec approval prompt should not replay on thread switch"
         );
     }
@@ -506,9 +564,10 @@ mod tests {
         });
 
         let snapshot = store.snapshot();
-        assert_eq!(snapshot.events.len(), 1);
+        let events = snapshot_events(&snapshot);
+        assert_eq!(events.len(), 1);
         assert!(matches!(
-            snapshot.events.first().map(|event| &event.msg),
+            events.first().map(|event| &event.msg),
             Some(EventMsg::RequestUserInput(ev)) if ev.call_id == "call-2"
         ));
     }
@@ -545,9 +604,10 @@ mod tests {
         });
 
         let snapshot = store.snapshot();
-        assert_eq!(snapshot.events.len(), 1);
+        let events = snapshot_events(&snapshot);
+        assert_eq!(events.len(), 1);
         assert!(matches!(
-            snapshot.events.first().map(|event| &event.msg),
+            events.first().map(|event| &event.msg),
             Some(EventMsg::RequestUserInput(ev)) if ev.call_id == "call-2"
         ));
     }
@@ -575,7 +635,7 @@ mod tests {
 
         let snapshot = store.snapshot();
         assert!(
-            snapshot.events.is_empty(),
+            snapshot_events(&snapshot).is_empty(),
             "resolved patch approval prompt should not replay on thread switch"
         );
     }
@@ -617,6 +677,17 @@ mod tests {
         });
         store.push_event(Event {
             id: "ev-3".to_string(),
+            msg: EventMsg::RequestPermissions(
+                codex_protocol::request_permissions::RequestPermissionsEvent {
+                    call_id: "permissions-call-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    reason: Some("Select a root".to_string()),
+                    permissions: codex_protocol::models::PermissionProfile::default(),
+                },
+            ),
+        });
+        store.push_event(Event {
+            id: "ev-4".to_string(),
             msg: EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
                 turn_id: Some("turn-1".to_string()),
                 reason: TurnAbortReason::Replaced,
@@ -624,10 +695,13 @@ mod tests {
         });
 
         let snapshot = store.snapshot();
-        assert!(snapshot.events.iter().all(|event| {
+        let events = snapshot_events(&snapshot);
+        assert!(events.iter().all(|event| {
             !matches!(
                 &event.msg,
-                EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_)
+                EventMsg::ExecApprovalRequest(_)
+                    | EventMsg::ApplyPatchApprovalRequest(_)
+                    | EventMsg::RequestPermissions(_)
             )
         }));
     }
@@ -663,7 +737,7 @@ mod tests {
 
         let snapshot = store.snapshot();
         assert!(
-            snapshot.events.is_empty(),
+            snapshot_events(&snapshot).is_empty(),
             "resolved elicitation prompt should not replay on thread switch"
         );
     }
@@ -700,6 +774,24 @@ mod tests {
             id: "call-1".to_string(),
             turn_id: Some("turn-1".to_string()),
             decision: codex_protocol::protocol::ReviewDecision::Approved,
+        });
+
+        assert_eq!(store.has_pending_thread_approvals(), false);
+    }
+
+    #[test]
+    fn request_permissions_counts_as_pending_thread_approval() {
+        let mut store = ThreadEventStore::new(8);
+        store.push_event(request_permissions_event("call-1", "turn-1"));
+
+        assert_eq!(store.has_pending_thread_approvals(), true);
+
+        store.note_outbound_op(&Op::RequestPermissionsResponse {
+            id: "call-1".to_string(),
+            response: codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: codex_protocol::models::PermissionProfile::default(),
+                scope: codex_protocol::request_permissions::PermissionGrantScope::Turn,
+            },
         });
 
         assert_eq!(store.has_pending_thread_approvals(), false);

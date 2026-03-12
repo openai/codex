@@ -36,6 +36,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_arg0::Arg0DispatchPaths;
+use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
@@ -129,6 +130,8 @@ pub struct InProcessClientStartArgs {
     pub arg0_paths: Arg0DispatchPaths,
     /// Shared config used to initialize app-server runtime.
     pub config: Arc<Config>,
+    /// Optional thread manager to reuse instead of creating a private one.
+    pub thread_manager: Option<Arc<ThreadManager>>,
     /// CLI config overrides that are already parsed into TOML values.
     pub cli_overrides: Vec<(String, TomlValue)>,
     /// Loader override knobs used by config API paths.
@@ -182,6 +185,7 @@ impl InProcessClientStartArgs {
         InProcessStartArgs {
             arg0_paths: self.arg0_paths,
             config: self.config,
+            thread_manager: self.thread_manager,
             cli_overrides: self.cli_overrides,
             loader_overrides: self.loader_overrides,
             cloud_requirements: self.cloud_requirements,
@@ -606,7 +610,10 @@ mod tests {
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
+    use codex_core::CodexAuth;
+    use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
+    use codex_core::test_support::thread_manager_with_models_provider_and_home;
     use pretty_assertions::assert_eq;
     use tokio::time::Duration;
     use tokio::time::timeout;
@@ -623,9 +630,11 @@ mod tests {
         session_source: SessionSource,
         channel_capacity: usize,
     ) -> InProcessAppServerClient {
+        let config = Arc::new(build_test_config().await);
         InProcessAppServerClient::start(InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
-            config: Arc::new(build_test_config().await),
+            config,
+            thread_manager: None,
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
@@ -645,6 +654,14 @@ mod tests {
 
     async fn start_test_client(session_source: SessionSource) -> InProcessAppServerClient {
         start_test_client_with_capacity(session_source, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY).await
+    }
+
+    fn shared_test_thread_manager(config: &Config) -> Arc<ThreadManager> {
+        Arc::new(thread_manager_with_models_provider_and_home(
+            CodexAuth::from_api_key("test"),
+            config.model_provider.clone(),
+            config.codex_home.clone(),
+        ))
     }
 
     #[tokio::test]
@@ -700,6 +717,98 @@ mod tests {
             assert_eq!(parsed.thread.source, expected_source);
             client.shutdown().await.expect("shutdown should complete");
         }
+    }
+
+    #[tokio::test]
+    async fn shared_thread_manager_observes_threads_started_in_process() {
+        let config = Arc::new(build_test_config().await);
+        let thread_manager = shared_test_thread_manager(&config);
+        let client = InProcessAppServerClient::start(InProcessClientStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config,
+            thread_manager: Some(Arc::clone(&thread_manager)),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            client_name: "codex-app-server-client-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await
+        .expect("in-process app-server client should start");
+
+        let response: ThreadStartResponse = client
+            .request_typed(ClientRequest::ThreadStart {
+                request_id: RequestId::Integer(3),
+                params: ThreadStartParams {
+                    ephemeral: Some(true),
+                    ..ThreadStartParams::default()
+                },
+            })
+            .await
+            .expect("thread/start should succeed");
+        let thread_id = codex_protocol::ThreadId::from_string(&response.thread.id)
+            .expect("thread/start returned valid thread id");
+
+        thread_manager
+            .get_thread(thread_id)
+            .await
+            .expect("shared thread manager should see in-process threads");
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
+    async fn shared_thread_manager_reuses_configured_auth_manager() {
+        let mut config = build_test_config().await;
+        config.forced_chatgpt_workspace_id = Some("workspace-123".to_string());
+        let config = Arc::new(config);
+        let thread_manager = shared_test_thread_manager(&config);
+
+        assert_eq!(
+            thread_manager.auth_manager().forced_chatgpt_workspace_id(),
+            None
+        );
+        assert_eq!(
+            thread_manager.auth_manager().has_external_auth_refresher(),
+            false
+        );
+
+        let client = InProcessAppServerClient::start(InProcessClientStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config,
+            thread_manager: Some(Arc::clone(&thread_manager)),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            client_name: "codex-app-server-client-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await
+        .expect("in-process app-server client should start");
+
+        assert_eq!(
+            thread_manager.auth_manager().forced_chatgpt_workspace_id(),
+            Some("workspace-123".to_string())
+        );
+        assert_eq!(
+            thread_manager.auth_manager().has_external_auth_refresher(),
+            true
+        );
+
+        client.shutdown().await.expect("shutdown should complete");
     }
 
     #[tokio::test]

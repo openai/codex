@@ -74,6 +74,7 @@ use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
+use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
@@ -116,6 +117,8 @@ pub struct InProcessStartArgs {
     pub arg0_paths: Arg0DispatchPaths,
     /// Shared base config used to initialize core components.
     pub config: Arc<Config>,
+    /// Optional thread manager to reuse instead of creating a private one.
+    pub thread_manager: Option<Arc<ThreadManager>>,
     /// CLI config overrides that are already parsed into TOML values.
     pub cli_overrides: Vec<(String, TomlValue)>,
     /// Loader override knobs used by config API paths.
@@ -401,6 +404,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 outgoing: Arc::clone(&processor_outgoing),
                 arg0_paths: args.arg0_paths,
                 config: args.config,
+                thread_manager: args.thread_manager,
                 cli_overrides: args.cli_overrides,
                 loader_overrides: args.loader_overrides,
                 cloud_requirements: args.cloud_requirements,
@@ -442,6 +446,18 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                 );
                                 if !was_initialized && session.initialized {
                                     processor.send_initialize_notifications().await;
+                                    for thread_id in processor
+                                        .thread_manager()
+                                        .list_thread_ids()
+                                        .await
+                                    {
+                                        processor
+                                            .try_attach_thread_listener(
+                                                thread_id,
+                                                vec![IN_PROCESS_CONNECTION_ID],
+                                            )
+                                            .await;
+                                    }
                                 }
                             }
                             Some(ProcessorCommand::Notification(notification)) => {
@@ -727,8 +743,13 @@ mod tests {
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
+    use codex_app_server_protocol::TurnStartParams;
+    use codex_app_server_protocol::TurnStartResponse;
     use codex_app_server_protocol::TurnStatus;
+    use codex_core::AuthManager;
+    use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
+    use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
     use pretty_assertions::assert_eq;
 
     async fn build_test_config() -> Config {
@@ -746,6 +767,7 @@ mod tests {
         let args = InProcessStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
             config: Arc::new(build_test_config().await),
+            thread_manager: None,
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
@@ -839,6 +861,270 @@ mod tests {
         };
         let _parsed: ConfigRequirementsReadResponse =
             serde_json::from_value(response).expect("response should match v2 schema");
+        client
+            .shutdown()
+            .await
+            .expect("in-process runtime should shutdown cleanly");
+    }
+
+    #[tokio::test]
+    async fn in_process_shutdown_restores_shared_auth_refresher() {
+        let mut config = build_test_config().await;
+        config.forced_chatgpt_workspace_id = Some("workspace-during".to_string());
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            false,
+            config.cli_auth_credentials_store_mode,
+        );
+        auth_manager.set_forced_chatgpt_workspace_id(Some("workspace-before".to_string()));
+        let thread_manager = Arc::new(ThreadManager::new(
+            &config,
+            auth_manager.clone(),
+            SessionSource::Cli,
+            CollaborationModesConfig {
+                default_mode_request_user_input: false,
+            },
+        ));
+
+        assert!(!auth_manager.has_external_auth_refresher());
+        assert_eq!(
+            auth_manager.forced_chatgpt_workspace_id(),
+            Some("workspace-before".to_string())
+        );
+
+        let args = InProcessStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(config),
+            thread_manager: Some(thread_manager),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            initialize: InitializeParams {
+                client_info: ClientInfo {
+                    name: "codex-in-process-test".to_string(),
+                    title: None,
+                    version: "0.0.0".to_string(),
+                },
+                capabilities: None,
+            },
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        };
+        let client = start(args).await.expect("in-process runtime should start");
+        assert!(auth_manager.has_external_auth_refresher());
+        assert_eq!(
+            auth_manager.forced_chatgpt_workspace_id(),
+            Some("workspace-during".to_string())
+        );
+
+        client
+            .shutdown()
+            .await
+            .expect("in-process runtime should shutdown cleanly");
+
+        assert!(!auth_manager.has_external_auth_refresher());
+        assert_eq!(
+            auth_manager.forced_chatgpt_workspace_id(),
+            Some("workspace-before".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn nested_in_process_clients_keep_latest_shared_auth_override_active() {
+        let mut config_a = build_test_config().await;
+        config_a.forced_chatgpt_workspace_id = Some("workspace-a".to_string());
+        let auth_manager = AuthManager::shared(
+            config_a.codex_home.clone(),
+            false,
+            config_a.cli_auth_credentials_store_mode,
+        );
+        auth_manager.set_forced_chatgpt_workspace_id(Some("workspace-before".to_string()));
+        let thread_manager = Arc::new(ThreadManager::new(
+            &config_a,
+            auth_manager.clone(),
+            SessionSource::Cli,
+            CollaborationModesConfig {
+                default_mode_request_user_input: false,
+            },
+        ));
+
+        let client_a = start(InProcessStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(config_a),
+            thread_manager: Some(Arc::clone(&thread_manager)),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            initialize: InitializeParams {
+                client_info: ClientInfo {
+                    name: "codex-in-process-test-a".to_string(),
+                    title: None,
+                    version: "0.0.0".to_string(),
+                },
+                capabilities: None,
+            },
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await
+        .expect("first in-process runtime should start");
+
+        assert!(auth_manager.has_external_auth_refresher());
+        assert_eq!(
+            auth_manager.forced_chatgpt_workspace_id(),
+            Some("workspace-a".to_string())
+        );
+
+        let mut config_b = build_test_config().await;
+        config_b.forced_chatgpt_workspace_id = Some("workspace-b".to_string());
+        let client_b = start(InProcessStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(config_b),
+            thread_manager: Some(Arc::clone(&thread_manager)),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            initialize: InitializeParams {
+                client_info: ClientInfo {
+                    name: "codex-in-process-test-b".to_string(),
+                    title: None,
+                    version: "0.0.0".to_string(),
+                },
+                capabilities: None,
+            },
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await
+        .expect("second in-process runtime should start");
+
+        assert!(auth_manager.has_external_auth_refresher());
+        assert_eq!(
+            auth_manager.forced_chatgpt_workspace_id(),
+            Some("workspace-b".to_string())
+        );
+
+        client_a
+            .shutdown()
+            .await
+            .expect("first in-process runtime should shutdown cleanly");
+
+        assert!(auth_manager.has_external_auth_refresher());
+        assert_eq!(
+            auth_manager.forced_chatgpt_workspace_id(),
+            Some("workspace-b".to_string())
+        );
+
+        client_b
+            .shutdown()
+            .await
+            .expect("second in-process runtime should shutdown cleanly");
+
+        assert!(!auth_manager.has_external_auth_refresher());
+        assert_eq!(
+            auth_manager.forced_chatgpt_workspace_id(),
+            Some("workspace-before".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn in_process_start_attaches_listeners_for_existing_shared_manager_threads() {
+        let config = build_test_config().await;
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            false,
+            config.cli_auth_credentials_store_mode,
+        );
+        let thread_manager = Arc::new(ThreadManager::new(
+            &config,
+            auth_manager,
+            SessionSource::Cli,
+            CollaborationModesConfig {
+                default_mode_request_user_input: false,
+            },
+        ));
+        let new_thread = thread_manager
+            .start_thread(config.clone())
+            .await
+            .expect("pre-existing shared-manager thread");
+        let thread_id = new_thread.thread_id.to_string();
+
+        let mut client = start(InProcessStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(config),
+            thread_manager: Some(Arc::clone(&thread_manager)),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            initialize: InitializeParams {
+                client_info: ClientInfo {
+                    name: "codex-in-process-existing-thread-test".to_string(),
+                    title: None,
+                    version: "0.0.0".to_string(),
+                },
+                capabilities: None,
+            },
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await
+        .expect("in-process runtime should start");
+
+        let response = client
+            .request(ClientRequest::TurnStart {
+                request_id: RequestId::Integer(100),
+                params: TurnStartParams {
+                    thread_id: thread_id.clone(),
+                    input: vec![codex_app_server_protocol::UserInput::Text {
+                        text: "hello".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: None,
+                    service_tier: None,
+                    effort: None,
+                    summary: None,
+                    personality: None,
+                    output_schema: None,
+                    collaboration_mode: None,
+                },
+            })
+            .await
+            .expect("turn/start request should be sent")
+            .expect("turn/start should succeed");
+        let _: TurnStartResponse =
+            serde_json::from_value(response).expect("turn/start response should parse");
+
+        let started = timeout(Duration::from_secs(2), async {
+            loop {
+                let Some(event) = client.next_event().await else {
+                    panic!("expected in-process server event");
+                };
+                if let InProcessServerEvent::LegacyNotification(notification) = event
+                    && notification.method == "codex/event/task_started"
+                {
+                    break notification;
+                }
+            }
+        })
+        .await
+        .expect("timed out waiting for task_started notification");
+        assert_eq!(started.method, "codex/event/task_started".to_string());
+
         client
             .shutdown()
             .await

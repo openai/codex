@@ -51,6 +51,7 @@ use crate::status::rate_limit_snapshot_display_for_limit;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_arg0::Arg0DispatchPaths;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_core::config::Config;
@@ -58,6 +59,7 @@ use codex_core::config::Constrained;
 use codex_core::config::ConstraintResult;
 use codex_core::config::types::Notifications;
 use codex_core::config::types::WindowsSandboxModeToml;
+use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
@@ -164,6 +166,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
+use toml::Value as TomlValue;
 use tracing::debug;
 use tracing::warn;
 
@@ -233,6 +236,7 @@ use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::ThreadUserInputRequest;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
@@ -269,8 +273,8 @@ use crate::tui::FrameRequester;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
+pub(crate) use self::agent::ThreadScopedOp;
 use self::agent::spawn_agent;
-use self::agent::spawn_agent_from_existing;
 pub(crate) use self::agent::spawn_op_forwarder;
 mod session_header;
 use self::session_header::SessionHeader;
@@ -465,7 +469,19 @@ pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
     }
 }
 
-/// Common initialization parameters shared by all `ChatWidget` constructors.
+/// Ambient state needed to start an in-process app-server client inside the
+/// agent task. Cloned into each spawned agent so new threads/forks can create
+/// their own `InProcessAppServerClient` without reaching back to the TUI shell.
+#[derive(Clone)]
+pub(crate) struct InProcessAgentContext {
+    pub(crate) arg0_paths: Arg0DispatchPaths,
+    pub(crate) cli_kv_overrides: Vec<(String, TomlValue)>,
+    pub(crate) cloud_requirements: CloudRequirementsLoader,
+}
+
+/// Common initialization parameters shared by all `ChatWidget` constructors
+/// (fresh session, resume, fork). Bundled into a struct to keep constructor
+/// signatures manageable.
 pub(crate) struct ChatWidgetInit {
     pub(crate) config: Config,
     pub(crate) frame_requester: FrameRequester,
@@ -482,6 +498,7 @@ pub(crate) struct ChatWidgetInit {
     // Shared latch so we only warn once about invalid status-line item IDs.
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
     pub(crate) session_telemetry: SessionTelemetry,
+    pub(crate) in_process_context: InProcessAgentContext,
 }
 
 #[derive(Default)]
@@ -542,6 +559,8 @@ pub(crate) enum ExternalEditorState {
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
+    thread_scoped_op_tx: Option<UnboundedSender<ThreadScopedOp>>,
+    app_server_thread_id: Option<ThreadId>,
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
@@ -618,6 +637,7 @@ pub(crate) struct ChatWidget {
     pending_status_indicator_restore: bool,
     suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
+    current_turn_id: Option<String>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
     frame_requester: FrameRequester,
@@ -2052,6 +2072,12 @@ impl ChatWidget {
         self.finalize_turn();
         if reason == TurnAbortReason::Interrupted {
             self.clear_unified_exec_processes();
+            // The in-process agent clears pending turn-scoped approvals as part of turn abort
+            // handling. Preserve MCP elicitation overlays because those requests can outlive the
+            // interrupted turn and still need a local response.
+            if let Some(thread_id) = self.thread_id {
+                self.bottom_pane.dismiss_turn_scoped_views(thread_id);
+            }
         }
         let send_pending_steers_immediately = self.submit_pending_steers_after_interrupt;
         self.submit_pending_steers_after_interrupt = false;
@@ -2232,42 +2258,72 @@ impl ChatWidget {
     }
 
     fn on_exec_approval_request(&mut self, _id: String, ev: ExecApprovalRequestEvent) {
+        let Some(thread_id) = self.thread_id() else {
+            tracing::warn!("dropping exec approval event before session configured");
+            return;
+        };
         let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_exec_approval(ev),
-            |s| s.handle_exec_approval_now(ev2),
+            |q| q.push_exec_approval(thread_id, ev),
+            |s| s.handle_exec_approval_for_thread(thread_id, ev2),
         );
     }
 
     fn on_apply_patch_approval_request(&mut self, _id: String, ev: ApplyPatchApprovalRequestEvent) {
+        let Some(thread_id) = self.thread_id() else {
+            tracing::warn!("dropping apply_patch approval event before session configured");
+            return;
+        };
         let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_apply_patch_approval(ev),
-            |s| s.handle_apply_patch_approval_now(ev2),
+            |q| q.push_apply_patch_approval(thread_id, ev),
+            |s| s.handle_apply_patch_approval_for_thread(thread_id, ev2),
         );
     }
 
     fn on_elicitation_request(&mut self, ev: ElicitationRequestEvent) {
+        let Some(thread_id) = self.thread_id() else {
+            tracing::warn!("dropping elicitation request before session configured");
+            return;
+        };
         let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_elicitation(ev),
-            |s| s.handle_elicitation_request_now(ev2),
-        );
-    }
-
-    fn on_request_user_input(&mut self, ev: RequestUserInputEvent) {
-        let ev2 = ev.clone();
-        self.defer_or_handle(
-            |q| q.push_user_input(ev),
-            |s| s.handle_request_user_input_now(ev2),
+            |q| q.push_elicitation(thread_id, ev),
+            |s| s.handle_elicitation_request_for_thread(thread_id, ev2),
         );
     }
 
     fn on_request_permissions(&mut self, ev: RequestPermissionsEvent) {
+        let Some(thread_id) = self.thread_id() else {
+            tracing::warn!("dropping request_permissions event before session configured");
+            return;
+        };
         let ev2 = ev.clone();
         self.defer_or_handle(
-            |q| q.push_request_permissions(ev),
-            |s| s.handle_request_permissions_now(ev2),
+            |q| q.push_request_permissions(thread_id, ev),
+            |s| s.handle_request_permissions_for_thread(thread_id, ev2),
+        );
+    }
+
+    fn on_request_user_input(&mut self, ev: RequestUserInputEvent) {
+        let Some(thread_id) = self.thread_id() else {
+            tracing::warn!("dropping request_user_input event before session configured");
+            return;
+        };
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| {
+                q.push_user_input(ThreadUserInputRequest {
+                    thread_id,
+                    request: ev,
+                })
+            },
+            |s| {
+                s.handle_request_user_input_now(ThreadUserInputRequest {
+                    thread_id,
+                    request: ev2,
+                })
+            },
         );
     }
 
@@ -2951,7 +3007,11 @@ impl ChatWidget {
         self.had_work_activity = true;
     }
 
-    pub(crate) fn handle_exec_approval_now(&mut self, ev: ExecApprovalRequestEvent) {
+    pub(crate) fn handle_exec_approval_for_thread(
+        &mut self,
+        thread_id: ThreadId,
+        ev: ExecApprovalRequestEvent,
+    ) {
         self.flush_answer_stream_with_separator();
         let command = shlex::try_join(ev.command.iter().map(String::as_str))
             .unwrap_or_else(|_| ev.command.join(" "));
@@ -2959,7 +3019,7 @@ impl ChatWidget {
 
         let available_decisions = ev.effective_available_decisions();
         let request = ApprovalRequest::Exec {
-            thread_id: self.thread_id.unwrap_or_default(),
+            thread_id,
             thread_label: None,
             id: ev.effective_approval_id(),
             command: ev.command,
@@ -2973,11 +3033,15 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn handle_apply_patch_approval_now(&mut self, ev: ApplyPatchApprovalRequestEvent) {
+    pub(crate) fn handle_apply_patch_approval_for_thread(
+        &mut self,
+        thread_id: ThreadId,
+        ev: ApplyPatchApprovalRequestEvent,
+    ) {
         self.flush_answer_stream_with_separator();
 
         let request = ApprovalRequest::ApplyPatch {
-            thread_id: self.thread_id.unwrap_or_default(),
+            thread_id,
             thread_label: None,
             id: ev.call_id,
             reason: ev.reason,
@@ -2993,14 +3057,17 @@ impl ChatWidget {
         });
     }
 
-    pub(crate) fn handle_elicitation_request_now(&mut self, ev: ElicitationRequestEvent) {
+    pub(crate) fn handle_elicitation_request_for_thread(
+        &mut self,
+        thread_id: ThreadId,
+        ev: ElicitationRequestEvent,
+    ) {
         self.flush_answer_stream_with_separator();
 
         self.notify(Notification::ElicitationRequested {
             server_name: ev.server_name.clone(),
         });
 
-        let thread_id = self.thread_id.unwrap_or_default();
         if let Some(request) = McpServerElicitationFormRequest::from_event(thread_id, ev.clone()) {
             self.bottom_pane
                 .push_mcp_server_elicitation_request(request);
@@ -3015,6 +3082,31 @@ impl ChatWidget {
             self.bottom_pane
                 .push_approval_request(request, &self.config.features);
         }
+        self.request_redraw();
+    }
+
+    pub(crate) fn handle_request_permissions_for_thread(
+        &mut self,
+        thread_id: ThreadId,
+        ev: RequestPermissionsEvent,
+    ) {
+        self.flush_answer_stream_with_separator();
+        self.notify(Notification::PermissionsRequested {
+            summary: ev
+                .reason
+                .clone()
+                .or_else(|| Notification::permission_request_summary(&ev.permissions)),
+        });
+        self.bottom_pane.push_approval_request(
+            ApprovalRequest::Permissions {
+                thread_id,
+                thread_label: None,
+                call_id: ev.call_id,
+                reason: ev.reason,
+                permissions: ev.permissions,
+            },
+            &self.config.features,
+        );
         self.request_redraw();
     }
 
@@ -3033,27 +3125,23 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn handle_request_user_input_now(&mut self, ev: RequestUserInputEvent) {
-        self.flush_answer_stream_with_separator();
-        self.notify(Notification::UserInputRequested {
-            question_count: ev.questions.len(),
-            summary: Notification::user_input_request_summary(&ev.questions),
-        });
-        self.bottom_pane.push_user_input_request(ev);
+    pub(crate) fn push_user_input_request(&mut self, request: ThreadUserInputRequest) {
+        self.bottom_pane.push_user_input_request(request);
         self.request_redraw();
     }
 
-    pub(crate) fn handle_request_permissions_now(&mut self, ev: RequestPermissionsEvent) {
+    pub(crate) fn dismiss_finished_thread_views(&mut self, thread_id: ThreadId) {
+        self.bottom_pane.dismiss_finished_thread_views(thread_id);
+        self.request_redraw();
+    }
+
+    pub(crate) fn handle_request_user_input_now(&mut self, ev: ThreadUserInputRequest) {
         self.flush_answer_stream_with_separator();
-        let request = ApprovalRequest::Permissions {
-            thread_id: self.thread_id.unwrap_or_default(),
-            thread_label: None,
-            call_id: ev.call_id,
-            reason: ev.reason,
-            permissions: ev.permissions,
-        };
-        self.bottom_pane
-            .push_approval_request(request, &self.config.features);
+        self.notify(Notification::UserInputRequested {
+            question_count: ev.request.questions.len(),
+            summary: Notification::user_input_request_summary(&ev.request.questions),
+        });
+        self.bottom_pane.push_user_input_request(ev);
         self.request_redraw();
     }
 
@@ -3185,6 +3273,7 @@ impl ChatWidget {
             startup_tooltip_override,
             status_line_invalid_items_warned,
             session_telemetry,
+            in_process_context,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -3192,7 +3281,12 @@ impl ChatWidget {
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
-        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
+        let (codex_op_tx, thread_scoped_op_tx) = spawn_agent(
+            config.clone(),
+            app_event_tx.clone(),
+            thread_manager,
+            in_process_context,
+        );
 
         let model_override = model.as_deref();
         let model_for_header = model
@@ -3224,6 +3318,8 @@ impl ChatWidget {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
+            thread_scoped_op_tx: Some(thread_scoped_op_tx),
+            app_server_thread_id: None,
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
                 app_event_tx,
@@ -3278,6 +3374,7 @@ impl ChatWidget {
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
             thread_id: None,
+            current_turn_id: None,
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
@@ -3355,6 +3452,8 @@ impl ChatWidget {
     pub(crate) fn new_with_op_sender(
         common: ChatWidgetInit,
         codex_op_tx: UnboundedSender<Op>,
+        thread_scoped_op_tx: Option<UnboundedSender<ThreadScopedOp>>,
+        app_server_thread_id: Option<ThreadId>,
     ) -> Self {
         let ChatWidgetInit {
             config,
@@ -3371,6 +3470,7 @@ impl ChatWidget {
             startup_tooltip_override,
             status_line_invalid_items_warned,
             session_telemetry,
+            in_process_context: _,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -3409,6 +3509,8 @@ impl ChatWidget {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
+            thread_scoped_op_tx,
+            app_server_thread_id,
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
                 app_event_tx,
@@ -3463,6 +3565,7 @@ impl ChatWidget {
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
             thread_id: None,
+            current_turn_id: None,
             thread_name: None,
             forked_from: None,
             saw_plan_update_this_turn: false,
@@ -3548,6 +3651,7 @@ impl ChatWidget {
             startup_tooltip_override: _,
             status_line_invalid_items_warned,
             session_telemetry,
+            in_process_context: _,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
@@ -3565,9 +3669,8 @@ impl ChatWidget {
             .and_then(|mask| mask.model.clone())
             .unwrap_or(header_model);
 
-        let current_cwd = Some(session_configured.cwd.clone());
-        let codex_op_tx =
-            spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
+        let current_cwd = Some(session_configured.cwd);
+        let codex_op_tx = spawn_op_forwarder(conversation);
 
         let fallback_default = Settings {
             model: header_model.clone(),
@@ -3586,6 +3689,8 @@ impl ChatWidget {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
+            thread_scoped_op_tx: None,
+            app_server_thread_id: None,
             bottom_pane: BottomPane::new(BottomPaneParams {
                 frame_requester,
                 app_event_tx,
@@ -3640,6 +3745,7 @@ impl ChatWidget {
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
             thread_id: None,
+            current_turn_id: None,
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
@@ -4903,6 +5009,7 @@ impl ChatWidget {
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TurnStarted(event) => {
+                self.current_turn_id = Some(event.turn_id.clone());
                 if !is_resume_initial_replay {
                     self.apply_turn_started_context_window(event.model_context_window);
                     self.on_task_started();
@@ -4910,7 +5017,10 @@ impl ChatWidget {
             }
             EventMsg::TurnComplete(TurnCompleteEvent {
                 last_agent_message, ..
-            }) => self.on_task_complete(last_agent_message, from_replay),
+            }) => {
+                self.current_turn_id = None;
+                self.on_task_complete(last_agent_message, from_replay);
+            }
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
@@ -4940,15 +5050,18 @@ impl ChatWidget {
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
+                    self.current_turn_id = None;
                     self.on_interrupted_turn(ev.reason);
                 }
                 TurnAbortReason::Replaced => {
+                    self.current_turn_id = None;
                     self.submit_pending_steers_after_interrupt = false;
                     self.pending_steers.clear();
                     self.refresh_pending_input_preview();
                     self.on_error("Turn aborted: replaced by a new task".to_owned())
                 }
                 TurnAbortReason::ReviewEnded => {
+                    self.current_turn_id = None;
                     self.on_interrupted_turn(ev.reason);
                 }
             },
@@ -4993,7 +5106,10 @@ impl ChatWidget {
                     force_reload: true,
                 });
             }
-            EventMsg::ShutdownComplete => self.on_shutdown_complete(),
+            EventMsg::ShutdownComplete => {
+                self.current_turn_id = None;
+                self.on_shutdown_complete();
+            }
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
             EventMsg::DeprecationNotice(ev) => self.on_deprecation_notice(ev),
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
@@ -5050,14 +5166,14 @@ impl ChatWidget {
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(multi_agents::close_end(ev)),
             EventMsg::CollabResumeBegin(ev) => self.on_collab_event(multi_agents::resume_begin(ev)),
             EventMsg::CollabResumeEnd(ev) => self.on_collab_event(multi_agents::resume_end(ev)),
-            EventMsg::ThreadRolledBack(rollback) => {
+            EventMsg::ThreadRolledBack(_rollback) => {
                 // Conservatively clear `/copy` state on rollback. The app layer trims visible
                 // transcript cells, but we do not maintain rollback-aware raw-markdown history yet,
                 // so keeping the previous cache can return content that was just removed.
                 self.last_copyable_output = None;
                 if from_replay {
                     self.app_event_tx.send(AppEvent::ApplyThreadRollback {
-                        num_turns: rollback.num_turns,
+                        num_turns: _rollback.num_turns,
                     });
                 }
             }
@@ -8353,11 +8469,33 @@ impl ChatWidget {
         if matches!(&op, Op::Review { .. }) && !self.bottom_pane.is_task_running() {
             self.bottom_pane.set_task_running(true);
         }
+        if let (Some(thread_id), Some(thread_scoped_op_tx)) =
+            (self.app_server_thread_id, self.thread_scoped_op_tx.as_ref())
+        {
+            let interrupt_turn_id = matches!(&op, Op::Interrupt)
+                .then(|| self.current_turn_id.clone())
+                .flatten();
+            if let Err(e) = thread_scoped_op_tx.send(ThreadScopedOp {
+                thread_id,
+                op,
+                interrupt_turn_id,
+            }) {
+                tracing::error!("failed to submit thread-scoped op: {e}");
+                return false;
+            }
+            return true;
+        }
         if let Err(e) = self.codex_op_tx.send(op) {
             tracing::error!("failed to submit op: {e}");
             return false;
         }
         true
+    }
+
+    pub(crate) fn thread_scoped_op_sender(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedSender<ThreadScopedOp>> {
+        self.thread_scoped_op_tx.clone()
     }
 
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
@@ -8802,6 +8940,9 @@ enum Notification {
     ElicitationRequested {
         server_name: String,
     },
+    PermissionsRequested {
+        summary: Option<String>,
+    },
     PlanModePrompt {
         title: String,
     },
@@ -8835,6 +8976,10 @@ impl Notification {
             Notification::ElicitationRequested { server_name } => {
                 format!("Approval requested by {server_name}")
             }
+            Notification::PermissionsRequested { summary } => summary
+                .as_deref()
+                .map(|summary| format!("Permissions requested: {summary}"))
+                .unwrap_or_else(|| "Permissions requested".to_string()),
             Notification::PlanModePrompt { title } => {
                 format!("Plan mode prompt: {title}")
             }
@@ -8854,7 +8999,8 @@ impl Notification {
             Notification::AgentTurnComplete { .. } => "agent-turn-complete",
             Notification::ExecApprovalRequested { .. }
             | Notification::EditApprovalRequested { .. }
-            | Notification::ElicitationRequested { .. } => "approval-requested",
+            | Notification::ElicitationRequested { .. }
+            | Notification::PermissionsRequested { .. } => "approval-requested",
             Notification::PlanModePrompt { .. } => "plan-mode-prompt",
             Notification::UserInputRequested { .. } => "user-input-requested",
         }
@@ -8866,6 +9012,7 @@ impl Notification {
             Notification::ExecApprovalRequested { .. }
             | Notification::EditApprovalRequested { .. }
             | Notification::ElicitationRequested { .. }
+            | Notification::PermissionsRequested { .. }
             | Notification::PlanModePrompt { .. }
             | Notification::UserInputRequested { .. } => 1,
         }
@@ -8907,6 +9054,46 @@ impl Notification {
             None
         } else {
             Some(truncate_text(summary, 30))
+        }
+    }
+
+    fn permission_request_summary(
+        permissions: &codex_protocol::models::PermissionProfile,
+    ) -> Option<String> {
+        let mut parts = Vec::new();
+        if permissions
+            .network
+            .as_ref()
+            .and_then(|network| network.enabled)
+            .unwrap_or(false)
+        {
+            parts.push("network".to_string());
+        }
+        if let Some(file_system) = permissions.file_system.as_ref() {
+            let read_count = file_system.read.as_ref().map(Vec::len).unwrap_or(0);
+            let write_count = file_system.write.as_ref().map(Vec::len).unwrap_or(0);
+            if read_count > 0 {
+                parts.push(if read_count == 1 {
+                    "1 read root".to_string()
+                } else {
+                    format!("{read_count} read roots")
+                });
+            }
+            if write_count > 0 {
+                parts.push(if write_count == 1 {
+                    "1 write root".to_string()
+                } else {
+                    format!("{write_count} write roots")
+                });
+            }
+        }
+        if permissions.macos.is_some() {
+            parts.push("macOS access".to_string());
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(truncate_text(&parts.join(", "), 30))
         }
     }
 }

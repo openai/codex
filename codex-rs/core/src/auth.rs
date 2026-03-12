@@ -14,6 +14,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_otel::TelemetryAuthMode;
@@ -832,6 +834,32 @@ impl Debug for CachedAuth {
     }
 }
 
+#[derive(Clone)]
+/// One entry in the auth override stack managed by [`AuthManager`].
+///
+/// Each in-process app-server session pushes an entry when it starts and
+/// removes it (via [`ExternalAuthOverrideGuard`]) when it shuts down. The
+/// most recent entry wins: its `refresher` is used for token refresh and its
+/// `forced_workspace_id` constrains workspace selection. A `None` workspace
+/// means "inherit from the next entry down the stack (or the base setting)."
+struct ExternalAuthOverrideEntry {
+    /// Unique identifier used by the guard to remove this specific entry.
+    id: u64,
+    refresher: Arc<dyn ExternalAuthRefresher>,
+    /// Workspace restriction for this override scope, or `None` to inherit.
+    forced_workspace_id: Option<String>,
+}
+
+impl Debug for ExternalAuthOverrideEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExternalAuthOverrideEntry")
+            .field("id", &self.id)
+            .field("refresher", &"present")
+            .field("forced_workspace_id", &self.forced_workspace_id)
+            .finish()
+    }
+}
+
 enum UnauthorizedRecoveryStep {
     Reload,
     RefreshToken,
@@ -968,12 +996,49 @@ impl UnauthorizedRecovery {
 /// `reload()` is called explicitly. This matches the design goal of avoiding
 /// different parts of the program seeing inconsistent auth data mid‑run.
 #[derive(Debug)]
+/// Central authority for authentication credentials and token lifecycle.
+///
+/// `AuthManager` loads, caches, and refreshes auth credentials (API key or
+/// ChatGPT OAuth tokens) and distributes them to threads and app-server
+/// sessions. It is shared via `Arc` and is safe to call from any thread.
+///
+/// In-process app-server sessions may temporarily redirect token refresh by
+/// pushing an [`ExternalAuthOverrideEntry`] onto the override stack. The
+/// stack uses RAII guards ([`ExternalAuthOverrideGuard`]) so cleanup is
+/// automatic. See [`push_external_auth_override`](Self::push_external_auth_override)
+/// for the nesting contract.
 pub struct AuthManager {
     codex_home: PathBuf,
+    /// Cached auth credentials; refreshed lazily on access.
     inner: RwLock<CachedAuth>,
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
+    /// Base workspace restriction, independent of any override.
     forced_chatgpt_workspace_id: RwLock<Option<String>>,
+    /// Stack of active auth overrides, most recent last.
+    external_auth_overrides: RwLock<Vec<ExternalAuthOverrideEntry>>,
+    next_external_auth_override_id: AtomicU64,
+}
+
+/// RAII guard that removes an auth override from the [`AuthManager`] stack on drop.
+///
+/// Returned by [`AuthManager::push_external_auth_override`]. The guard holds
+/// an `Arc<AuthManager>` reference, so the manager stays alive at least as
+/// long as the guard. Dropping the guard removes exactly the entry with the
+/// matching `id`, even if other entries were pushed or removed in the interim.
+///
+/// Callers that need nested auth scopes (e.g. a child agent spawned inside an
+/// in-process session) simply hold multiple guards; the stack unwinds in drop
+/// order.
+pub struct ExternalAuthOverrideGuard {
+    auth_manager: Arc<AuthManager>,
+    id: u64,
+}
+
+impl Drop for ExternalAuthOverrideGuard {
+    fn drop(&mut self) {
+        self.auth_manager.remove_external_auth_override(self.id);
+    }
 }
 
 impl AuthManager {
@@ -1002,6 +1067,8 @@ impl AuthManager {
             enable_codex_api_key_env,
             auth_credentials_store_mode,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            external_auth_overrides: RwLock::new(Vec::new()),
+            next_external_auth_override_id: AtomicU64::new(1),
         }
     }
 
@@ -1018,6 +1085,8 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            external_auth_overrides: RwLock::new(Vec::new()),
+            next_external_auth_override_id: AtomicU64::new(1),
         })
     }
 
@@ -1036,12 +1105,68 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            external_auth_overrides: RwLock::new(Vec::new()),
+            next_external_auth_override_id: AtomicU64::new(1),
         })
     }
 
     /// Current cached auth (clone) without attempting a refresh.
     pub fn auth_cached(&self) -> Option<CodexAuth> {
         self.inner.read().ok().and_then(|c| c.auth.clone())
+    }
+
+    fn current_external_auth_override(&self) -> Option<Arc<dyn ExternalAuthRefresher>> {
+        self.external_auth_overrides
+            .read()
+            .ok()
+            .and_then(|guard| guard.last().map(|entry| entry.refresher.clone()))
+    }
+
+    fn base_forced_chatgpt_workspace_id(&self) -> Option<String> {
+        self.forced_chatgpt_workspace_id
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    fn remove_external_auth_override(&self, id: u64) {
+        if let Ok(mut guard) = self.external_auth_overrides.write()
+            && let Some(index) = guard.iter().rposition(|entry| entry.id == id)
+        {
+            guard.remove(index);
+        }
+    }
+
+    /// Pushes an auth override onto the stack and returns an RAII guard.
+    ///
+    /// While the guard is alive, `refresh_external_auth` and
+    /// `forced_chatgpt_workspace_id` consult this entry (if it is still the
+    /// topmost). Dropping the guard removes the entry regardless of stack
+    /// position.
+    ///
+    /// Pass `forced_workspace_id: None` to inherit the workspace restriction
+    /// from the next entry down the stack (or the base setting). This is the
+    /// common case for child agents that should run in the same workspace as
+    /// their parent session.
+    pub fn push_external_auth_override(
+        self: &Arc<Self>,
+        refresher: Arc<dyn ExternalAuthRefresher>,
+        forced_workspace_id: Option<String>,
+    ) -> ExternalAuthOverrideGuard {
+        let id = self
+            .next_external_auth_override_id
+            .fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut guard) = self.external_auth_overrides.write() {
+            guard.push(ExternalAuthOverrideEntry {
+                id,
+                refresher,
+                forced_workspace_id,
+            });
+        }
+        ExternalAuthOverrideGuard {
+            auth_manager: Arc::clone(self),
+            id,
+        }
     }
 
     /// Current cached auth (clone). May be `None` if not logged in or load failed.
@@ -1140,26 +1265,50 @@ impl AuthManager {
         }
     }
 
+    pub fn replace_external_auth_refresher(
+        &self,
+        refresher: Option<Arc<dyn ExternalAuthRefresher>>,
+    ) -> Option<Arc<dyn ExternalAuthRefresher>> {
+        self.inner
+            .write()
+            .ok()
+            .and_then(|mut guard| std::mem::replace(&mut guard.external_refresher, refresher))
+    }
+
     pub fn set_external_auth_refresher(&self, refresher: Arc<dyn ExternalAuthRefresher>) {
-        if let Ok(mut guard) = self.inner.write() {
-            guard.external_refresher = Some(refresher);
-        }
+        let _ = self.replace_external_auth_refresher(Some(refresher));
+    }
+
+    pub fn replace_forced_chatgpt_workspace_id(
+        &self,
+        workspace_id: Option<String>,
+    ) -> Option<String> {
+        self.forced_chatgpt_workspace_id
+            .write()
+            .ok()
+            .and_then(|mut guard| std::mem::replace(&mut guard, workspace_id))
     }
 
     pub fn set_forced_chatgpt_workspace_id(&self, workspace_id: Option<String>) {
-        if let Ok(mut guard) = self.forced_chatgpt_workspace_id.write() {
-            *guard = workspace_id;
-        }
+        let _ = self.replace_forced_chatgpt_workspace_id(workspace_id);
     }
 
     pub fn forced_chatgpt_workspace_id(&self) -> Option<String> {
-        self.forced_chatgpt_workspace_id
-            .read()
-            .ok()
-            .and_then(|guard| guard.clone())
+        if let Ok(guard) = self.external_auth_overrides.read()
+            && let Some(workspace_id) = guard
+                .iter()
+                .rev()
+                .find_map(|entry| entry.forced_workspace_id.clone())
+        {
+            return Some(workspace_id);
+        }
+        self.base_forced_chatgpt_workspace_id()
     }
 
     pub fn has_external_auth_refresher(&self) -> bool {
+        if self.current_external_auth_override().is_some() {
+            return true;
+        }
         self.inner
             .read()
             .ok()
@@ -1295,15 +1444,20 @@ impl AuthManager {
         &self,
         reason: ExternalAuthRefreshReason,
     ) -> Result<(), RefreshTokenError> {
-        let forced_chatgpt_workspace_id = self.forced_chatgpt_workspace_id();
-        let refresher = match self.inner.read() {
-            Ok(guard) => guard.external_refresher.clone(),
-            Err(_) => {
-                return Err(RefreshTokenError::Transient(std::io::Error::other(
-                    "failed to read external auth state",
-                )));
-            }
-        };
+        let (refresher, forced_chatgpt_workspace_id) =
+            if let Some(refresher) = self.current_external_auth_override() {
+                (Some(refresher), self.forced_chatgpt_workspace_id())
+            } else {
+                let refresher = match self.inner.read() {
+                    Ok(guard) => guard.external_refresher.clone(),
+                    Err(_) => {
+                        return Err(RefreshTokenError::Transient(std::io::Error::other(
+                            "failed to read external auth state",
+                        )));
+                    }
+                };
+                (refresher, self.forced_chatgpt_workspace_id())
+            };
 
         let Some(refresher) = refresher else {
             return Err(RefreshTokenError::Transient(std::io::Error::other(

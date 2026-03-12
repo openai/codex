@@ -231,6 +231,7 @@ fn build_test_processor(
         outgoing,
         arg0_paths: Arg0DispatchPaths::default(),
         config,
+        thread_manager: None,
         cli_overrides: Vec::new(),
         loader_overrides: LoaderOverrides::default(),
         cloud_requirements: CloudRequirementsLoader::default(),
@@ -511,13 +512,15 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
         )
         .await;
     let spans = wait_for_exported_spans(harness.tracing, |spans| {
-        spans
-            .iter()
-            .any(|span| span.name.as_ref() == "submission_dispatch")
-            && spans
-                .iter()
-                .any(|span| span.name.as_ref() == "session_task.turn")
-            && spans.iter().any(|span| span.name.as_ref() == "run_turn")
+        spans.iter().any(|span| {
+            span.name.as_ref() == "submission_dispatch"
+                && span.span_context.trace_id() == remote_trace_id
+        }) && spans.iter().any(|span| {
+            span.name.as_ref() == "session_task.turn"
+                && span.span_context.trace_id() == remote_trace_id
+        }) && spans.iter().any(|span| {
+            span.name.as_ref() == "run_turn" && span.span_context.trace_id() == remote_trace_id
+        })
     })
     .await;
     drop(harness.processor);

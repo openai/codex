@@ -1,7 +1,8 @@
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::McpServerElicitationFormRequest;
+use crate::bottom_pane::ThreadUserInputRequest;
 use crate::render::renderable::Renderable;
-use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_protocol::ThreadId;
 use crossterm::event::KeyEvent;
 
 use super::CancellationEvent;
@@ -74,8 +75,8 @@ pub(crate) trait BottomPaneView: Renderable {
     /// consumed.
     fn try_consume_user_input_request(
         &mut self,
-        request: RequestUserInputEvent,
-    ) -> Option<RequestUserInputEvent> {
+        request: ThreadUserInputRequest,
+    ) -> Option<ThreadUserInputRequest> {
         Some(request)
     }
 
@@ -86,5 +87,31 @@ pub(crate) trait BottomPaneView: Renderable {
         request: McpServerElicitationFormRequest,
     ) -> Option<McpServerElicitationFormRequest> {
         Some(request)
+    }
+
+    /// Whether this view should remain visible after a turn interrupt clears
+    /// turn-scoped approvals.
+    fn preserve_on_turn_interrupt(&self) -> bool {
+        false
+    }
+
+    /// Owning thread for overlays scoped to a specific Codex thread.
+    fn thread_id(&self) -> Option<ThreadId> {
+        None
+    }
+
+    /// Drop interrupted-thread state while preserving queued work for other
+    /// threads when possible. Returns `true` if the view should remain visible.
+    fn dismiss_on_turn_interrupt(&mut self, interrupted_thread_id: ThreadId) -> bool {
+        self.preserve_on_turn_interrupt()
+            || self
+                .thread_id()
+                .is_some_and(|thread_id| thread_id != interrupted_thread_id)
+    }
+
+    /// Drop stale state owned by a finished thread while preserving unrelated
+    /// or unscoped views. Returns `true` if the view should remain visible.
+    fn dismiss_on_thread_finished(&mut self, finished_thread_id: ThreadId) -> bool {
+        self.thread_id() != Some(finished_thread_id)
     }
 }
