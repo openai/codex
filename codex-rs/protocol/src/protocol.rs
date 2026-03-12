@@ -529,14 +529,15 @@ pub enum AskForApproval {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 pub struct RejectConfig {
-    /// Reject approval prompts related to sandbox escalation.
+    /// Reject shell command approval requests, including inline
+    /// `with_additional_permissions` and `require_escalated` requests.
     pub sandbox_approval: bool,
     /// Reject prompts triggered by execpolicy `prompt` rules.
     pub rules: bool,
     /// Reject approval prompts triggered by skill script execution.
     #[serde(default)]
     pub skill_approval: bool,
-    /// Reject approval prompts related to built-in permission requests.
+    /// Reject `request_permissions` tool requests.
     #[serde(default)]
     pub request_permissions: bool,
     /// Reject MCP elicitation prompts.
