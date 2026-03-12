@@ -13,6 +13,6 @@
 - `store(key: string, value: any)`: stores a serializeable value under a string key for later `exec` calls in the same session.
 - `load(key: stirng)`: returns the stored value for a string key, or `undefined` if it is missing.
 
-- `set_max_output_tokens_per_exec_call(value)`: sets the token budget for direct `exec` results.
+- `set_max_output_tokens_per_exec_call(value)`: sets the token budget for direct `exec` results. By default the result is trucated to 10000 tokens.
 - `set_yield_time(value)`: asks `exec` to yield early after that many milliseconds if the script is still running.
 - `yield_control()`: yields the accumulated output to the model immidiately while the script keeps running.
