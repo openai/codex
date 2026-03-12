@@ -18,6 +18,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::js_repl::resolve_compatible_node;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
+use crate::tools::router::ToolRouterParams;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::formatted_truncate_text_content_items_with_policy;
 use crate::truncate::truncate_function_output_items_with_policy;
@@ -53,7 +54,9 @@ pub(crate) struct CodeModeProcess {
     child: tokio::process::Child,
     stdin: Arc<Mutex<tokio::process::ChildStdin>>,
     stdout_task: JoinHandle<()>,
+    // A set of current requests waiting for a response from code mode host
     response_waiters: Arc<Mutex<HashMap<String, oneshot::Sender<NodeToHostMessage>>>>,
+    // When there is an active worker it listens for tool calls from code mode and processes them
     tool_call_rx: Arc<Mutex<mpsc::UnboundedReceiver<CodeModeToolCall>>>,
 }
 
@@ -786,9 +789,12 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
 
     ToolRouter::from_config(
         &nested_tools_config,
-        Some(mcp_tools),
-        None,
-        exec.turn.dynamic_tools.as_slice(),
+        ToolRouterParams {
+            mcp_tools: Some(mcp_tools),
+            app_tools: None,
+            discoverable_tools: None,
+            dynamic_tools: exec.turn.dynamic_tools.as_slice(),
+        },
     )
 }
 
