@@ -6,13 +6,9 @@ use serde_json::Map;
 use serde_json::Value;
 use std::fmt;
 use std::fmt::Write as _;
-use std::time::Duration;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 use tracing::warn;
 
 const LAYOUT_VERSION: &str = "v1";
-const ACTIVE_REVISION_ENTRY: &str = "active";
 const MANIFEST_ENTRY: &str = "manifest";
 const VALUE_ENTRY_PREFIX: &str = "value";
 const ROOT_PATH_SENTINEL: &str = "root";
@@ -168,11 +164,10 @@ pub fn load_split_json_from_keyring<K: KeyringStore + ?Sized>(
     service: &str,
     base_key: &str,
 ) -> Result<Option<Value>, SplitJsonKeyringError> {
-    let Some(revision) = load_active_revision(keyring_store, service, base_key)? else {
+    let Some(manifest) = load_manifest(keyring_store, service, base_key)? else {
         return Ok(None);
     };
-    let manifest = load_manifest(keyring_store, service, base_key, &revision)?;
-    inflate_split_json(keyring_store, service, base_key, &revision, &manifest).map(Some)
+    inflate_split_json(keyring_store, service, base_key, &manifest).map(Some)
 }
 
 pub fn save_split_json_to_keyring<K: KeyringStore + ?Sized>(
@@ -181,18 +176,23 @@ pub fn save_split_json_to_keyring<K: KeyringStore + ?Sized>(
     base_key: &str,
     value: &Value,
 ) -> Result<(), SplitJsonKeyringError> {
-    let previous_revision = match load_active_revision(keyring_store, service, base_key) {
-        Ok(revision) => revision,
+    let previous_manifest = match load_manifest(keyring_store, service, base_key) {
+        Ok(manifest) => manifest,
         Err(err) => {
-            warn!("failed to read previous split JSON revision from keyring: {err}");
+            warn!("failed to read previous split JSON manifest from keyring: {err}");
             None
         }
     };
-    let revision = next_revision();
     let (manifest, leaf_values) = flatten_split_json(value)?;
+    let current_scalar_paths = manifest
+        .nodes
+        .iter()
+        .filter(|node| !node.kind.is_container())
+        .map(|node| node.path.as_str())
+        .collect::<std::collections::HashSet<_>>();
 
     for (path, bytes) in leaf_values {
-        let key = value_key(base_key, &revision, &path);
+        let key = value_key(base_key, &path);
         save_secret_to_keyring(
             keyring_store,
             service,
@@ -202,7 +202,7 @@ pub fn save_split_json_to_keyring<K: KeyringStore + ?Sized>(
         )?;
     }
 
-    let manifest_key = revision_key(base_key, &revision, MANIFEST_ENTRY);
+    let manifest_key = layout_key(base_key, MANIFEST_ENTRY);
     let manifest_bytes = serde_json::to_vec(&manifest).map_err(|err| {
         SplitJsonKeyringError::new(format!("failed to serialize JSON manifest: {err}"))
     })?;
@@ -214,21 +214,21 @@ pub fn save_split_json_to_keyring<K: KeyringStore + ?Sized>(
         "JSON manifest",
     )?;
 
-    let active_key = layout_key(base_key, ACTIVE_REVISION_ENTRY);
-    save_secret_to_keyring(
-        keyring_store,
-        service,
-        &active_key,
-        revision.as_bytes(),
-        "active split JSON revision",
-    )?;
-
-    if let Some(previous_revision) = previous_revision
-        && previous_revision != revision
-        && let Err(err) =
-            delete_revision_entries(keyring_store, service, base_key, &previous_revision)
-    {
-        warn!("failed to remove stale split JSON revision from keyring: {err}");
+    if let Some(previous_manifest) = previous_manifest {
+        for node in previous_manifest.nodes {
+            if node.kind.is_container() || current_scalar_paths.contains(node.path.as_str()) {
+                continue;
+            }
+            let key = value_key(base_key, &node.path);
+            if let Err(err) = delete_keyring_entry(
+                keyring_store,
+                service,
+                &key,
+                &format!("stale JSON value at {}", node.path),
+            ) {
+                warn!("failed to remove stale split JSON value from keyring: {err}");
+            }
+        }
     }
 
     Ok(())
@@ -239,18 +239,26 @@ pub fn delete_split_json_from_keyring<K: KeyringStore + ?Sized>(
     service: &str,
     base_key: &str,
 ) -> Result<bool, SplitJsonKeyringError> {
-    let Some(revision) = load_active_revision(keyring_store, service, base_key)? else {
+    let Some(manifest) = load_manifest(keyring_store, service, base_key)? else {
         return Ok(false);
     };
 
-    let mut removed = delete_revision_entries(keyring_store, service, base_key, &revision)?;
-    let active_key = layout_key(base_key, ACTIVE_REVISION_ENTRY);
-    removed |= delete_keyring_entry(
-        keyring_store,
-        service,
-        &active_key,
-        "active split JSON revision",
-    )?;
+    let mut removed = false;
+    for node in manifest.nodes {
+        if node.kind.is_container() {
+            continue;
+        }
+        let key = value_key(base_key, &node.path);
+        removed |= delete_keyring_entry(
+            keyring_store,
+            service,
+            &key,
+            &format!("JSON value at {}", node.path),
+        )?;
+    }
+
+    let manifest_key = layout_key(base_key, MANIFEST_ENTRY);
+    removed |= delete_keyring_entry(keyring_store, service, &manifest_key, "JSON manifest")?;
     Ok(removed)
 }
 
@@ -365,7 +373,6 @@ fn inflate_split_json<K: KeyringStore + ?Sized>(
     keyring_store: &K,
     service: &str,
     base_key: &str,
-    revision: &str,
     manifest: &SplitJsonManifest,
 ) -> Result<Value, SplitJsonKeyringError> {
     let root_node = manifest
@@ -377,7 +384,7 @@ fn inflate_split_json<K: KeyringStore + ?Sized>(
     let mut result = if let Some(value) = root_node.kind.empty_value() {
         value
     } else {
-        load_value(keyring_store, service, base_key, revision, "")?
+        load_value(keyring_store, service, base_key, "")?
     };
 
     let mut nodes = manifest.nodes.clone();
@@ -391,7 +398,7 @@ fn inflate_split_json<K: KeyringStore + ?Sized>(
         let value = if let Some(value) = node.kind.empty_value() {
             value
         } else {
-            load_value(keyring_store, service, base_key, revision, &node.path)?
+            load_value(keyring_store, service, base_key, &node.path)?
         };
         insert_value_at_pointer(&mut result, &node.path, value)?;
     }
@@ -403,10 +410,9 @@ fn load_value<K: KeyringStore + ?Sized>(
     keyring_store: &K,
     service: &str,
     base_key: &str,
-    revision: &str,
     path: &str,
 ) -> Result<Value, SplitJsonKeyringError> {
-    let key = value_key(base_key, revision, path);
+    let key = value_key(base_key, path);
     let bytes = load_secret_from_keyring(
         keyring_store,
         service,
@@ -483,79 +489,24 @@ fn insert_value_at_pointer(
     }
 }
 
-fn delete_revision_entries<K: KeyringStore + ?Sized>(
-    keyring_store: &K,
-    service: &str,
-    base_key: &str,
-    revision: &str,
-) -> Result<bool, SplitJsonKeyringError> {
-    let manifest = load_manifest(keyring_store, service, base_key, revision)?;
-    let mut removed = false;
-
-    for node in manifest.nodes {
-        if node.kind.is_container() {
-            continue;
-        }
-        let key = value_key(base_key, revision, &node.path);
-        removed |= delete_keyring_entry(
-            keyring_store,
-            service,
-            &key,
-            &format!("JSON value at {}", node.path),
-        )?;
-    }
-
-    let manifest_key = revision_key(base_key, revision, MANIFEST_ENTRY);
-    removed |= delete_keyring_entry(keyring_store, service, &manifest_key, "JSON manifest")?;
-    Ok(removed)
-}
-
 fn load_manifest<K: KeyringStore + ?Sized>(
     keyring_store: &K,
     service: &str,
     base_key: &str,
-    revision: &str,
-) -> Result<SplitJsonManifest, SplitJsonKeyringError> {
-    let manifest_key = revision_key(base_key, revision, MANIFEST_ENTRY);
-    let bytes = load_secret_from_keyring(keyring_store, service, &manifest_key, "JSON manifest")?
-        .ok_or_else(|| SplitJsonKeyringError::new("missing JSON manifest in keyring"))?;
+) -> Result<Option<SplitJsonManifest>, SplitJsonKeyringError> {
+    let manifest_key = layout_key(base_key, MANIFEST_ENTRY);
+    let Some(bytes) =
+        load_secret_from_keyring(keyring_store, service, &manifest_key, "JSON manifest")?
+    else {
+        return Ok(None);
+    };
     let manifest: SplitJsonManifest = serde_json::from_slice(&bytes).map_err(|err| {
         SplitJsonKeyringError::new(format!("failed to deserialize JSON manifest: {err}"))
     })?;
     if manifest.nodes.is_empty() {
         return Err(SplitJsonKeyringError::new("JSON manifest is empty"));
     }
-    Ok(manifest)
-}
-
-fn load_active_revision<K: KeyringStore + ?Sized>(
-    keyring_store: &K,
-    service: &str,
-    base_key: &str,
-) -> Result<Option<String>, SplitJsonKeyringError> {
-    let active_key = layout_key(base_key, ACTIVE_REVISION_ENTRY);
-    load_utf8_secret_from_keyring(
-        keyring_store,
-        service,
-        &active_key,
-        "active split JSON revision",
-    )
-}
-
-fn load_utf8_secret_from_keyring<K: KeyringStore + ?Sized>(
-    keyring_store: &K,
-    service: &str,
-    key: &str,
-    field: &str,
-) -> Result<Option<String>, SplitJsonKeyringError> {
-    let Some(secret) = load_secret_from_keyring(keyring_store, service, key, field)? else {
-        return Ok(None);
-    };
-    String::from_utf8(secret).map(Some).map_err(|err| {
-        SplitJsonKeyringError::new(format!(
-            "failed to decode {field} from keyring as UTF-8: {err}"
-        ))
-    })
+    Ok(Some(manifest))
 }
 
 fn load_secret_from_keyring<K: KeyringStore + ?Sized>(
@@ -603,26 +554,13 @@ fn credential_store_error(
     ))
 }
 
-fn next_revision() -> String {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0))
-        .as_nanos()
-        .to_string()
-}
-
 fn layout_key(base_key: &str, suffix: &str) -> String {
     format!("{base_key}|{LAYOUT_VERSION}|{suffix}")
 }
 
-fn revision_key(base_key: &str, revision: &str, suffix: &str) -> String {
-    format!("{base_key}|{LAYOUT_VERSION}|{revision}|{suffix}")
-}
-
-fn value_key(base_key: &str, revision: &str, path: &str) -> String {
+fn value_key(base_key: &str, path: &str) -> String {
     let encoded_path = encode_path(path);
-    let suffix = format!("{VALUE_ENTRY_PREFIX}|{encoded_path}");
-    revision_key(base_key, revision, &suffix)
+    layout_key(base_key, &format!("{VALUE_ENTRY_PREFIX}|{encoded_path}"))
 }
 
 fn encode_path(path: &str) -> String {
@@ -705,17 +643,13 @@ fn path_depth(path: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::ACTIVE_REVISION_ENTRY;
     use super::LAYOUT_VERSION;
     use super::MANIFEST_ENTRY;
-    use super::ROOT_PATH_SENTINEL;
-    use super::VALUE_ENTRY_PREFIX;
     use super::delete_json_from_keyring;
     use super::delete_split_json_from_keyring;
     use super::layout_key;
     use super::load_json_from_keyring;
     use super::load_split_json_from_keyring;
-    use super::revision_key;
     use super::save_json_to_keyring;
     use super::save_split_json_to_keyring;
     use super::value_key;
@@ -749,8 +683,8 @@ mod tests {
                 "windows should not store the full JSON record under the base key"
             );
             assert!(
-                store.contains(&layout_key(BASE_KEY, ACTIVE_REVISION_ENTRY)),
-                "windows should track an active split revision"
+                store.contains(&layout_key(BASE_KEY, MANIFEST_ENTRY)),
+                "windows should store split JSON manifest metadata"
             );
         }
 
@@ -761,8 +695,8 @@ mod tests {
                 Some(serde_json::to_vec(&expected).expect("JSON should serialize")),
             );
             assert!(
-                !store.contains(&layout_key(BASE_KEY, ACTIVE_REVISION_ENTRY)),
-                "non-windows should not create split revision metadata"
+                !store.contains(&layout_key(BASE_KEY, MANIFEST_ENTRY)),
+                "non-windows should not create split JSON manifest metadata"
             );
         }
     }
@@ -812,7 +746,7 @@ mod tests {
                 .is_none()
         );
         assert!(!store.contains(BASE_KEY));
-        assert!(!store.contains(&layout_key(BASE_KEY, ACTIVE_REVISION_ENTRY)));
+        assert!(!store.contains(&layout_key(BASE_KEY, MANIFEST_ENTRY)));
     }
 
     #[test]
@@ -845,14 +779,7 @@ mod tests {
         save_split_json_to_keyring(&store, SERVICE, BASE_KEY, &expected)
             .expect("split JSON should save");
 
-        let revision = store
-            .saved_secret_utf8(&layout_key(BASE_KEY, ACTIVE_REVISION_ENTRY))
-            .expect("active revision should exist");
-        let root_value_key = revision_key(
-            BASE_KEY,
-            &revision,
-            &format!("{VALUE_ENTRY_PREFIX}|{ROOT_PATH_SENTINEL}"),
-        );
+        let root_value_key = value_key(BASE_KEY, "");
         assert_eq!(
             store.saved_secret_utf8(&root_value_key),
             Some("\"value\"".to_string())
@@ -877,48 +804,44 @@ mod tests {
         save_split_json_to_keyring(&store, SERVICE, BASE_KEY, &expected)
             .expect("split JSON should save");
 
-        let revision = store
-            .saved_secret_utf8(&layout_key(BASE_KEY, ACTIVE_REVISION_ENTRY))
-            .expect("active revision should exist");
-        let manifest_key = revision_key(BASE_KEY, &revision, MANIFEST_ENTRY);
-        let token_key = value_key(BASE_KEY, &revision, "/token");
-        let nested_id_key = value_key(BASE_KEY, &revision, "/nested/id");
+        let manifest_key = layout_key(BASE_KEY, MANIFEST_ENTRY);
+        let token_key = value_key(BASE_KEY, "/token");
+        let nested_id_key = value_key(BASE_KEY, "/nested/id");
 
         let removed = delete_split_json_from_keyring(&store, SERVICE, BASE_KEY)
             .expect("split JSON delete should succeed");
 
         assert!(removed);
-        assert!(!store.contains(&layout_key(BASE_KEY, ACTIVE_REVISION_ENTRY)));
         assert!(!store.contains(&manifest_key));
         assert!(!store.contains(&token_key));
         assert!(!store.contains(&nested_id_key));
     }
 
     #[test]
-    fn split_json_save_replaces_previous_revision() {
+    fn split_json_save_replaces_previous_values() {
         let store = MockKeyringStore::default();
-        let first = json!({"value": "first"});
+        let first = json!({"value": "first", "stale": true});
         let second = json!({"value": "second", "extra": 1});
 
         save_split_json_to_keyring(&store, SERVICE, BASE_KEY, &first)
             .expect("first split JSON save should succeed");
-        let first_revision = store
-            .saved_secret_utf8(&layout_key(BASE_KEY, ACTIVE_REVISION_ENTRY))
-            .expect("first revision should exist");
-        let first_manifest_key = revision_key(BASE_KEY, &first_revision, MANIFEST_ENTRY);
-        let first_value_key = value_key(BASE_KEY, &first_revision, "/value");
+        let manifest_key = layout_key(BASE_KEY, MANIFEST_ENTRY);
+        let stale_value_key = value_key(BASE_KEY, "/stale");
+        assert!(store.contains(&manifest_key));
+        assert!(store.contains(&stale_value_key));
 
         save_split_json_to_keyring(&store, SERVICE, BASE_KEY, &second)
             .expect("second split JSON save should succeed");
-        let second_revision = store
-            .saved_secret_utf8(&layout_key(BASE_KEY, ACTIVE_REVISION_ENTRY))
-            .expect("second revision should exist");
-        let second_manifest_key = revision_key(BASE_KEY, &second_revision, MANIFEST_ENTRY);
-
-        assert_ne!(first_revision, second_revision);
-        assert!(!store.contains(&first_manifest_key));
-        assert!(!store.contains(&first_value_key));
-        assert!(store.contains(&second_manifest_key));
+        assert!(!store.contains(&stale_value_key));
+        assert!(store.contains(&manifest_key));
+        assert_eq!(
+            store.saved_secret_utf8(&value_key(BASE_KEY, "/value")),
+            Some("\"second\"".to_string())
+        );
+        assert_eq!(
+            store.saved_secret_utf8(&value_key(BASE_KEY, "/extra")),
+            Some("1".to_string())
+        );
 
         let loaded = load_split_json_from_keyring(&store, SERVICE, BASE_KEY)
             .expect("split JSON should load")
