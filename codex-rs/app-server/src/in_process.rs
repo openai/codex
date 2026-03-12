@@ -417,8 +417,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
                 enable_codex_api_key_env: args.enable_codex_api_key_env,
-            })
-            .unwrap_or_else(|err| panic!("in-process message processor should initialize: {err}"));
+            });
             let mut thread_created_rx = processor.thread_created_receiver();
             let mut session = ConnectionSessionState::default();
             let mut listen_for_threads = true;
