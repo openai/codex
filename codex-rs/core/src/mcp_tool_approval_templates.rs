@@ -122,7 +122,7 @@ fn render_mcp_tool_approval_template_from_templates(
     };
 
     Some(RenderedMcpToolApprovalTemplate {
-        question: format!("{elicitation_message}?"),
+        question: elicitation_message.clone(),
         elicitation_message,
         tool_params,
         tool_params_display,
@@ -220,7 +220,7 @@ mod tests {
             rendered,
             Some(RenderedMcpToolApprovalTemplate {
                 question: "Allow Calendar to create an event?".to_string(),
-                elicitation_message: "Allow Calendar to create an event".to_string(),
+                elicitation_message: "Allow Calendar to create an event?".to_string(),
                 tool_params: Some(json!({
                     "Calendar": "primary",
                     "Title": "Roadmap review",

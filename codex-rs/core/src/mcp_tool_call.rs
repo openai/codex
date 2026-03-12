@@ -781,11 +781,9 @@ fn build_mcp_tool_approval_question(
     let question = question_override
         .map(ToString::to_string)
         .unwrap_or_else(|| {
-            format!(
-                "{}?",
-                build_mcp_tool_approval_fallback_message(server, tool_name, connector_name)
-            )
+            build_mcp_tool_approval_fallback_message(server, tool_name, connector_name)
         });
+    let question = format!("{}?", question.trim_end_matches('?'));
 
     let mut options = vec![RequestUserInputQuestionOption {
         label: MCP_TOOL_APPROVAL_ACCEPT.to_string(),
@@ -863,7 +861,7 @@ fn build_mcp_tool_approval_elicitation_request(
     let message = request
         .message_override
         .map(ToString::to_string)
-        .unwrap_or_else(|| request.question.question.trim_end_matches('?').to_string());
+        .unwrap_or_else(|| request.question.question.clone());
 
     McpServerElicitationRequestParams {
         thread_id: sess.conversation_id.to_string(),
@@ -1369,7 +1367,7 @@ mod tests {
                 })),
                 tool_params_display: None,
                 question,
-                message_override: Some("Allow Calendar to create an event"),
+                message_override: Some("Allow Calendar to create an event?"),
                 prompt_options: prompt_options(true, true),
             },
         );
@@ -1398,7 +1396,7 @@ mod tests {
                             "Title": "Roadmap review",
                         },
                     })),
-                    message: "Allow Calendar to create an event".to_string(),
+                    message: "Allow Calendar to create an event?".to_string(),
                     requested_schema: McpElicitationSchema {
                         schema_uri: None,
                         type_: McpElicitationObjectType::Object,
@@ -1674,6 +1672,7 @@ mod tests {
                 "custom_server",
                 None,
                 None,
+                None,
                 prompt_options(false, false),
             ),
             Some(serde_json::json!({
@@ -1695,6 +1694,7 @@ mod tests {
                     Some("Runs the selected action."),
                 )),
                 Some(&serde_json::json!({"id": 1})),
+                None,
                 prompt_options(true, false),
             ),
             Some(serde_json::json!({
@@ -1853,6 +1853,7 @@ mod tests {
                 Some(&serde_json::json!({
                     "calendar_id": "primary",
                 })),
+                None,
                 prompt_options(false, false),
             ),
             Some(serde_json::json!({
@@ -1885,6 +1886,7 @@ mod tests {
                 Some(&serde_json::json!({
                     "calendar_id": "primary",
                 })),
+                None,
                 prompt_options(true, true),
             ),
             Some(serde_json::json!({
