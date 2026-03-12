@@ -11,6 +11,7 @@ use super::marketplace::load_marketplace_summary;
 use super::marketplace::resolve_marketplace_plugin;
 use super::plugin_manifest_name;
 use super::plugin_manifest_paths;
+use super::read_curated_plugins_sha;
 use super::store::DEFAULT_PLUGIN_VERSION;
 use super::store::PluginId;
 use super::store::PluginIdError;
@@ -45,6 +46,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -56,7 +58,6 @@ use tracing::warn;
 const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
-const DISABLE_CURATED_PLUGIN_SYNC_ENV_VAR: &str = "CODEX_DISABLE_CURATED_PLUGIN_SYNC";
 const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 const REMOTE_PLUGIN_SYNC_TIMEOUT: Duration = Duration::from_secs(30);
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
@@ -395,9 +396,25 @@ impl PluginsManager {
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
         let resolved = resolve_marketplace_plugin(&request.marketplace_path, &request.plugin_name)?;
         let auth_policy = resolved.auth_policy;
+        let plugin_version =
+            if resolved.plugin_id.marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
+                Some(
+                    read_curated_plugins_sha(self.codex_home.as_path()).ok_or_else(|| {
+                        PluginStoreError::Invalid(
+                            "local curated marketplace sha is not available".to_string(),
+                        )
+                    })?,
+                )
+            } else {
+                None
+            };
         let store = self.store.clone();
         let result: StorePluginInstallResult = tokio::task::spawn_blocking(move || {
-            store.install(resolved.source_path, resolved.plugin_id)
+            if let Some(plugin_version) = plugin_version {
+                store.install_with_version(resolved.source_path, resolved.plugin_id, plugin_version)
+            } else {
+                store.install(resolved.source_path, resolved.plugin_id)
+            }
         })
         .await
         .map_err(PluginInstallError::join)??;
@@ -464,8 +481,19 @@ impl PluginsManager {
         };
 
         let marketplace_name = curated_marketplace.name.clone();
-        let mut local_plugins =
-            Vec::<(String, PluginId, AbsolutePathBuf, Option<bool>, bool)>::new();
+        let curated_plugin_version = read_curated_plugins_sha(self.codex_home.as_path())
+            .ok_or_else(|| {
+                PluginStoreError::Invalid(
+                    "local curated marketplace sha is not available".to_string(),
+                )
+            })?;
+        let mut local_plugins = Vec::<(
+            String,
+            PluginId,
+            AbsolutePathBuf,
+            Option<bool>,
+            Option<String>,
+        )>::new();
         let mut local_plugin_names = HashSet::new();
         for plugin in curated_marketplace.plugins {
             let plugin_name = plugin.name;
@@ -486,13 +514,13 @@ impl PluginsManager {
             let current_enabled = configured_plugins
                 .get(&plugin_key)
                 .map(|plugin| plugin.enabled);
-            let is_installed = self.store.is_installed(&plugin_id);
+            let installed_version = self.store.active_plugin_version(&plugin_id);
             local_plugins.push((
                 plugin_name,
                 plugin_id,
                 source_path,
                 current_enabled,
-                is_installed,
+                installed_version,
             ));
         }
 
@@ -528,11 +556,20 @@ impl PluginsManager {
         let remote_plugin_count = remote_enabled_by_name.len();
         let local_plugin_count = local_plugins.len();
 
-        for (plugin_name, plugin_id, source_path, current_enabled, is_installed) in local_plugins {
+        for (plugin_name, plugin_id, source_path, current_enabled, installed_version) in
+            local_plugins
+        {
             let plugin_key = plugin_id.as_key();
+            let is_installed = installed_version.is_some();
             if let Some(enabled) = remote_enabled_by_name.get(&plugin_name).copied() {
                 if !is_installed {
-                    installs.push((source_path, plugin_id.clone()));
+                    installs.push((
+                        source_path,
+                        plugin_id.clone(),
+                        curated_plugin_version.clone(),
+                    ));
+                }
+                if !is_installed {
                     result.installed_plugin_ids.push(plugin_key.clone());
                 }
 
@@ -565,8 +602,8 @@ impl PluginsManager {
 
         let store = self.store.clone();
         let store_result = tokio::task::spawn_blocking(move || {
-            for (source_path, plugin_id) in installs {
-                store.install(source_path, plugin_id)?;
+            for (source_path, plugin_id, plugin_version) in installs {
+                store.install_with_version(source_path, plugin_id, plugin_version)?;
             }
             for plugin_id in uninstalls {
                 store.uninstall(&plugin_id)?;
@@ -668,28 +705,67 @@ impl PluginsManager {
             .collect())
     }
 
-    pub fn maybe_start_curated_repo_sync_for_config(&self, config: &Config) {
+    pub fn maybe_start_curated_repo_sync_for_config(self: &Arc<Self>, config: &Config) {
         if plugins_feature_enabled_from_stack(&config.config_layer_stack) {
-            self.start_curated_repo_sync();
+            let mut configured_curated_plugin_ids =
+                configured_plugins_from_stack(&config.config_layer_stack)
+                    .into_keys()
+                    .filter_map(|plugin_key| match PluginId::parse(&plugin_key) {
+                        Ok(plugin_id)
+                            if plugin_id.marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME =>
+                        {
+                            Some(plugin_id)
+                        }
+                        Ok(_) => None,
+                        Err(err) => {
+                            warn!(
+                                plugin_key,
+                                error = %err,
+                                "ignoring invalid configured plugin key during curated sync setup"
+                            );
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+            configured_curated_plugin_ids.sort_unstable_by_key(super::store::PluginId::as_key);
+            self.start_curated_repo_sync(configured_curated_plugin_ids);
         }
     }
 
-    pub fn start_curated_repo_sync(&self) {
-        if std::env::var_os(DISABLE_CURATED_PLUGIN_SYNC_ENV_VAR).is_some() {
-            return;
-        }
+    fn start_curated_repo_sync(self: &Arc<Self>, configured_curated_plugin_ids: Vec<PluginId>) {
         if CURATED_REPO_SYNC_STARTED.swap(true, Ordering::SeqCst) {
             return;
         }
+        let manager = Arc::clone(self);
         let codex_home = self.codex_home.clone();
         if let Err(err) = std::thread::Builder::new()
             .name("plugins-curated-repo-sync".to_string())
-            .spawn(move || {
-                if let Err(err) = sync_openai_plugins_repo(codex_home.as_path()) {
-                    CURATED_REPO_SYNC_STARTED.store(false, Ordering::SeqCst);
-                    warn!("failed to sync curated plugins repo: {err}");
-                }
-            })
+            .spawn(
+                move || match sync_openai_plugins_repo(codex_home.as_path()) {
+                    Ok(curated_plugin_version) => {
+                        match refresh_curated_plugin_cache(
+                            codex_home.as_path(),
+                            &curated_plugin_version,
+                            &configured_curated_plugin_ids,
+                        ) {
+                            Ok(cache_refreshed) => {
+                                if cache_refreshed {
+                                    manager.clear_cache();
+                                }
+                            }
+                            Err(err) => {
+                                manager.clear_cache();
+                                CURATED_REPO_SYNC_STARTED.store(false, Ordering::SeqCst);
+                                warn!("failed to refresh curated plugin cache after sync: {err}");
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        CURATED_REPO_SYNC_STARTED.store(false, Ordering::SeqCst);
+                        warn!("failed to sync curated plugins repo: {err}");
+                    }
+                },
+            )
         {
             CURATED_REPO_SYNC_STARTED.store(false, Ordering::SeqCst);
             warn!("failed to start curated plugins repo sync task: {err}");
@@ -906,6 +982,65 @@ pub(crate) fn plugin_namespace_for_skill_path(path: &Path) -> Option<String> {
     None
 }
 
+fn refresh_curated_plugin_cache(
+    codex_home: &Path,
+    plugin_version: &str,
+    configured_curated_plugin_ids: &[PluginId],
+) -> Result<bool, String> {
+    let store = PluginStore::new(codex_home.to_path_buf());
+    let curated_marketplace_path = AbsolutePathBuf::try_from(
+        curated_plugins_repo_path(codex_home).join(".agents/plugins/marketplace.json"),
+    )
+    .map_err(|_| "local curated marketplace is not available".to_string())?;
+    let curated_marketplace = load_marketplace_summary(&curated_marketplace_path)
+        .map_err(|err| format!("failed to load curated marketplace for cache refresh: {err}"))?;
+
+    let mut plugin_sources = HashMap::<String, AbsolutePathBuf>::new();
+    for plugin in curated_marketplace.plugins {
+        let plugin_name = plugin.name;
+        if plugin_sources.contains_key(&plugin_name) {
+            warn!(
+                plugin = plugin_name,
+                marketplace = OPENAI_CURATED_MARKETPLACE_NAME,
+                "ignoring duplicate curated plugin entry during cache refresh"
+            );
+            continue;
+        }
+        let source_path = match plugin.source {
+            MarketplacePluginSourceSummary::Local { path } => path,
+        };
+        plugin_sources.insert(plugin_name, source_path);
+    }
+
+    let mut cache_refreshed = false;
+    for plugin_id in configured_curated_plugin_ids {
+        if store.active_plugin_version(plugin_id).as_deref() == Some(plugin_version) {
+            continue;
+        }
+
+        let Some(source_path) = plugin_sources.get(&plugin_id.plugin_name).cloned() else {
+            warn!(
+                plugin = plugin_id.plugin_name,
+                marketplace = OPENAI_CURATED_MARKETPLACE_NAME,
+                "configured curated plugin no longer exists in curated marketplace during cache refresh"
+            );
+            continue;
+        };
+
+        store
+            .install_with_version(source_path, plugin_id.clone(), plugin_version.to_string())
+            .map_err(|err| {
+                format!(
+                    "failed to refresh curated plugin cache for {}: {err}",
+                    plugin_id.as_key()
+                )
+            })?;
+        cache_refreshed = true;
+    }
+
+    Ok(cache_refreshed)
+}
+
 fn configured_plugins_from_stack(
     config_layer_stack: &ConfigLayerStack,
 ) -> HashMap<String, PluginConfig> {
@@ -926,9 +1061,11 @@ fn configured_plugins_from_stack(
 }
 
 fn load_plugin(config_name: String, plugin: &PluginConfig, store: &PluginStore) -> LoadedPlugin {
-    let plugin_version = DEFAULT_PLUGIN_VERSION.to_string();
-    let plugin_root = PluginId::parse(&config_name)
-        .map(|plugin_id| store.plugin_root(&plugin_id, &plugin_version));
+    let plugin_root = PluginId::parse(&config_name).map(|plugin_id| {
+        store
+            .active_plugin_root(&plugin_id)
+            .unwrap_or_else(|| store.plugin_root(&plugin_id, DEFAULT_PLUGIN_VERSION))
+    });
     let root = match &plugin_root {
         Ok(plugin_root) => plugin_root.clone(),
         Err(_) => store.root().clone(),
@@ -1227,6 +1364,8 @@ mod tests {
     use wiremock::matchers::method;
     use wiremock::matchers::path;
 
+    const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
     fn write_file(path: &Path, contents: &str) {
         fs::create_dir_all(path.parent().expect("file should have a parent")).unwrap();
         fs::write(path, contents).unwrap();
@@ -1246,7 +1385,6 @@ mod tests {
     }
 
     fn write_openai_curated_marketplace(root: &Path, plugin_names: &[&str]) {
-        fs::create_dir_all(root.join(".git")).unwrap();
         fs::create_dir_all(root.join(".agents/plugins")).unwrap();
         let plugins = plugin_names
             .iter()
@@ -1278,6 +1416,10 @@ mod tests {
         for plugin_name in plugin_names {
             write_plugin(root, &format!("plugins/{plugin_name}"), plugin_name);
         }
+    }
+
+    fn write_curated_plugin_sha(codex_home: &Path, sha: &str) {
+        write_file(&codex_home.join(".tmp/plugins.sha"), &format!("{sha}\n"));
     }
 
     fn plugin_config_toml(enabled: bool, plugins_feature_enabled: bool) -> String {
@@ -2134,7 +2276,6 @@ enabled = false
         let curated_root = curated_plugins_repo_path(tmp.path());
         let plugin_root = curated_root.join("plugins/linear");
 
-        fs::create_dir_all(curated_root.join(".git")).unwrap();
         fs::create_dir_all(curated_root.join(".agents/plugins")).unwrap();
         fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
         fs::write(
@@ -2404,6 +2545,7 @@ enabled = true
         let tmp = tempfile::tempdir().unwrap();
         let curated_root = curated_plugins_repo_path(tmp.path());
         write_openai_curated_marketplace(&curated_root, &["linear", "gmail", "calendar"]);
+        write_curated_plugin_sha(tmp.path(), TEST_CURATED_PLUGIN_SHA);
         write_plugin(
             &tmp.path().join("plugins/cache/openai-curated"),
             "linear/local",
@@ -2469,7 +2611,9 @@ enabled = true
         );
         assert!(
             tmp.path()
-                .join("plugins/cache/openai-curated/gmail/local")
+                .join(format!(
+                    "plugins/cache/openai-curated/gmail/{TEST_CURATED_PLUGIN_SHA}"
+                ))
                 .is_dir()
         );
         assert!(
@@ -2511,6 +2655,7 @@ enabled = true
         let tmp = tempfile::tempdir().unwrap();
         let curated_root = curated_plugins_repo_path(tmp.path());
         write_openai_curated_marketplace(&curated_root, &["linear"]);
+        write_curated_plugin_sha(tmp.path(), TEST_CURATED_PLUGIN_SHA);
         write_file(
             &tmp.path().join(CONFIG_TOML_FILE),
             r#"[features]
@@ -2566,6 +2711,7 @@ enabled = false
         let tmp = tempfile::tempdir().unwrap();
         let curated_root = curated_plugins_repo_path(tmp.path());
         write_openai_curated_marketplace(&curated_root, &["linear", "gmail"]);
+        write_curated_plugin_sha(tmp.path(), TEST_CURATED_PLUGIN_SHA);
         fs::remove_dir_all(curated_root.join("plugins/gmail")).unwrap();
         write_plugin(
             &tmp.path().join("plugins/cache/openai-curated"),
@@ -2630,7 +2776,7 @@ enabled = false
     async fn sync_plugins_from_remote_uses_first_duplicate_local_plugin_entry() {
         let tmp = tempfile::tempdir().unwrap();
         let curated_root = curated_plugins_repo_path(tmp.path());
-        fs::create_dir_all(curated_root.join(".git")).unwrap();
+        write_curated_plugin_sha(tmp.path(), TEST_CURATED_PLUGIN_SHA);
         fs::create_dir_all(curated_root.join(".agents/plugins")).unwrap();
         fs::write(
             curated_root.join(".agents/plugins/marketplace.json"),
@@ -2702,12 +2848,95 @@ plugins = true
             }
         );
         assert_eq!(
-            fs::read_to_string(
-                tmp.path()
-                    .join("plugins/cache/openai-curated/gmail/local/marker.txt")
-            )
+            fs::read_to_string(tmp.path().join(format!(
+                "plugins/cache/openai-curated/gmail/{TEST_CURATED_PLUGIN_SHA}/marker.txt"
+            )))
             .unwrap(),
             "first"
+        );
+    }
+
+    #[test]
+    fn refresh_curated_plugin_cache_replaces_existing_local_version_with_sha() {
+        let tmp = tempfile::tempdir().unwrap();
+        let curated_root = curated_plugins_repo_path(tmp.path());
+        write_openai_curated_marketplace(&curated_root, &["slack"]);
+        write_curated_plugin_sha(tmp.path(), TEST_CURATED_PLUGIN_SHA);
+        let plugin_id = PluginId::new(
+            "slack".to_string(),
+            OPENAI_CURATED_MARKETPLACE_NAME.to_string(),
+        )
+        .unwrap();
+        write_plugin(
+            &tmp.path().join("plugins/cache/openai-curated"),
+            "slack/local",
+            "slack",
+        );
+
+        assert!(
+            refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
+                .expect("cache refresh should succeed")
+        );
+
+        assert!(
+            !tmp.path()
+                .join("plugins/cache/openai-curated/slack/local")
+                .exists()
+        );
+        assert!(
+            tmp.path()
+                .join(format!(
+                    "plugins/cache/openai-curated/slack/{TEST_CURATED_PLUGIN_SHA}"
+                ))
+                .is_dir()
+        );
+    }
+
+    #[test]
+    fn refresh_curated_plugin_cache_reinstalls_missing_configured_plugin_with_current_sha() {
+        let tmp = tempfile::tempdir().unwrap();
+        let curated_root = curated_plugins_repo_path(tmp.path());
+        write_openai_curated_marketplace(&curated_root, &["slack"]);
+        write_curated_plugin_sha(tmp.path(), TEST_CURATED_PLUGIN_SHA);
+        let plugin_id = PluginId::new(
+            "slack".to_string(),
+            OPENAI_CURATED_MARKETPLACE_NAME.to_string(),
+        )
+        .unwrap();
+
+        assert!(
+            refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
+                .expect("cache refresh should recreate missing configured plugin")
+        );
+
+        assert!(
+            tmp.path()
+                .join(format!(
+                    "plugins/cache/openai-curated/slack/{TEST_CURATED_PLUGIN_SHA}"
+                ))
+                .is_dir()
+        );
+    }
+
+    #[test]
+    fn refresh_curated_plugin_cache_returns_false_when_configured_plugins_are_current() {
+        let tmp = tempfile::tempdir().unwrap();
+        let curated_root = curated_plugins_repo_path(tmp.path());
+        write_openai_curated_marketplace(&curated_root, &["slack"]);
+        let plugin_id = PluginId::new(
+            "slack".to_string(),
+            OPENAI_CURATED_MARKETPLACE_NAME.to_string(),
+        )
+        .unwrap();
+        write_plugin(
+            &tmp.path().join("plugins/cache/openai-curated"),
+            &format!("slack/{TEST_CURATED_PLUGIN_SHA}"),
+            "slack",
+        );
+
+        assert!(
+            !refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
+                .expect("cache refresh should be a no-op when configured plugins are current")
         );
     }
 
