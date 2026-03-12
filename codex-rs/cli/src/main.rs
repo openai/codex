@@ -498,18 +498,10 @@ impl FeatureToggles {
     fn to_overrides(&self) -> anyhow::Result<Vec<String>> {
         let mut v = Vec::new();
         for feature in &self.enable {
-            if feature == "use_linux_sandbox_bwrap" {
-                v.push("features.use_linux_sandbox_bwrap=true".to_string());
-                continue;
-            }
             Self::validate_feature(feature)?;
             v.push(format!("features.{feature}=true"));
         }
         for feature in &self.disable {
-            if feature == "use_linux_sandbox_bwrap" {
-                v.push("features.use_linux_sandbox_bwrap=false".to_string());
-                continue;
-            }
             Self::validate_feature(feature)?;
             v.push(format!("features.{feature}=false"));
         }

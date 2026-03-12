@@ -108,6 +108,9 @@ pub enum Feature {
     WebSearchCached,
     /// Legacy search-tool feature flag kept for backward compatibility.
     SearchTool,
+    /// Removed legacy Linux bubblewrap opt-in flag retained as a no-op so old
+    /// wrappers and config can still parse it.
+    UseLinuxSandboxBwrap,
     /// Use the legacy Landlock Linux sandbox fallback instead of the default
     /// bubblewrap pipeline.
     UseLegacyLandlock,
@@ -365,7 +368,7 @@ impl Features {
                 "use_linux_sandbox_bwrap" => {
                     self.legacy_usages.insert(LegacyFeatureUsage {
                         alias: k.clone(),
-                        feature: Feature::UseLegacyLandlock,
+                        feature: Feature::UseLinuxSandboxBwrap,
                         summary: "`use_linux_sandbox_bwrap` is deprecated and ignored because the bubblewrap sandbox is now the default on Linux.".to_string(),
                         details: Some(
                             "Remove this flag from wrapper arguments or config overrides.".to_string(),
@@ -649,6 +652,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::RequestPermissionsTool,
         key: "request_permissions_tool",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::UseLinuxSandboxBwrap,
+        key: "use_linux_sandbox_bwrap",
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -949,6 +958,12 @@ mod tests {
     }
 
     #[test]
+    fn use_linux_sandbox_bwrap_is_removed_and_disabled_by_default() {
+        assert_eq!(Feature::UseLinuxSandboxBwrap.stage(), Stage::Removed);
+        assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
+    }
+
+    #[test]
     fn legacy_use_linux_sandbox_bwrap_is_ignored() {
         let mut features = Features::with_defaults();
         features.enable(Feature::UseLegacyLandlock);
@@ -1032,12 +1047,15 @@ mod tests {
     }
 
     #[test]
-    fn use_linux_sandbox_bwrap_is_not_a_feature_alias() {
+    fn use_linux_sandbox_bwrap_is_a_removed_feature_key() {
         assert_eq!(
             feature_for_key("use_legacy_landlock"),
             Some(Feature::UseLegacyLandlock)
         );
-        assert_eq!(feature_for_key("use_linux_sandbox_bwrap"), None);
+        assert_eq!(
+            feature_for_key("use_linux_sandbox_bwrap"),
+            Some(Feature::UseLinuxSandboxBwrap)
+        );
     }
 
     #[test]
