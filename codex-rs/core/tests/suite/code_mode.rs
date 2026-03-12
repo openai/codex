@@ -233,6 +233,7 @@ add_content(JSON.stringify(await exec_command({ cmd: "printf code_mode_exec_mark
     Ok(())
 }
 
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_nested_tool_calls_can_run_in_parallel() -> Result<()> {
     skip_if_no_network!(Ok(()));
