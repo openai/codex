@@ -514,8 +514,8 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
         file_system_policy_json,
         "--network-sandbox-policy".to_string(),
         network_policy_json,
+        "--apply-seccomp-then-exec".to_string(),
     ];
-    inner.push("--apply-seccomp-then-exec".to_string());
     if allow_network_for_proxy {
         inner.push("--allow-network-for-proxy".to_string());
         let proxy_route_spec = proxy_route_spec
