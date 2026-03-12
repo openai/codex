@@ -68,7 +68,7 @@ struct WriteStdinArgs {
 }
 
 fn default_exec_yield_time_ms() -> u64 {
-    10000
+    10_000
 }
 
 fn default_write_stdin_yield_time_ms() -> u64 {

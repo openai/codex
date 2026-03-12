@@ -35,6 +35,7 @@ const CODE_MODE_WAIT_DESCRIPTION_TEMPLATE: &str = include_str!("wait_description
 
 pub(crate) const PUBLIC_TOOL_NAME: &str = "exec";
 pub(crate) const WAIT_TOOL_NAME: &str = "exec_wait";
+pub(crate) const DEFAULT_EXEC_YIELD_TIME_MS: u64 = 10_000;
 pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 = 10_000;
 
 #[derive(Clone)]

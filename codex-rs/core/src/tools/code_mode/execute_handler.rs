@@ -48,6 +48,7 @@ impl CodeModeExecuteHandler {
         let message = HostToNodeMessage::Start {
             request_id: request_id.clone(),
             session_id,
+            default_yield_time_ms: super::DEFAULT_EXEC_YIELD_TIME_MS,
             enabled_tools,
             stored_values,
             source,
