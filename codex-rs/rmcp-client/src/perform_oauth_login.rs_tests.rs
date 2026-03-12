@@ -137,7 +137,17 @@ fn callback_port_defaults_to_cimd_port_for_cimd_metadata() {
 }
 
 #[test]
-fn callback_listener_settings_allow_matching_explicit_port() {
+fn callback_listener_settings_allow_proxied_callback_url_with_different_local_port() {
+    let result = validate_callback_listener_settings(
+        Some(5678),
+        Some("https://login.example.com:8443/callback"),
+    );
+
+    assert_eq!(result.is_ok(), true);
+}
+
+#[test]
+fn callback_listener_settings_allow_matching_explicit_port_for_cimd_callback_url() {
     let result =
         validate_callback_listener_settings(Some(33418), Some(DEFAULT_CIMD_REDIRECT_URI_CALLBACK));
 
@@ -145,14 +155,13 @@ fn callback_listener_settings_allow_matching_explicit_port() {
 }
 
 #[test]
-fn callback_listener_settings_reject_conflicting_explicit_port() {
+fn callback_listener_settings_reject_non_default_port_for_cimd_callback_url() {
     let err =
         validate_callback_listener_settings(Some(5678), Some(DEFAULT_CIMD_REDIRECT_URI_CALLBACK))
-            .expect_err("conflicting callback URL and port should be rejected");
+            .expect_err("built-in CIMD callback URL should reject non-default port");
 
     assert!(
-        err.to_string()
-            .contains("`mcp_oauth_callback_port` is set to `5678`"),
+        err.to_string().contains("must be `33418` or unset"),
         "unexpected callback listener settings error: {err:#}"
     );
 }
@@ -382,12 +391,55 @@ async fn oauth_login_rejects_conflicting_explicit_callback_url_and_port_for_non_
     )
     .await
     .err()
-    .expect("oauth login should fail when callback URL and port conflict");
+    .expect("oauth login should fail when built-in CIMD callback URL uses a non-default port");
 
     assert!(
-        err.to_string()
-            .contains("`mcp_oauth_callback_port` is set to `5678`"),
+        err.to_string().contains("must be `33418` or unset"),
         "unexpected oauth setup error: {err:#}"
+    );
+
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn oauth_login_allows_proxied_callback_url_with_different_local_port() {
+    let _lock = callback_port_test_lock().lock().await;
+    let (server_url, server_handle) = start_oauth_metadata_server(false, true, false).await;
+    let local_callback_port = available_loopback_port();
+
+    let login_handle = perform_oauth_login_return_url(
+        "rmcp-http",
+        &server_url,
+        OAuthCredentialsStoreMode::File,
+        None,
+        None,
+        &[],
+        None,
+        Some(1),
+        Some(local_callback_port),
+        Some("https://login.example.com:8443/callback"),
+    )
+    .await
+    .expect("oauth login should start for proxied callback URL");
+    let (authorization_url, completion) = login_handle.into_parts();
+
+    let parsed = Url::parse(&authorization_url).expect("authorization URL should parse");
+    let params = parsed
+        .query_pairs()
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(
+        params.get("redirect_uri").map(std::convert::AsRef::as_ref),
+        Some("https://login.example.com:8443/callback")
+    );
+
+    let err = completion
+        .await
+        .expect("oauth completion receiver should resolve")
+        .expect_err("oauth should time out in test without proxy callback");
+    assert!(
+        err.to_string()
+            .contains("timed out waiting for OAuth callback"),
+        "unexpected oauth completion error: {err}"
     );
 
     server_handle.abort();
@@ -547,6 +599,72 @@ async fn oauth_login_fallback_rebinds_compatible_explicit_callback_without_port(
     )
     .await
     .expect("oauth login should start with compatible explicit callback URL");
+    let (authorization_url, completion) = login_handle.into_parts();
+
+    let parsed = Url::parse(&authorization_url).expect("authorization URL should parse");
+    let params = parsed
+        .query_pairs()
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(
+        params.get("redirect_uri").map(std::convert::AsRef::as_ref),
+        Some(DEFAULT_CIMD_REDIRECT_URI_CALLBACK)
+    );
+    let state = params
+        .get("state")
+        .map(std::convert::AsRef::as_ref)
+        .expect("authorization URL should include state");
+
+    let mut callback_url =
+        Url::parse(DEFAULT_CIMD_REDIRECT_URI_CALLBACK).expect("callback URL should parse");
+    callback_url
+        .query_pairs_mut()
+        .append_pair("code", "test-code")
+        .append_pair("state", state);
+    let callback_response = reqwest::get(callback_url)
+        .await
+        .expect("callback request should reach local listener");
+    assert_eq!(callback_response.status(), StatusCode::OK);
+    let callback_response_body = callback_response
+        .text()
+        .await
+        .expect("callback response body should be readable");
+    assert_eq!(
+        callback_response_body,
+        "Authentication complete. You may close this window."
+    );
+
+    let err = tokio::time::timeout(Duration::from_secs(5), completion)
+        .await
+        .expect("oauth completion should resolve after callback")
+        .expect("oauth completion receiver should resolve")
+        .expect_err("oauth completion should fail in test without token endpoint");
+    assert!(
+        err.to_string().contains("failed to handle OAuth callback"),
+        "unexpected oauth completion error: {err:#}"
+    );
+
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn oauth_login_dynamic_registration_uses_default_port_for_explicit_cimd_callback() {
+    let _lock = callback_port_test_lock().lock().await;
+    let (server_url, server_handle) = start_oauth_metadata_server(true, true, false).await;
+
+    let login_handle = perform_oauth_login_return_url(
+        "rmcp-http",
+        &server_url,
+        OAuthCredentialsStoreMode::File,
+        None,
+        None,
+        &[],
+        None,
+        Some(1),
+        None,
+        Some(DEFAULT_CIMD_REDIRECT_URI_CALLBACK),
+    )
+    .await
+    .expect("oauth login should start with explicit built-in CIMD callback URL");
     let (authorization_url, completion) = login_handle.into_parts();
 
     let parsed = Url::parse(&authorization_url).expect("authorization URL should parse");

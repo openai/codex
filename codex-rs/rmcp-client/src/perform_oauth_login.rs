@@ -364,27 +364,32 @@ fn callback_path_from_redirect_uri(redirect_uri: &str) -> Result<String> {
     Ok(parsed.path().to_string())
 }
 
+fn uses_default_cimd_redirect_uri(redirect_uri: &str) -> bool {
+    matches!(
+        redirect_uri,
+        DEFAULT_CIMD_REDIRECT_URI_ROOT | DEFAULT_CIMD_REDIRECT_URI_CALLBACK
+    )
+}
+
 fn validate_callback_listener_settings(
     callback_port: Option<u16>,
     callback_url: Option<&str>,
 ) -> Result<()> {
-    let Some(callback_port) = callback_port else {
-        return Ok(());
-    };
     let Some(callback_url) = callback_url else {
         return Ok(());
     };
-    let parsed = Url::parse(callback_url)
-        .with_context(|| format!("invalid MCP OAuth callback URL `{callback_url}`"))?;
-    let Some(callback_url_port) = parsed.port() else {
+    if !uses_default_cimd_redirect_uri(callback_url) {
+        return Ok(());
+    };
+    let Some(callback_port) = callback_port else {
         return Ok(());
     };
 
-    if callback_url_port == callback_port {
+    if callback_port == DEFAULT_CIMD_CALLBACK_PORT {
         Ok(())
     } else {
         Err(anyhow!(
-            "MCP OAuth callback URL `{callback_url}` uses port `{callback_url_port}` but `mcp_oauth_callback_port` is set to `{callback_port}`"
+            "MCP OAuth callback URL `{callback_url}` is a built-in Codex client metadata redirect URI, so `mcp_oauth_callback_port` must be `{DEFAULT_CIMD_CALLBACK_PORT}` or unset"
         ))
     }
 }
@@ -473,12 +478,16 @@ impl OauthLoginFlow {
         let supports_default_cimd_metadata = client_id_metadata_document_supported(&metadata);
         let callback_port_is_explicitly_set = callback_port.is_some();
         let callback_url_is_explicitly_set = callback_url.is_some();
+        let callback_url_uses_default_cimd_redirect = callback_url
+            .map(uses_default_cimd_redirect_uri)
+            .unwrap_or(false);
         let should_rebind_callback_for_cimd_fallback =
             !callback_port_is_explicitly_set && !callback_url_is_explicitly_set;
+        let should_bind_to_default_cimd_port = should_start_with_default_cimd_metadata
+            || (!callback_port_is_explicitly_set && callback_url_uses_default_cimd_redirect);
 
         let bind_host = callback_bind_host(callback_url);
-        let callback_port =
-            resolve_callback_port(callback_port, should_start_with_default_cimd_metadata)?;
+        let callback_port = resolve_callback_port(callback_port, should_bind_to_default_cimd_port)?;
         let mut callback_listener =
             start_callback_listener(&bind_host, callback_port, callback_url)?;
 
@@ -498,28 +507,16 @@ impl OauthLoginFlow {
                     && supports_default_cimd_metadata
                     && matches!(dynamic_registration_err, AuthError::RegistrationFailed(_)) =>
             {
-                let redirect_uri_is_compatible_with_default_cimd_metadata =
-                    validate_redirect_uri_for_default_cimd_metadata(
-                        &callback_listener.redirect_uri,
-                    )
-                    .is_ok();
-                let should_rebind_for_compatible_explicit_callback_url =
-                    !callback_port_is_explicitly_set
-                        && callback_url_is_explicitly_set
-                        && redirect_uri_is_compatible_with_default_cimd_metadata;
                 if should_rebind_callback_listener_for_cimd_fallback(
                     should_rebind_callback_for_cimd_fallback,
                     &callback_listener.redirect_uri,
-                ) || should_rebind_for_compatible_explicit_callback_url
-                {
-                    let explicit_callback_url = should_rebind_for_compatible_explicit_callback_url
-                        .then_some(callback_listener.redirect_uri.clone());
+                ) {
                     callback_listener = start_callback_listener(
                         "127.0.0.1",
                         Some(default_cimd_callback_port_nonzero().context(
                             "invalid built-in CIMD callback port for fallback listener",
                         )?),
-                        explicit_callback_url.as_deref(),
+                        None,
                     )
                     .context("failed to rebind OAuth callback listener for CIMD fallback")?;
                 } else if callback_port_is_explicitly_set || callback_url_is_explicitly_set {
@@ -710,10 +707,7 @@ fn client_id_metadata_document_supported(metadata: &AuthorizationMetadata) -> bo
 }
 
 fn validate_redirect_uri_for_default_cimd_metadata(redirect_uri: &str) -> Result<()> {
-    if matches!(
-        redirect_uri,
-        DEFAULT_CIMD_REDIRECT_URI_ROOT | DEFAULT_CIMD_REDIRECT_URI_CALLBACK
-    ) {
+    if uses_default_cimd_redirect_uri(redirect_uri) {
         Ok(())
     } else {
         Err(anyhow!(
