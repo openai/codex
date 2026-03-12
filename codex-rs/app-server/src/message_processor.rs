@@ -536,7 +536,11 @@ impl MessageProcessor {
                 }
 
                 let user_agent = get_codex_user_agent();
-                let response = InitializeResponse { user_agent };
+                let response = InitializeResponse {
+                    user_agent,
+                    platform_family: std::env::consts::FAMILY.to_string(),
+                    platform_os: std::env::consts::OS.to_string(),
+                };
                 self.outgoing
                     .send_response(connection_request_id, response)
                     .await;

@@ -2147,11 +2147,19 @@
     "InitializeResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "platformFamily": {
+          "type": "string"
+        },
+        "platformOs": {
+          "type": "string"
+        },
         "userAgent": {
           "type": "string"
         }
       },
       "required": [
+        "platformFamily",
+        "platformOs",
         "userAgent"
       ],
       "title": "InitializeResponse",
