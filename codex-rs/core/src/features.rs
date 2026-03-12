@@ -906,5 +906,6 @@ pub fn maybe_push_unstable_features_warning(
     });
 }
 
+#[cfg(test)]
 #[path = "features_tests.rs"]
 mod tests;
