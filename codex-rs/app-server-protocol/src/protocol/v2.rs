@@ -3115,7 +3115,7 @@ pub struct PluginDetail {
     pub marketplace_path: AbsolutePathBuf,
     pub summary: PluginSummary,
     pub description: Option<String>,
-    pub skills: Vec<PluginSkillSummary>,
+    pub skills: Vec<SkillSummary>,
     pub apps: Vec<AppSummary>,
     pub mcp_servers: Vec<String>,
 }
@@ -3123,7 +3123,7 @@ pub struct PluginDetail {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct PluginSkillSummary {
+pub struct SkillSummary {
     pub name: String,
     pub description: String,
     pub short_description: Option<String>,

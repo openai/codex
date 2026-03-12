@@ -68,7 +68,7 @@
         },
         "skills": {
           "items": {
-            "$ref": "#/definitions/PluginSkillSummary"
+            "$ref": "#/definitions/SkillSummary"
           },
           "type": "array"
         },
@@ -195,41 +195,6 @@
       ],
       "type": "object"
     },
-    "PluginSkillSummary": {
-      "properties": {
-        "description": {
-          "type": "string"
-        },
-        "interface": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SkillInterface"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        },
-        "shortDescription": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "description",
-        "name",
-        "path"
-      ],
-      "type": "object"
-    },
     "PluginSource": {
       "oneOf": [
         {
@@ -338,6 +303,41 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "SkillSummary": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "interface": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SkillInterface"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "shortDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "description",
+        "name",
+        "path"
+      ],
       "type": "object"
     }
   },

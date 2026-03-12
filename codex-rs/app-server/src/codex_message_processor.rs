@@ -24,8 +24,6 @@ use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AppInfo;
-use codex_app_server_protocol::AppListUpdatedNotification;
-use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::AskForApproval;
@@ -92,7 +90,6 @@ use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
-use codex_app_server_protocol::PluginSkillSummary;
 use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallParams;
@@ -106,6 +103,7 @@ use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
+use codex_app_server_protocol::SkillSummary;
 use codex_app_server_protocol::SkillsConfigWriteParams;
 use codex_app_server_protocol::SkillsConfigWriteResponse;
 use codex_app_server_protocol::SkillsListParams;
@@ -222,7 +220,6 @@ use codex_core::mcp::collect_mcp_snapshot;
 use codex_core::mcp::group_tools_by_server;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::parse_cursor;
-use codex_core::plugins::AppConnectorId;
 use codex_core::plugins::MarketplaceError;
 use codex_core::plugins::MarketplacePluginSourceSummary;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
@@ -312,6 +309,9 @@ use uuid::Uuid;
 
 #[cfg(test)]
 use codex_app_server_protocol::ServerRequest;
+
+mod apps_list_helpers;
+mod plugin_app_helpers;
 
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
@@ -5133,18 +5133,19 @@ impl CodexMessageProcessor {
 
         if accessible_connectors.is_some() || all_connectors.is_some() {
             let merged = connectors::with_app_enabled_state(
-                Self::merge_loaded_apps(
+                apps_list_helpers::merge_loaded_apps(
                     all_connectors.as_deref(),
                     accessible_connectors.as_deref(),
                 ),
                 &config,
             );
-            if Self::should_send_app_list_updated_notification(
+            if apps_list_helpers::should_send_app_list_updated_notification(
                 merged.as_slice(),
                 accessible_loaded,
                 all_loaded,
             ) {
-                Self::send_app_list_updated_notification(&outgoing, merged.clone()).await;
+                apps_list_helpers::send_app_list_updated_notification(&outgoing, merged.clone())
+                    .await;
                 last_notified_apps = Some(merged);
             }
         }
@@ -5218,24 +5219,25 @@ impl CodexMessageProcessor {
                     accessible_connectors.as_deref()
                 };
             let merged = connectors::with_app_enabled_state(
-                Self::merge_loaded_apps(
+                apps_list_helpers::merge_loaded_apps(
                     all_connectors_for_update,
                     accessible_connectors_for_update,
                 ),
                 &config,
             );
-            if Self::should_send_app_list_updated_notification(
+            if apps_list_helpers::should_send_app_list_updated_notification(
                 merged.as_slice(),
                 accessible_loaded,
                 all_loaded,
             ) && last_notified_apps.as_ref() != Some(&merged)
             {
-                Self::send_app_list_updated_notification(&outgoing, merged.clone()).await;
+                apps_list_helpers::send_app_list_updated_notification(&outgoing, merged.clone())
+                    .await;
                 last_notified_apps = Some(merged.clone());
             }
 
             if accessible_loaded && all_loaded {
-                match Self::paginate_apps(merged.as_slice(), start, limit) {
+                match apps_list_helpers::paginate_apps(merged.as_slice(), start, limit) {
                     Ok(response) => {
                         outgoing.send_response(request_id, response).await;
                         return;
@@ -5247,116 +5249,6 @@ impl CodexMessageProcessor {
                 }
             }
         }
-    }
-
-    fn merge_loaded_apps(
-        all_connectors: Option<&[AppInfo]>,
-        accessible_connectors: Option<&[AppInfo]>,
-    ) -> Vec<AppInfo> {
-        let all_connectors_loaded = all_connectors.is_some();
-        let all = all_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
-        let accessible = accessible_connectors.map_or_else(Vec::new, <[AppInfo]>::to_vec);
-        connectors::merge_connectors_with_accessible(all, accessible, all_connectors_loaded)
-    }
-
-    async fn load_plugin_app_summaries(
-        config: &Config,
-        plugin_apps: &[AppConnectorId],
-    ) -> Vec<AppSummary> {
-        if plugin_apps.is_empty() {
-            return Vec::new();
-        }
-
-        let connectors = match connectors::list_all_connectors_with_options(config, false).await {
-            Ok(connectors) => connectors,
-            Err(err) => {
-                warn!("failed to load app metadata for plugin/read: {err:#}");
-                connectors::list_cached_all_connectors(config)
-                    .await
-                    .unwrap_or_default()
-            }
-        };
-
-        connectors::connectors_for_plugin_apps(connectors, plugin_apps)
-            .into_iter()
-            .map(AppSummary::from)
-            .collect()
-    }
-
-    fn plugin_apps_needing_auth(
-        all_connectors: &[AppInfo],
-        accessible_connectors: &[AppInfo],
-        plugin_apps: &[AppConnectorId],
-        codex_apps_ready: bool,
-    ) -> Vec<AppSummary> {
-        if !codex_apps_ready {
-            return Vec::new();
-        }
-
-        let accessible_ids = accessible_connectors
-            .iter()
-            .map(|connector| connector.id.as_str())
-            .collect::<HashSet<_>>();
-        let plugin_app_ids = plugin_apps
-            .iter()
-            .map(|connector_id| connector_id.0.as_str())
-            .collect::<HashSet<_>>();
-
-        all_connectors
-            .iter()
-            .filter(|connector| {
-                plugin_app_ids.contains(connector.id.as_str())
-                    && !accessible_ids.contains(connector.id.as_str())
-            })
-            .cloned()
-            .map(AppSummary::from)
-            .collect()
-    }
-
-    fn should_send_app_list_updated_notification(
-        connectors: &[AppInfo],
-        accessible_loaded: bool,
-        all_loaded: bool,
-    ) -> bool {
-        connectors.iter().any(|connector| connector.is_accessible)
-            || (accessible_loaded && all_loaded)
-    }
-
-    fn paginate_apps(
-        connectors: &[AppInfo],
-        start: usize,
-        limit: Option<u32>,
-    ) -> Result<AppsListResponse, JSONRPCErrorError> {
-        let total = connectors.len();
-        if start > total {
-            return Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("cursor {start} exceeds total apps {total}"),
-                data: None,
-            });
-        }
-
-        let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
-        let end = start.saturating_add(effective_limit).min(total);
-        let data = connectors[start..end].to_vec();
-        let next_cursor = if end < total {
-            Some(end.to_string())
-        } else {
-            None
-        };
-
-        Ok(AppsListResponse { data, next_cursor })
-    }
-
-    async fn send_app_list_updated_notification(
-        outgoing: &Arc<OutgoingMessageSender>,
-        data: Vec<AppInfo>,
-    ) {
-        outgoing
-            .send_server_notification(ServerNotification::AppListUpdated(
-                AppListUpdatedNotification { data },
-            ))
-            .await;
     }
 
     async fn skills_list(&self, request_id: ConnectionRequestId, params: SkillsListParams) {
@@ -5571,7 +5463,8 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        let app_summaries = Self::load_plugin_app_summaries(&config, &outcome.plugin.apps).await;
+        let app_summaries =
+            plugin_app_helpers::load_plugin_app_summaries(&config, &outcome.plugin.apps).await;
         let plugin = PluginDetail {
             marketplace_name: outcome.marketplace_name,
             marketplace_path: outcome.marketplace_path,
@@ -5780,7 +5673,7 @@ impl CodexMessageProcessor {
                         );
                     }
 
-                    Self::plugin_apps_needing_auth(
+                    plugin_app_helpers::plugin_apps_needing_auth(
                         &all_connectors,
                         &accessible_connectors,
                         &plugin_apps,
@@ -7502,10 +7395,10 @@ fn skills_to_info(
         .collect()
 }
 
-fn plugin_skills_to_info(skills: &[codex_core::skills::SkillMetadata]) -> Vec<PluginSkillSummary> {
+fn plugin_skills_to_info(skills: &[codex_core::skills::SkillMetadata]) -> Vec<SkillSummary> {
     skills
         .iter()
-        .map(|skill| PluginSkillSummary {
+        .map(|skill| SkillSummary {
             name: skill.name.clone(),
             description: skill.description.clone(),
             short_description: skill.short_description.clone(),
@@ -8196,35 +8089,6 @@ mod tests {
             input_schema: json!({"properties": {}}),
         }];
         validate_dynamic_tools(&tools).expect("valid schema");
-    }
-
-    #[test]
-    fn plugin_apps_needing_auth_returns_empty_when_codex_apps_is_not_ready() {
-        let all_connectors = vec![AppInfo {
-            id: "alpha".to_string(),
-            name: "Alpha".to_string(),
-            description: Some("Alpha connector".to_string()),
-            logo_url: None,
-            logo_url_dark: None,
-            distribution_channel: None,
-            branding: None,
-            app_metadata: None,
-            labels: None,
-            install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
-            is_accessible: false,
-            is_enabled: true,
-            plugin_display_names: Vec::new(),
-        }];
-
-        assert_eq!(
-            CodexMessageProcessor::plugin_apps_needing_auth(
-                &all_connectors,
-                &[],
-                &[AppConnectorId("alpha".to_string())],
-                false,
-            ),
-            Vec::<AppSummary>::new()
-        );
     }
 
     #[test]

@@ -9170,7 +9170,7 @@
         },
         "skills": {
           "items": {
-            "$ref": "#/definitions/PluginSkillSummary"
+            "$ref": "#/definitions/SkillSummary"
           },
           "type": "array"
         },
@@ -9427,41 +9427,6 @@
         "plugin"
       ],
       "title": "PluginReadResponse",
-      "type": "object"
-    },
-    "PluginSkillSummary": {
-      "properties": {
-        "description": {
-          "type": "string"
-        },
-        "interface": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SkillInterface"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        },
-        "shortDescription": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "description",
-        "name",
-        "path"
-      ],
       "type": "object"
     },
     "PluginSource": {
@@ -12618,6 +12583,41 @@
         "admin"
       ],
       "type": "string"
+    },
+    "SkillSummary": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "interface": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SkillInterface"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "shortDescription": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "description",
+        "name",
+        "path"
+      ],
+      "type": "object"
     },
     "SkillToolDependency": {
       "properties": {
