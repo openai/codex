@@ -375,7 +375,10 @@ fn enabled_tool_from_spec(spec: ToolSpec) -> Option<EnabledTool> {
     let (description, kind) = match spec {
         ToolSpec::Function(tool) => (tool.description, CodeModeToolKind::Function),
         ToolSpec::Freeform(tool) => (tool.description, CodeModeToolKind::Freeform),
-        ToolSpec::LocalShell {} | ToolSpec::ImageGeneration { .. } | ToolSpec::WebSearch { .. } => {
+        ToolSpec::LocalShell {}
+        | ToolSpec::ImageGeneration { .. }
+        | ToolSpec::ToolSearch { .. }
+        | ToolSpec::WebSearch { .. } => {
             return None;
         }
     };
@@ -427,25 +430,27 @@ async fn call_nested_tool(
     let router = build_nested_router(&exec).await;
 
     let specs = router.specs();
-    let payload = if let Some((server, tool)) = exec.session.parse_mcp_tool_name(&tool_name).await {
-        match serialize_function_tool_arguments(&tool_name, input) {
-            Ok(raw_arguments) => ToolPayload::Mcp {
-                server,
-                tool,
-                raw_arguments,
-            },
-            Err(error) => return JsonValue::String(error),
-        }
-    } else {
-        match build_nested_tool_payload(&specs, &tool_name, input) {
-            Ok(payload) => payload,
-            Err(error) => return JsonValue::String(error),
-        }
-    };
+    let payload =
+        if let Some((server, tool)) = exec.session.parse_mcp_tool_name(&tool_name, &None).await {
+            match serialize_function_tool_arguments(&tool_name, input) {
+                Ok(raw_arguments) => ToolPayload::Mcp {
+                    server,
+                    tool,
+                    raw_arguments,
+                },
+                Err(error) => return JsonValue::String(error),
+            }
+        } else {
+            match build_nested_tool_payload(&specs, &tool_name, input) {
+                Ok(payload) => payload,
+                Err(error) => return JsonValue::String(error),
+            }
+        };
 
     let call = ToolCall {
         tool_name: tool_name.clone(),
         call_id: format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4()),
+        tool_namespace: None,
         payload,
     };
     let result = router

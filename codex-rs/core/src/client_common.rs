@@ -169,6 +169,12 @@ pub(crate) mod tools {
     pub(crate) enum ToolSpec {
         #[serde(rename = "function")]
         Function(ResponsesApiTool),
+        #[serde(rename = "tool_search")]
+        ToolSearch {
+            execution: String,
+            description: String,
+            parameters: JsonSchema,
+        },
         #[serde(rename = "local_shell")]
         LocalShell {},
         #[serde(rename = "image_generation")]
@@ -198,6 +204,7 @@ pub(crate) mod tools {
         pub(crate) fn name(&self) -> &str {
             match self {
                 ToolSpec::Function(tool) => tool.name.as_str(),
+                ToolSpec::ToolSearch { .. } => "tool_search",
                 ToolSpec::LocalShell {} => "local_shell",
                 ToolSpec::ImageGeneration { .. } => "image_generation",
                 ToolSpec::WebSearch { .. } => "web_search",
@@ -268,9 +275,35 @@ pub(crate) mod tools {
         /// `required` and `additional_properties` must be present. All fields in
         /// `properties` must be present in `required`.
         pub(crate) strict: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) defer_loading: Option<bool>,
         pub(crate) parameters: JsonSchema,
         #[serde(skip)]
         pub(crate) output_schema: Option<Value>,
+    }
+
+    #[derive(Debug, Clone, Serialize, PartialEq)]
+    #[serde(tag = "type")]
+    pub(crate) enum ToolSearchOutputTool {
+        #[allow(dead_code)]
+        #[serde(rename = "function")]
+        Function(ResponsesApiTool),
+        #[serde(rename = "namespace")]
+        Namespace(ResponsesApiNamespace),
+    }
+
+    #[derive(Debug, Clone, Serialize, PartialEq)]
+    pub(crate) struct ResponsesApiNamespace {
+        pub(crate) name: String,
+        pub(crate) description: String,
+        pub(crate) tools: Vec<ResponsesApiNamespaceTool>,
+    }
+
+    #[derive(Debug, Clone, Serialize, PartialEq)]
+    #[serde(tag = "type")]
+    pub(crate) enum ResponsesApiNamespaceTool {
+        #[serde(rename = "function")]
+        Function(ResponsesApiTool),
     }
 }
 
@@ -434,6 +467,7 @@ mod tests {
             ResponseItem::FunctionCall {
                 id: None,
                 name: "shell".to_string(),
+                namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-1".to_string(),
             },
@@ -462,6 +496,7 @@ mod tests {
                 ResponseItem::FunctionCall {
                     id: None,
                     name: "shell".to_string(),
+                    namespace: None,
                     arguments: "{}".to_string(),
                     call_id: "call-1".to_string(),
                 },
@@ -481,6 +516,52 @@ mod tests {
                     output: FunctionCallOutputPayload::from_text(expected_output.to_string()),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn tool_search_output_namespace_serializes_with_deferred_child_tools() {
+        let namespace = tools::ToolSearchOutputTool::Namespace(tools::ResponsesApiNamespace {
+            name: "mcp__codex_apps__calendar".to_string(),
+            description: "Plan events".to_string(),
+            tools: vec![tools::ResponsesApiNamespaceTool::Function(
+                tools::ResponsesApiTool {
+                    name: "create_event".to_string(),
+                    description: "Create a calendar event.".to_string(),
+                    strict: false,
+                    defer_loading: Some(true),
+                    parameters: crate::tools::spec::JsonSchema::Object {
+                        properties: Default::default(),
+                        required: None,
+                        additional_properties: None,
+                    },
+                    output_schema: None,
+                },
+            )],
+        });
+
+        let value = serde_json::to_value(namespace).expect("serialize namespace");
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "type": "namespace",
+                "name": "mcp__codex_apps__calendar",
+                "description": "Plan events",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "create_event",
+                        "description": "Create a calendar event.",
+                        "strict": false,
+                        "defer_loading": true,
+                        "parameters": {
+                            "type": "object",
+                            "properties": {}
+                        }
+                    }
+                ]
+            })
         );
     }
 }

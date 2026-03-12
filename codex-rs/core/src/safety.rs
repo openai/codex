@@ -143,9 +143,6 @@ fn is_write_patch_constrained_to_writable_paths(
         Some(out)
     }
 
-    let unreadable_roots = file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd);
-    let writable_roots = file_system_sandbox_policy.get_writable_roots_with_cwd(cwd);
-
     // Determine whether `path` is inside **any** writable root. Both `path`
     // and roots are converted to absolute, normalized forms before the
     // prefix check.
@@ -156,20 +153,7 @@ fn is_write_patch_constrained_to_writable_paths(
             None => return false,
         };
 
-        if unreadable_roots
-            .iter()
-            .any(|root| abs.starts_with(root.as_path()))
-        {
-            return false;
-        }
-
-        if file_system_sandbox_policy.has_full_disk_write_access() {
-            return true;
-        }
-
-        writable_roots
-            .iter()
-            .any(|writable_root| writable_root.is_path_writable(&abs))
+        file_system_sandbox_policy.can_write_path_with_cwd(&abs, cwd)
     };
 
     for (path, change) in action.changes() {
