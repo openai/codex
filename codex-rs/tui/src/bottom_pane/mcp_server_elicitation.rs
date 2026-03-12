@@ -464,12 +464,14 @@ fn format_tool_approval_display_message(
     if !param_lines.is_empty() {
         sections.push(param_lines.join("\n"));
     }
-    sections.join("\n\n")
+    let mut message = sections.join("\n\n");
+    message.push('\n');
+    message
 }
 
 fn format_tool_approval_display_param_line(param: &McpToolApprovalDisplayParam) -> String {
     format!(
-        "{}:{}",
+        "{}: {}",
         param.name,
         format_tool_approval_display_param_value(&param.value)
     )

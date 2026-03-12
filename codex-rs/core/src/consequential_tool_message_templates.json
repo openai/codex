@@ -1,13 +1,11 @@
 {
-  "schema_version": 3,
-  "generated_from_path": "codex-rs/core/src/consequential_tools.json",
+  "schema_version": 4,
   "templates": [
     {
       "source_tool_index": 0,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "add_comment_to_issue",
-      "action": "add a comment to a pull request",
       "template_params": [
         {
           "name": "pr_number",
@@ -21,14 +19,14 @@
           "name": "comment",
           "label": "Comment"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to add a comment to a pull request?"
     },
     {
       "source_tool_index": 1,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "add_reaction_to_issue_comment",
-      "action": "add a reaction to an issue comment",
       "template_params": [
         {
           "name": "reaction",
@@ -42,14 +40,14 @@
           "name": "repo_full_name",
           "label": "Repository"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to add a reaction to an issue comment?"
     },
     {
       "source_tool_index": 2,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "add_reaction_to_pr",
-      "action": "add a reaction to a pull request",
       "template_params": [
         {
           "name": "reaction",
@@ -63,14 +61,14 @@
           "name": "repo_full_name",
           "label": "Repository"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to add a reaction to a pull request?"
     },
     {
       "source_tool_index": 3,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "add_reaction_to_pr_review_comment",
-      "action": "add a reaction to a pull request review comment",
       "template_params": [
         {
           "name": "reaction",
@@ -84,14 +82,14 @@
           "name": "repo_full_name",
           "label": "Repository"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to add a reaction to a pull request review comment?"
     },
     {
       "source_tool_index": 4,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "add_review_to_pr",
-      "action": "submit a pull request review",
       "template_params": [
         {
           "name": "action",
@@ -105,14 +103,14 @@
           "name": "review",
           "label": "Review"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to submit a pull request review?"
     },
     {
       "source_tool_index": 5,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "create_blob",
-      "action": "create a Git blob",
       "template_params": [
         {
           "name": "repository_full_name",
@@ -122,14 +120,14 @@
           "name": "content",
           "label": "Content"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to create a Git blob?"
     },
     {
       "source_tool_index": 6,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "create_branch",
-      "action": "create a branch",
       "template_params": [
         {
           "name": "branch_name",
@@ -139,14 +137,14 @@
           "name": "repository_full_name",
           "label": "Repository"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to create a branch?"
     },
     {
       "source_tool_index": 7,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "create_commit",
-      "action": "create a commit",
       "template_params": [
         {
           "name": "repository_full_name",
@@ -156,14 +154,14 @@
           "name": "message",
           "label": "Message"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to create a commit?"
     },
     {
       "source_tool_index": 8,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "create_pull_request",
-      "action": "create a pull request",
       "template_params": [
         {
           "name": "title",
@@ -177,14 +175,14 @@
           "name": "base_branch",
           "label": "Base branch"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to create a pull request?"
     },
     {
       "source_tool_index": 9,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "create_tree",
-      "action": "create a Git tree",
       "template_params": [
         {
           "name": "repository_full_name",
@@ -194,14 +192,14 @@
           "name": "tree_elements",
           "label": "Changes"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to create a Git tree?"
     },
     {
       "source_tool_index": 10,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "enable_auto_merge",
-      "action": "enable pull request auto-merge",
       "template_params": [
         {
           "name": "pr_number",
@@ -211,14 +209,14 @@
           "name": "repository_full_name",
           "label": "Repository"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to enable pull request auto-merge?"
     },
     {
       "source_tool_index": 11,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "label_pr",
-      "action": "add a label to a pull request",
       "template_params": [
         {
           "name": "label",
@@ -232,14 +230,14 @@
           "name": "repository_full_name",
           "label": "Repository"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to add a label to a pull request?"
     },
     {
       "source_tool_index": 12,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "remove_reaction_from_issue_comment",
-      "action": "remove a reaction from an issue comment",
       "template_params": [
         {
           "name": "reaction_id",
@@ -253,14 +251,14 @@
           "name": "repo_full_name",
           "label": "Repository"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to remove a reaction from an issue comment?"
     },
     {
       "source_tool_index": 13,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "remove_reaction_from_pr",
-      "action": "remove a reaction from a pull request",
       "template_params": [
         {
           "name": "reaction_id",
@@ -274,14 +272,14 @@
           "name": "repo_full_name",
           "label": "Repository"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to remove a reaction from a pull request?"
     },
     {
       "source_tool_index": 14,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "remove_reaction_from_pr_review_comment",
-      "action": "remove a reaction from a pull request review comment",
       "template_params": [
         {
           "name": "reaction_id",
@@ -295,14 +293,14 @@
           "name": "repo_full_name",
           "label": "Repository"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to remove a reaction from a pull request review comment?"
     },
     {
       "source_tool_index": 15,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "reply_to_review_comment",
-      "action": "reply to a pull request review comment",
       "template_params": [
         {
           "name": "pr_number",
@@ -316,14 +314,14 @@
           "name": "comment",
           "label": "Comment"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to reply to a pull request review comment?"
     },
     {
       "source_tool_index": 16,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "update_issue_comment",
-      "action": "update an issue comment",
       "template_params": [
         {
           "name": "comment_id",
@@ -337,14 +335,14 @@
           "name": "comment",
           "label": "Comment"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to update an issue comment?"
     },
     {
       "source_tool_index": 17,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "update_ref",
-      "action": "update a branch reference",
       "template_params": [
         {
           "name": "branch_name",
@@ -358,14 +356,14 @@
           "name": "sha",
           "label": "Commit"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to update a branch reference?"
     },
     {
       "source_tool_index": 18,
       "connector_id": "connector_76869538009648d5b282a4bb21c3d157",
       "server_name": "codex_apps",
       "tool_title": "update_review_comment",
-      "action": "update a pull request review comment",
       "template_params": [
         {
           "name": "comment_id",
@@ -379,14 +377,14 @@
           "name": "comment",
           "label": "Comment"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to update a pull request review comment?"
     },
     {
       "source_tool_index": 19,
       "connector_id": "connector_947e0d954944416db111db556030eea6",
       "server_name": "codex_apps",
       "tool_title": "create_event",
-      "action": "create a calendar event",
       "template_params": [
         {
           "name": "title",
@@ -400,27 +398,27 @@
           "name": "attendees",
           "label": "Attendees"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to create an event?"
     },
     {
       "source_tool_index": 20,
       "connector_id": "connector_947e0d954944416db111db556030eea6",
       "server_name": "codex_apps",
       "tool_title": "delete_event",
-      "action": "delete a calendar event",
       "template_params": [
         {
           "name": "event_id",
           "label": "Event"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to delete an event?"
     },
     {
       "source_tool_index": 21,
       "connector_id": "connector_947e0d954944416db111db556030eea6",
       "server_name": "codex_apps",
       "tool_title": "respond_event",
-      "action": "respond to a calendar event",
       "template_params": [
         {
           "name": "response_status",
@@ -430,27 +428,27 @@
           "name": "event_id",
           "label": "Event"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to respond to an event?"
     },
     {
       "source_tool_index": 22,
       "connector_id": "connector_947e0d954944416db111db556030eea6",
       "server_name": "codex_apps",
       "tool_title": "update_event",
-      "action": "update a calendar event",
       "template_params": [
         {
           "name": "event_id",
           "label": "Event"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to update an event?"
     },
     {
       "source_tool_index": 23,
       "connector_id": "connector_9d7cfa34e6654a5f98d3387af34b2e1c",
       "server_name": "codex_apps",
       "tool_title": "batch_update",
-      "action": "apply spreadsheet updates",
       "template_params": [
         {
           "name": "spreadsheet_url",
@@ -460,27 +458,27 @@
           "name": "requests",
           "label": "Changes"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to apply spreadsheet updates?"
     },
     {
       "source_tool_index": 24,
       "connector_id": "connector_9d7cfa34e6654a5f98d3387af34b2e1c",
       "server_name": "codex_apps",
       "tool_title": "create_spreadsheet",
-      "action": "create a spreadsheet",
       "template_params": [
         {
           "name": "title",
           "label": "Title"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to create a spreadsheet?"
     },
     {
       "source_tool_index": 25,
       "connector_id": "connector_9d7cfa34e6654a5f98d3387af34b2e1c",
       "server_name": "codex_apps",
       "tool_title": "duplicate_sheet_in_new_file",
-      "action": "copy a sheet into a new spreadsheet",
       "template_params": [
         {
           "name": "source_sheet_name",
@@ -494,14 +492,14 @@
           "name": "new_file_name",
           "label": "New File Name"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to copy a sheet into a new spreadsheet?"
     },
     {
       "source_tool_index": 26,
       "connector_id": "connector_6f1ec045b8fa4ced8738e32c7f74514b",
       "server_name": "codex_apps",
       "tool_title": "batch_update",
-      "action": "apply presentation updates",
       "template_params": [
         {
           "name": "presentation_url",
@@ -511,27 +509,27 @@
           "name": "requests",
           "label": "Changes"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to apply presentation updates?"
     },
     {
       "source_tool_index": 27,
       "connector_id": "connector_6f1ec045b8fa4ced8738e32c7f74514b",
       "server_name": "codex_apps",
       "tool_title": "create_presentation",
-      "action": "create a presentation",
       "template_params": [
         {
           "name": "title",
           "label": "Title"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to create a presentation?"
     },
     {
       "source_tool_index": 28,
       "connector_id": "connector_4964e3b22e3e427e9b4ae1acf2c1fa34",
       "server_name": "codex_apps",
       "tool_title": "batch_update",
-      "action": "apply document updates",
       "template_params": [
         {
           "name": "document_url",
@@ -541,40 +539,40 @@
           "name": "requests",
           "label": "Changes"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to apply document updates?"
     },
     {
       "source_tool_index": 29,
       "connector_id": "connector_4964e3b22e3e427e9b4ae1acf2c1fa34",
       "server_name": "codex_apps",
       "tool_title": "create_document",
-      "action": "create a document",
       "template_params": [
         {
           "name": "title",
           "label": "Title"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to create a document?"
     },
     {
       "source_tool_index": 30,
       "connector_id": "connector_5f3c8c41a1e54ad7a76272c89e2554fa",
       "server_name": "codex_apps",
       "tool_title": "copy_document",
-      "action": "copy a Google Drive file",
       "template_params": [
         {
           "name": "url",
           "label": "URL"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to copy a file?"
     },
     {
       "source_tool_index": 31,
       "connector_id": "connector_5f3c8c41a1e54ad7a76272c89e2554fa",
       "server_name": "codex_apps",
       "tool_title": "share_document",
-      "action": "change file sharing",
       "template_params": [
         {
           "name": "url",
@@ -584,14 +582,14 @@
           "name": "permission",
           "label": "Permission"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to change file sharing?"
     },
     {
       "source_tool_index": 32,
       "connector_id": "asdk_app_69a1d78e929881919bba0dbda1f6436d",
       "server_name": "codex_apps",
       "tool_title": "slack_send_message",
-      "action": "send a message",
       "template_params": [
         {
           "name": "channel_id",
@@ -601,14 +599,14 @@
           "name": "message",
           "label": "Message"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to send a message?"
     },
     {
       "source_tool_index": 33,
       "connector_id": "asdk_app_69a1d78e929881919bba0dbda1f6436d",
       "server_name": "codex_apps",
       "tool_title": "slack_schedule_message",
-      "action": "schedule a message",
       "template_params": [
         {
           "name": "channel_id",
@@ -622,14 +620,14 @@
           "name": "message",
           "label": "Message"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to schedule a message?"
     },
     {
       "source_tool_index": 34,
       "connector_id": "asdk_app_69a1d78e929881919bba0dbda1f6436d",
       "server_name": "codex_apps",
       "tool_title": "slack_create_canvas",
-      "action": "create a canvas",
       "template_params": [
         {
           "name": "title",
@@ -639,14 +637,14 @@
           "name": "content",
           "label": "Content"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to create a canvas?"
     },
     {
       "source_tool_index": 35,
       "connector_id": "asdk_app_69a1d78e929881919bba0dbda1f6436d",
       "server_name": "codex_apps",
       "tool_title": "slack_send_message_draft",
-      "action": "create a message draft",
       "template_params": [
         {
           "name": "channel_id",
@@ -656,14 +654,14 @@
           "name": "message",
           "label": "Message"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to create a message draft?"
     },
     {
       "source_tool_index": 36,
       "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
       "server_name": "codex_apps",
       "tool_title": "add_comment_to_issue",
-      "action": "add a comment to a Linear issue",
       "template_params": [
         {
           "name": "issue_id",
@@ -673,14 +671,14 @@
           "name": "body",
           "label": "Body"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to add a comment to an issue?"
     },
     {
       "source_tool_index": 37,
       "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
       "server_name": "codex_apps",
       "tool_title": "add_label_to_issue",
-      "action": "add a label to a Linear issue",
       "template_params": [
         {
           "name": "label_id",
@@ -690,14 +688,14 @@
           "name": "issue_id",
           "label": "Issue"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to add a label to an issue?"
     },
     {
       "source_tool_index": 38,
       "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
       "server_name": "codex_apps",
       "tool_title": "add_url_attachment_to_issue",
-      "action": "attach a link to a Linear issue",
       "template_params": [
         {
           "name": "url",
@@ -711,14 +709,14 @@
           "name": "title",
           "label": "Title"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to attach a link to an issue?"
     },
     {
       "source_tool_index": 39,
       "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
       "server_name": "codex_apps",
       "tool_title": "assign_issue",
-      "action": "assign a Linear issue",
       "template_params": [
         {
           "name": "issue_id",
@@ -728,14 +726,14 @@
           "name": "user_id",
           "label": "User"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to assign an issue?"
     },
     {
       "source_tool_index": 40,
       "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
       "server_name": "codex_apps",
       "tool_title": "create_issue",
-      "action": "create a Linear issue",
       "template_params": [
         {
           "name": "title",
@@ -745,27 +743,27 @@
           "name": "team_id",
           "label": "Team"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to create an issue?"
     },
     {
       "source_tool_index": 41,
       "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
       "server_name": "codex_apps",
       "tool_title": "create_label",
-      "action": "create a Linear label",
       "template_params": [
         {
           "name": "label_name",
           "label": "Label Name"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to create a label?"
     },
     {
       "source_tool_index": 42,
       "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
       "server_name": "codex_apps",
       "tool_title": "create_project",
-      "action": "create a Linear project",
       "template_params": [
         {
           "name": "name",
@@ -775,14 +773,14 @@
           "name": "team_id",
           "label": "Team"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to create a project?"
     },
     {
       "source_tool_index": 43,
       "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
       "server_name": "codex_apps",
       "tool_title": "remove_label_from_issue",
-      "action": "remove a label from a Linear issue",
       "template_params": [
         {
           "name": "label_id",
@@ -792,27 +790,27 @@
           "name": "issue_id",
           "label": "Issue"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to remove a label from an issue?"
     },
     {
       "source_tool_index": 44,
       "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
       "server_name": "codex_apps",
       "tool_title": "resolve_comment",
-      "action": "resolve a Linear comment",
       "template_params": [
         {
           "name": "comment_id",
           "label": "Comment"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to resolve a comment?"
     },
     {
       "source_tool_index": 45,
       "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
       "server_name": "codex_apps",
       "tool_title": "set_issue_state",
-      "action": "change a Linear issue state",
       "template_params": [
         {
           "name": "issue_id",
@@ -822,27 +820,27 @@
           "name": "state_id",
           "label": "State"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to change issue state?"
     },
     {
       "source_tool_index": 46,
       "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
       "server_name": "codex_apps",
       "tool_title": "unassign_issue",
-      "action": "unassign a Linear issue",
       "template_params": [
         {
           "name": "issue_id",
           "label": "Issue"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to unassign an issue?"
     },
     {
       "source_tool_index": 47,
       "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
       "server_name": "codex_apps",
       "tool_title": "update_issue",
-      "action": "update a Linear issue",
       "template_params": [
         {
           "name": "issue_id",
@@ -852,14 +850,14 @@
           "name": "issue_update",
           "label": "Changes"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to update an issue?"
     },
     {
       "source_tool_index": 48,
       "connector_id": "connector_686fad9b54914a35b75be6d06a0f6f31",
       "server_name": "codex_apps",
       "tool_title": "update_project",
-      "action": "update a Linear project",
       "template_params": [
         {
           "name": "project_id",
@@ -869,30 +867,30 @@
           "name": "update_fields",
           "label": "Changes"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to update a project?"
     },
     {
       "source_tool_index": 49,
       "connector_id": "connector_2128aebfecb84f64a069897515042a44",
       "server_name": "codex_apps",
       "tool_title": "apply_labels_to_emails",
-      "action": "apply label changes to Gmail messages",
-      "template_params": []
+      "template_params": [],
+      "template": "Allow {connector_name} to apply label changes to messages?"
     },
     {
       "source_tool_index": 50,
       "connector_id": "connector_2128aebfecb84f64a069897515042a44",
       "server_name": "codex_apps",
       "tool_title": "batch_modify_email",
-      "action": "update Gmail message labels",
-      "template_params": []
+      "template_params": [],
+      "template": "Allow {connector_name} to update message labels?"
     },
     {
       "source_tool_index": 51,
       "connector_id": "connector_2128aebfecb84f64a069897515042a44",
       "server_name": "codex_apps",
       "tool_title": "bulk_label_matching_emails",
-      "action": "label matching Gmail messages",
       "template_params": [
         {
           "name": "label_name",
@@ -902,14 +900,14 @@
           "name": "query",
           "label": "Query"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to label matching messages?"
     },
     {
       "source_tool_index": 52,
       "connector_id": "connector_2128aebfecb84f64a069897515042a44",
       "server_name": "codex_apps",
       "tool_title": "create_draft",
-      "action": "create an email draft",
       "template_params": [
         {
           "name": "to",
@@ -923,27 +921,27 @@
           "name": "body",
           "label": "Body"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to create an email draft?"
     },
     {
       "source_tool_index": 53,
       "connector_id": "connector_2128aebfecb84f64a069897515042a44",
       "server_name": "codex_apps",
       "tool_title": "create_label",
-      "action": "create a Gmail label",
       "template_params": [
         {
           "name": "name",
           "label": "Name"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to create a label?"
     },
     {
       "source_tool_index": 54,
       "connector_id": "connector_2128aebfecb84f64a069897515042a44",
       "server_name": "codex_apps",
       "tool_title": "send_email",
-      "action": "send an email",
       "template_params": [
         {
           "name": "to",
@@ -957,7 +955,8 @@
           "name": "body",
           "label": "Body"
         }
-      ]
+      ],
+      "template": "Allow {connector_name} to send an email?"
     }
   ]
 }

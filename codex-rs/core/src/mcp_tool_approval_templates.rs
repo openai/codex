@@ -7,7 +7,8 @@ use serde_json::Map;
 use serde_json::Value;
 use tracing::warn;
 
-const CONSEQUENTIAL_TOOL_MESSAGE_TEMPLATES_SCHEMA_VERSION: u8 = 3;
+const CONSEQUENTIAL_TOOL_MESSAGE_TEMPLATES_SCHEMA_VERSION: u8 = 4;
+const CONNECTOR_NAME_TEMPLATE_VAR: &str = "{connector_name}";
 
 static CONSEQUENTIAL_TOOL_MESSAGE_TEMPLATES: LazyLock<
     Option<Vec<ConsequentialToolMessageTemplate>>,
@@ -38,7 +39,7 @@ struct ConsequentialToolMessageTemplate {
     connector_id: String,
     server_name: String,
     tool_title: String,
-    action: String,
+    template: String,
     template_params: Vec<ConsequentialToolTemplateParam>,
 }
 
@@ -98,21 +99,13 @@ fn render_mcp_tool_approval_template_from_templates(
     tool_params: Option<&Value>,
 ) -> Option<RenderedMcpToolApprovalTemplate> {
     let connector_id = connector_id?;
-    let connector_name = connector_name
-        .map(str::trim)
-        .filter(|name| !name.is_empty())?;
     let tool_title = tool_title.map(str::trim).filter(|name| !name.is_empty())?;
     let template = templates.iter().find(|template| {
         template.server_name == server_name
             && template.connector_id == connector_id
             && template.tool_title == tool_title
     })?;
-    let action = template.action.trim();
-    if action.is_empty() {
-        return None;
-    }
-
-    let elicitation_message = format!("Allow {connector_name} to {action}?");
+    let elicitation_message = render_question_template(&template.template, connector_name)?;
     let (tool_params, tool_params_display) = match tool_params {
         Some(Value::Object(tool_params)) => {
             render_tool_params(tool_params, &template.template_params)?
@@ -127,6 +120,22 @@ fn render_mcp_tool_approval_template_from_templates(
         tool_params,
         tool_params_display,
     })
+}
+
+fn render_question_template(template: &str, connector_name: Option<&str>) -> Option<String> {
+    let template = template.trim();
+    if template.is_empty() {
+        return None;
+    }
+
+    if template.contains(CONNECTOR_NAME_TEMPLATE_VAR) {
+        let connector_name = connector_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())?;
+        return Some(template.replace(CONNECTOR_NAME_TEMPLATE_VAR, connector_name));
+    }
+
+    Some(template.to_string())
 }
 
 fn render_tool_params(
@@ -190,7 +199,7 @@ mod tests {
             connector_id: "calendar".to_string(),
             server_name: "codex_apps".to_string(),
             tool_title: "create_event".to_string(),
-            action: "create an event".to_string(),
+            template: "Allow {connector_name} to create an event?".to_string(),
             template_params: vec![
                 ConsequentialToolTemplateParam {
                     name: "calendar_id".to_string(),
@@ -250,7 +259,7 @@ mod tests {
             connector_id: "calendar".to_string(),
             server_name: "codex_apps".to_string(),
             tool_title: "create_event".to_string(),
-            action: "create an event".to_string(),
+            template: "Allow {connector_name} to create an event?".to_string(),
             template_params: Vec::new(),
         }];
 
@@ -273,7 +282,7 @@ mod tests {
             connector_id: "calendar".to_string(),
             server_name: "codex_apps".to_string(),
             tool_title: "create_event".to_string(),
-            action: "create an event".to_string(),
+            template: "Allow {connector_name} to create an event?".to_string(),
             template_params: vec![ConsequentialToolTemplateParam {
                 name: "calendar_id".to_string(),
                 label: "timezone".to_string(),
@@ -291,6 +300,64 @@ mod tests {
                     "calendar_id": "primary",
                     "timezone": "UTC",
                 })),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn bundled_templates_load() {
+        assert_eq!(CONSEQUENTIAL_TOOL_MESSAGE_TEMPLATES.is_some(), true);
+    }
+
+    #[test]
+    fn renders_literal_template_without_connector_substitution() {
+        let templates = vec![ConsequentialToolMessageTemplate {
+            connector_id: "github".to_string(),
+            server_name: "codex_apps".to_string(),
+            tool_title: "add_comment".to_string(),
+            template: "Allow GitHub to add a comment to a pull request?".to_string(),
+            template_params: Vec::new(),
+        }];
+
+        let rendered = render_mcp_tool_approval_template_from_templates(
+            &templates,
+            "codex_apps",
+            Some("github"),
+            None,
+            Some("add_comment"),
+            Some(&json!({})),
+        );
+
+        assert_eq!(
+            rendered,
+            Some(RenderedMcpToolApprovalTemplate {
+                question: "Allow GitHub to add a comment to a pull request?".to_string(),
+                elicitation_message: "Allow GitHub to add a comment to a pull request?".to_string(),
+                tool_params: Some(json!({})),
+                tool_params_display: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn returns_none_when_connector_placeholder_has_no_value() {
+        let templates = vec![ConsequentialToolMessageTemplate {
+            connector_id: "calendar".to_string(),
+            server_name: "codex_apps".to_string(),
+            tool_title: "create_event".to_string(),
+            template: "Allow {connector_name} to create an event?".to_string(),
+            template_params: Vec::new(),
+        }];
+
+        assert_eq!(
+            render_mcp_tool_approval_template_from_templates(
+                &templates,
+                "codex_apps",
+                Some("calendar"),
+                None,
+                Some("create_event"),
+                Some(&json!({})),
             ),
             None
         );
