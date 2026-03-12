@@ -4328,6 +4328,12 @@ impl ChatWidget {
         false
     }
 
+    /// Dispatch a built-in slash command for both live input and queued replay.
+    ///
+    /// Live callers usually ignore the return value, but queued replay uses it to decide whether
+    /// draining can continue after this command. `Continue` means the command only changed local
+    /// UI/config state, while `Stop` means it opened UI, submitted work, or otherwise hit a
+    /// boundary that should stop queued draining.
     fn dispatch_command(&mut self, cmd: SlashCommand) -> QueueReplayControl {
         if self.bottom_pane.is_task_running()
             && !cmd.available_during_task()
