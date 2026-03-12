@@ -446,7 +446,7 @@ fn test_build_specs_collab_tools_enabled() {
 }
 
 #[test]
-fn test_build_specs_spawn_csv_enables_agent_jobs_and_collab_tools() {
+fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     let mut features = Features::with_defaults();

@@ -5350,7 +5350,7 @@ async fn feature_requirements_normalize_runtime_feature_mutations() -> std::io::
 }
 
 #[tokio::test]
-async fn feature_requirements_reject_legacy_aliases() {
+async fn feature_requirements_reject_collab_legacy_alias() {
     let codex_home = TempDir::new().expect("tempdir");
 
     let err = ConfigBuilder::default()
