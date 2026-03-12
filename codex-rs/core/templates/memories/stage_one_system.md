@@ -296,7 +296,6 @@ setup. free-form. concise.>
 ## Task <idx>: <task name>
 
 Outcome: <success|partial|fail|uncertain>
-git_branch: <single best task-specific branch when supported by rollout evidence; otherwise `unknown`>
 
 Preference signals:
 
@@ -409,7 +408,6 @@ task: <primary_task_signature>
 task_group: <cwd_or_workflow_bucket>
 task_outcome: <success|partial|fail|uncertain>
 cwd: <single best primary working directory for this raw memory; use `unknown` only when none is identifiable>
-git_branches: <comma-separated set of task-family branches supported by rollout evidence; use `unknown` only when no branch is identifiable; do not include `unknown` alongside concrete branches>
 keywords: k1, k2, k3, ... <searchable handles (tool names, error names, repo concepts, contracts)>
 ---
 
@@ -420,7 +418,6 @@ Then write task-grouped body content (required):
 task: <task signature for this task>
 task_group: <project/workflow topic>
 task_outcome: <success|partial|fail|uncertain>
-git_branch: <single task-specific branch when supported by rollout evidence; otherwise `unknown`>
 
 Preference signals:
 - when <situation>, the user said / asked / corrected: "<short quote or near-verbatim request>" -> <what that suggests for similar future runs>
@@ -459,7 +456,6 @@ Preferred task-block body shape (strongly recommended):
 - Include a `Preference signals:` subsection inside each task when that task contains meaningful
   user-preference evidence.
 - Within each task block, include:
-  - a task-level `git_branch:` line when the rollout supports one, plus explicit branch applicability notes when it matters for reuse,
   - `Preference signals:` for evidence plus implication on the same line when meaningful,
   - `Reusable knowledge:` for validated repo/system facts and high-leverage procedural knowledge,
   - `Failures and how to do differently:` for pivots, prevention rules, and failure shields,
@@ -484,15 +480,11 @@ Task grouping rules (strict):
 - For each task block, keep the outcome tied to evidence relevant to that task.
 - If a thread has partially related tasks, prefer splitting into separate task blocks and
   linking them through shared keywords rather than merging.
-- A single rollout may include multiple branches.
 - Each raw-memory entry should resolve to exactly one best top-level `cwd` when evidence
   supports that.
-- Each `### Task <n>` block should resolve to exactly one best `git_branch` when evidence
-  supports that.
 - If two parts of the rollout would be retrieved differently because they happen in different
-  primary working directories or on different branches, split them into separate raw-memory
-  entries or task blocks rather than storing multiple primary cwd values in one raw memory
-  or multiple branches in one task.
+  primary working directories, split them into separate raw-memory entries or task blocks
+  rather than storing multiple primary cwd values in one raw memory.
 
 What to write in memory entries: Extract useful takeaways from the rollout summaries,
 especially from "Preference signals", "Reusable knowledge", "References", and
@@ -508,26 +500,18 @@ summary for full detail.
 
 Evidence and attribution rules (strict):
 
-- Top-level raw-memory cwd / branch is more important than session-level cwd / branch hints.
 - The top-level raw-memory `cwd` should be the single best primary working directory for that
-  raw memory. The top-level `git_branches` field should list only concrete branches supported
-  by rollout evidence, and should use `unknown` only when no branch is identifiable.
-- Treat rollout-level metadata (for example rollout cwd / branch hints) as a starting hint,
+  raw memory.
+- Treat rollout-level metadata (for example rollout cwd hints) as a starting hint,
   not as authoritative labeling.
-- Use rollout evidence to infer the raw-memory `cwd` and task-level branches. Strong evidence includes:
+- Use rollout evidence to infer the raw-memory `cwd`. Strong evidence includes:
   - `workdir` / `cwd` in commands, turn context, and tool calls,
-  - explicit branch-changing commands such as `git switch`, `git checkout`, `git checkout -b`,
-  - explicit branch-reporting commands such as `git branch --show-current`,
-    `git status --branch`, `git status -sb`,
-  - `git worktree list --porcelain` output that maps worktree paths to branches,
-  - command outputs or user text that explicitly confirm the branch.
+  - command outputs or user text that explicitly confirm the working directory.
 - Choose exactly one top-level raw-memory `cwd`.
   - Default to the rollout primary cwd hint when it matches the main substantive work.
   - Override it only when the rollout clearly spent most of its meaningful work in another
     working directory.
   - Mention secondary working directories in bullets if they matter for future retrieval or interpretation.
-- If a task happens after an explicit branch change in the same working directory at the beginning, use the
-  later branch for that task rather than inheriting the rollout-level branch hint.
 Be more conservative here than in the rollout summary:
 
 - Preserve preference evidence inside the task where it appeared; let Phase 2 decide whether
@@ -565,14 +549,10 @@ For each task block, include enough detail to be useful for future agent referen
 - what evidence validates the outcome (user feedback, environment/test feedback, or lack of both),
 - reusable procedures/checklists and failure shields that should survive future similar tasks,
 - artifacts and retrieval handles (commands, file paths, error strings, IDs) that make the task easy to rediscover.
-- Treat cwd/branch provenance as first-class memory. If the rollout context names a
-  working directory or branch, preserve that in the top-level frontmatter and the task-level
-  branch fields when evidence supports it.
-- If multiple tasks are similar but tied to different working directories or branches, keep them
+- Treat cwd provenance as first-class memory. If the rollout context names a working
+  directory, preserve that in the top-level frontmatter when evidence supports it.
+- If multiple tasks are similar but tied to different working directories, keep them
   separate rather than blending them into one generic task.
-- When a task is branch-specific (for example comparing against checkout state, working
-  in an unmerged feature branch, or reasoning about local diffs), say that explicitly so
-  Phase 2 can avoid reusing it in the wrong environment.
 
 ============================================================
 WORKFLOW
