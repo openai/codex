@@ -390,9 +390,10 @@ fn append_mount_target_parent_dir_args(args: &mut Vec<String>, mount_target: &Pa
     let mount_target_dir = if mount_target.is_dir() {
         mount_target
     } else {
-        mount_target
-            .parent()
-            .expect("writable file targets under unreadable roots must have a parent")
+        match mount_target.parent() {
+            Some(parent) => parent,
+            None => return,
+        }
     };
     let mut mount_target_dirs: Vec<PathBuf> = mount_target_dir
         .ancestors()
@@ -470,15 +471,10 @@ fn append_unreadable_root_args(
         return Ok(());
     }
 
-    let null_file = if let Some(file) = preserved_files.first() {
-        file
-    } else {
+    if preserved_files.is_empty() {
         preserved_files.push(File::open("/dev/null")?);
-        preserved_files
-            .first()
-            .expect("preserved_files must contain /dev/null")
-    };
-    let null_fd = null_file.as_raw_fd().to_string();
+    }
+    let null_fd = preserved_files[0].as_raw_fd().to_string();
     args.push("--perms".to_string());
     args.push("000".to_string());
     args.push("--ro-bind-data".to_string());
@@ -761,10 +757,39 @@ mod tests {
                     writable_root_str.as_str(),
                 ]
         }));
-        assert!(
-            args.args.windows(3).any(|window| {
-                window == ["--ro-bind", blocked_str.as_str(), blocked_str.as_str()]
+        let blocked_mask_index = args
+            .args
+            .windows(6)
+            .position(|window| {
+                window
+                    == [
+                        "--perms",
+                        "000",
+                        "--tmpfs",
+                        blocked_str.as_str(),
+                        "--remount-ro",
+                        blocked_str.as_str(),
+                    ]
             })
+            .expect("blocked directory should be remounted unreadable");
+
+        let writable_root_bind_index = args
+            .args
+            .windows(3)
+            .position(|window| {
+                window
+                    == [
+                        "--bind",
+                        writable_root_str.as_str(),
+                        writable_root_str.as_str(),
+                    ]
+            })
+            .expect("writable root should be rebound writable");
+
+        assert!(
+            writable_root_bind_index < blocked_mask_index,
+            "expected unreadable carveout to be re-applied after writable bind: {:#?}",
+            args.args
         );
     }
 
@@ -783,7 +808,7 @@ mod tests {
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path {
-                    path: writable_root.clone(),
+                    path: writable_root,
                 },
                 access: FileSystemAccessMode::Write,
             },

@@ -294,7 +294,11 @@ fn resolve_sandbox_policies(
                         err.to_string(),
                     )
                 })?;
-            if derived_legacy_policy != sandbox_policy {
+            if !legacy_sandbox_policies_match_semantics(
+                &sandbox_policy,
+                &derived_legacy_policy,
+                sandbox_policy_cwd,
+            ) {
                 return Err(ResolveSandboxPoliciesError::MismatchedLegacyPolicy {
                     provided: sandbox_policy,
                     derived: derived_legacy_policy,
@@ -328,6 +332,35 @@ fn resolve_sandbox_policies(
         }
         (None, None) => Err(ResolveSandboxPoliciesError::MissingConfiguration),
     }
+}
+
+fn legacy_sandbox_policies_match_semantics(
+    provided: &SandboxPolicy,
+    derived: &SandboxPolicy,
+    sandbox_policy_cwd: &Path,
+) -> bool {
+    NetworkSandboxPolicy::from(provided) == NetworkSandboxPolicy::from(derived)
+        && file_system_sandbox_policies_match_semantics(
+            &FileSystemSandboxPolicy::from_legacy_sandbox_policy(provided, sandbox_policy_cwd),
+            &FileSystemSandboxPolicy::from_legacy_sandbox_policy(derived, sandbox_policy_cwd),
+            sandbox_policy_cwd,
+        )
+}
+
+fn file_system_sandbox_policies_match_semantics(
+    provided: &FileSystemSandboxPolicy,
+    derived: &FileSystemSandboxPolicy,
+    sandbox_policy_cwd: &Path,
+) -> bool {
+    provided.has_full_disk_read_access() == derived.has_full_disk_read_access()
+        && provided.has_full_disk_write_access() == derived.has_full_disk_write_access()
+        && provided.include_platform_defaults() == derived.include_platform_defaults()
+        && provided.get_readable_roots_with_cwd(sandbox_policy_cwd)
+            == derived.get_readable_roots_with_cwd(sandbox_policy_cwd)
+        && provided.get_writable_roots_with_cwd(sandbox_policy_cwd)
+            == derived.get_writable_roots_with_cwd(sandbox_policy_cwd)
+        && provided.get_unreadable_roots_with_cwd(sandbox_policy_cwd)
+            == derived.get_unreadable_roots_with_cwd(sandbox_policy_cwd)
 }
 
 fn ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec: bool, use_bwrap_sandbox: bool) {
