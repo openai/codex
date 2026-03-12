@@ -472,6 +472,18 @@ fn append_unreadable_root_args(
         args.push("000".to_string());
         args.push("--tmpfs".to_string());
         args.push(path_to_string(unreadable_root));
+        // Recreate any writable descendants inside the tmpfs before remounting
+        // the denied parent read-only. Otherwise bubblewrap cannot mkdir the
+        // nested mount targets after the parent has been frozen.
+        let mut writable_descendants: Vec<&Path> = allowed_write_paths
+            .iter()
+            .map(PathBuf::as_path)
+            .filter(|path| *path != unreadable_root && path.starts_with(unreadable_root))
+            .collect();
+        writable_descendants.sort_by_key(|path| path_depth(path));
+        for writable_descendant in writable_descendants {
+            append_mount_target_parent_dir_args(args, writable_descendant, unreadable_root);
+        }
         args.push("--remount-ro".to_string());
         args.push(path_to_string(unreadable_root));
         return Ok(());
@@ -893,6 +905,11 @@ mod tests {
             .windows(2)
             .position(|window| window == ["--dir", allowed_str.as_str()])
             .expect("allowed mount target should be recreated");
+        let blocked_remount_ro_index = args
+            .args
+            .windows(2)
+            .position(|window| window == ["--remount-ro", blocked_str.as_str()])
+            .expect("blocked directory should be remounted read-only");
         let allowed_bind_index = args
             .args
             .windows(3)
@@ -900,8 +917,10 @@ mod tests {
             .expect("allowed path should be rebound writable");
 
         assert!(
-            blocked_none_index < allowed_dir_index && allowed_dir_index < allowed_bind_index,
-            "expected unreadable parent mask before recreating and rebinding writable child: {:#?}",
+            blocked_none_index < allowed_dir_index
+                && allowed_dir_index < blocked_remount_ro_index
+                && blocked_remount_ro_index < allowed_bind_index,
+            "expected writable child target recreation before remounting and rebinding under unreadable parent: {:#?}",
             args.args
         );
     }
