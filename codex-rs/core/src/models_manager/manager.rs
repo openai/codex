@@ -18,6 +18,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,6 +27,7 @@ use tokio::sync::TryLockError;
 use tokio::time::timeout;
 use tracing::error;
 use tracing::info;
+use tracing::instrument;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
@@ -40,6 +42,22 @@ pub enum RefreshStrategy {
     Offline,
     /// Use cache if available and fresh, otherwise fetch from the network.
     OnlineIfUncached,
+}
+
+impl RefreshStrategy {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Online => "online",
+            Self::Offline => "offline",
+            Self::OnlineIfUncached => "online_if_uncached",
+        }
+    }
+}
+
+impl fmt::Display for RefreshStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// How the manager's base catalog is sourced for the lifetime of the process.
@@ -102,6 +120,11 @@ impl ModelsManager {
     /// List all available models, refreshing according to the specified strategy.
     ///
     /// Returns model presets sorted by priority and filtered by auth mode and visibility.
+    #[instrument(
+        level = "info",
+        skip(self),
+        fields(refresh_strategy = %refresh_strategy)
+    )]
     pub async fn list_models(&self, refresh_strategy: RefreshStrategy) -> Vec<ModelPreset> {
         if let Err(err) = self.refresh_available_models(refresh_strategy).await {
             error!("failed to refresh available models: {err}");
@@ -137,6 +160,14 @@ impl ModelsManager {
     ///
     /// If `model` is provided, returns it directly. Otherwise selects the default based on
     /// auth mode and available models.
+    #[instrument(
+        level = "info",
+        skip(self, model),
+        fields(
+            model.provided = model.is_some(),
+            refresh_strategy = %refresh_strategy
+        )
+    )]
     pub async fn get_default_model(
         &self,
         model: &Option<String>,
@@ -160,6 +191,7 @@ impl ModelsManager {
 
     // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
+    #[instrument(level = "info", skip(self, config), fields(model = model))]
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
         let remote_models = self.get_remote_models().await;
         Self::construct_model_info_from_candidates(model, &remote_models, config)

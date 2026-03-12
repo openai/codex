@@ -583,7 +583,6 @@ impl Codex {
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
 
-        let session_init_span = info_span!("session_init");
         let session = Session::new(
             session_configuration,
             config.clone(),
@@ -600,7 +599,6 @@ impl Codex {
             file_watcher,
             agent_control,
         )
-        .instrument(session_init_span)
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
@@ -1339,6 +1337,7 @@ impl Session {
         }
     }
 
+    #[instrument(name = "session_init", level = "info", skip_all)]
     #[allow(clippy::too_many_arguments)]
     async fn new(
         mut session_configuration: SessionConfiguration,
@@ -1430,18 +1429,29 @@ impl Session {
                 .await?;
                 Ok((Some(rollout_recorder), state_db_ctx))
             }
-        };
+        }
+        .instrument(info_span!(
+            "session_init.rollout",
+            otel.name = "session_init.rollout",
+            session_init.ephemeral = config.ephemeral,
+        ));
 
+        let is_subagent = matches!(
+            session_configuration.session_source,
+            SessionSource::SubAgent(_)
+        );
         let history_meta_fut = async {
-            if matches!(
-                session_configuration.session_source,
-                SessionSource::SubAgent(_)
-            ) {
+            if is_subagent {
                 (0, 0)
             } else {
                 crate::message_history::history_metadata(&config).await
             }
-        };
+        }
+        .instrument(info_span!(
+            "session_init.history_metadata",
+            otel.name = "session_init.history_metadata",
+            session_init.is_subagent = is_subagent,
+        ));
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
@@ -1454,7 +1464,11 @@ impl Session {
             )
             .await;
             (auth, mcp_servers, auth_statuses)
-        };
+        }
+        .instrument(info_span!(
+            "session_init.auth_mcp",
+            otel.name = "session_init.auth_mcp",
+        ));
 
         // Join all independent futures.
         let (
@@ -1612,7 +1626,12 @@ impl Session {
             tx
         };
         let thread_name =
-            match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id).await
+            match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id)
+                .instrument(info_span!(
+                    "session_init.thread_name_lookup",
+                    otel.name = "session_init.thread_name_lookup",
+                ))
+                .await
             {
                 Ok(name) => name,
                 Err(err) => {
@@ -1662,6 +1681,12 @@ impl Session {
                     managed_network_requirements_enabled,
                     network_proxy_audit_metadata,
                 )
+                .instrument(info_span!(
+                    "session_init.network_proxy",
+                    otel.name = "session_init.network_proxy",
+                    session_init.managed_network_requirements_enabled =
+                        managed_network_requirements_enabled,
+                ))
                 .await?;
                 (Some(network_proxy), Some(session_network_proxy))
             } else {
@@ -1811,6 +1836,8 @@ impl Session {
             .map(|(name, _)| name.clone())
             .collect();
         required_mcp_servers.sort();
+        let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
+        let required_mcp_server_count = required_mcp_servers.len();
         let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref());
         {
             let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
@@ -1828,6 +1855,12 @@ impl Session {
             codex_apps_tools_cache_key(auth),
             tool_plugin_provenance,
         )
+        .instrument(info_span!(
+            "session_init.mcp_manager_init",
+            otel.name = "session_init.mcp_manager_init",
+            session_init.enabled_mcp_server_count = enabled_mcp_server_count,
+            session_init.required_mcp_server_count = required_mcp_server_count,
+        ))
         .await;
         {
             let mut manager_guard = sess.services.mcp_connection_manager.write().await;
@@ -1847,6 +1880,11 @@ impl Session {
                 .read()
                 .await
                 .required_startup_failures(&required_mcp_servers)
+                .instrument(info_span!(
+                    "session_init.required_mcp_wait",
+                    otel.name = "session_init.required_mcp_wait",
+                    session_init.required_mcp_server_count = required_mcp_server_count,
+                ))
                 .await;
             if !failures.is_empty() {
                 let details = failures
@@ -4263,11 +4301,23 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
 }
 
 fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
+    let op_name = sub.op.kind();
+    let span_name = format!("op.dispatch.{op_name}");
     let dispatch_span = match &sub.op {
         Op::RealtimeConversationAudio(_) => {
-            debug_span!("submission_dispatch", submission.id = sub.id.as_str())
+            debug_span!(
+                "submission_dispatch",
+                otel.name = span_name.as_str(),
+                submission.id = sub.id.as_str(),
+                codex.op = op_name
+            )
         }
-        _ => info_span!("submission_dispatch", submission.id = sub.id.as_str()),
+        _ => info_span!(
+            "submission_dispatch",
+            otel.name = span_name.as_str(),
+            submission.id = sub.id.as_str(),
+            codex.op = op_name
+        ),
     };
     if let Some(trace) = sub.trace.as_ref()
         && !set_parent_from_w3c_trace_context(&dispatch_span, trace)

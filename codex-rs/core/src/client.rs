@@ -80,6 +80,7 @@ use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
 
@@ -692,6 +693,18 @@ impl ModelClientSession {
         Ok(())
     }
     /// Returns a websocket connection for this turn.
+    #[instrument(
+        name = "model_client.websocket_connection",
+        level = "info",
+        skip_all,
+        fields(
+            provider = %self.client.state.provider.name,
+            wire_api = %self.client.state.provider.wire_api,
+            transport = "responses_websocket",
+            api.path = "responses",
+            turn.has_metadata_header = turn_metadata_header.is_some()
+        )
+    )]
     async fn websocket_connection(
         &mut self,
         session_telemetry: &SessionTelemetry,
@@ -749,6 +762,19 @@ impl ModelClientSession {
     /// Handles SSE fixtures, reasoning summaries, verbosity, and the
     /// `text` controls used for output schemas.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(
+        name = "model_client.stream_responses_api",
+        level = "info",
+        skip_all,
+        fields(
+            model = %model_info.slug,
+            wire_api = %self.client.state.provider.wire_api,
+            transport = "responses_http",
+            http.method = "POST",
+            api.path = "responses",
+            turn.has_metadata_header = turn_metadata_header.is_some()
+        )
+    )]
     async fn stream_responses_api(
         &self,
         prompt: &Prompt,
@@ -816,6 +842,19 @@ impl ModelClientSession {
 
     /// Streams a turn via the Responses API over WebSocket transport.
     #[allow(clippy::too_many_arguments)]
+    #[instrument(
+        name = "model_client.stream_responses_websocket",
+        level = "info",
+        skip_all,
+        fields(
+            model = %model_info.slug,
+            wire_api = %self.client.state.provider.wire_api,
+            transport = "responses_websocket",
+            api.path = "responses",
+            turn.has_metadata_header = turn_metadata_header.is_some(),
+            websocket.warmup = warmup
+        )
+    )]
     async fn stream_responses_websocket(
         &mut self,
         prompt: &Prompt,

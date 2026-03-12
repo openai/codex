@@ -16,6 +16,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::fmt;
 use std::time::Duration;
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
@@ -38,6 +39,15 @@ pub enum WireApi {
     /// The Responses API exposed by OpenAI at `/v1/responses`.
     #[default]
     Responses,
+}
+
+impl fmt::Display for WireApi {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Responses => "responses",
+        };
+        f.write_str(value)
+    }
 }
 
 impl<'de> Deserialize<'de> for WireApi {

@@ -478,6 +478,47 @@ pub enum Op {
     ListModels,
 }
 
+impl Op {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Interrupt => "interrupt",
+            Self::CleanBackgroundTerminals => "clean_background_terminals",
+            Self::RealtimeConversationStart(_) => "realtime_conversation_start",
+            Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",
+            Self::RealtimeConversationText(_) => "realtime_conversation_text",
+            Self::RealtimeConversationClose => "realtime_conversation_close",
+            Self::UserInput { .. } => "user_input",
+            Self::UserTurn { .. } => "user_turn",
+            Self::OverrideTurnContext { .. } => "override_turn_context",
+            Self::ExecApproval { .. } => "exec_approval",
+            Self::PatchApproval { .. } => "patch_approval",
+            Self::ResolveElicitation { .. } => "resolve_elicitation",
+            Self::UserInputAnswer { .. } => "user_input_answer",
+            Self::RequestPermissionsResponse { .. } => "request_permissions_response",
+            Self::DynamicToolResponse { .. } => "dynamic_tool_response",
+            Self::AddToHistory { .. } => "add_to_history",
+            Self::GetHistoryEntryRequest { .. } => "get_history_entry_request",
+            Self::ListMcpTools => "list_mcp_tools",
+            Self::RefreshMcpServers { .. } => "refresh_mcp_servers",
+            Self::ReloadUserConfig => "reload_user_config",
+            Self::ListCustomPrompts => "list_custom_prompts",
+            Self::ListSkills { .. } => "list_skills",
+            Self::ListRemoteSkills { .. } => "list_remote_skills",
+            Self::DownloadRemoteSkill { .. } => "download_remote_skill",
+            Self::Compact => "compact",
+            Self::DropMemories => "drop_memories",
+            Self::UpdateMemories => "update_memories",
+            Self::SetThreadName { .. } => "set_thread_name",
+            Self::Undo => "undo",
+            Self::ThreadRollback { .. } => "thread_rollback",
+            Self::Review { .. } => "review",
+            Self::Shutdown => "shutdown",
+            Self::RunUserShellCommand { .. } => "run_user_shell_command",
+            Self::ListModels => "list_models",
+        }
+    }
+}
+
 /// Determines the conditions under which the user is consulted to approve
 /// running the command proposed by Codex.
 #[derive(
