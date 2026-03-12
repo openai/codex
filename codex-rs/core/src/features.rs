@@ -142,6 +142,8 @@ pub enum Feature {
     SpawnCsv,
     /// Enable apps.
     Apps,
+    /// Enable discoverable tool suggestions for apps.
+    ToolSuggest,
     /// Enable plugins.
     Plugins,
     /// Allow the model to invoke the built-in image generation tool.
@@ -715,6 +717,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::ToolSuggest,
+        key: "tool_suggest",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Plugins,
         key: "plugins",
         stage: Stage::UnderDevelopment,
@@ -994,6 +1002,12 @@ mod tests {
             Stage::UnderDevelopment
         );
         assert_eq!(Feature::RequestPermissionsTool.default_enabled(), false);
+    }
+
+    #[test]
+    fn tool_suggest_is_under_development() {
+        assert_eq!(Feature::ToolSuggest.stage(), Stage::UnderDevelopment);
+        assert_eq!(Feature::ToolSuggest.default_enabled(), false);
     }
 
     #[test]
