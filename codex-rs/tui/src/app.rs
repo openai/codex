@@ -1,3 +1,4 @@
+use crate::EmbeddedAppServer;
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
@@ -39,7 +40,10 @@ use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
+use codex_app_server_client::InProcessAppServerClient;
+use codex_app_server_client::InProcessServerEvent;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
@@ -51,7 +55,6 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::Feature;
-use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
@@ -1711,7 +1714,7 @@ impl App {
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
-        auth_manager: Arc<AuthManager>,
+        mut embedded_app_server: EmbeddedAppServer,
         mut config: Config,
         cli_kv_overrides: Vec<(String, TomlValue)>,
         harness_overrides: ConfigOverrides,
@@ -1731,20 +1734,8 @@ impl App {
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
-        let thread_manager = Arc::new(ThreadManager::new(
-            &config,
-            auth_manager.clone(),
-            SessionSource::Cli,
-            CollaborationModesConfig {
-                default_mode_request_user_input: config
-                    .features
-                    .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
-            },
-        ));
-        // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
-        thread_manager
-            .plugins_manager()
-            .maybe_start_curated_repo_sync_for_config(&config);
+        let auth_manager = embedded_app_server.auth_manager.clone();
+        let thread_manager = embedded_app_server.thread_manager.clone();
         let mut model = thread_manager
             .get_models_manager()
             .get_default_model(&config.model, RefreshStrategy::Offline)
@@ -2011,6 +2002,7 @@ impl App {
 
         let mut thread_created_rx = thread_manager.subscribe_thread_created();
         let mut listen_for_threads = true;
+        let mut listen_for_app_server_events = true;
         let mut waiting_for_initial_session_configured = wait_for_initial_session_configured;
 
         let exit_reason = loop {
@@ -2037,6 +2029,16 @@ impl App {
                 }
                 Some(event) = tui_events.next() => {
                     app.handle_tui_event(tui, event).await?
+                }
+                app_server_event = embedded_app_server.client.next_event(), if listen_for_app_server_events => {
+                    match app_server_event {
+                        Some(event) => app.handle_embedded_app_server_event(&embedded_app_server.client, event).await,
+                        None => {
+                            listen_for_app_server_events = false;
+                            tracing::warn!("embedded app-server event stream closed");
+                        }
+                    }
+                    AppRunControl::Continue
                 }
                 // Listen on new thread creation due to collab tools.
                 created = thread_created_rx.recv(), if listen_for_threads => {
@@ -2065,6 +2067,9 @@ impl App {
                 AppRunControl::Exit(reason) => break reason,
             }
         };
+        if let Err(err) = embedded_app_server.client.shutdown().await {
+            tracing::warn!(error = %err, "failed to shut down embedded app server");
+        }
         tui.terminal.clear()?;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
@@ -2073,6 +2078,55 @@ impl App {
             update_action: app.pending_update_action,
             exit_reason,
         })
+    }
+
+    async fn handle_embedded_app_server_event(
+        &mut self,
+        app_server_client: &InProcessAppServerClient,
+        event: InProcessServerEvent,
+    ) {
+        match event {
+            InProcessServerEvent::Lagged { skipped } => {
+                tracing::warn!(
+                    skipped,
+                    "embedded app-server event consumer lagged; dropping ignored events"
+                );
+            }
+            InProcessServerEvent::ServerNotification(notification) => {
+                tracing::debug!(
+                    ?notification,
+                    "ignoring embedded app-server notification during hybrid TUI startup"
+                );
+            }
+            InProcessServerEvent::LegacyNotification(notification) => {
+                tracing::debug!(
+                    method = %notification.method,
+                    "ignoring embedded app-server legacy notification during hybrid TUI startup"
+                );
+            }
+            InProcessServerEvent::ServerRequest(request) => {
+                let request_id = request.id().clone();
+                tracing::warn!(
+                    ?request_id,
+                    "rejecting embedded app-server request while TUI still uses direct core APIs"
+                );
+                if let Err(err) = app_server_client
+                    .reject_server_request(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: -32601,
+                            message:
+                                "embedded TUI client does not yet handle app-server server requests"
+                                    .to_string(),
+                            data: None,
+                        },
+                    )
+                    .await
+                {
+                    tracing::warn!(error = %err, "failed to reject embedded app-server request");
+                }
+            }
+        }
     }
 
     pub(crate) async fn handle_tui_event(
