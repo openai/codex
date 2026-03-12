@@ -14,6 +14,7 @@ use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
 use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
 use crate::error::ApiError;
 use crate::provider::Provider;
+use codex_client::maybe_build_rustls_client_config_with_custom_ca;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -474,12 +475,19 @@ impl RealtimeWebsocketClient {
         request.headers_mut().extend(headers);
 
         info!("connecting realtime websocket: {ws_url}");
-        let (stream, response) =
-            tokio_tungstenite::connect_async_with_config(request, Some(websocket_config()), false)
-                .await
-                .map_err(|err| {
-                    ApiError::Stream(format!("failed to connect realtime websocket: {err}"))
-                })?;
+        // Realtime websocket TLS should honor the same custom-CA env vars as the rest of Codex's
+        // outbound HTTPS and websocket traffic.
+        let connector = maybe_build_rustls_client_config_with_custom_ca()
+            .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?
+            .map(tokio_tungstenite::Connector::Rustls);
+        let (stream, response) = tokio_tungstenite::connect_async_tls_with_config(
+            request,
+            Some(websocket_config()),
+            false,
+            connector,
+        )
+        .await
+        .map_err(|err| ApiError::Stream(format!("failed to connect realtime websocket: {err}")))?;
         info!(
             ws_url = %ws_url,
             status = %response.status(),

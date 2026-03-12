@@ -13,6 +13,8 @@ http = { workspace = true }
 opentelemetry = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
+rustls = { workspace = true }
+rustls-native-certs = { workspace = true }
 rustls-pki-types = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -20,6 +22,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
+codex-utils-rustls-provider = { workspace = true }
 zstd = { workspace = true }
 
 [lints]

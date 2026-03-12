@@ -7,7 +7,7 @@ mod sse;
 mod telemetry;
 mod transport;
 
-pub use crate::custom_ca::BuildReqwestClientError;
+pub use crate::custom_ca::BuildCustomCaTransportError;
 /// Test-only subprocess hook for custom CA coverage.
 ///
 /// This stays public only so the `custom_ca_probe` binary target can reuse the shared helper. It
@@ -16,6 +16,7 @@ pub use crate::custom_ca::BuildReqwestClientError;
 #[doc(hidden)]
 pub use crate::custom_ca::build_reqwest_client_for_subprocess_tests;
 pub use crate::custom_ca::build_reqwest_client_with_custom_ca;
+pub use crate::custom_ca::maybe_build_rustls_client_config_with_custom_ca;
 pub use crate::default_client::CodexHttpClient;
 pub use crate::default_client::CodexRequestBuilder;
 pub use crate::error::StreamError;
