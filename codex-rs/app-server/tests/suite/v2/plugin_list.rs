@@ -26,6 +26,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
 #[tokio::test]
 async fn plugin_list_returns_invalid_request_for_invalid_marketplace_file() -> Result<()> {
@@ -613,7 +614,9 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
     assert!(
         codex_home
             .path()
-            .join("plugins/cache/openai-curated/gmail/local")
+            .join(format!(
+                "plugins/cache/openai-curated/gmail/{TEST_CURATED_PLUGIN_SHA}"
+            ))
             .is_dir()
     );
     assert!(
@@ -706,5 +709,10 @@ fn write_openai_curated_marketplace(
             format!(r#"{{"name":"{plugin_name}"}}"#),
         )?;
     }
+    std::fs::create_dir_all(codex_home.join(".tmp"))?;
+    std::fs::write(
+        codex_home.join(".tmp/plugins.sha"),
+        format!("{TEST_CURATED_PLUGIN_SHA}\n"),
+    )?;
     Ok(())
 }
