@@ -297,36 +297,18 @@ mod tests {
         let cwd = temp_dir.path().to_path_buf();
         let sandbox_policy = SandboxPolicy::new_read_only_policy();
 
-        let default_sandbox = TurnMetadataState::new(
+        let state = TurnMetadataState::new(
             "turn-a".to_string(),
-            cwd.clone(),
-            &sandbox_policy,
-            WindowsSandboxLevel::Disabled,
-        );
-        let legacy_landlock = TurnMetadataState::new(
-            "turn-b".to_string(),
             cwd,
             &sandbox_policy,
             WindowsSandboxLevel::Disabled,
         );
 
-        let default_sandbox_header = default_sandbox
-            .current_header_value()
-            .expect("default_sandbox_header");
-        let legacy_landlock_header = legacy_landlock
-            .current_header_value()
-            .expect("legacy_landlock_header");
-
-        let default_sandbox_json: Value =
-            serde_json::from_str(&default_sandbox_header).expect("default_sandbox_json");
-        let legacy_landlock_json: Value =
-            serde_json::from_str(&legacy_landlock_header).expect("legacy_landlock_json");
-
-        let default_sandbox_name = default_sandbox_json.get("sandbox").and_then(Value::as_str);
-        let legacy_landlock_sandbox = legacy_landlock_json.get("sandbox").and_then(Value::as_str);
+        let header = state.current_header_value().expect("header");
+        let json: Value = serde_json::from_str(&header).expect("json");
+        let sandbox_name = json.get("sandbox").and_then(Value::as_str);
 
         let expected_sandbox = sandbox_tag(&sandbox_policy, WindowsSandboxLevel::Disabled);
-        assert_eq!(default_sandbox_name, Some(expected_sandbox));
-        assert_eq!(legacy_landlock_sandbox, Some(expected_sandbox));
+        assert_eq!(sandbox_name, Some(expected_sandbox));
     }
 }
