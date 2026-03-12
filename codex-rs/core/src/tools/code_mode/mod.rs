@@ -1,7 +1,8 @@
-mod handler;
+mod execute_handler;
 mod process;
 mod protocol;
 mod service;
+mod wait_handler;
 mod worker;
 
 use std::sync::Arc;
@@ -43,9 +44,9 @@ pub(super) struct ExecContext {
     pub(super) tracker: SharedTurnDiffTracker,
 }
 
-pub(crate) use handler::CodeModeHandler;
-pub(crate) use handler::CodeModeWaitHandler;
+pub(crate) use execute_handler::CodeModeExecuteHandler;
 pub(crate) use service::CodeModeService;
+pub(crate) use wait_handler::CodeModeWaitHandler;
 
 enum CodeModeSessionProgress {
     Finished(FunctionToolOutput),
