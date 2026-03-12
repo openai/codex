@@ -8229,6 +8229,18 @@ async fn model_slash_command_while_task_running_opens_popup_snapshot() {
 }
 
 #[tokio::test]
+async fn theme_slash_command_while_task_running_opens_popup_instead_of_queueing() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+
+    chat.dispatch_command(SlashCommand::Theme);
+
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(chat.has_active_view(), "expected /theme popup to open");
+    assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
 async fn model_selection_queues_selected_action_while_task_running() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
     chat.on_task_started();
@@ -11563,6 +11575,25 @@ async fn queued_review_selection_replays_after_turn_complete() {
             Err(TryRecvError::Disconnected) => panic!("expected queued /review branch op"),
         }
     }
+}
+
+#[tokio::test]
+async fn queued_bare_theme_command_restores_to_composer_instead_of_opening_popup() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.queued_user_messages
+        .push_back(UserMessage::from("/theme".to_string()));
+
+    chat.on_task_complete(None, false);
+
+    assert_eq!(chat.bottom_pane.composer_text(), "/theme");
+    assert!(!chat.has_active_view(), "expected no popup during replay");
+    assert!(chat.queued_user_messages.is_empty());
+    assert_no_submit_op(&mut op_rx);
+    assert!(
+        !drain_insert_history(&mut rx).is_empty(),
+        "expected replay failure to be surfaced to the user"
+    );
 }
 
 #[tokio::test]

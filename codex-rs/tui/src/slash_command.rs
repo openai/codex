@@ -132,6 +132,29 @@ impl SlashCommand {
         )
     }
 
+    /// Whether bare dispatch opens interactive UI that should be resolved before queueing.
+    pub fn requires_interaction(self) -> bool {
+        matches!(
+            self,
+            SlashCommand::Feedback
+                | SlashCommand::Resume
+                | SlashCommand::Review
+                | SlashCommand::Rename
+                | SlashCommand::Model
+                | SlashCommand::Settings
+                | SlashCommand::Personality
+                | SlashCommand::Collab
+                | SlashCommand::Agent
+                | SlashCommand::MultiAgents
+                | SlashCommand::Approvals
+                | SlashCommand::Permissions
+                | SlashCommand::Experimental
+                | SlashCommand::Skills
+                | SlashCommand::Statusline
+                | SlashCommand::Theme
+        )
+    }
+
     /// Whether this command can be run while a task is in progress.
     pub fn available_during_task(self) -> bool {
         match self {

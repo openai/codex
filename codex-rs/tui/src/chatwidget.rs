@@ -4332,12 +4332,13 @@ impl ChatWidget {
     ///
     /// Live callers usually ignore the return value, but queued replay uses it to decide whether
     /// draining can continue after this command. `Continue` means the command only changed local
-    /// UI/config state, while `Stop` means it opened UI, submitted work, or otherwise hit a
-    /// boundary that should stop queued draining.
+    /// UI/config state. `Stop` means it submitted or queued work, changed session/navigation
+    /// state, or otherwise hit a boundary where queued draining must stop. Commands that require
+    /// interactive UI are resolved before queueing and should not open that UI during replay.
     fn dispatch_command(&mut self, cmd: SlashCommand) -> QueueReplayControl {
         if self.bottom_pane.is_task_running()
             && !cmd.available_during_task()
-            && !matches!(cmd, SlashCommand::Model | SlashCommand::Review)
+            && !cmd.requires_interaction()
         {
             self.queue_user_message(format!("/{}", cmd.command()).into());
             // This busy-path queueing only happens for live command dispatch. Queued replay
@@ -4718,7 +4719,7 @@ impl ChatWidget {
         let trimmed = args.trim();
         let should_queue = self.bottom_pane.is_task_running() && !cmd.available_during_task();
         if trimmed.is_empty() {
-            if should_queue && !matches!(cmd, SlashCommand::Model | SlashCommand::Review) {
+            if should_queue && !cmd.requires_interaction() {
                 self.queue_current_inline_bare_slash_command(cmd);
             } else {
                 self.dispatch_command(cmd);
@@ -5092,6 +5093,13 @@ impl ChatWidget {
             return QueueReplayControl::Stop;
         };
         if rest.trim().is_empty() {
+            if cmd.requires_interaction() {
+                self.add_error_message(format!(
+                    "Failed to replay queued slash command requiring interaction: {preview}"
+                ));
+                self.restore_user_message_to_composer(draft);
+                return QueueReplayControl::Stop;
+            }
             let replay_control = self.dispatch_command(cmd);
             if replay_control == QueueReplayControl::Continue
                 && self.bottom_pane.no_modal_or_popup_active()
