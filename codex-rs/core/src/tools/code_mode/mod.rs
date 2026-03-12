@@ -18,8 +18,8 @@ use crate::tools::ToolRouter;
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::code_mode_description::code_mode_tool_reference;
 use crate::tools::context::FunctionToolOutput;
-use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
+use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouterParams;
@@ -35,13 +35,13 @@ const CODE_MODE_WAIT_DESCRIPTION_TEMPLATE: &str = include_str!("wait_description
 
 pub(crate) const PUBLIC_TOOL_NAME: &str = "exec";
 pub(crate) const WAIT_TOOL_NAME: &str = "exec_wait";
+pub(crate) const DEFAULT_EXEC_YIELD_TIME_MS: u64 = 10_000;
 pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 = 10_000;
 
 #[derive(Clone)]
 pub(super) struct ExecContext {
     pub(super) session: Arc<Session>,
     pub(super) turn: Arc<TurnContext>,
-    pub(super) tracker: SharedTurnDiffTracker,
 }
 
 pub(crate) use execute_handler::CodeModeExecuteHandler;
@@ -269,8 +269,10 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
 
 async fn call_nested_tool(
     exec: ExecContext,
+    tool_runtime: ToolCallRuntime,
     tool_name: String,
     input: Option<JsonValue>,
+    cancellation_token: tokio_util::sync::CancellationToken,
 ) -> JsonValue {
     if tool_name == PUBLIC_TOOL_NAME {
         return JsonValue::String(format!("{PUBLIC_TOOL_NAME} cannot invoke itself"));
@@ -301,14 +303,8 @@ async fn call_nested_tool(
         tool_namespace: None,
         payload,
     };
-    let result = router
-        .dispatch_tool_call_with_code_mode_result(
-            exec.session.clone(),
-            exec.turn.clone(),
-            exec.tracker.clone(),
-            call,
-            ToolCallSource::CodeMode,
-        )
+    let result = tool_runtime
+        .handle_tool_call_with_source(call, ToolCallSource::CodeMode, cancellation_token)
         .await;
 
     match result {

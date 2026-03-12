@@ -41,6 +41,7 @@ pub(super) enum HostToNodeMessage {
     Start {
         request_id: String,
         session_id: i32,
+        default_yield_time_ms: u64,
         enabled_tools: Vec<EnabledTool>,
         stored_values: HashMap<String, JsonValue>,
         source: String,

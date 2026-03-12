@@ -13,12 +13,12 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
+use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
-use crate::tools::context::ToolPayload;
+use crate::tools::registry::AnyToolResult;
 use crate::tools::router::ToolCall;
+use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouter;
-use codex_protocol::models::FunctionCallOutputBody;
-use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 
 #[derive(Clone)]
@@ -52,8 +52,19 @@ impl ToolCallRuntime {
         call: ToolCall,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
-        let supports_parallel = self.router.tool_supports_parallel(&call.tool_name);
+        let future =
+            self.handle_tool_call_with_source(call, ToolCallSource::Direct, cancellation_token);
+        async move { future.await.map(AnyToolResult::into_response) }.in_current_span()
+    }
 
+    #[instrument(level = "trace", skip_all)]
+    pub(crate) fn handle_tool_call_with_source(
+        self,
+        call: ToolCall,
+        source: ToolCallSource,
+        cancellation_token: CancellationToken,
+    ) -> impl std::future::Future<Output = Result<AnyToolResult, CodexErr>> {
+        let supports_parallel = self.router.tool_supports_parallel(&call.tool_name);
         let router = Arc::clone(&self.router);
         let session = Arc::clone(&self.session);
         let turn = Arc::clone(&self.turn_context);
@@ -69,7 +80,7 @@ impl ToolCallRuntime {
             aborted = false,
         );
 
-        let handle: AbortOnDropHandle<Result<ResponseInputItem, FunctionCallError>> =
+        let handle: AbortOnDropHandle<Result<AnyToolResult, FunctionCallError>> =
             AbortOnDropHandle::new(tokio::spawn(async move {
                 tokio::select! {
                     _ = cancellation_token.cancelled() => {
@@ -85,12 +96,12 @@ impl ToolCallRuntime {
                         };
 
                         router
-                            .dispatch_tool_call(
+                            .dispatch_tool_call_with_code_mode_result(
                                 session,
                                 turn,
                                 tracker,
                                 call.clone(),
-                                crate::tools::router::ToolCallSource::Direct,
+                                source,
                             )
                             .instrument(dispatch_span.clone())
                             .await
@@ -113,34 +124,13 @@ impl ToolCallRuntime {
 }
 
 impl ToolCallRuntime {
-    fn aborted_response(call: &ToolCall, secs: f32) -> ResponseInputItem {
-        match &call.payload {
-            ToolPayload::Custom { .. } => ResponseInputItem::CustomToolCallOutput {
-                call_id: call.call_id.clone(),
-                output: FunctionCallOutputPayload {
-                    body: FunctionCallOutputBody::Text(Self::abort_message(call, secs)),
-                    ..Default::default()
-                },
-            },
-            ToolPayload::ToolSearch { .. } => ResponseInputItem::ToolSearchOutput {
-                call_id: call.call_id.clone(),
-                status: "completed".to_string(),
-                execution: "client".to_string(),
-                tools: Vec::new(),
-            },
-            ToolPayload::Mcp { .. } => ResponseInputItem::McpToolCallOutput {
-                call_id: call.call_id.clone(),
-                output: codex_protocol::mcp::CallToolResult::from_error_text(Self::abort_message(
-                    call, secs,
-                )),
-            },
-            _ => ResponseInputItem::FunctionCallOutput {
-                call_id: call.call_id.clone(),
-                output: FunctionCallOutputPayload {
-                    body: FunctionCallOutputBody::Text(Self::abort_message(call, secs)),
-                    ..Default::default()
-                },
-            },
+    fn aborted_response(call: &ToolCall, secs: f32) -> AnyToolResult {
+        AnyToolResult {
+            call_id: call.call_id.clone(),
+            payload: call.payload.clone(),
+            result: Box::new(AbortedToolOutput {
+                message: Self::abort_message(call, secs),
+            }),
         }
     }
 
