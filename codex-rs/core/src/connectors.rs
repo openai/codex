@@ -693,13 +693,24 @@ fn is_connector_id_allowed_for_originator(connector_id: &str, originator_value: 
 
 fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {
     let effective_config = config.config_layer_stack.effective_config();
-    let apps_config = effective_config.as_table()?.get("apps")?.clone();
-    let mut apps_config = AppsConfigToml::deserialize(apps_config).ok()?;
+    let apps_value = effective_config
+        .as_table()
+        .and_then(|table| table.get("apps"))
+        .cloned();
+    let had_apps_config = apps_value.is_some();
+    let mut apps_config = match apps_value {
+        Some(value) => AppsConfigToml::deserialize(value).ok()?,
+        None => AppsConfigToml::default(),
+    };
     apply_requirements_apps_constraints(
         &mut apps_config,
         config.config_layer_stack.requirements_toml().apps.as_ref(),
     );
-    Some(apps_config)
+    if had_apps_config || apps_config.default.is_some() || !apps_config.apps.is_empty() {
+        Some(apps_config)
+    } else {
+        None
+    }
 }
 
 fn apply_requirements_apps_constraints(
@@ -920,16 +931,22 @@ fn format_connector_label(name: &str, _id: &str) -> String {
 #[path = "connectors_tests.rs"]
 mod tests {
     use super::*;
+    use crate::config::ConfigBuilder;
     use crate::config::types::AppConfig;
     use crate::config::types::AppToolConfig;
     use crate::config::types::AppToolsConfig;
     use crate::config::types::AppsDefaultConfig;
     use crate::config_loader::AppRequirementToml;
+    use crate::config_loader::CloudRequirementsLoader;
+    use crate::config_loader::ConfigRequirementsToml;
     use crate::mcp_connection_manager::ToolInfo;
+    use codex_config::CONFIG_TOML_FILE;
     use pretty_assertions::assert_eq;
     use rmcp::model::JsonObject;
     use rmcp::model::Tool;
+    use std::collections::BTreeMap;
     use std::sync::Arc;
+    use tempfile::TempDir;
 
     fn annotations(
         destructive_hint: Option<bool>,
@@ -1286,6 +1303,90 @@ mod tests {
             effective_apps.apps.get("calendar").map(|app| app.enabled),
             Some(true)
         );
+    }
+
+    #[tokio::test]
+    async fn cloud_requirements_disable_connector_overrides_user_apps_config() -> std::io::Result<()>
+    {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"
+[apps.connector_123123]
+enabled = true
+"#,
+        )?;
+
+        let requirements = ConfigRequirementsToml {
+            apps: Some(AppsRequirementsToml {
+                apps: BTreeMap::from([(
+                    "connector_123123".to_string(),
+                    AppRequirementToml {
+                        enabled: Some(false),
+                    },
+                )]),
+            }),
+            ..Default::default()
+        };
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async move {
+                Ok(Some(requirements))
+            }))
+            .build()
+            .await?;
+
+        let policy = app_tool_policy(&config, Some("connector_123123"), "events.list", None, None);
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: false,
+                approval: AppToolApproval::Auto,
+            }
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cloud_requirements_disable_connector_applies_without_user_apps_table()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        std::fs::write(codex_home.path().join(CONFIG_TOML_FILE), "")?;
+
+        let requirements = ConfigRequirementsToml {
+            apps: Some(AppsRequirementsToml {
+                apps: BTreeMap::from([(
+                    "connector_123123".to_string(),
+                    AppRequirementToml {
+                        enabled: Some(false),
+                    },
+                )]),
+            }),
+            ..Default::default()
+        };
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async move {
+                Ok(Some(requirements))
+            }))
+            .build()
+            .await?;
+
+        let policy = app_tool_policy(&config, Some("connector_123123"), "events.list", None, None);
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: false,
+                approval: AppToolApproval::Auto,
+            }
+        );
+
+        Ok(())
     }
 
     #[test]
