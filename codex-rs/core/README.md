@@ -14,10 +14,15 @@ When using the workspace-write sandbox policy, the Seatbelt profile allows
 writes under the configured writable roots while keeping `.git` (directory or
 pointer file), the resolved `gitdir:` target, and `.codex` read-only.
 
+<<<<<<< HEAD
 Network access and filesystem read/write roots are controlled by the split
 `FileSystemSandboxPolicy` and `NetworkSandboxPolicy` views. On macOS, Seatbelt
 enforces overlapping path rules with the most specific entry winning, so a
 broader writable root can still contain nested read-only or denied carveouts.
+=======
+Network access and filesystem read/write roots are controlled by
+`SandboxPolicy`. Seatbelt consumes the resolved policy and enforces it.
+>>>>>>> 28e7c4637 (fix: fail closed split windows sandboxing during transform)
 
 Seatbelt also supports macOS permission-profile extensions layered on top of
 `SandboxPolicy`:

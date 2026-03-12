@@ -416,15 +416,10 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
 
     let output = exec(
         params,
-        ExecSandboxContext {
-            sandbox: SandboxType::None,
-            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
-            file_system_sandbox_policy: &FileSystemSandboxPolicy::from(
-                &SandboxPolicy::new_read_only_policy(),
-            ),
-            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
-            sandbox_policy_cwd: cwd.as_path(),
-        },
+        SandboxType::None,
+        &SandboxPolicy::new_read_only_policy(),
+        &FileSystemSandboxPolicy::from(&SandboxPolicy::new_read_only_policy()),
+        NetworkSandboxPolicy::Restricted,
         None,
         None,
     )

@@ -288,7 +288,6 @@ pub(crate) async fn execute_exec_request(
     let ExecRequest {
         command,
         cwd,
-        sandbox_policy_cwd,
         env,
         network,
         expiration,
@@ -320,13 +319,10 @@ pub(crate) async fn execute_exec_request(
     let start = Instant::now();
     let raw_output_result = exec(
         params,
-        ExecSandboxContext {
-            sandbox,
-            sandbox_policy,
-            file_system_sandbox_policy: &file_system_sandbox_policy,
-            network_sandbox_policy,
-            sandbox_policy_cwd: sandbox_policy_cwd.as_path(),
-        },
+        sandbox,
+        sandbox_policy,
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
         stdout_stream,
         after_spawn,
     )
@@ -405,7 +401,6 @@ fn record_windows_sandbox_spawn_failure(
 async fn exec_windows_sandbox(
     params: ExecParams,
     sandbox_policy: &SandboxPolicy,
-    sandbox_policy_cwd: &Path,
 ) -> Result<RawExecToolCallOutput> {
     use crate::config::find_codex_home;
     use codex_protocol::config_types::WindowsSandboxLevel;
@@ -435,7 +430,7 @@ async fn exec_windows_sandbox(
             "failed to serialize Windows sandbox policy: {err}"
         )))
     })?;
-    let sandbox_cwd = sandbox_policy_cwd.to_path_buf();
+    let sandbox_cwd = cwd.clone();
     let codex_home = find_codex_home().map_err(|err| {
         CodexErr::Io(io::Error::other(format!(
             "windows sandbox: failed to resolve codex_home: {err}"
@@ -587,6 +582,9 @@ pub(crate) mod errors {
             match err {
                 SandboxTransformError::MissingLinuxSandboxExecutable => {
                     CodexErr::LandlockSandboxExecutableNotProvided
+                }
+                SandboxTransformError::UnsupportedWindowsRestrictedToken(reason) => {
+                    CodexErr::UnsupportedOperation(reason)
                 }
                 #[cfg(not(target_os = "macos"))]
                 SandboxTransformError::SeatbeltUnavailable => CodexErr::UnsupportedOperation(
@@ -758,42 +756,19 @@ impl Default for ExecToolCallOutput {
     }
 }
 
-#[derive(Clone, Copy)]
-struct ExecSandboxContext<'a> {
-    sandbox: SandboxType,
-    sandbox_policy: &'a SandboxPolicy,
-    file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
-    sandbox_policy_cwd: &'a Path,
-}
-
 #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
 async fn exec(
     params: ExecParams,
-    sandbox_context: ExecSandboxContext<'_>,
+    sandbox: SandboxType,
+    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<RawExecToolCallOutput> {
-    let ExecSandboxContext {
-        sandbox,
-        sandbox_policy,
-        file_system_sandbox_policy,
-        network_sandbox_policy,
-        sandbox_policy_cwd,
-    } = sandbox_context;
-
     #[cfg(target_os = "windows")]
     if sandbox == SandboxType::WindowsRestrictedToken {
-        if let Some(reason) = unsupported_windows_restricted_token_sandbox_reason(
-            sandbox,
-            sandbox_policy,
-            file_system_sandbox_policy,
-            network_sandbox_policy,
-            sandbox_policy_cwd,
-        ) {
-            return Err(CodexErr::Io(io::Error::other(reason)));
-        }
-        return exec_windows_sandbox(params, sandbox_policy, sandbox_policy_cwd).await;
+        return exec_windows_sandbox(params, sandbox_policy).await;
     }
     let ExecParams {
         command,
@@ -850,8 +825,7 @@ fn should_use_windows_restricted_token_sandbox(
         )
 }
 
-#[cfg(any(target_os = "windows", test))]
-fn unsupported_windows_restricted_token_sandbox_reason(
+pub(crate) fn unsupported_windows_restricted_token_sandbox_reason(
     sandbox: SandboxType,
     sandbox_policy: &SandboxPolicy,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,

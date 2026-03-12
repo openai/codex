@@ -730,7 +730,6 @@ mod tests {
         ExecRequest {
             command: vec!["cmd".to_string()],
             cwd: PathBuf::from("."),
-            sandbox_policy_cwd: PathBuf::from("."),
             env: HashMap::new(),
             network: None,
             expiration: ExecExpiration::DefaultTimeout,
@@ -843,7 +842,6 @@ mod tests {
                 exec_request: ExecRequest {
                     command: vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],
                     cwd: PathBuf::from("."),
-                    sandbox_policy_cwd: PathBuf::from("."),
                     env: HashMap::new(),
                     network: None,
                     expiration: ExecExpiration::Cancellation(CancellationToken::new()),

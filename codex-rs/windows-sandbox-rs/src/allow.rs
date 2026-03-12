@@ -128,37 +128,6 @@ mod tests {
     }
 
     #[test]
-    fn resolves_relative_writable_roots_against_policy_cwd() {
-        let tmp = TempDir::new().expect("tempdir");
-        let policy_cwd = tmp.path().join("policy");
-        let command_cwd = tmp.path().join("command");
-        let relative_root = PathBuf::from("shared");
-        let shared_from_policy = policy_cwd.join(&relative_root);
-        let shared_from_command = command_cwd.join(&relative_root);
-        let _ = fs::create_dir_all(&policy_cwd);
-        let _ = fs::create_dir_all(&command_cwd);
-        let _ = fs::create_dir_all(&shared_from_policy);
-        let _ = fs::create_dir_all(&shared_from_command);
-
-        let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![AbsolutePathBuf::try_from(relative_root.as_path()).unwrap()],
-            read_only_access: Default::default(),
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: false,
-        };
-
-        let paths = compute_allow_paths(&policy, &policy_cwd, &command_cwd, &HashMap::new());
-
-        assert!(paths
-            .allow
-            .contains(&dunce::canonicalize(&shared_from_policy).unwrap()));
-        assert!(!paths
-            .allow
-            .contains(&dunce::canonicalize(&shared_from_command).unwrap()));
-    }
-
-    #[test]
     fn excludes_tmp_env_vars_when_requested() {
         let tmp = TempDir::new().expect("tempdir");
         let command_cwd = tmp.path().join("workspace");

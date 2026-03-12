@@ -191,6 +191,62 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
 }
 
 #[test]
+fn transform_rejects_unsupported_windows_split_only_filesystem_policies() {
+    let manager = SandboxManager::new();
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let docs = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("docs"))
+        .expect("absolute docs path");
+    let err = manager
+        .transform(super::SandboxTransformRequest {
+            spec: super::CommandSpec {
+                program: "true".to_string(),
+                args: Vec::new(),
+                cwd: temp_dir.path().to_path_buf(),
+                env: HashMap::new(),
+                expiration: crate::exec::ExecExpiration::DefaultTimeout,
+                sandbox_permissions: super::SandboxPermissions::UseDefault,
+                additional_permissions: None,
+                justification: None,
+            },
+            policy: &SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                read_only_access: ReadOnlyAccess::FullAccess,
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            },
+            file_system_policy: &FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path: docs },
+                    access: FileSystemAccessMode::Read,
+                },
+            ]),
+            network_policy: NetworkSandboxPolicy::Restricted,
+            sandbox: SandboxType::WindowsRestrictedToken,
+            enforce_managed_network: false,
+            network: None,
+            sandbox_policy_cwd: temp_dir.path(),
+            #[cfg(target_os = "macos")]
+            macos_seatbelt_profile_extensions: None,
+            codex_linux_sandbox_exe: None,
+            use_legacy_landlock: false,
+            windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+        })
+        .expect_err("unsupported split-only windows policy should fail closed");
+
+    assert!(matches!(
+        err,
+        super::SandboxTransformError::UnsupportedWindowsRestrictedToken(_)
+    ));
+}
+
+#[test]
 fn normalize_additional_permissions_preserves_network() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let path = AbsolutePathBuf::from_absolute_path(
