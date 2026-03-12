@@ -1658,7 +1658,7 @@ function handleEmitImageResult(message) {
 }
 
 let queue = Promise.resolve();
-let inputBuffer = Buffer.alloc(0);
+let pendingInputSegments = [];
 
 process.on("uncaughtException", (error) => {
   scheduleFatalExit("uncaught exception", error);
@@ -1693,36 +1693,47 @@ function handleInputLine(line) {
   }
 }
 
-function consumeInputBuffer(flushRemainder = false) {
-  let frameEnd = inputBuffer.indexOf(0x0a);
-  while (frameEnd !== -1) {
-    let frame = inputBuffer.subarray(0, frameEnd);
-    if (frame[frame.length - 1] === 0x0d) {
-      frame = frame.subarray(0, frame.length - 1);
-    }
-    inputBuffer = inputBuffer.subarray(frameEnd + 1);
-    handleInputLine(frame.toString("utf8"));
-    frameEnd = inputBuffer.indexOf(0x0a);
+function takePendingInputFrame() {
+  if (pendingInputSegments.length === 0) {
+    return null;
   }
 
-  if (!flushRemainder || inputBuffer.length === 0) {
+  // Keep raw stdin chunks queued until a full JSONL frame is ready so we only
+  // assemble the frame bytes once.
+  const frame =
+    pendingInputSegments.length === 1
+      ? pendingInputSegments[0]
+      : Buffer.concat(pendingInputSegments);
+  pendingInputSegments = [];
+  return frame;
+}
+
+function handleInputFrame(frame) {
+  if (!frame) {
     return;
   }
 
-  let frame = inputBuffer;
   if (frame[frame.length - 1] === 0x0d) {
     frame = frame.subarray(0, frame.length - 1);
   }
-  inputBuffer = Buffer.alloc(0);
   handleInputLine(frame.toString("utf8"));
 }
 
 process.stdin.on("data", (chunk) => {
-  inputBuffer =
-    inputBuffer.length === 0 ? Buffer.from(chunk) : Buffer.concat([inputBuffer, chunk]);
-  consumeInputBuffer(false);
+  const input = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  let segmentStart = 0;
+  let frameEnd = input.indexOf(0x0a);
+  while (frameEnd !== -1) {
+    pendingInputSegments.push(input.subarray(segmentStart, frameEnd));
+    handleInputFrame(takePendingInputFrame());
+    segmentStart = frameEnd + 1;
+    frameEnd = input.indexOf(0x0a, segmentStart);
+  }
+  if (segmentStart < input.length) {
+    pendingInputSegments.push(input.subarray(segmentStart));
+  }
 });
 
 process.stdin.on("end", () => {
-  consumeInputBuffer(true);
+  handleInputFrame(takePendingInputFrame());
 });
