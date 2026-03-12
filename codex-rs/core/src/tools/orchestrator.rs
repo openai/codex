@@ -151,7 +151,8 @@ impl ToolOrchestrator {
                     }
                     ReviewDecision::Approved
                     | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-                    | ReviewDecision::ApprovedForSession => {}
+                    | ReviewDecision::ApprovedForSession
+                    | ReviewDecision::ApprovedForAlways => {}
                     ReviewDecision::NetworkPolicyAmendment {
                         network_policy_amendment,
                     } => match network_policy_amendment.action {
@@ -296,7 +297,8 @@ impl ToolOrchestrator {
                         }
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-                        | ReviewDecision::ApprovedForSession => {}
+                        | ReviewDecision::ApprovedForSession
+                        | ReviewDecision::ApprovedForAlways => {}
                         ReviewDecision::NetworkPolicyAmendment {
                             network_policy_amendment,
                         } => match network_policy_amendment.action {

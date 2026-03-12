@@ -1,0 +1,10 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+expression: terminal.backend()
+---
+"                                                            "
+"› /sand                                                     "
+"                                                            "
+"                                                            "
+"  /sandbox-setup  scan project and request the permissions  "
+"                  needed to run it                          "

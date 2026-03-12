@@ -16,6 +16,7 @@ pub enum SlashCommand {
     Fast,
     Approvals,
     Permissions,
+    SandboxSetup,
     #[strum(serialize = "setup-default-sandbox")]
     ElevateSandbox,
     #[strum(serialize = "sandbox-add-read-dir")]
@@ -99,6 +100,9 @@ impl SlashCommand {
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
             SlashCommand::Approvals => "choose what Codex is allowed to do",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
+            SlashCommand::SandboxSetup => {
+                "scan project and request the permissions needed to run it"
+            }
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::SandboxReadRoot => {
                 "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>"
@@ -144,6 +148,7 @@ impl SlashCommand {
             | SlashCommand::Personality
             | SlashCommand::Approvals
             | SlashCommand::Permissions
+            | SlashCommand::SandboxSetup
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental

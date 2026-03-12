@@ -14,6 +14,12 @@ use crate::config_loader::RequirementSource;
 use crate::features::Feature;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::MacOsAutomationPermission;
+use codex_protocol::models::MacOsPreferencesPermission;
+use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+use codex_protocol::models::NetworkPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -319,6 +325,7 @@ allowed_domains = ["openai.com"]
                         allow_unix_sockets: None,
                         allow_local_binding: None,
                     }),
+                    macos: None,
                 },
             )]),
         }
@@ -350,6 +357,7 @@ fn permissions_profiles_network_populates_runtime_network_proxy_spec() -> std::i
                             enable_socks5: Some(false),
                             ..Default::default()
                         }),
+                        macos: None,
                     },
                 )]),
             }),
@@ -395,6 +403,7 @@ fn permissions_profiles_network_disabled_by_default_does_not_start_proxy() -> st
                             allowed_domains: Some(vec!["openai.com".to_string()]),
                             ..Default::default()
                         }),
+                        macos: None,
                     },
                 )]),
             }),
@@ -440,6 +449,7 @@ fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::io::Re
                         ]),
                     }),
                     network: None,
+                    macos: None,
                 },
             )]),
         }),
@@ -526,6 +536,7 @@ fn permissions_profiles_require_default_permissions() -> std::io::Result<()> {
                             )]),
                         }),
                         network: None,
+                        macos: None,
                     },
                 )]),
             }),
@@ -568,6 +579,7 @@ fn permissions_profiles_reject_writes_outside_workspace_root() -> std::io::Resul
                             )]),
                         }),
                         network: None,
+                        macos: None,
                     },
                 )]),
             }),
@@ -613,6 +625,7 @@ fn permissions_profiles_reject_nested_entries_for_non_project_roots() -> std::io
                             )]),
                         }),
                         network: None,
+                        macos: None,
                     },
                 )]),
             }),
@@ -665,6 +678,7 @@ fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<()> {
             )]),
         }),
         network: None,
+        macos: None,
     })?;
 
     assert_eq!(
@@ -709,6 +723,7 @@ fn permissions_profiles_allow_unknown_special_paths_with_nested_entries() -> std
             )]),
         }),
         network: None,
+        macos: None,
     })?;
 
     assert_eq!(
@@ -735,6 +750,7 @@ fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io::Resu
     let config = load_workspace_permission_profile(PermissionProfileToml {
         filesystem: None,
         network: None,
+        macos: None,
     })?;
 
     assert_eq!(
@@ -768,6 +784,7 @@ fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::Result
             entries: BTreeMap::new(),
         }),
         network: None,
+        macos: None,
     })?;
 
     assert_eq!(
@@ -807,6 +824,7 @@ fn permissions_profiles_reject_project_root_parent_traversal() -> std::io::Resul
                             )]),
                         }),
                         network: None,
+                        macos: None,
                     },
                 )]),
             }),
@@ -851,6 +869,7 @@ fn permissions_profiles_allow_network_enablement() -> std::io::Result<()> {
                             enabled: Some(true),
                             ..Default::default()
                         }),
+                        macos: None,
                     },
                 )]),
             }),
@@ -5593,4 +5612,212 @@ fn test_tui_notification_method() {
     let parsed: RootTomlTest =
         toml::from_str(toml).expect("deserialize notification_method=\"bel\"");
     assert_eq!(parsed.tui.notification_method, NotificationMethod::Bel);
+}
+
+#[test]
+fn config_toml_deserializes_permissions_profile_macos_and_special_paths() {
+    let toml = r#"
+default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+":cwd" = "write"
+":slash_tmp" = "write"
+
+[permissions.workspace.macos]
+preferences = "read_write"
+automations = ["com.apple.Calendar"]
+accessibility = true
+calendar = true
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for macOS permissions");
+    let permissions = cfg.permissions.expect("[permissions] should deserialize");
+    let workspace = permissions
+        .entries
+        .get("workspace")
+        .expect("workspace profile should exist");
+
+    assert_eq!(
+        workspace.filesystem,
+        Some(FilesystemPermissionsToml {
+            entries: BTreeMap::from([
+                (
+                    ":cwd".to_string(),
+                    FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
+                ),
+                (
+                    ":slash_tmp".to_string(),
+                    FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
+                ),
+            ]),
+        })
+    );
+    assert_eq!(
+        workspace.macos,
+        Some(MacOsPermissionsToml {
+            preferences: Some(MacOsPreferencesPermission::ReadWrite),
+            automations: Some(MacOsAutomationPermission::BundleIds(vec![
+                "com.apple.Calendar".to_string(),
+            ])),
+            accessibility: Some(true),
+            calendar: Some(true),
+        })
+    );
+}
+
+#[test]
+fn default_permissions_profile_populates_runtime_macos_extensions() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        toml::from_str(
+            r#"
+default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+":minimal" = "read"
+
+[permissions.workspace.macos]
+preferences = "read_write"
+automations = ["com.apple.Calendar"]
+accessibility = true
+calendar = true
+"#,
+        )
+        .expect("config should deserialize"),
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.permissions.macos_seatbelt_profile_extensions,
+        Some(MacOsSeatbeltProfileExtensions {
+            macos_preferences: MacOsPreferencesPermission::ReadWrite,
+            macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                "com.apple.Calendar".to_string(),
+            ]),
+            macos_accessibility: true,
+            macos_calendar: true,
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn persist_granted_permission_profile_creates_default_profile_from_legacy_config()
+-> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        toml::from_str(
+            r#"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true
+exclude_tmpdir_env_var = false
+exclude_slash_tmp = false
+"#,
+        )
+        .expect("config should deserialize"),
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )?;
+
+    let profile_name = persist_granted_permission_profile(
+        codex_home.path(),
+        &config,
+        &PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                read: None,
+                write: Some(vec![AbsolutePathBuf::try_from(cwd.path().join("logs"))?]),
+            }),
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
+            }),
+            macos: Some(MacOsSeatbeltProfileExtensions {
+                macos_preferences: MacOsPreferencesPermission::ReadWrite,
+                macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                    "com.apple.Calendar".to_string(),
+                ]),
+                macos_accessibility: true,
+                macos_calendar: false,
+            }),
+        },
+    )
+    .await?;
+
+    assert_eq!(profile_name, "default");
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+    assert_eq!(parsed.default_permissions.as_deref(), Some("default"));
+    let profile = parsed
+        .permissions
+        .expect("permissions should be written")
+        .entries
+        .get("default")
+        .cloned()
+        .expect("default profile should exist");
+    let memories_root = AbsolutePathBuf::try_from(codex_home.path().join("memories"))?;
+
+    assert_eq!(
+        profile.filesystem,
+        Some(FilesystemPermissionsToml {
+            entries: BTreeMap::from([
+                (
+                    ":root".to_string(),
+                    FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                ),
+                (
+                    ":cwd".to_string(),
+                    FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
+                ),
+                (
+                    ":slash_tmp".to_string(),
+                    FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
+                ),
+                (
+                    ":tmpdir".to_string(),
+                    FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
+                ),
+                (
+                    memories_root.to_string_lossy().to_string(),
+                    FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
+                ),
+                (
+                    AbsolutePathBuf::try_from(cwd.path().join("logs"))?
+                        .to_string_lossy()
+                        .to_string(),
+                    FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
+                ),
+            ]),
+        })
+    );
+    assert_eq!(
+        profile.network,
+        Some(NetworkToml {
+            enabled: Some(true),
+            ..Default::default()
+        })
+    );
+    assert_eq!(
+        profile.macos,
+        Some(MacOsPermissionsToml {
+            preferences: Some(MacOsPreferencesPermission::ReadWrite),
+            automations: Some(MacOsAutomationPermission::BundleIds(vec![
+                "com.apple.Calendar".to_string(),
+            ])),
+            accessibility: Some(true),
+            calendar: Some(false),
+        })
+    );
+
+    Ok(())
 }

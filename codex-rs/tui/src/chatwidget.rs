@@ -180,6 +180,7 @@ const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
 const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
+const SANDBOX_SETUP_PROMPT: &str = include_str!("../prompt_for_sandbox_setup_command.md");
 
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
@@ -3326,6 +3327,12 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
+        widget.bottom_pane.set_request_permissions_tool_enabled(
+            widget
+                .config
+                .features
+                .enabled(Feature::RequestPermissionsTool),
+        );
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -3511,6 +3518,12 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
+        widget.bottom_pane.set_request_permissions_tool_enabled(
+            widget
+                .config
+                .features
+                .enabled(Feature::RequestPermissionsTool),
+        );
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -3688,6 +3701,12 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
+        widget.bottom_pane.set_request_permissions_tool_enabled(
+            widget
+                .config
+                .features
+                .enabled(Feature::RequestPermissionsTool),
+        );
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
@@ -4072,6 +4091,23 @@ impl ChatWidget {
             }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
+            }
+            SlashCommand::SandboxSetup => {
+                let user_message = UserMessage {
+                    text: SANDBOX_SETUP_PROMPT.to_string(),
+                    local_images: Vec::new(),
+                    remote_image_urls: Vec::new(),
+                    text_elements: Vec::new(),
+                    mention_bindings: Vec::new(),
+                };
+                if self.is_session_configured() {
+                    self.reasoning_buffer.clear();
+                    self.full_reasoning_buffer.clear();
+                    self.set_status_header(String::from("Working"));
+                    self.submit_user_message(user_message);
+                } else {
+                    self.queue_user_message(user_message);
+                }
             }
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
@@ -7388,6 +7424,10 @@ impl ChatWidget {
         }
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
+        }
+        if feature == Feature::RequestPermissionsTool {
+            self.bottom_pane
+                .set_request_permissions_tool_enabled(enabled);
         }
         if feature == Feature::Plugins {
             self.refresh_plugin_mentions();

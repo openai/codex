@@ -161,6 +161,7 @@ use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
 use crate::config::StartedNetworkProxy;
+use crate::config::persist_granted_permission_profile;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
@@ -3089,6 +3090,7 @@ impl Session {
         response: RequestPermissionsResponse,
     ) {
         let mut granted_for_session = None;
+        let mut granted_always_allow = None;
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -3103,6 +3105,10 @@ impl Session {
                             PermissionGrantScope::Session => {
                                 granted_for_session = Some(response.permissions.clone());
                             }
+                            PermissionGrantScope::AlwaysAllow => {
+                                granted_for_session = Some(response.permissions.clone());
+                                granted_always_allow = Some(response.permissions.clone());
+                            }
                         }
                     }
                     entry
@@ -3113,6 +3119,20 @@ impl Session {
         if let Some(permissions) = granted_for_session {
             let mut state = self.state.lock().await;
             state.record_granted_permissions(permissions);
+        }
+        if let Some(permissions) = granted_always_allow {
+            let config = self.get_config().await;
+            if let Err(err) = persist_granted_permission_profile(
+                self.codex_home().await.as_path(),
+                &config,
+                &permissions,
+            )
+            .await
+            {
+                warn!("failed to persist granted permissions: {err}");
+            } else {
+                self.reload_user_config_layer().await;
+            }
         }
         match entry {
             Some(tx_response) => {

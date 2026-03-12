@@ -73,6 +73,10 @@ impl NetworkProxySpec {
         self.config.network.enabled
     }
 
+    pub(crate) fn config(&self) -> &NetworkProxyConfig {
+        &self.config
+    }
+
     pub fn proxy_host_and_port(&self) -> String {
         host_and_port_from_network_addr(&self.config.network.proxy_url, 3128)
     }

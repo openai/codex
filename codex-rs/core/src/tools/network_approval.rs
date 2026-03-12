@@ -378,7 +378,9 @@ impl NetworkApprovalService {
             ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                 PendingApprovalDecision::AllowOnce
             }
-            ReviewDecision::ApprovedForSession => PendingApprovalDecision::AllowForSession,
+            ReviewDecision::ApprovedForSession | ReviewDecision::ApprovedForAlways => {
+                PendingApprovalDecision::AllowForSession
+            }
             ReviewDecision::NetworkPolicyAmendment {
                 network_policy_amendment,
             } => match network_policy_amendment.action {

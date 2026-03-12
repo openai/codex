@@ -1,5 +1,6 @@
 use super::*;
 use crate::CodexAuth;
+use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
@@ -15,8 +16,14 @@ use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
 use codex_protocol::ThreadId;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::MacOsAutomationPermission;
+use codex_protocol::models::MacOsPreferencesPermission;
+use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+use codex_protocol::models::NetworkPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -25,6 +32,8 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use tokio::sync::oneshot;
 use tracing::Span;
 
 use crate::protocol::CompactedItem;
@@ -2354,6 +2363,66 @@ async fn request_permissions_returns_empty_grant_when_reject_policy_blocks_reque
             .is_err(),
         "unexpected request_permissions event emitted",
     );
+}
+
+#[tokio::test]
+async fn notify_request_permissions_response_persists_always_allow_permissions() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let active_turn = ActiveTurn::default();
+    let (tx, rx) = oneshot::channel();
+    active_turn
+        .turn_state
+        .lock()
+        .await
+        .insert_pending_request_permissions("call-1".to_string(), tx);
+    *session.active_turn.lock().await = Some(active_turn);
+
+    let permissions = PermissionProfile {
+        network: Some(NetworkPermissions {
+            enabled: Some(true),
+        }),
+        file_system: Some(FileSystemPermissions {
+            read: None,
+            write: Some(vec![
+                AbsolutePathBuf::try_from(session.codex_home().await.join("allowed"))
+                    .expect("absolute path"),
+            ]),
+        }),
+        macos: Some(MacOsSeatbeltProfileExtensions {
+            macos_preferences: MacOsPreferencesPermission::ReadWrite,
+            macos_automation: MacOsAutomationPermission::BundleIds(vec![
+                "com.apple.Calendar".to_string(),
+            ]),
+            macos_accessibility: true,
+            macos_calendar: false,
+        }),
+    };
+
+    session
+        .notify_request_permissions_response(
+            "call-1",
+            codex_protocol::request_permissions::RequestPermissionsResponse {
+                permissions: permissions.clone(),
+                scope: PermissionGrantScope::AlwaysAllow,
+            },
+        )
+        .await;
+
+    assert_eq!(session.granted_turn_permissions().await, None);
+    assert_eq!(
+        session.granted_session_permissions().await,
+        Some(permissions)
+    );
+    assert_eq!(
+        rx.await.expect("response should be delivered").scope,
+        PermissionGrantScope::AlwaysAllow
+    );
+
+    let serialized = std::fs::read_to_string(session.codex_home().await.join(CONFIG_TOML_FILE))
+        .expect("config.toml should exist");
+    let config_toml: crate::config::ConfigToml =
+        toml::from_str(&serialized).expect("config.toml should parse");
+    assert_eq!(config_toml.default_permissions.as_deref(), Some("default"));
 }
 
 #[tokio::test]

@@ -16,6 +16,7 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) personality_command_enabled: bool,
     pub(crate) realtime_conversation_enabled: bool,
     pub(crate) audio_device_selection_enabled: bool,
+    pub(crate) request_permissions_tool_enabled: bool,
     pub(crate) allow_elevate_sandbox: bool,
 }
 
@@ -33,6 +34,9 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
         .filter(|(_, cmd)| flags.personality_command_enabled || *cmd != SlashCommand::Personality)
         .filter(|(_, cmd)| flags.realtime_conversation_enabled || *cmd != SlashCommand::Realtime)
         .filter(|(_, cmd)| flags.audio_device_selection_enabled || *cmd != SlashCommand::Settings)
+        .filter(|(_, cmd)| {
+            flags.request_permissions_tool_enabled || *cmd != SlashCommand::SandboxSetup
+        })
         .collect()
 }
 
@@ -64,6 +68,7 @@ mod tests {
             personality_command_enabled: true,
             realtime_conversation_enabled: true,
             audio_device_selection_enabled: true,
+            request_permissions_tool_enabled: true,
             allow_elevate_sandbox: true,
         }
     }

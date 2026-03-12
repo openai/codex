@@ -407,6 +407,7 @@ pub(crate) struct ChatComposer {
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
+    request_permissions_tool_enabled: bool,
     windows_degraded_sandbox_active: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
@@ -445,6 +446,7 @@ impl ChatComposer {
             personality_command_enabled: self.personality_command_enabled,
             realtime_conversation_enabled: self.realtime_conversation_enabled,
             audio_device_selection_enabled: self.audio_device_selection_enabled,
+            request_permissions_tool_enabled: self.request_permissions_tool_enabled,
             allow_elevate_sandbox: self.windows_degraded_sandbox_active,
         }
     }
@@ -529,6 +531,7 @@ impl ChatComposer {
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
+            request_permissions_tool_enabled: false,
             windows_degraded_sandbox_active: false,
             status_line_value: None,
             status_line_enabled: false,
@@ -618,6 +621,10 @@ impl ChatComposer {
 
     pub fn set_audio_device_selection_enabled(&mut self, enabled: bool) {
         self.audio_device_selection_enabled = enabled;
+    }
+
+    pub fn set_request_permissions_tool_enabled(&mut self, enabled: bool) {
+        self.request_permissions_tool_enabled = enabled;
     }
 
     /// Compatibility shim for tests that still toggle the removed steer mode flag.
@@ -3474,6 +3481,7 @@ impl ChatComposer {
                     let personality_command_enabled = self.personality_command_enabled;
                     let realtime_conversation_enabled = self.realtime_conversation_enabled;
                     let audio_device_selection_enabled = self.audio_device_selection_enabled;
+                    let request_permissions_tool_enabled = self.request_permissions_tool_enabled;
                     let mut command_popup = CommandPopup::new(
                         self.custom_prompts.clone(),
                         CommandPopupFlags {
@@ -3483,6 +3491,7 @@ impl ChatComposer {
                             personality_command_enabled,
                             realtime_conversation_enabled,
                             audio_device_selection_enabled,
+                            request_permissions_tool_enabled,
                             windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
                         },
                     );
@@ -6443,6 +6452,36 @@ mod tests {
     }
 
     #[test]
+    fn slash_popup_sandbox_setup_snapshot() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_request_permissions_tool_enabled(true);
+
+        type_chars_humanlike(&mut composer, &['/', 's', 'a', 'n', 'd']);
+
+        let mut terminal = match Terminal::new(TestBackend::new(60, 6)) {
+            Ok(t) => t,
+            Err(e) => panic!("Failed to create terminal: {e}"),
+        };
+        terminal
+            .draw(|f| composer.render(f.area(), f.buffer_mut()))
+            .unwrap_or_else(|e| panic!("Failed to draw composer: {e}"));
+
+        insta::assert_snapshot!("slash_popup_sand", terminal.backend());
+    }
+
+    #[test]
     fn slash_popup_resume_for_res_ui() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
@@ -6663,6 +6702,50 @@ mod tests {
 
         assert_eq!(InputResult::None, result);
         assert_eq!("/review these changes", composer.textarea.text());
+
+        let mut found_error = false;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let message = cell
+                    .display_lines(80)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(message.contains("disabled while a task is in progress"));
+                found_error = true;
+                break;
+            }
+        }
+        assert!(found_error, "expected error history cell to be sent");
+    }
+
+    #[test]
+    fn sandbox_setup_command_disabled_while_task_running_keeps_text() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_request_permissions_tool_enabled(true);
+        composer.set_task_running(true);
+        composer
+            .textarea
+            .set_text_clearing_elements("/sandbox-setup");
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::None, result);
+        assert_eq!("/sandbox-setup", composer.textarea.text());
 
         let mut found_error = false;
         while let Ok(event) = rx.try_recv() {

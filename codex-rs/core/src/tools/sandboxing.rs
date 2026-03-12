@@ -82,8 +82,12 @@ where
 
     let already_approved = {
         let store = services.tool_approvals.lock().await;
-        keys.iter()
-            .all(|key| matches!(store.get(key), Some(ReviewDecision::ApprovedForSession)))
+        keys.iter().all(|key| {
+            matches!(
+                store.get(key),
+                Some(ReviewDecision::ApprovedForSession | ReviewDecision::ApprovedForAlways)
+            )
+        })
     };
 
     if already_approved {
@@ -101,7 +105,10 @@ where
         ],
     );
 
-    if matches!(decision, ReviewDecision::ApprovedForSession) {
+    if matches!(
+        decision,
+        ReviewDecision::ApprovedForSession | ReviewDecision::ApprovedForAlways
+    ) {
         let mut store = services.tool_approvals.lock().await;
         for key in keys {
             store.put(key, ReviewDecision::ApprovedForSession);
