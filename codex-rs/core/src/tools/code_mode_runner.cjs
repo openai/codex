@@ -265,7 +265,7 @@ function codeModeWorkerMain() {
         'set_max_output_tokens_per_exec_call',
         'set_yield_time',
         'store',
-        'yield_control',
+        'background',
       ],
       function initCodeModeModule() {
         this.setExport('load', load);
@@ -289,7 +289,7 @@ function codeModeWorkerMain() {
           return normalized;
         });
         this.setExport('store', store);
-        this.setExport('yield_control', () => {
+        this.setExport('background', () => {
           parentPort.postMessage({ type: 'yield' });
         });
       },

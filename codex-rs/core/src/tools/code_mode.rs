@@ -99,20 +99,19 @@ impl CodeModeProcess {
                 let Some(tool_call) = tool_call else {
                     break;
                 };
-                let response = HostToNodeMessage::Response {
-                    request_id: tool_call.request_id,
-                    id: tool_call.id,
-                    code_mode_result: call_nested_tool(
-                        exec.clone(),
-                        tool_call.name,
-                        tool_call.input,
-                    )
-                    .await,
-                };
-                if let Err(err) = write_message(&stdin, &response).await {
-                    warn!("failed to write {PUBLIC_TOOL_NAME} tool response: {err}");
-                    break;
-                }
+                let exec = exec.clone();
+                let stdin = Arc::clone(&stdin);
+                tokio::spawn(async move {
+                    let response = HostToNodeMessage::Response {
+                        request_id: tool_call.request_id,
+                        id: tool_call.id,
+                        code_mode_result: call_nested_tool(exec, tool_call.name, tool_call.input)
+                            .await,
+                    };
+                    if let Err(err) = write_message(&stdin, &response).await {
+                        warn!("failed to write {PUBLIC_TOOL_NAME} tool response: {err}");
+                    }
+                });
             }
         });
 
@@ -345,7 +344,7 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
     ));
     section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { ALL_TOOLS } from \"tools.js\"` to inspect the available `{ module, name, description }` entries. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. Nested tool calls resolve to their code-mode result values.\n");
     section.push_str(&format!(
-        "- Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, set_yield_time, store, load, yield_control }}` from `@openai/code_mode` (or `\"openai/code_mode\"`). `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs. `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, and `load(key)` returns a cloned stored value or `undefined`. `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate direct `{PUBLIC_TOOL_NAME}` returns; `{WAIT_TOOL_NAME}` uses its own `max_tokens` argument instead and defaults to `10000`. `set_yield_time(value)` asks `{PUBLIC_TOOL_NAME}` to return early if the script is still running after that many milliseconds so `{WAIT_TOOL_NAME}` can resume it later. `yield_control()` returns a yielded `{PUBLIC_TOOL_NAME}` response immediately while the script keeps running in the background. The returned content starts with a separate `Script completed`, `Script failed`, or `Script running with session ID …` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker.\n",
+        "- Import `{{ background, output_text, output_image, set_max_output_tokens_per_exec_call, set_yield_time, store, load }}` from `@openai/code_mode` (or `\"openai/code_mode\"`). `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs. `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, and `load(key)` returns a cloned stored value or `undefined`. `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate direct `{PUBLIC_TOOL_NAME}` returns; `{WAIT_TOOL_NAME}` uses its own `max_tokens` argument instead and defaults to `10000`. `set_yield_time(value)` asks `{PUBLIC_TOOL_NAME}` to return early if the script is still running after that many milliseconds so `{WAIT_TOOL_NAME}` can resume it later. `background()` returns a yielded `{PUBLIC_TOOL_NAME}` response immediately while the script keeps running in the background. The returned content starts with a separate `Script completed`, `Script failed`, or `Script running with session ID …` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker.\n",
     ));
     section.push_str(&format!(
         "- If `{PUBLIC_TOOL_NAME}` returns `Script running with session ID …`, call `{WAIT_TOOL_NAME}` with that `session_id` to keep waiting for more output, completion, or termination.\n",
