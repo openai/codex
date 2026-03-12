@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
-expression: popup
+expression: searching
 ---
   Slash Commands
 
@@ -240,4 +240,4 @@ expression: popup
         /debug-m-drop
 
   /debug-m-update
-  ↑/↓ scroll  pgup/pgdn page  / search  n/p match  q/esc close                           1-233/239
+  Search: /maintainers  enter apply  esc cancel                                1 match | 1-233/239

@@ -6020,6 +6020,59 @@ async fn slash_help_opens_reference_popup() {
 }
 
 #[tokio::test]
+async fn slash_help_search_jumps_to_lower_match() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Help);
+    let _ = render_bottom_popup(&chat, 100);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char('/')));
+    for ch in "maintainers".chars() {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+    }
+    let searching = render_bottom_popup(&chat, 100);
+    assert_snapshot!("slash_help_search_output", searching);
+    assert!(searching.contains("Search: /maintainers"));
+    assert!(searching.contains("1 match"));
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(popup.contains("/feedback"));
+    assert!(popup.contains("1/1 |"));
+}
+
+#[tokio::test]
+async fn slash_help_search_navigates_matches_with_n_and_p() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Help);
+    let _ = render_bottom_popup(&chat, 100);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char('/')));
+    for ch in "toggle".chars() {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+    }
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let first = render_bottom_popup(&chat, 100);
+    assert!(first.contains("1/3 |"));
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char('n')));
+    let second = render_bottom_popup(&chat, 100);
+    assert!(second.contains("2/3 |"));
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char('n')));
+    let third = render_bottom_popup(&chat, 100);
+    assert!(third.contains("3/3 |"));
+    assert!(third.contains("/realtime"));
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char('p')));
+    let previous = render_bottom_popup(&chat, 100);
+    assert!(previous.contains("2/3 |"));
+}
+
+#[tokio::test]
 async fn slash_help_esc_dismisses_popup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
