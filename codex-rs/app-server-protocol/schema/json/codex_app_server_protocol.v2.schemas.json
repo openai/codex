@@ -6224,6 +6224,10 @@
               "description": "Identifier for the collab tool call.",
               "type": "string"
             },
+            "model": {
+              "description": "Model requested for the spawned agent.",
+              "type": "string"
+            },
             "new_agent_nickname": {
               "description": "Optional nickname assigned to the new agent.",
               "type": [
@@ -6253,6 +6257,14 @@
               "description": "Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
               "type": "string"
             },
+            "reasoning_effort": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ReasoningEffort"
+                }
+              ],
+              "description": "Reasoning effort requested for the spawned agent."
+            },
             "sender_thread_id": {
               "allOf": [
                 {
@@ -6279,7 +6291,9 @@
           },
           "required": [
             "call_id",
+            "model",
             "prompt",
+            "reasoning_effort",
             "sender_thread_id",
             "status",
             "type"
@@ -7705,7 +7719,7 @@
           "type": "boolean"
         },
         "optOutNotificationMethods": {
-          "description": "Exact notification method names that should be suppressed for this connection (for example `codex/event/session_configured`).",
+          "description": "Exact notification method names that should be suppressed for this connection (for example `thread/started`).",
           "items": {
             "type": "string"
           },
@@ -9139,18 +9153,12 @@
           "type": "array"
         },
         "authPolicy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PluginAuthPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/definitions/PluginAuthPolicy"
         }
       },
       "required": [
-        "appsNeedingAuth"
+        "appsNeedingAuth",
+        "authPolicy"
       ],
       "title": "PluginInstallResponse",
       "type": "object"
@@ -9348,14 +9356,7 @@
     "PluginSummary": {
       "properties": {
         "authPolicy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PluginAuthPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/definitions/PluginAuthPolicy"
         },
         "enabled": {
           "type": "boolean"
@@ -9364,14 +9365,7 @@
           "type": "string"
         },
         "installPolicy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PluginInstallPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/definitions/PluginInstallPolicy"
         },
         "installed": {
           "type": "boolean"
@@ -9394,8 +9388,10 @@
         }
       },
       "required": [
+        "authPolicy",
         "enabled",
         "id",
+        "installPolicy",
         "installed",
         "name",
         "source"
@@ -10411,6 +10407,12 @@
             "name": {
               "type": "string"
             },
+            "namespace": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "function_call"
@@ -10426,6 +10428,47 @@
             "type"
           ],
           "title": "FunctionCallResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "arguments": true,
+            "call_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "execution": {
+              "type": "string"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "tool_search_call"
+              ],
+              "title": "ToolSearchCallResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "arguments",
+            "execution",
+            "type"
+          ],
+          "title": "ToolSearchCallResponseItem",
           "type": "object"
         },
         {
@@ -10515,6 +10558,41 @@
             "type"
           ],
           "title": "CustomToolCallOutputResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "execution": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "tools": {
+              "items": true,
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "tool_search_output"
+              ],
+              "title": "ToolSearchOutputResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "execution",
+            "status",
+            "tools",
+            "type"
+          ],
+          "title": "ToolSearchOutputResponseItem",
           "type": "object"
         },
         {
@@ -13487,12 +13565,30 @@
               "description": "Unique identifier for this collab tool call.",
               "type": "string"
             },
+            "model": {
+              "description": "Model requested for the spawned agent, when applicable.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "prompt": {
               "description": "Prompt text sent as part of the collab tool call, when available.",
               "type": [
                 "string",
                 "null"
               ]
+            },
+            "reasoningEffort": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ReasoningEffort"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reasoning effort requested for the spawned agent, when applicable."
             },
             "receiverThreadIds": {
               "description": "Thread ID of the receiving agent, when applicable. In case of spawn operation, this corresponds to the newly spawned agent.",

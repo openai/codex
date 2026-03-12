@@ -52,6 +52,7 @@ At most one step can be in_progress at a time.
 "#
         .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["plan".to_string()]),

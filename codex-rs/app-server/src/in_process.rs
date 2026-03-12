@@ -384,6 +384,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 Arc::clone(&outbound_initialized),
                 Arc::clone(&outbound_experimental_api_enabled),
                 Arc::clone(&outbound_opted_out_notification_methods),
+                true,
                 None,
             ),
         );
@@ -474,6 +475,8 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 }
             }
 
+            processor.drain_background_tasks().await;
+            processor.shutdown_threads().await;
             processor.connection_closed(IN_PROCESS_CONNECTION_ID).await;
         });
         let mut pending_request_responses =

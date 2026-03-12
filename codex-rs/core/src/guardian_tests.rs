@@ -105,6 +105,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
         ResponseItem::FunctionCall {
             id: None,
             name: "read_file".to_string(),
+            namespace: None,
             arguments: "{\"path\":\"README.md\"}".to_string(),
             call_id: "call-1".to_string(),
         },
@@ -319,6 +320,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
                 ResponseItem::FunctionCall {
                     id: None,
                     name: "gh_repo_view".to_string(),
+                    namespace: None,
                     arguments: "{\"repo\":\"openai/codex\"}".to_string(),
                     call_id: "call-1".to_string(),
                 },

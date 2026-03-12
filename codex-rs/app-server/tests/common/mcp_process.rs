@@ -594,7 +594,7 @@ impl McpProcess {
     /// Deterministically clean up an intentionally in-flight turn.
     ///
     /// Some tests assert behavior while a turn is still running. Returning from those tests
-    /// without an explicit interrupt + `codex/event/turn_aborted` wait can leave in-flight work
+    /// without an explicit interrupt + terminal turn notification wait can leave in-flight work
     /// racing teardown and intermittently show up as `LEAK` in nextest.
     ///
     /// In rare races, the turn can also fail or complete on its own after we send
@@ -631,18 +631,19 @@ impl McpProcess {
         }
         match tokio::time::timeout(
             read_timeout,
-            self.read_stream_until_notification_message("codex/event/turn_aborted"),
+            self.read_stream_until_notification_message("turn/completed"),
         )
         .await
         {
             Ok(result) => {
-                result.with_context(|| "failed while waiting for turn aborted notification")?;
+                result.with_context(|| "failed while waiting for terminal turn notification")?;
             }
             Err(err) => {
                 if self.pending_turn_completed_notification(&thread_id, &turn_id) {
                     return Ok(());
                 }
-                return Err(err).with_context(|| "timed out waiting for turn aborted notification");
+                return Err(err)
+                    .with_context(|| "timed out waiting for terminal turn notification");
             }
         }
         Ok(())

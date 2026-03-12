@@ -13,6 +13,7 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use crate::outgoing_message::RequestContext;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::thread_status::ThreadWatchManager;
 use crate::thread_status::resolve_thread_status;
@@ -203,6 +204,7 @@ use codex_core::connectors::filter_disallowed_connectors;
 use codex_core::connectors::merge_plugin_apps;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::error::CodexErr;
+use codex_core::error::Result as CodexResult;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
@@ -271,6 +273,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
@@ -298,7 +301,9 @@ use tokio::sync::broadcast;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use toml::Value as TomlValue;
+use tracing::Instrument;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -388,6 +393,7 @@ pub(crate) struct CodexMessageProcessor {
     command_exec_manager: CommandExecManager,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
+    background_tasks: TaskTracker,
     feedback: CodexFeedback,
     log_db: Option<LogDbLayer>,
 }
@@ -502,6 +508,7 @@ impl CodexMessageProcessor {
             command_exec_manager: CommandExecManager::default(),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
+            background_tasks: TaskTracker::new(),
             feedback,
             log_db,
         }
@@ -622,6 +629,7 @@ impl CodexMessageProcessor {
         connection_id: ConnectionId,
         request: ClientRequest,
         app_server_client_name: Option<String>,
+        request_context: RequestContext,
     ) {
         let to_connection_request_id = |request_id| ConnectionRequestId {
             connection_id,
@@ -634,8 +642,12 @@ impl CodexMessageProcessor {
             }
             // === v2 Thread/Turn APIs ===
             ClientRequest::ThreadStart { request_id, params } => {
-                self.thread_start(to_connection_request_id(request_id), params)
-                    .await;
+                self.thread_start(
+                    to_connection_request_id(request_id),
+                    params,
+                    request_context,
+                )
+                .await;
             }
             ClientRequest::ThreadUnsubscribe { request_id, params } => {
                 self.thread_unsubscribe(to_connection_request_id(request_id), params)
@@ -1713,7 +1725,7 @@ impl CodexMessageProcessor {
         let outgoing = self.outgoing.clone();
         let request_for_task = request.clone();
         let started_network_proxy_for_task = started_network_proxy;
-        let use_linux_sandbox_bwrap = self.config.features.enabled(Feature::UseLinuxSandboxBwrap);
+        let use_legacy_landlock = self.config.features.use_legacy_landlock();
         let size = match size.map(crate::command_exec::terminal_size_from_protocol) {
             Some(Ok(size)) => Some(size),
             Some(Err(error)) => {
@@ -1730,7 +1742,7 @@ impl CodexMessageProcessor {
             effective_network_sandbox_policy,
             sandbox_cwd.as_path(),
             &codex_linux_sandbox_exe,
-            use_linux_sandbox_bwrap,
+            use_legacy_landlock,
         ) {
             Ok(exec_request) => {
                 if let Err(error) = self
@@ -1808,7 +1820,12 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_start(&self, request_id: ConnectionRequestId, params: ThreadStartParams) {
+    async fn thread_start(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ThreadStartParams,
+        request_context: RequestContext,
+    ) {
         let ThreadStartParams {
             model,
             model_provider,
@@ -1849,8 +1866,8 @@ impl CodexMessageProcessor {
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.clone(),
         };
-
-        tokio::spawn(async move {
+        let request_trace = request_context.request_trace();
+        let thread_start_task = async move {
             Self::thread_start_task(
                 listener_task_context,
                 cli_overrides,
@@ -1862,9 +1879,53 @@ impl CodexMessageProcessor {
                 persist_extended_history,
                 service_name,
                 experimental_raw_events,
+                request_trace,
             )
             .await;
-        });
+        };
+        self.background_tasks
+            .spawn(thread_start_task.instrument(request_context.span()));
+    }
+
+    pub(crate) async fn drain_background_tasks(&self) {
+        self.background_tasks.close();
+        if tokio::time::timeout(Duration::from_secs(10), self.background_tasks.wait())
+            .await
+            .is_err()
+        {
+            warn!("timed out waiting for background tasks to shut down; proceeding");
+        }
+    }
+
+    pub(crate) async fn shutdown_threads(&self) {
+        let report = self
+            .thread_manager
+            .shutdown_all_threads_bounded(Duration::from_secs(10))
+            .await;
+        for thread_id in report.submit_failed {
+            warn!("failed to submit Shutdown to thread {thread_id}");
+        }
+        for thread_id in report.timed_out {
+            warn!("timed out waiting for thread {thread_id} to shut down");
+        }
+    }
+
+    async fn request_trace_context(
+        &self,
+        request_id: &ConnectionRequestId,
+    ) -> Option<codex_protocol::protocol::W3cTraceContext> {
+        self.outgoing.request_trace_context(request_id).await
+    }
+
+    async fn submit_core_op(
+        &self,
+        request_id: &ConnectionRequestId,
+        thread: &CodexThread,
+        op: Op,
+    ) -> CodexResult<String> {
+        thread
+            .submit_with_trace(op, self.request_trace_context(request_id).await)
+            .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1879,6 +1940,7 @@ impl CodexMessageProcessor {
         persist_extended_history: bool,
         service_name: Option<String>,
         experimental_raw_events: bool,
+        request_trace: Option<W3cTraceContext>,
     ) {
         let config = match derive_config_from_params(
             &cli_overrides,
@@ -1936,6 +1998,7 @@ impl CodexMessageProcessor {
                 core_dynamic_tools,
                 persist_extended_history,
                 service_name,
+                request_trace,
             )
             .await
         {
@@ -2201,7 +2264,10 @@ impl CodexMessageProcessor {
         };
 
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
-            if let Err(err) = thread.submit(Op::SetThreadName { name }).await {
+            if let Err(err) = self
+                .submit_core_op(&request_id, thread.as_ref(), Op::SetThreadName { name })
+                .await
+            {
                 self.send_internal_error(request_id, format!("failed to set thread name: {err}"))
                     .await;
                 return;
@@ -2786,7 +2852,14 @@ impl CodexMessageProcessor {
             return;
         }
 
-        if let Err(err) = thread.submit(Op::ThreadRollback { num_turns }).await {
+        if let Err(err) = self
+            .submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::ThreadRollback { num_turns },
+            )
+            .await
+        {
             // No ThreadRollback event will arrive if an error occurs.
             // Clean up and reply immediately.
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
@@ -2814,7 +2887,10 @@ impl CodexMessageProcessor {
             }
         };
 
-        match thread.submit(Op::Compact).await {
+        match self
+            .submit_core_op(&request_id, thread.as_ref(), Op::Compact)
+            .await
+        {
             Ok(_) => {
                 self.outgoing
                     .send_response(request_id, ThreadCompactStartResponse {})
@@ -2842,7 +2918,10 @@ impl CodexMessageProcessor {
             }
         };
 
-        match thread.submit(Op::CleanBackgroundTerminals).await {
+        match self
+            .submit_core_op(&request_id, thread.as_ref(), Op::CleanBackgroundTerminals)
+            .await
+        {
             Ok(_) => {
                 self.outgoing
                     .send_response(request_id, ThreadBackgroundTerminalsCleanResponse {})
@@ -3300,6 +3379,7 @@ impl CodexMessageProcessor {
                 thread_history,
                 self.auth_manager.clone(),
                 persist_extended_history,
+                self.request_trace_context(&request_id).await,
             )
             .await
         {
@@ -3825,6 +3905,7 @@ impl CodexMessageProcessor {
                 config,
                 rollout_path.clone(),
                 persist_extended_history,
+                self.request_trace_context(&request_id).await,
             )
             .await
         {
@@ -4702,26 +4783,10 @@ impl CodexMessageProcessor {
     }
 
     async fn wait_for_thread_shutdown(thread: &Arc<CodexThread>) -> ThreadShutdownResult {
-        match thread.submit(Op::Shutdown).await {
-            Ok(_) => {
-                let wait_for_shutdown = async {
-                    loop {
-                        if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
-                            break;
-                        }
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                    }
-                };
-                if tokio::time::timeout(Duration::from_secs(10), wait_for_shutdown)
-                    .await
-                    .is_err()
-                {
-                    ThreadShutdownResult::TimedOut
-                } else {
-                    ThreadShutdownResult::Complete
-                }
-            }
-            Err(_) => ThreadShutdownResult::SubmitFailed,
+        match tokio::time::timeout(Duration::from_secs(10), thread.shutdown_and_wait()).await {
+            Ok(Ok(())) => ThreadShutdownResult::Complete,
+            Ok(Err(_)) => ThreadShutdownResult::SubmitFailed,
+            Err(_) => ThreadShutdownResult::TimedOut,
         }
     }
 
@@ -5408,8 +5473,8 @@ impl CodexMessageProcessor {
                                         PluginSource::Local { path }
                                     }
                                 },
-                                install_policy: plugin.install_policy.map(Into::into),
-                                auth_policy: plugin.auth_policy.map(Into::into),
+                                install_policy: plugin.install_policy.into(),
+                                auth_policy: plugin.auth_policy.into(),
                                 interface: plugin.interface.map(|interface| PluginInterface {
                                     display_name: interface.display_name,
                                     short_description: interface.short_description,
@@ -5662,7 +5727,7 @@ impl CodexMessageProcessor {
                     .send_response(
                         request_id,
                         PluginInstallResponse {
-                            auth_policy: result.auth_policy.map(Into::into),
+                            auth_policy: result.auth_policy.into(),
                             apps_needing_auth,
                         },
                     )
@@ -5807,28 +5872,36 @@ impl CodexMessageProcessor {
 
         // If any overrides are provided, update the session turn context first.
         if has_any_overrides {
-            let _ = thread
-                .submit(Op::OverrideTurnContext {
-                    cwd: params.cwd,
-                    approval_policy: params.approval_policy.map(AskForApproval::to_core),
-                    sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
-                    windows_sandbox_level: None,
-                    model: params.model,
-                    effort: params.effort.map(Some),
-                    summary: params.summary,
-                    service_tier: params.service_tier,
-                    collaboration_mode,
-                    personality: params.personality,
-                })
+            let _ = self
+                .submit_core_op(
+                    &request_id,
+                    thread.as_ref(),
+                    Op::OverrideTurnContext {
+                        cwd: params.cwd,
+                        approval_policy: params.approval_policy.map(AskForApproval::to_core),
+                        sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
+                        windows_sandbox_level: None,
+                        model: params.model,
+                        effort: params.effort.map(Some),
+                        summary: params.summary,
+                        service_tier: params.service_tier,
+                        collaboration_mode,
+                        personality: params.personality,
+                    },
+                )
                 .await;
         }
 
         // Start the turn by submitting the user input. Return its submission id as turn_id.
-        let turn_id = thread
-            .submit(Op::UserInput {
-                items: mapped_items,
-                final_output_json_schema: params.output_schema,
-            })
+        let turn_id = self
+            .submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::UserInput {
+                    items: mapped_items,
+                    final_output_json_schema: params.output_schema,
+                },
+            )
             .await;
 
         match turn_id {
@@ -5985,11 +6058,15 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let submit = thread
-            .submit(Op::RealtimeConversationStart(ConversationStartParams {
-                prompt: params.prompt,
-                session_id: params.session_id,
-            }))
+        let submit = self
+            .submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::RealtimeConversationStart(ConversationStartParams {
+                    prompt: params.prompt,
+                    session_id: params.session_id,
+                }),
+            )
             .await;
 
         match submit {
@@ -6020,10 +6097,14 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let submit = thread
-            .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
-                frame: params.audio.into(),
-            }))
+        let submit = self
+            .submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::RealtimeConversationAudio(ConversationAudioParams {
+                    frame: params.audio.into(),
+                }),
+            )
             .await;
 
         match submit {
@@ -6054,10 +6135,12 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let submit = thread
-            .submit(Op::RealtimeConversationText(ConversationTextParams {
-                text: params.text,
-            }))
+        let submit = self
+            .submit_core_op(
+                &request_id,
+                thread.as_ref(),
+                Op::RealtimeConversationText(ConversationTextParams { text: params.text }),
+            )
             .await;
 
         match submit {
@@ -6088,7 +6171,9 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let submit = thread.submit(Op::RealtimeConversationClose).await;
+        let submit = self
+            .submit_core_op(&request_id, thread.as_ref(), Op::RealtimeConversationClose)
+            .await;
 
         match submit {
             Ok(_) => {
@@ -6151,7 +6236,13 @@ impl CodexMessageProcessor {
         display_text: &str,
         parent_thread_id: String,
     ) -> std::result::Result<(), JSONRPCErrorError> {
-        let turn_id = parent_thread.submit(Op::Review { review_request }).await;
+        let turn_id = self
+            .submit_core_op(
+                request_id,
+                parent_thread.as_ref(),
+                Op::Review { review_request },
+            )
+            .await;
 
         match turn_id {
             Ok(turn_id) => {
@@ -6205,7 +6296,13 @@ impl CodexMessageProcessor {
             ..
         } = self
             .thread_manager
-            .fork_thread(usize::MAX, config, rollout_path, false)
+            .fork_thread(
+                usize::MAX,
+                config,
+                rollout_path,
+                false,
+                self.request_trace_context(request_id).await,
+            )
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
@@ -6260,8 +6357,12 @@ impl CodexMessageProcessor {
             );
         }
 
-        let turn_id = review_thread
-            .submit(Op::Review { review_request })
+        let turn_id = self
+            .submit_core_op(
+                request_id,
+                review_thread.as_ref(),
+                Op::Review { review_request },
+            )
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
@@ -6359,7 +6460,9 @@ impl CodexMessageProcessor {
         }
 
         // Submit the interrupt; we'll respond upon TurnAborted.
-        let _ = thread.submit(Op::Interrupt).await;
+        let _ = self
+            .submit_core_op(&request_id, thread.as_ref(), Op::Interrupt)
+            .await;
     }
 
     async fn ensure_conversation_listener(
@@ -6514,9 +6617,17 @@ impl CodexMessageProcessor {
                         };
 
                         // For now, we send a notification for every event,
-                        // JSON-serializing the `Event` as-is, but these should
-                        // be migrated to be variants of `ServerNotification`
-                        // instead.
+                        // Legacy `codex/event/*` notifications are still
+                        // produced here because the in-process app-server lane
+                        // (`codex exec` and other in-process consumers) still
+                        // depends on them. External transports now drop
+                        // `OutgoingMessage::Notification` in `transport.rs`,
+                        // so stdio/websocket clients only observe the typed
+                        // `ServerNotification` translations emitted below.
+                        //
+                        // TODO: remove this raw legacy-notification emission
+                        // entirely once the remaining in-process consumers are
+                        // migrated off `codex/event/*`.
                         let event_formatted = match &event.msg {
                             EventMsg::TurnStarted(_) => "task_started",
                             EventMsg::TurnComplete(_) => "task_complete",

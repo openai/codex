@@ -239,7 +239,7 @@ enum SandboxCommand {
     #[clap(visible_alias = "seatbelt")]
     Macos(SeatbeltCommand),
 
-    /// Run a command under Landlock+seccomp (Linux only).
+    /// Run a command under the Linux sandbox (bubblewrap by default).
     #[clap(visible_alias = "landlock")]
     Linux(LandlockCommand),
 
@@ -1513,6 +1513,19 @@ mod tests {
                 "features.web_search_request=true".to_string(),
                 "features.unified_exec=false".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn feature_toggles_accept_legacy_linux_sandbox_flag() {
+        let toggles = FeatureToggles {
+            enable: vec!["use_linux_sandbox_bwrap".to_string()],
+            disable: Vec::new(),
+        };
+        let overrides = toggles.to_overrides().expect("valid features");
+        assert_eq!(
+            overrides,
+            vec!["features.use_linux_sandbox_bwrap=true".to_string(),]
         );
     }
 

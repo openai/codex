@@ -363,6 +363,9 @@
             "enable_experimental_windows_sandbox": {
               "type": "boolean"
             },
+            "enable_fanout": {
+              "type": "boolean"
+            },
             "enable_request_compression": {
               "type": "boolean"
             },
@@ -459,9 +462,6 @@
             "skill_mcp_dependency_install": {
               "type": "boolean"
             },
-            "spawn_csv": {
-              "type": "boolean"
-            },
             "sqlite": {
               "type": "boolean"
             },
@@ -471,10 +471,16 @@
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
+            "tool_suggest": {
+              "type": "boolean"
+            },
             "undo": {
               "type": "boolean"
             },
             "unified_exec": {
+              "type": "boolean"
+            },
+            "use_legacy_landlock": {
               "type": "boolean"
             },
             "use_linux_sandbox_bwrap": {
@@ -594,10 +600,11 @@
       "type": "object"
     },
     "FileSystemAccessMode": {
+      "description": "Access mode for a filesystem entry.\n\nWhen two equally specific entries target the same path, we compare these by conflict precedence rather than by capability breadth: `none` beats `write`, and `write` beats `read`.",
       "enum": [
-        "none",
         "read",
-        "write"
+        "write",
+        "none"
       ],
       "type": "string"
     },
@@ -1864,6 +1871,9 @@
         "enable_experimental_windows_sandbox": {
           "type": "boolean"
         },
+        "enable_fanout": {
+          "type": "boolean"
+        },
         "enable_request_compression": {
           "type": "boolean"
         },
@@ -1960,9 +1970,6 @@
         "skill_mcp_dependency_install": {
           "type": "boolean"
         },
-        "spawn_csv": {
-          "type": "boolean"
-        },
         "sqlite": {
           "type": "boolean"
         },
@@ -1972,10 +1979,16 @@
         "tool_call_mcp_elicitation": {
           "type": "boolean"
         },
+        "tool_suggest": {
+          "type": "boolean"
+        },
         "undo": {
           "type": "boolean"
         },
         "unified_exec": {
+          "type": "boolean"
+        },
+        "use_legacy_landlock": {
           "type": "boolean"
         },
         "use_linux_sandbox_bwrap": {

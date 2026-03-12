@@ -17,7 +17,9 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use serde::Deserialize;
 use tempfile::tempdir;
 
@@ -1042,6 +1044,76 @@ trust_level = "trusted"
             }
         );
     }
+}
+
+#[test]
+fn legacy_sandbox_mode_config_builds_split_policies_without_drift() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let extra_root = test_absolute_path("/tmp/legacy-extra-root");
+    let cases = vec![
+        (
+            "danger-full-access".to_string(),
+            r#"sandbox_mode = "danger-full-access"
+"#
+            .to_string(),
+        ),
+        (
+            "read-only".to_string(),
+            r#"sandbox_mode = "read-only"
+"#
+            .to_string(),
+        ),
+        (
+            "workspace-write".to_string(),
+            format!(
+                r#"sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+writable_roots = [{}]
+exclude_tmpdir_env_var = true
+exclude_slash_tmp = true
+"#,
+                serde_json::json!(extra_root)
+            ),
+        ),
+    ];
+
+    for (name, config_toml) in cases {
+        let cfg = toml::from_str::<ConfigToml>(&config_toml)
+            .unwrap_or_else(|err| panic!("case `{name}` should parse: {err}"));
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        let sandbox_policy = config.permissions.sandbox_policy.get();
+        assert_eq!(
+            config.permissions.file_system_sandbox_policy,
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, cwd.path()),
+            "case `{name}` should preserve filesystem semantics from legacy config"
+        );
+        assert_eq!(
+            config.permissions.network_sandbox_policy,
+            NetworkSandboxPolicy::from(sandbox_policy),
+            "case `{name}` should preserve network semantics from legacy config"
+        );
+        assert_eq!(
+            config
+                .permissions
+                .file_system_sandbox_policy
+                .to_legacy_sandbox_policy(config.permissions.network_sandbox_policy, cwd.path())
+                .unwrap_or_else(|err| panic!("case `{name}` should round-trip: {err}")),
+            sandbox_policy.clone(),
+            "case `{name}` should round-trip through split policies without drift"
+        );
+    }
+
+    Ok(())
 }
 
 #[test]
@@ -5278,7 +5350,7 @@ async fn feature_requirements_normalize_runtime_feature_mutations() -> std::io::
 }
 
 #[tokio::test]
-async fn feature_requirements_reject_legacy_aliases() {
+async fn feature_requirements_reject_collab_legacy_alias() {
     let codex_home = TempDir::new().expect("tempdir");
 
     let err = ConfigBuilder::default()

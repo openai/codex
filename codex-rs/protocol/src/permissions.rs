@@ -34,13 +34,31 @@ impl NetworkSandboxPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, JsonSchema, TS)]
+/// Access mode for a filesystem entry.
+///
+/// When two equally specific entries target the same path, we compare these by
+/// conflict precedence rather than by capability breadth: `none` beats
+/// `write`, and `write` beats `read`.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Display,
+    JsonSchema,
+    TS,
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum FileSystemAccessMode {
-    None,
     Read,
     Write,
+    None,
 }
 
 impl FileSystemAccessMode {
@@ -121,6 +139,22 @@ pub struct FileSystemSandboxPolicy {
     pub entries: Vec<FileSystemSandboxEntry>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedFileSystemEntry {
+    path: AbsolutePathBuf,
+    access: FileSystemAccessMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileSystemSemanticSignature {
+    has_full_disk_read_access: bool,
+    has_full_disk_write_access: bool,
+    include_platform_defaults: bool,
+    readable_roots: Vec<AbsolutePathBuf>,
+    writable_roots: Vec<WritableRoot>,
+    unreadable_roots: Vec<AbsolutePathBuf>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(tag = "type")]
@@ -161,6 +195,43 @@ impl FileSystemSandboxPolicy {
                 .entries
                 .iter()
                 .any(|entry| entry.access == FileSystemAccessMode::None)
+    }
+
+    /// Returns true when a restricted policy contains any entry that really
+    /// reduces a broader `:root = write` grant.
+    ///
+    /// Raw entry presence is not enough here: an equally specific `write`
+    /// entry for the same target wins under the normal precedence rules, so a
+    /// shadowed `read` entry must not downgrade the policy out of full-disk
+    /// write mode.
+    fn has_write_narrowing_entries(&self) -> bool {
+        matches!(self.kind, FileSystemSandboxKind::Restricted)
+            && self.entries.iter().any(|entry| {
+                if entry.access.can_write() {
+                    return false;
+                }
+
+                match &entry.path {
+                    FileSystemPath::Path { .. } => !self.has_same_target_write_override(entry),
+                    FileSystemPath::Special { value } => match value {
+                        FileSystemSpecialPath::Root => entry.access == FileSystemAccessMode::None,
+                        FileSystemSpecialPath::Minimal | FileSystemSpecialPath::Unknown { .. } => {
+                            false
+                        }
+                        _ => !self.has_same_target_write_override(entry),
+                    },
+                }
+            })
+    }
+
+    /// Returns true when a higher-priority `write` entry targets the same
+    /// location as `entry`, so `entry` cannot narrow effective write access.
+    fn has_same_target_write_override(&self, entry: &FileSystemSandboxEntry) -> bool {
+        self.entries.iter().any(|candidate| {
+            candidate.access.can_write()
+                && candidate.access > entry.access
+                && file_system_paths_share_target(&candidate.path, &entry.path)
+        })
     }
 
     pub fn unrestricted() -> Self {
@@ -229,7 +300,7 @@ impl FileSystemSandboxPolicy {
             FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => true,
             FileSystemSandboxKind::Restricted => {
                 self.has_root_access(FileSystemAccessMode::can_write)
-                    && !self.has_explicit_deny_entries()
+                    && !self.has_write_narrowing_entries()
             }
         }
     }
@@ -248,31 +319,64 @@ impl FileSystemSandboxPolicy {
             })
     }
 
+    pub fn resolve_access_with_cwd(&self, path: &Path, cwd: &Path) -> FileSystemAccessMode {
+        match self.kind {
+            FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => {
+                return FileSystemAccessMode::Write;
+            }
+            FileSystemSandboxKind::Restricted => {}
+        }
+
+        let Some(path) = resolve_candidate_path(path, cwd) else {
+            return FileSystemAccessMode::None;
+        };
+
+        self.resolved_entries_with_cwd(cwd)
+            .into_iter()
+            .filter(|entry| path.as_path().starts_with(entry.path.as_path()))
+            .max_by_key(resolved_entry_precedence)
+            .map(|entry| entry.access)
+            .unwrap_or(FileSystemAccessMode::None)
+    }
+
+    pub fn can_read_path_with_cwd(&self, path: &Path, cwd: &Path) -> bool {
+        self.resolve_access_with_cwd(path, cwd).can_read()
+    }
+
+    pub fn can_write_path_with_cwd(&self, path: &Path, cwd: &Path) -> bool {
+        self.resolve_access_with_cwd(path, cwd).can_write()
+    }
+
+    pub fn needs_direct_runtime_enforcement(
+        &self,
+        network_policy: NetworkSandboxPolicy,
+        cwd: &Path,
+    ) -> bool {
+        if !matches!(self.kind, FileSystemSandboxKind::Restricted) {
+            return false;
+        }
+
+        let Ok(legacy_policy) = self.to_legacy_sandbox_policy(network_policy, cwd) else {
+            return true;
+        };
+
+        self.semantic_signature(cwd)
+            != FileSystemSandboxPolicy::from_legacy_sandbox_policy(&legacy_policy, cwd)
+                .semantic_signature(cwd)
+    }
+
     /// Returns the explicit readable roots resolved against the provided cwd.
     pub fn get_readable_roots_with_cwd(&self, cwd: &Path) -> Vec<AbsolutePathBuf> {
         if self.has_full_disk_read_access() {
             return Vec::new();
         }
 
-        let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
-        let mut readable_roots = Vec::new();
-        if self.has_root_access(FileSystemAccessMode::can_read)
-            && let Some(cwd_absolute) = cwd_absolute.as_ref()
-        {
-            readable_roots.push(absolute_root_path_for_cwd(cwd_absolute));
-        }
-
         dedup_absolute_paths(
-            readable_roots
+            self.resolved_entries_with_cwd(cwd)
                 .into_iter()
-                .chain(
-                    self.entries
-                        .iter()
-                        .filter(|entry| entry.access.can_read())
-                        .filter_map(|entry| {
-                            resolve_file_system_path(&entry.path, cwd_absolute.as_ref())
-                        }),
-                )
+                .filter(|entry| entry.access.can_read())
+                .filter(|entry| self.can_read_path_with_cwd(entry.path.as_path(), cwd))
+                .map(|entry| entry.path)
                 .collect(),
         )
     }
@@ -284,32 +388,22 @@ impl FileSystemSandboxPolicy {
             return Vec::new();
         }
 
-        let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
+        let resolved_entries = self.resolved_entries_with_cwd(cwd);
         let read_only_roots = dedup_absolute_paths(
-            self.entries
+            resolved_entries
                 .iter()
                 .filter(|entry| !entry.access.can_write())
-                .filter_map(|entry| resolve_file_system_path(&entry.path, cwd_absolute.as_ref()))
+                .filter(|entry| !self.can_write_path_with_cwd(entry.path.as_path(), cwd))
+                .map(|entry| entry.path.clone())
                 .collect(),
         );
-        let mut writable_roots = Vec::new();
-        if self.has_root_access(FileSystemAccessMode::can_write)
-            && let Some(cwd_absolute) = cwd_absolute.as_ref()
-        {
-            writable_roots.push(absolute_root_path_for_cwd(cwd_absolute));
-        }
 
         dedup_absolute_paths(
-            writable_roots
+            resolved_entries
                 .into_iter()
-                .chain(
-                    self.entries
-                        .iter()
-                        .filter(|entry| entry.access.can_write())
-                        .filter_map(|entry| {
-                            resolve_file_system_path(&entry.path, cwd_absolute.as_ref())
-                        }),
-                )
+                .filter(|entry| entry.access.can_write())
+                .filter(|entry| self.can_write_path_with_cwd(entry.path.as_path(), cwd))
+                .map(|entry| entry.path)
                 .collect(),
         )
         .into_iter()
@@ -339,12 +433,20 @@ impl FileSystemSandboxPolicy {
             return Vec::new();
         }
 
-        let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
+        let root = AbsolutePathBuf::from_absolute_path(cwd)
+            .ok()
+            .map(|cwd| absolute_root_path_for_cwd(&cwd));
+
         dedup_absolute_paths(
-            self.entries
+            self.resolved_entries_with_cwd(cwd)
                 .iter()
                 .filter(|entry| entry.access == FileSystemAccessMode::None)
-                .filter_map(|entry| resolve_file_system_path(&entry.path, cwd_absolute.as_ref()))
+                .filter(|entry| !self.can_read_path_with_cwd(entry.path.as_path(), cwd))
+                // Restricted policies already deny reads outside explicit allow roots,
+                // so materializing the filesystem root here would erase narrower
+                // readable carveouts when downstream sandboxes apply deny masks last.
+                .filter(|entry| root.as_ref() != Some(&entry.path))
+                .map(|entry| entry.path.clone())
                 .collect(),
         )
     }
@@ -504,6 +606,32 @@ impl FileSystemSandboxPolicy {
             }
         })
     }
+
+    fn resolved_entries_with_cwd(&self, cwd: &Path) -> Vec<ResolvedFileSystemEntry> {
+        let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
+        self.entries
+            .iter()
+            .filter_map(|entry| {
+                resolve_entry_path(&entry.path, cwd_absolute.as_ref()).map(|path| {
+                    ResolvedFileSystemEntry {
+                        path,
+                        access: entry.access,
+                    }
+                })
+            })
+            .collect()
+    }
+
+    fn semantic_signature(&self, cwd: &Path) -> FileSystemSemanticSignature {
+        FileSystemSemanticSignature {
+            has_full_disk_read_access: self.has_full_disk_read_access(),
+            has_full_disk_write_access: self.has_full_disk_write_access(),
+            include_platform_defaults: self.include_platform_defaults(),
+            readable_roots: self.get_readable_roots_with_cwd(cwd),
+            writable_roots: self.get_writable_roots_with_cwd(cwd),
+            unreadable_roots: self.get_unreadable_roots_with_cwd(cwd),
+        }
+    }
 }
 
 impl From<&SandboxPolicy> for NetworkSandboxPolicy {
@@ -639,6 +767,108 @@ fn resolve_file_system_path(
         FileSystemPath::Path { path } => Some(path.clone()),
         FileSystemPath::Special { value } => resolve_file_system_special_path(value, cwd),
     }
+}
+
+fn resolve_entry_path(
+    path: &FileSystemPath,
+    cwd: Option<&AbsolutePathBuf>,
+) -> Option<AbsolutePathBuf> {
+    match path {
+        FileSystemPath::Special {
+            value: FileSystemSpecialPath::Root,
+        } => cwd.map(absolute_root_path_for_cwd),
+        _ => resolve_file_system_path(path, cwd),
+    }
+}
+
+fn resolve_candidate_path(path: &Path, cwd: &Path) -> Option<AbsolutePathBuf> {
+    if path.is_absolute() {
+        AbsolutePathBuf::from_absolute_path(path).ok()
+    } else {
+        AbsolutePathBuf::resolve_path_against_base(path, cwd).ok()
+    }
+}
+
+/// Returns true when two config paths refer to the same exact target before
+/// any prefix matching is applied.
+///
+/// This is intentionally narrower than full path resolution: it only answers
+/// the "can one entry shadow another at the same specificity?" question used
+/// by `has_write_narrowing_entries`.
+fn file_system_paths_share_target(left: &FileSystemPath, right: &FileSystemPath) -> bool {
+    match (left, right) {
+        (FileSystemPath::Path { path: left }, FileSystemPath::Path { path: right }) => {
+            left == right
+        }
+        (FileSystemPath::Special { value: left }, FileSystemPath::Special { value: right }) => {
+            special_paths_share_target(left, right)
+        }
+        (FileSystemPath::Path { path }, FileSystemPath::Special { value })
+        | (FileSystemPath::Special { value }, FileSystemPath::Path { path }) => {
+            special_path_matches_absolute_path(value, path)
+        }
+    }
+}
+
+/// Compares special-path tokens that resolve to the same concrete target
+/// without needing a cwd.
+fn special_paths_share_target(left: &FileSystemSpecialPath, right: &FileSystemSpecialPath) -> bool {
+    match (left, right) {
+        (FileSystemSpecialPath::Root, FileSystemSpecialPath::Root)
+        | (FileSystemSpecialPath::Minimal, FileSystemSpecialPath::Minimal)
+        | (
+            FileSystemSpecialPath::CurrentWorkingDirectory,
+            FileSystemSpecialPath::CurrentWorkingDirectory,
+        )
+        | (FileSystemSpecialPath::Tmpdir, FileSystemSpecialPath::Tmpdir)
+        | (FileSystemSpecialPath::SlashTmp, FileSystemSpecialPath::SlashTmp) => true,
+        (
+            FileSystemSpecialPath::CurrentWorkingDirectory,
+            FileSystemSpecialPath::ProjectRoots { subpath: None },
+        )
+        | (
+            FileSystemSpecialPath::ProjectRoots { subpath: None },
+            FileSystemSpecialPath::CurrentWorkingDirectory,
+        ) => true,
+        (
+            FileSystemSpecialPath::ProjectRoots { subpath: left },
+            FileSystemSpecialPath::ProjectRoots { subpath: right },
+        ) => left == right,
+        (
+            FileSystemSpecialPath::Unknown {
+                path: left,
+                subpath: left_subpath,
+            },
+            FileSystemSpecialPath::Unknown {
+                path: right,
+                subpath: right_subpath,
+            },
+        ) => left == right && left_subpath == right_subpath,
+        _ => false,
+    }
+}
+
+/// Matches cwd-independent special paths against absolute `Path` entries when
+/// they name the same location.
+///
+/// We intentionally only fold the special paths whose concrete meaning is
+/// stable without a cwd, such as `/` and `/tmp`.
+fn special_path_matches_absolute_path(
+    value: &FileSystemSpecialPath,
+    path: &AbsolutePathBuf,
+) -> bool {
+    match value {
+        FileSystemSpecialPath::Root => path.as_path().parent().is_none(),
+        FileSystemSpecialPath::SlashTmp => path.as_path() == Path::new("/tmp"),
+        _ => false,
+    }
+}
+
+/// Orders resolved entries so the most specific path wins first, then applies
+/// the access tie-breaker from [`FileSystemAccessMode`].
+fn resolved_entry_precedence(entry: &ResolvedFileSystemEntry) -> (usize, FileSystemAccessMode) {
+    let specificity = entry.path.as_path().components().count();
+    (specificity, entry.access)
 }
 
 fn absolute_root_path_for_cwd(cwd: &AbsolutePathBuf) -> AbsolutePathBuf {
@@ -808,6 +1038,7 @@ fn resolve_gitdir_from_file(dot_git: &AbsolutePathBuf) -> Option<AbsolutePathBuf
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     #[test]
     fn unknown_special_paths_are_ignored_by_legacy_bridge() -> std::io::Result<()> {
@@ -834,5 +1065,205 @@ mod tests {
             }
         );
         Ok(())
+    }
+
+    #[test]
+    fn resolve_access_with_cwd_uses_most_specific_entry() {
+        let cwd = TempDir::new().expect("tempdir");
+        let docs =
+            AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
+        let docs_private = AbsolutePathBuf::resolve_path_against_base("docs/private", cwd.path())
+            .expect("resolve docs/private");
+        let docs_private_public =
+            AbsolutePathBuf::resolve_path_against_base("docs/private/public", cwd.path())
+                .expect("resolve docs/private/public");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: docs.clone() },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: docs_private.clone(),
+                },
+                access: FileSystemAccessMode::None,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: docs_private_public.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+        ]);
+
+        assert_eq!(
+            policy.resolve_access_with_cwd(cwd.path(), cwd.path()),
+            FileSystemAccessMode::Write
+        );
+        assert_eq!(
+            policy.resolve_access_with_cwd(docs.as_path(), cwd.path()),
+            FileSystemAccessMode::Read
+        );
+        assert_eq!(
+            policy.resolve_access_with_cwd(docs_private.as_path(), cwd.path()),
+            FileSystemAccessMode::None
+        );
+        assert_eq!(
+            policy.resolve_access_with_cwd(docs_private_public.as_path(), cwd.path()),
+            FileSystemAccessMode::Write
+        );
+    }
+
+    #[test]
+    fn split_only_nested_carveouts_need_direct_runtime_enforcement() {
+        let cwd = TempDir::new().expect("tempdir");
+        let docs =
+            AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: docs },
+                access: FileSystemAccessMode::Read,
+            },
+        ]);
+
+        assert!(
+            policy.needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path(),)
+        );
+
+        let legacy_workspace_write =
+            FileSystemSandboxPolicy::from(&SandboxPolicy::new_workspace_write_policy());
+        assert!(
+            !legacy_workspace_write
+                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path(),)
+        );
+    }
+
+    #[test]
+    fn root_write_with_read_only_child_is_not_full_disk_write() {
+        let cwd = TempDir::new().expect("tempdir");
+        let docs =
+            AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: docs.clone() },
+                access: FileSystemAccessMode::Read,
+            },
+        ]);
+
+        assert!(!policy.has_full_disk_write_access());
+        assert_eq!(
+            policy.resolve_access_with_cwd(docs.as_path(), cwd.path()),
+            FileSystemAccessMode::Read
+        );
+        assert!(
+            policy.needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path(),)
+        );
+    }
+
+    #[test]
+    fn root_deny_does_not_materialize_as_unreadable_root() {
+        let cwd = TempDir::new().expect("tempdir");
+        let docs =
+            AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::None,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: docs.clone() },
+                access: FileSystemAccessMode::Read,
+            },
+        ]);
+
+        assert_eq!(
+            policy.resolve_access_with_cwd(docs.as_path(), cwd.path()),
+            FileSystemAccessMode::Read
+        );
+        assert_eq!(policy.get_readable_roots_with_cwd(cwd.path()), vec![docs]);
+        assert!(policy.get_unreadable_roots_with_cwd(cwd.path()).is_empty());
+    }
+
+    #[test]
+    fn duplicate_root_deny_prevents_full_disk_write_access() {
+        let cwd = TempDir::new().expect("tempdir");
+        let root = AbsolutePathBuf::from_absolute_path(cwd.path())
+            .map(|cwd| absolute_root_path_for_cwd(&cwd))
+            .expect("resolve filesystem root");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        assert!(!policy.has_full_disk_write_access());
+        assert_eq!(
+            policy.resolve_access_with_cwd(root.as_path(), cwd.path()),
+            FileSystemAccessMode::None
+        );
+    }
+
+    #[test]
+    fn same_specificity_write_override_keeps_full_disk_write_access() {
+        let cwd = TempDir::new().expect("tempdir");
+        let docs =
+            AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: docs.clone() },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: docs.clone() },
+                access: FileSystemAccessMode::Write,
+            },
+        ]);
+
+        assert!(policy.has_full_disk_write_access());
+        assert_eq!(
+            policy.resolve_access_with_cwd(docs.as_path(), cwd.path()),
+            FileSystemAccessMode::Write
+        );
+    }
+
+    #[test]
+    fn file_system_access_mode_orders_by_conflict_precedence() {
+        assert!(FileSystemAccessMode::Write > FileSystemAccessMode::Read);
+        assert!(FileSystemAccessMode::None > FileSystemAccessMode::Write);
     }
 }

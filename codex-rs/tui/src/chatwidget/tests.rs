@@ -2040,6 +2040,8 @@ async fn collab_spawn_end_shows_requested_model_and_effort() {
             new_agent_nickname: Some("Robie".to_string()),
             new_agent_role: Some("explorer".to_string()),
             prompt: "Explore the repo".to_string(),
+            model: "gpt-5".to_string(),
+            reasoning_effort: ReasoningEffortConfig::High,
             status: AgentStatus::PendingInit,
         }),
     });

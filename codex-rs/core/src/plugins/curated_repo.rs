@@ -1,30 +1,67 @@
+use crate::default_client::build_reqwest_client;
+use reqwest::Client;
+use serde::Deserialize;
 use std::fs;
+use std::io::Cursor;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
-use std::process::Output;
-use std::process::Stdio;
-use std::thread;
 use std::time::Duration;
-use std::time::Instant;
+use zip::ZipArchive;
 
-const OPENAI_PLUGINS_REPO_URL: &str = "https://github.com/openai/plugins.git";
+const GITHUB_API_BASE_URL: &str = "https://api.github.com";
+const GITHUB_API_ACCEPT_HEADER: &str = "application/vnd.github+json";
+const GITHUB_API_VERSION_HEADER: &str = "2022-11-28";
+const OPENAI_PLUGINS_OWNER: &str = "openai";
+const OPENAI_PLUGINS_REPO: &str = "plugins";
 const CURATED_PLUGINS_RELATIVE_DIR: &str = ".tmp/plugins";
 const CURATED_PLUGINS_SHA_FILE: &str = ".tmp/plugins.sha";
-const CURATED_PLUGINS_GIT_TIMEOUT: Duration = Duration::from_secs(30);
+const CURATED_PLUGINS_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Deserialize)]
+struct GitHubRepositorySummary {
+    default_branch: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubGitRefSummary {
+    object: GitHubGitRefObject,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubGitRefObject {
+    sha: String,
+}
 
 pub(crate) fn curated_plugins_repo_path(codex_home: &Path) -> PathBuf {
     codex_home.join(CURATED_PLUGINS_RELATIVE_DIR)
 }
 
-pub(crate) fn sync_openai_plugins_repo(codex_home: &Path) -> Result<(), String> {
+pub(crate) fn read_curated_plugins_sha(codex_home: &Path) -> Option<String> {
+    read_sha_file(codex_home.join(CURATED_PLUGINS_SHA_FILE).as_path())
+}
+
+pub(crate) fn sync_openai_plugins_repo(codex_home: &Path) -> Result<String, String> {
+    sync_openai_plugins_repo_with_api_base_url(codex_home, GITHUB_API_BASE_URL)
+}
+
+fn sync_openai_plugins_repo_with_api_base_url(
+    codex_home: &Path,
+    api_base_url: &str,
+) -> Result<String, String> {
     let repo_path = curated_plugins_repo_path(codex_home);
     let sha_path = codex_home.join(CURATED_PLUGINS_SHA_FILE);
-    let remote_sha = git_ls_remote_head_sha()?;
-    let local_sha = read_local_sha(&repo_path, &sha_path);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| format!("failed to create curated plugins sync runtime: {err}"))?;
+    let remote_sha = runtime.block_on(fetch_curated_repo_remote_sha(api_base_url))?;
+    let local_sha = read_sha_file(&sha_path);
 
-    if local_sha.as_deref() == Some(remote_sha.as_str()) && repo_path.join(".git").is_dir() {
-        return Ok(());
+    if local_sha.as_deref() == Some(remote_sha.as_str()) && repo_path.is_dir() {
+        return Ok(remote_sha);
     }
 
     let Some(parent) = repo_path.parent() else {
@@ -50,23 +87,18 @@ pub(crate) fn sync_openai_plugins_repo(codex_home: &Path) -> Result<(), String> 
             )
         })?;
     let cloned_repo_path = clone_dir.path().join("repo");
-    let clone_output = run_git_command_with_timeout(
-        Command::new("git")
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .arg("clone")
-            .arg("--depth")
-            .arg("1")
-            .arg(OPENAI_PLUGINS_REPO_URL)
-            .arg(&cloned_repo_path),
-        "git clone curated plugins repo",
-        CURATED_PLUGINS_GIT_TIMEOUT,
-    )?;
-    ensure_git_success(&clone_output, "git clone curated plugins repo")?;
+    let zipball_bytes = runtime.block_on(fetch_curated_repo_zipball(api_base_url, &remote_sha))?;
+    extract_zipball_to_dir(&zipball_bytes, &cloned_repo_path)?;
 
-    let cloned_sha = git_head_sha(&cloned_repo_path)?;
-    if cloned_sha != remote_sha {
+    if !cloned_repo_path
+        .join(".agents/plugins/marketplace.json")
+        .is_file()
+    {
         return Err(format!(
-            "curated plugins clone HEAD mismatch: expected {remote_sha}, got {cloned_sha}"
+            "curated plugins archive missing marketplace manifest at {}",
+            cloned_repo_path
+                .join(".agents/plugins/marketplace.json")
+                .display()
         ));
     }
 
@@ -123,231 +155,202 @@ pub(crate) fn sync_openai_plugins_repo(codex_home: &Path) -> Result<(), String> 
             )
         })?;
     }
-    fs::write(&sha_path, format!("{cloned_sha}\n")).map_err(|err| {
+    fs::write(&sha_path, format!("{remote_sha}\n")).map_err(|err| {
         format!(
             "failed to write curated plugins sha file {}: {err}",
             sha_path.display()
         )
     })?;
 
-    Ok(())
+    Ok(remote_sha)
 }
 
-fn read_local_sha(repo_path: &Path, sha_path: &Path) -> Option<String> {
-    if repo_path.join(".git").is_dir()
-        && let Ok(sha) = git_head_sha(repo_path)
-    {
-        return Some(sha);
+async fn fetch_curated_repo_remote_sha(api_base_url: &str) -> Result<String, String> {
+    let api_base_url = api_base_url.trim_end_matches('/');
+    let repo_url = format!("{api_base_url}/repos/{OPENAI_PLUGINS_OWNER}/{OPENAI_PLUGINS_REPO}");
+    let client = build_reqwest_client();
+    let repo_body = fetch_github_text(&client, &repo_url, "get curated plugins repository").await?;
+    let repo_summary: GitHubRepositorySummary =
+        serde_json::from_str(&repo_body).map_err(|err| {
+            format!("failed to parse curated plugins repository response from {repo_url}: {err}")
+        })?;
+    if repo_summary.default_branch.is_empty() {
+        return Err(format!(
+            "curated plugins repository response from {repo_url} did not include a default branch"
+        ));
     }
 
+    let git_ref_url = format!("{repo_url}/git/ref/heads/{}", repo_summary.default_branch);
+    let git_ref_body =
+        fetch_github_text(&client, &git_ref_url, "get curated plugins HEAD ref").await?;
+    let git_ref: GitHubGitRefSummary = serde_json::from_str(&git_ref_body).map_err(|err| {
+        format!("failed to parse curated plugins ref response from {git_ref_url}: {err}")
+    })?;
+    if git_ref.object.sha.is_empty() {
+        return Err(format!(
+            "curated plugins ref response from {git_ref_url} did not include a HEAD sha"
+        ));
+    }
+
+    Ok(git_ref.object.sha)
+}
+
+async fn fetch_curated_repo_zipball(
+    api_base_url: &str,
+    remote_sha: &str,
+) -> Result<Vec<u8>, String> {
+    let api_base_url = api_base_url.trim_end_matches('/');
+    let repo_url = format!("{api_base_url}/repos/{OPENAI_PLUGINS_OWNER}/{OPENAI_PLUGINS_REPO}");
+    let zipball_url = format!("{repo_url}/zipball/{remote_sha}");
+    let client = build_reqwest_client();
+    fetch_github_bytes(&client, &zipball_url, "download curated plugins archive").await
+}
+
+async fn fetch_github_text(client: &Client, url: &str, context: &str) -> Result<String, String> {
+    let response = github_request(client, url)
+        .send()
+        .await
+        .map_err(|err| format!("failed to {context} from {url}: {err}"))?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!(
+            "{context} from {url} failed with status {status}: {body}"
+        ));
+    }
+    Ok(body)
+}
+
+async fn fetch_github_bytes(client: &Client, url: &str, context: &str) -> Result<Vec<u8>, String> {
+    let response = github_request(client, url)
+        .send()
+        .await
+        .map_err(|err| format!("failed to {context} from {url}: {err}"))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|err| format!("failed to read {context} response from {url}: {err}"))?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(format!(
+            "{context} from {url} failed with status {status}: {body_text}"
+        ));
+    }
+    Ok(body.to_vec())
+}
+
+fn github_request(client: &Client, url: &str) -> reqwest::RequestBuilder {
+    client
+        .get(url)
+        .timeout(CURATED_PLUGINS_HTTP_TIMEOUT)
+        .header("accept", GITHUB_API_ACCEPT_HEADER)
+        .header("x-github-api-version", GITHUB_API_VERSION_HEADER)
+}
+
+fn read_sha_file(sha_path: &Path) -> Option<String> {
     fs::read_to_string(sha_path)
         .ok()
         .map(|sha| sha.trim().to_string())
         .filter(|sha| !sha.is_empty())
 }
 
-fn git_ls_remote_head_sha() -> Result<String, String> {
-    let output = run_git_command_with_timeout(
-        Command::new("git")
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .arg("ls-remote")
-            .arg(OPENAI_PLUGINS_REPO_URL)
-            .arg("HEAD"),
-        "git ls-remote curated plugins repo",
-        CURATED_PLUGINS_GIT_TIMEOUT,
-    )?;
-    ensure_git_success(&output, "git ls-remote curated plugins repo")?;
+fn extract_zipball_to_dir(bytes: &[u8], destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination).map_err(|err| {
+        format!(
+            "failed to create curated plugins extraction directory {}: {err}",
+            destination.display()
+        )
+    })?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let Some(first_line) = stdout.lines().next() else {
-        return Err("git ls-remote returned empty output for curated plugins repo".to_string());
-    };
-    let Some((sha, _)) = first_line.split_once('\t') else {
-        return Err(format!(
-            "unexpected git ls-remote output for curated plugins repo: {first_line}"
-        ));
-    };
-    if sha.is_empty() {
-        return Err("git ls-remote returned empty sha for curated plugins repo".to_string());
-    }
-    Ok(sha.to_string())
-}
+    let cursor = Cursor::new(bytes);
+    let mut archive = ZipArchive::new(cursor)
+        .map_err(|err| format!("failed to open curated plugins zip archive: {err}"))?;
 
-fn git_head_sha(repo_path: &Path) -> Result<String, String> {
-    let output = Command::new("git")
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .arg("-C")
-        .arg(repo_path)
-        .arg("rev-parse")
-        .arg("HEAD")
-        .output()
-        .map_err(|err| {
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|err| format!("failed to read curated plugins zip entry: {err}"))?;
+        let Some(relative_path) = entry.enclosed_name() else {
+            return Err(format!(
+                "curated plugins zip entry `{}` escapes extraction root",
+                entry.name()
+            ));
+        };
+
+        let mut components = relative_path.components();
+        let Some(Component::Normal(_)) = components.next() else {
+            continue;
+        };
+
+        let output_relative = components.fold(PathBuf::new(), |mut path, component| {
+            if let Component::Normal(segment) = component {
+                path.push(segment);
+            }
+            path
+        });
+        if output_relative.as_os_str().is_empty() {
+            continue;
+        }
+
+        let output_path = destination.join(&output_relative);
+        if entry.is_dir() {
+            fs::create_dir_all(&output_path).map_err(|err| {
+                format!(
+                    "failed to create curated plugins directory {}: {err}",
+                    output_path.display()
+                )
+            })?;
+            continue;
+        }
+
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).map_err(|err| {
+                format!(
+                    "failed to create curated plugins directory {}: {err}",
+                    parent.display()
+                )
+            })?;
+        }
+        let mut output = fs::File::create(&output_path).map_err(|err| {
             format!(
-                "failed to run git rev-parse HEAD in {}: {err}",
-                repo_path.display()
+                "failed to create curated plugins file {}: {err}",
+                output_path.display()
             )
         })?;
-    ensure_git_success(&output, "git rev-parse HEAD")?;
-
-    let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if sha.is_empty() {
-        return Err(format!(
-            "git rev-parse HEAD returned empty output in {}",
-            repo_path.display()
-        ));
+        std::io::copy(&mut entry, &mut output).map_err(|err| {
+            format!(
+                "failed to write curated plugins file {}: {err}",
+                output_path.display()
+            )
+        })?;
+        apply_zip_permissions(&entry, &output_path)?;
     }
-    Ok(sha)
+
+    Ok(())
 }
 
-fn run_git_command_with_timeout(
-    command: &mut Command,
-    context: &str,
-    timeout: Duration,
-) -> Result<Output, String> {
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| format!("failed to run {context}: {err}"))?;
-
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                return child
-                    .wait_with_output()
-                    .map_err(|err| format!("failed to wait for {context}: {err}"));
-            }
-            Ok(None) => {}
-            Err(err) => return Err(format!("failed to poll {context}: {err}")),
-        }
-
-        if start.elapsed() >= timeout {
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    return child
-                        .wait_with_output()
-                        .map_err(|err| format!("failed to wait for {context}: {err}"));
-                }
-                Ok(None) => {}
-                Err(err) => return Err(format!("failed to poll {context}: {err}")),
-            }
-
-            let _ = child.kill();
-            let output = child
-                .wait_with_output()
-                .map_err(|err| format!("failed to wait for {context} after timeout: {err}"))?;
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return if stderr.is_empty() {
-                Err(format!("{context} timed out after {}s", timeout.as_secs()))
-            } else {
-                Err(format!(
-                    "{context} timed out after {}s: {stderr}",
-                    timeout.as_secs()
-                ))
-            };
-        }
-
-        thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn ensure_git_success(output: &Output, context: &str) -> Result<(), String> {
-    if output.status.success() {
+#[cfg(unix)]
+fn apply_zip_permissions(entry: &zip::read::ZipFile<'_>, output_path: &Path) -> Result<(), String> {
+    let Some(mode) = entry.unix_mode() else {
         return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if stderr.is_empty() {
-        Err(format!("{context} failed with status {}", output.status))
-    } else {
-        Err(format!(
-            "{context} failed with status {}: {stderr}",
-            output.status
-        ))
-    }
+    };
+    fs::set_permissions(output_path, fs::Permissions::from_mode(mode)).map_err(|err| {
+        format!(
+            "failed to set permissions on curated plugins file {}: {err}",
+            output_path.display()
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn apply_zip_permissions(
+    _entry: &zip::read::ZipFile<'_>,
+    _output_path: &Path,
+) -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-    use tempfile::tempdir;
-
-    #[test]
-    fn curated_plugins_repo_path_uses_codex_home_tmp_dir() {
-        let tmp = tempdir().expect("tempdir");
-        assert_eq!(
-            curated_plugins_repo_path(tmp.path()),
-            tmp.path().join(".tmp/plugins")
-        );
-    }
-
-    #[test]
-    fn read_local_sha_prefers_repo_head_when_available() {
-        let tmp = tempdir().expect("tempdir");
-        let repo_path = tmp.path().join("repo");
-        let sha_path = tmp.path().join("plugins.sha");
-
-        fs::create_dir_all(&repo_path).expect("create repo dir");
-        fs::write(&sha_path, "abc123\n").expect("write sha");
-        let init_output = Command::new("git")
-            .arg("init")
-            .arg(&repo_path)
-            .output()
-            .expect("git init should run");
-        ensure_git_success(&init_output, "git init").expect("git init should succeed");
-        let config_name_output = Command::new("git")
-            .arg("-C")
-            .arg(&repo_path)
-            .arg("config")
-            .arg("user.name")
-            .arg("Codex")
-            .output()
-            .expect("git config user.name should run");
-        ensure_git_success(&config_name_output, "git config user.name")
-            .expect("git config user.name should succeed");
-        let config_email_output = Command::new("git")
-            .arg("-C")
-            .arg(&repo_path)
-            .arg("config")
-            .arg("user.email")
-            .arg("codex@example.com")
-            .output()
-            .expect("git config user.email should run");
-        ensure_git_success(&config_email_output, "git config user.email")
-            .expect("git config user.email should succeed");
-        fs::write(repo_path.join("README.md"), "demo\n").expect("write file");
-        let add_output = Command::new("git")
-            .arg("-C")
-            .arg(&repo_path)
-            .arg("add")
-            .arg(".")
-            .output()
-            .expect("git add should run");
-        ensure_git_success(&add_output, "git add").expect("git add should succeed");
-        let commit_output = Command::new("git")
-            .arg("-C")
-            .arg(&repo_path)
-            .arg("commit")
-            .arg("-m")
-            .arg("init")
-            .output()
-            .expect("git commit should run");
-        ensure_git_success(&commit_output, "git commit").expect("git commit should succeed");
-
-        let sha = read_local_sha(&repo_path, &sha_path);
-        assert_eq!(sha, Some(git_head_sha(&repo_path).expect("repo head sha")));
-    }
-
-    #[test]
-    fn read_local_sha_falls_back_to_sha_file() {
-        let tmp = tempdir().expect("tempdir");
-        let repo_path = tmp.path().join("repo");
-        let sha_path = tmp.path().join("plugins.sha");
-        fs::write(&sha_path, "abc123\n").expect("write sha");
-
-        let sha = read_local_sha(&repo_path, &sha_path);
-        assert_eq!(sha.as_deref(), Some("abc123"));
-    }
-}
+#[path = "curated_repo_tests.rs"]
+mod tests;
