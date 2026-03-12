@@ -843,7 +843,10 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
         name: "spawn_agent".to_string(),
         description: format!(
             r#"
-        Only use `spawn_agent` if and only if the user explicitly asked for sub-agents or parallel agent work. Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
+        Only use `spawn_agent` if and only if the user explicitly asks for sub-agents, delegation, or parallel agent work.
+        Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn.
+        Agent-role guidance below only helps choose which agent to use after spawning is already authorized; it never authorizes spawning by itself.
+        Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
 
 {available_models_description}
 ### When to delegate vs. do the subtask yourself
