@@ -3,6 +3,7 @@
 // Requires Node started with --experimental-vm-modules.
 
 const { Buffer } = require("node:buffer");
+const { AsyncLocalStorage } = require("node:async_hooks");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const { builtinModules, createRequire } = require("node:module");
@@ -126,6 +127,7 @@ const pendingTool = new Map();
 const pendingEmitImage = new Map();
 let toolCounter = 0;
 let emitImageCounter = 0;
+const execContextStorage = new AsyncLocalStorage();
 const cwd = process.cwd();
 const tmpDir = process.env.CODEX_JS_TMP_DIR || cwd;
 const homeDir = process.env.HOME ?? null;
@@ -1122,6 +1124,14 @@ function sendFatalExecResultSync(kind, error) {
   }
 }
 
+function getCurrentExecState() {
+  const execState = execContextStorage.getStore();
+  if (!execState || typeof execState.id !== "string" || !execState.id) {
+    throw new Error("js_repl exec context not found");
+  }
+  return execState;
+}
+
 function scheduleFatalExit(kind, error) {
   if (fatalExitScheduled) {
     process.exitCode = 1;
@@ -1427,15 +1437,21 @@ function normalizeEmitImageValue(value) {
   throw new Error("codex.emitImage received an unsupported value");
 }
 
-async function handleExec(message) {
-  clearLocalFileModuleCaches();
-  activeExecId = message.id;
-  const pendingBackgroundTasks = new Set();
-  const tool = (toolName, args) => {
+const codex = {
+  cwd,
+  homeDir,
+  tmpDir,
+  tool(toolName, args) {
+    let execState;
+    try {
+      execState = getCurrentExecState();
+    } catch (error) {
+      return Promise.reject(error);
+    }
     if (typeof toolName !== "string" || !toolName) {
       return Promise.reject(new Error("codex.tool expects a tool name string"));
     }
-    const id = `${message.id}-tool-${toolCounter++}`;
+    const id = `${execState.id}-tool-${toolCounter++}`;
     let argumentsJson = "{}";
     if (typeof args === "string") {
       argumentsJson = args;
@@ -1447,7 +1463,7 @@ async function handleExec(message) {
       const payload = {
         type: "run_tool",
         id,
-        exec_id: message.id,
+        exec_id: execState.id,
         tool_name: toolName,
         arguments: argumentsJson,
       };
@@ -1460,15 +1476,31 @@ async function handleExec(message) {
         resolve(res.response);
       });
     });
-  };
-  const emitImage = (imageLike) => {
+  },
+  emitImage(imageLike) {
+    let execState;
+    try {
+      execState = getCurrentExecState();
+    } catch (error) {
+      return {
+        then(onFulfilled, onRejected) {
+          return Promise.reject(error).then(onFulfilled, onRejected);
+        },
+        catch(onRejected) {
+          return Promise.reject(error).catch(onRejected);
+        },
+        finally(onFinally) {
+          return Promise.reject(error).finally(onFinally);
+        },
+      };
+    }
     const operation = (async () => {
       const normalized = normalizeEmitImageValue(await imageLike);
-      const id = `${message.id}-emit-image-${emitImageCounter++}`;
+      const id = `${execState.id}-emit-image-${emitImageCounter++}`;
       const payload = {
         type: "emit_image",
         id,
-        exec_id: message.id,
+        exec_id: execState.id,
         image_url: normalized.image_url,
         detail: normalized.detail ?? null,
       };
@@ -1489,7 +1521,7 @@ async function handleExec(message) {
       () => ({ ok: true, error: null, observation }),
       (error) => ({ ok: false, error, observation }),
     );
-    pendingBackgroundTasks.add(trackedOperation);
+    execState.pendingBackgroundTasks.add(trackedOperation);
     return {
       then(onFulfilled, onRejected) {
         observation.observed = true;
@@ -1504,6 +1536,15 @@ async function handleExec(message) {
         return operation.finally(onFinally);
       },
     };
+  },
+};
+
+async function handleExec(message) {
+  clearLocalFileModuleCaches();
+  activeExecId = message.id;
+  const execState = {
+    id: message.id,
+    pendingBackgroundTasks: new Set(),
   };
 
   let module = null;
@@ -1534,63 +1575,67 @@ async function handleExec(message) {
     priorBindings = builtSource.priorBindings;
     let output = "";
 
-    context.codex = { cwd, homeDir, tmpDir, tool, emitImage };
+    context.codex = codex;
     context.tmpDir = tmpDir;
 
-    await withCapturedConsole(context, async (logs) => {
-      const cellIdentifier = path.join(
-        cwd,
-        `.codex_js_repl_cell_${cellCounter++}.mjs`,
-      );
-      module = new SourceTextModule(source, {
-        context,
-        identifier: cellIdentifier,
-        initializeImportMeta(meta, mod) {
-          setImportMeta(meta, mod, true);
-          meta.__codexInternalMarkCommittedBindings = markCommittedBindings;
-          meta.__codexInternalMarkPreludeCompleted = markPreludeCompleted;
-        },
-        importModuleDynamically(specifier, referrer) {
-          return importResolved(resolveSpecifier(specifier, referrer?.identifier));
-        },
-      });
+    await execContextStorage.run(execState, async () => {
+      await withCapturedConsole(context, async (logs) => {
+        const cellIdentifier = path.join(
+          cwd,
+          `.codex_js_repl_cell_${cellCounter++}.mjs`,
+        );
+        module = new SourceTextModule(source, {
+          context,
+          identifier: cellIdentifier,
+          initializeImportMeta(meta, mod) {
+            setImportMeta(meta, mod, true);
+            meta.__codexInternalMarkCommittedBindings = markCommittedBindings;
+            meta.__codexInternalMarkPreludeCompleted = markPreludeCompleted;
+          },
+          importModuleDynamically(specifier, referrer) {
+            return importResolved(resolveSpecifier(specifier, referrer?.identifier));
+          },
+        });
 
-      await module.link(async (specifier) => {
-        if (specifier === "@prev" && previousModule) {
-          const exportNames = previousBindings.map((b) => b.name);
-          // Build a synthetic module snapshot of the prior cell's exports.
-          // This is the bridge that carries values from cell N to cell N+1.
-          const synthetic = new SyntheticModule(
-            exportNames,
-            function initSynthetic() {
-              for (const binding of previousBindings) {
-                this.setExport(
-                  binding.name,
-                  previousModule.namespace[binding.name],
-                );
-              }
-            },
-            { context },
+        await module.link(async (specifier) => {
+          if (specifier === "@prev" && previousModule) {
+            const exportNames = previousBindings.map((b) => b.name);
+            // Build a synthetic module snapshot of the prior cell's exports.
+            // This is the bridge that carries values from cell N to cell N+1.
+            const synthetic = new SyntheticModule(
+              exportNames,
+              function initSynthetic() {
+                for (const binding of previousBindings) {
+                  this.setExport(
+                    binding.name,
+                    previousModule.namespace[binding.name],
+                  );
+                }
+              },
+              { context },
+            );
+            return synthetic;
+          }
+          throw new Error(
+            `Top-level static import "${specifier}" is not supported in js_repl. Use await import("${specifier}") instead.`,
           );
-          return synthetic;
-        }
-        throw new Error(
-          `Top-level static import "${specifier}" is not supported in js_repl. Use await import("${specifier}") instead.`,
-        );
-      });
-      moduleLinked = true;
+        });
+        moduleLinked = true;
 
-      await module.evaluate();
-      if (pendingBackgroundTasks.size > 0) {
-        const backgroundResults = await Promise.all([...pendingBackgroundTasks]);
-        const firstUnhandledBackgroundError = backgroundResults.find(
-          (result) => !result.ok && !result.observation.observed,
-        );
-        if (firstUnhandledBackgroundError) {
-          throw firstUnhandledBackgroundError.error;
+        await module.evaluate();
+        if (execState.pendingBackgroundTasks.size > 0) {
+          const backgroundResults = await Promise.all([
+            ...execState.pendingBackgroundTasks,
+          ]);
+          const firstUnhandledBackgroundError = backgroundResults.find(
+            (result) => !result.ok && !result.observation.observed,
+          );
+          if (firstUnhandledBackgroundError) {
+            throw firstUnhandledBackgroundError.error;
+          }
         }
-      }
-      output = logs.join("\n");
+        output = logs.join("\n");
+      });
     });
 
     previousModule = module;

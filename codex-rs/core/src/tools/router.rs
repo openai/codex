@@ -75,6 +75,13 @@ impl ToolRouter {
             .collect()
     }
 
+    pub fn find_spec(&self, tool_name: &str) -> Option<ToolSpec> {
+        self.specs
+            .iter()
+            .find(|config| config.spec.name() == tool_name)
+            .map(|config| config.spec.clone())
+    }
+
     pub fn tool_supports_parallel(&self, tool_name: &str) -> bool {
         self.specs
             .iter()

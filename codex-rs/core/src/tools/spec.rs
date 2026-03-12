@@ -622,9 +622,9 @@ fn create_write_stdin_tool() -> ToolSpec {
 fn create_exec_wait_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
-            "session_id".to_string(),
-            JsonSchema::Number {
-                description: Some("Identifier of the running exec session.".to_string()),
+            "cell_id".to_string(),
+            JsonSchema::String {
+                description: Some("Identifier of the running exec cell.".to_string()),
             },
         ),
         (
@@ -647,7 +647,7 @@ fn create_exec_wait_tool() -> ToolSpec {
         (
             "terminate".to_string(),
             JsonSchema::Boolean {
-                description: Some("Whether to terminate the running exec session.".to_string()),
+                description: Some("Whether to terminate the running exec cell.".to_string()),
             },
         ),
     ]);
@@ -655,13 +655,13 @@ fn create_exec_wait_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: WAIT_TOOL_NAME.to_string(),
         description: format!(
-            "Waits on a yielded `{PUBLIC_TOOL_NAME}` session and returns new output or completion.\n{}",
+            "Waits on a yielded `{PUBLIC_TOOL_NAME}` cell and returns new output or completion.\n{}",
             code_mode_wait_tool_description().trim()
         ),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["session_id".to_string()]),
+            required: Some(vec!["cell_id".to_string()]),
             additional_properties: Some(false.into()),
         },
         output_schema: None,

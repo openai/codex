@@ -12,6 +12,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
@@ -171,12 +172,16 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let request_permission_enabled =
                     session.features().enabled(Feature::RequestPermissions);
+                let requested_additional_permissions = additional_permissions.clone();
                 let effective_additional_permissions = apply_granted_turn_permissions(
                     context.session.as_ref(),
                     sandbox_permissions,
                     additional_permissions,
                 )
                 .await;
+                let additional_permissions_allowed = request_permission_enabled
+                    || (session.features().enabled(Feature::RequestPermissionsTool)
+                        && effective_additional_permissions.permissions_preapproved);
 
                 // Sticky turn permissions have already been approved, so they should
                 // continue through the normal exec approval flow for the command.
@@ -200,21 +205,30 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
                 let cwd = workdir.clone().unwrap_or(cwd);
-                let normalized_additional_permissions =
-                    match normalize_and_validate_additional_permissions(
-                        request_permission_enabled,
-                        context.turn.approval_policy.value(),
-                        effective_additional_permissions.sandbox_permissions,
-                        effective_additional_permissions.additional_permissions,
-                        effective_additional_permissions.permissions_preapproved,
-                        &cwd,
-                    ) {
-                        Ok(normalized) => normalized,
-                        Err(err) => {
-                            manager.release_process_id(process_id).await;
-                            return Err(FunctionCallError::RespondToModel(err));
-                        }
-                    };
+                let normalized_additional_permissions = match implicit_granted_permissions(
+                    sandbox_permissions,
+                    requested_additional_permissions.as_ref(),
+                    &effective_additional_permissions,
+                )
+                .map_or_else(
+                    || {
+                        normalize_and_validate_additional_permissions(
+                            additional_permissions_allowed,
+                            context.turn.approval_policy.value(),
+                            effective_additional_permissions.sandbox_permissions,
+                            effective_additional_permissions.additional_permissions,
+                            effective_additional_permissions.permissions_preapproved,
+                            &cwd,
+                        )
+                    },
+                    |permissions| Ok(Some(permissions)),
+                ) {
+                    Ok(normalized) => normalized,
+                    Err(err) => {
+                        manager.release_process_id(process_id).await;
+                        return Err(FunctionCallError::RespondToModel(err));
+                    }
+                };
 
                 if let Some(output) = intercept_apply_patch(
                     &command,
