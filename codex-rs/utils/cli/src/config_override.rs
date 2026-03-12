@@ -89,9 +89,7 @@ impl CliConfigOverrides {
 }
 
 fn canonicalize_override_key(key: &str) -> String {
-    if key == "use_linux_sandbox_bwrap" {
-        "features.use_linux_sandbox_bwrap".to_string()
-    } else if key == "use_legacy_landlock" {
+    if key == "use_legacy_landlock" {
         "features.use_legacy_landlock".to_string()
     } else {
         key.to_string()
@@ -154,7 +152,6 @@ fn parse_toml_value(raw: &str) -> Result<Value, toml::de::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
 
     #[test]
     fn parses_basic_scalar() {
@@ -190,16 +187,6 @@ mod tests {
         };
         let parsed = overrides.parse_overrides().expect("parse_overrides");
         assert_eq!(parsed[0].0.as_str(), "features.use_legacy_landlock");
-        assert_eq!(parsed[0].1.as_bool(), Some(true));
-    }
-
-    #[test]
-    fn canonicalizes_use_linux_sandbox_bwrap_alias() {
-        let overrides = CliConfigOverrides {
-            raw_overrides: vec!["use_linux_sandbox_bwrap=true".to_string()],
-        };
-        let parsed = overrides.parse_overrides().expect("parse_overrides");
-        assert_eq!(parsed[0].0.as_str(), "features.use_linux_sandbox_bwrap");
         assert_eq!(parsed[0].1.as_bool(), Some(true));
     }
 

@@ -365,17 +365,6 @@ impl Features {
                         Feature::WebSearchCached,
                     );
                 }
-                "use_linux_sandbox_bwrap" => {
-                    self.legacy_usages.insert(LegacyFeatureUsage {
-                        alias: k.clone(),
-                        feature: Feature::UseLinuxSandboxBwrap,
-                        summary: "`use_linux_sandbox_bwrap` is deprecated and ignored because the bubblewrap sandbox is now the default on Linux.".to_string(),
-                        details: Some(
-                            "Remove this flag from wrapper arguments or config overrides.".to_string(),
-                        ),
-                    });
-                    continue;
-                }
                 _ => {}
             }
             match feature_for_key(k) {
@@ -922,7 +911,6 @@ mod tests {
     use super::*;
 
     use pretty_assertions::assert_eq;
-    use std::collections::BTreeMap;
 
     #[test]
     fn under_development_features_are_disabled_by_default() {
@@ -961,31 +949,6 @@ mod tests {
     fn use_linux_sandbox_bwrap_is_removed_and_disabled_by_default() {
         assert_eq!(Feature::UseLinuxSandboxBwrap.stage(), Stage::Removed);
         assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
-    }
-
-    #[test]
-    fn legacy_use_linux_sandbox_bwrap_is_ignored() {
-        let mut features = Features::with_defaults();
-        features.enable(Feature::UseLegacyLandlock);
-
-        features.apply_map(&BTreeMap::from([(
-            "use_linux_sandbox_bwrap".to_string(),
-            true,
-        )]));
-
-        assert_eq!(features.use_legacy_landlock(), true);
-        let usage = features
-            .legacy_feature_usages()
-            .find(|usage| usage.alias == "use_linux_sandbox_bwrap")
-            .expect("legacy usage should be recorded");
-        assert_eq!(
-            usage.summary,
-            "`use_linux_sandbox_bwrap` is deprecated and ignored because the bubblewrap sandbox is now the default on Linux."
-        );
-        assert_eq!(
-            usage.details.as_deref(),
-            Some("Remove this flag from wrapper arguments or config overrides.")
-        );
     }
 
     #[test]
