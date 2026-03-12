@@ -1544,14 +1544,14 @@ fn format_discoverable_tools(discoverable_tools: &[DiscoverableTool]) -> String 
                 .map(ToString::to_string)
                 .unwrap_or_else(|| match &tool {
                     DiscoverableTool::Connector(_) => "No description provided.".to_string(),
-                    DiscoverableTool::Plugin(plugin) => format_plugin_summary(plugin),
+                    DiscoverableTool::Plugin(plugin) => format_plugin_summary(plugin.as_ref()),
                 });
             let default_action = match tool.tool_type() {
                 DiscoverableToolType::Connector => DiscoverableToolAction::Install,
                 DiscoverableToolType::Plugin => DiscoverableToolAction::Enable,
             };
             format!(
-                "- {} (`{}`, {}, {}): {}",
+                "- {} (id: `{}`, type: {}, action: {}): {}",
                 tool.name(),
                 tool.id(),
                 tool.tool_type().as_str(),
@@ -2753,7 +2753,7 @@ mod tests {
 
     fn discoverable_connector(id: &str, name: &str, description: &str) -> DiscoverableTool {
         let slug = name.replace(' ', "-").to_lowercase();
-        DiscoverableTool::Connector(AppInfo {
+        DiscoverableTool::Connector(Box::new(AppInfo {
             id: id.to_string(),
             name: name.to_string(),
             description: Some(description.to_string()),
@@ -2767,7 +2767,7 @@ mod tests {
             is_accessible: false,
             is_enabled: true,
             plugin_display_names: Vec::new(),
-        })
+        }))
     }
 
     #[test]
@@ -4495,14 +4495,14 @@ mod tests {
                 "Gmail",
                 "Find and summarize email threads.",
             ),
-            DiscoverableTool::Plugin(DiscoverablePluginInfo {
+            DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
                 id: "sample@test".to_string(),
                 name: "Sample Plugin".to_string(),
                 description: None,
                 has_skills: true,
                 mcp_server_names: vec!["sample-docs".to_string()],
                 app_connector_ids: vec!["connector_sample".to_string()],
-            }),
+            })),
         ];
 
         let (tools, _) = build_specs_with_discoverable_tools(
@@ -4528,7 +4528,7 @@ mod tests {
         assert!(description.contains("Sample Plugin"));
         assert!(description.contains("Plan events and schedules."));
         assert!(description.contains("Find and summarize email threads."));
-        assert!(description.contains("plugin, enable"));
+        assert!(description.contains("id: `sample@test`, type: plugin, action: enable"));
         assert!(
             description
                 .contains("skills; MCP servers: sample-docs; app connectors: connector_sample")

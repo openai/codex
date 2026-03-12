@@ -137,7 +137,7 @@ impl ToolHandler for ToolSuggestHandler {
             .into_iter()
             .find_map(|tool| match tool {
                 DiscoverableTool::Connector(connector) if connector.id == args.tool_id => {
-                    Some(connector)
+                    Some(*connector)
                 }
                 DiscoverableTool::Connector(_) | DiscoverableTool::Plugin(_) => None,
             })

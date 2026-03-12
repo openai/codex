@@ -37,8 +37,8 @@ impl DiscoverableToolAction {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum DiscoverableTool {
-    Connector(AppInfo),
-    Plugin(DiscoverablePluginInfo),
+    Connector(Box<AppInfo>),
+    Plugin(Box<DiscoverablePluginInfo>),
 }
 
 impl DiscoverableTool {
@@ -73,13 +73,13 @@ impl DiscoverableTool {
 
 impl From<AppInfo> for DiscoverableTool {
     fn from(value: AppInfo) -> Self {
-        Self::Connector(value)
+        Self::Connector(Box::new(value))
     }
 }
 
 impl From<DiscoverablePluginInfo> for DiscoverableTool {
     fn from(value: DiscoverablePluginInfo) -> Self {
-        Self::Plugin(value)
+        Self::Plugin(Box::new(value))
     }
 }
 
