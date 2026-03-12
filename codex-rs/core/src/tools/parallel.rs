@@ -9,11 +9,11 @@ use tracing::Instrument;
 use tracing::instrument;
 use tracing::trace_span;
 
+use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
-use crate::client_common::tools::ToolSpec;
 use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::registry::AnyToolResult;

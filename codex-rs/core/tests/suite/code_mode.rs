@@ -1521,9 +1521,7 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
     let patch = format!(
         "*** Begin Patch\n*** Add File: {file_name}\n+hello from code_mode\n*** End Patch\n"
     );
-    let code = format!(
-        "text(await tools.apply_patch({patch:?}));\n"
-    );
+    let code = format!("text(await tools.apply_patch({patch:?}));\n");
 
     let (test, second_mock) =
         run_code_mode_turn(&server, "use exec to run apply_patch", &code, true).await?;
@@ -1609,12 +1607,9 @@ text(
 );
 "#;
 
-    let (_test, second_mock) = run_code_mode_turn_with_rmcp(
-        &server,
-        "use exec to inspect the global tools object",
-        code,
-    )
-    .await?;
+    let (_test, second_mock) =
+        run_code_mode_turn_with_rmcp(&server, "use exec to inspect the global tools object", code)
+            .await?;
 
     let req = second_mock.single_request();
     let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
