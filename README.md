@@ -12,6 +12,7 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 > Exomind fork status
 >
 > This fork tracks `openai/codex` and carries a small set of workflow-level changes on top of upstream.
+>
 > - README section updated on `2026-03-12`
 > - Baseline upstream release tag for this branch: `rust-v0.114.0` (`b9904c0ae`)
 > - Exomind release line: `0.114.0-exomind`
