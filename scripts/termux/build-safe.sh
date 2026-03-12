@@ -37,13 +37,16 @@ echo "[termux-build-safe] target: $TARGET"
 echo "[termux-build-safe] cores: $cores"
 echo "[termux-build-safe] MemAvailable: ${mem_kb} kB"
 echo "[termux-build-safe] CARGO_BUILD_JOBS=$jobs"
-echo "[termux-build-safe] release overrides: LTO=off, codegen-units=16, debug=0"
+echo "[termux-build-safe] release overrides: opt-level=2, LTO=off, codegen-units=2, debug=0"
+echo "[termux-build-safe] rustflags: -C llvm-args=--threads=1"
 
 cd "$ROOT_DIR/codex-rs"
 
 CARGO_BUILD_JOBS="$jobs" \
+RUSTFLAGS="-C llvm-args=--threads=1" \
+CARGO_PROFILE_RELEASE_OPT_LEVEL=2 \
 CARGO_PROFILE_RELEASE_LTO=off \
-CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+CARGO_PROFILE_RELEASE_CODEGEN_UNITS=2 \
 CARGO_PROFILE_RELEASE_DEBUG=0 \
 cargo build --release -p codex-cli -p codex-exec --target "$TARGET"
 

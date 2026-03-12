@@ -368,6 +368,11 @@ strip = "symbols"
 # See https://github.com/openai/codex/issues/1411 for details.
 codegen-units = 1
 
+[profile.release.package.bm25]
+opt-level = 3
+codegen-units = 1
+strip = "symbols"
+
 [profile.ci-test]
 debug = 1         # Reduce debug symbol size
 inherits = "test"
