@@ -5997,18 +5997,38 @@ async fn slash_copy_reports_when_no_copyable_output_exists() {
 }
 
 #[tokio::test]
-async fn slash_help_renders_reference_page() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+async fn slash_help_opens_reference_popup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.dispatch_command(SlashCommand::Help);
 
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one help cell");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert_snapshot!("slash_help_output", rendered);
-    assert!(rendered.contains("/help"));
-    assert!(rendered.contains("/model <model>"));
-    assert!(rendered.contains("/review <instructions>"));
+    assert!(chat.bottom_pane.has_active_view());
+    let popup = render_bottom_popup(&chat, 100);
+    assert_snapshot!("slash_help_output", popup);
+    assert!(popup.contains("/help"));
+    assert!(popup.contains("/model <model>"));
+
+    let mut scrolled = popup;
+    for _ in 0..8 {
+        if scrolled.contains("/review <instructions>") {
+            break;
+        }
+        chat.handle_key_event(KeyEvent::from(KeyCode::PageDown));
+        scrolled = render_bottom_popup(&chat, 100);
+    }
+    assert!(scrolled.contains("/review <instructions>"));
+}
+
+#[tokio::test]
+async fn slash_help_esc_dismisses_popup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Help);
+    assert!(chat.bottom_pane.has_active_view());
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+    assert!(!chat.bottom_pane.has_active_view());
 }
 
 #[tokio::test]

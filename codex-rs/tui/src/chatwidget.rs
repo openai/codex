@@ -271,7 +271,6 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
-use crate::slash_command::built_in_slash_commands;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
@@ -4359,7 +4358,8 @@ impl ChatWidget {
         }
         match cmd {
             SlashCommand::Help => {
-                self.add_slash_help_output();
+                self.bottom_pane
+                    .show_view(Box::new(crate::bottom_pane::SlashHelpView::new()));
                 QueueReplayControl::Continue
             }
             SlashCommand::Feedback => {
@@ -4790,7 +4790,8 @@ impl ChatWidget {
     ) -> QueueReplayControl {
         match cmd {
             SlashCommand::Help => {
-                self.add_slash_help_output();
+                self.bottom_pane
+                    .show_view(Box::new(crate::bottom_pane::SlashHelpView::new()));
                 QueueReplayControl::Continue
             }
             SlashCommand::Approvals | SlashCommand::Permissions => {
@@ -6957,39 +6958,6 @@ impl ChatWidget {
             collaboration_mode,
             reasoning_effort_override,
         ));
-    }
-
-    pub(crate) fn add_slash_help_output(&mut self) {
-        let mut lines = vec![
-            Line::from("Slash Commands".bold()),
-            Line::from(""),
-            Line::from(
-                "Type / to open the command popup. For commands with both a picker and an arg form, bare /command opens the picker and /command ... runs directly."
-                    .dim(),
-            ),
-            Line::from("Args use shell-style quoting; quote values with spaces.".dim()),
-            Line::from(""),
-        ];
-
-        const DESCRIPTION_COLUMN: usize = 56;
-
-        for (_, cmd) in built_in_slash_commands() {
-            let forms = cmd.help_forms();
-            let primary = if forms[0].is_empty() {
-                format!("/{}", cmd.command())
-            } else {
-                format!("/{} {}", cmd.command(), forms[0])
-            };
-            let padded = format!("  {primary:<DESCRIPTION_COLUMN$}");
-            lines.push(Line::from(vec![padded.cyan(), cmd.description().dim()]));
-
-            for form in &forms[1..] {
-                let syntax = format!("    /{} {}", cmd.command(), form);
-                lines.push(Line::from(syntax.dim()));
-            }
-        }
-
-        self.add_to_history(crate::history_cell::PlainHistoryCell::new(lines));
     }
 
     pub(crate) fn add_debug_config_output(&mut self) {
