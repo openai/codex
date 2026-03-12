@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
+use std::time::Instant;
 use wiremock::MockServer;
 
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
@@ -89,10 +90,12 @@ async fn run_code_mode_turn(
     code: &str,
     include_apply_patch: bool,
 ) -> Result<(TestCodex, ResponseMock)> {
-    let mut builder = test_codex().with_config(move |config| {
-        let _ = config.features.enable(Feature::CodeMode);
-        config.include_apply_patch_tool = include_apply_patch;
-    });
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(move |config| {
+            let _ = config.features.enable(Feature::CodeMode);
+            config.include_apply_patch_tool = include_apply_patch;
+        });
     let test = builder.build(server).await?;
 
     responses::mount_sse_once(
@@ -124,39 +127,41 @@ async fn run_code_mode_turn_with_rmcp(
     code: &str,
 ) -> Result<(TestCodex, ResponseMock)> {
     let rmcp_test_server_bin = stdio_server_bin()?;
-    let mut builder = test_codex().with_config(move |config| {
-        let _ = config.features.enable(Feature::CodeMode);
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(move |config| {
+            let _ = config.features.enable(Feature::CodeMode);
 
-        let mut servers = config.mcp_servers.get().clone();
-        servers.insert(
-            "rmcp".to_string(),
-            McpServerConfig {
-                transport: McpServerTransportConfig::Stdio {
-                    command: rmcp_test_server_bin,
-                    args: Vec::new(),
-                    env: Some(HashMap::from([(
-                        "MCP_TEST_VALUE".to_string(),
-                        "propagated-env".to_string(),
-                    )])),
-                    env_vars: Vec::new(),
-                    cwd: None,
+            let mut servers = config.mcp_servers.get().clone();
+            servers.insert(
+                "rmcp".to_string(),
+                McpServerConfig {
+                    transport: McpServerTransportConfig::Stdio {
+                        command: rmcp_test_server_bin,
+                        args: Vec::new(),
+                        env: Some(HashMap::from([(
+                            "MCP_TEST_VALUE".to_string(),
+                            "propagated-env".to_string(),
+                        )])),
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    },
+                    enabled: true,
+                    required: false,
+                    disabled_reason: None,
+                    startup_timeout_sec: Some(Duration::from_secs(10)),
+                    tool_timeout_sec: None,
+                    enabled_tools: None,
+                    disabled_tools: None,
+                    scopes: None,
+                    oauth_resource: None,
                 },
-                enabled: true,
-                required: false,
-                disabled_reason: None,
-                startup_timeout_sec: Some(Duration::from_secs(10)),
-                tool_timeout_sec: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth_resource: None,
-            },
-        );
-        config
-            .mcp_servers
-            .set(servers)
-            .expect("test mcp servers should accept any configuration");
-    });
+            );
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("test mcp servers should accept any configuration");
+        });
     let test = builder.build(server).await?;
 
     responses::mount_sse_once(
@@ -224,6 +229,49 @@ add_content(JSON.stringify(await exec_command({ cmd: "printf code_mode_exec_mark
     assert_eq!(parsed.get("exit_code").and_then(Value::as_i64), Some(0));
     assert!(parsed.get("wall_time_seconds").is_some());
     assert!(parsed.get("session_id").is_none());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_nested_tool_calls_can_run_in_parallel() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+import { test_sync_tool } from "tools.js";
+
+const args = {
+  sleep_after_ms: 300,
+  barrier: {
+    id: "code-mode-parallel-tools",
+    participants: 2,
+    timeout_ms: 1_000,
+  },
+};
+
+const results = await Promise.all([
+  test_sync_tool(args),
+  test_sync_tool(args),
+]);
+
+add_content(JSON.stringify(results));
+"#;
+
+    let start = Instant::now();
+    let (_test, second_mock) =
+        run_code_mode_turn(&server, "run nested tools in parallel", code, false).await?;
+    let duration = start.elapsed();
+
+    assert!(
+        duration < Duration::from_millis(1_600),
+        "expected nested tools to finish in parallel, got {duration:?}",
+    );
+
+    let req = second_mock.single_request();
+    let items = custom_tool_output_items(&req, "call-1");
+    assert_eq!(items.len(), 2);
+    assert_eq!(text_item(&items, 1), "[\"ok\",\"ok\"]");
 
     Ok(())
 }
