@@ -55,6 +55,12 @@ pub struct VoiceCapture {
 
 impl VoiceCapture {
     pub fn start() -> Result<Self, String> {
+        #[cfg(target_os = "android")]
+        let (device, config) = std::panic::catch_unwind(select_default_input_device_and_config)
+            .map_err(|_| {
+            "audio input unavailable: Android app context was not initialized".to_string()
+        })??;
+        #[cfg(not(target_os = "android"))]
         let (device, config) = select_default_input_device_and_config()?;
 
         let sample_rate = config.sample_rate().0;
@@ -79,6 +85,14 @@ impl VoiceCapture {
     }
 
     pub fn start_realtime(config: &Config, tx: AppEventSender) -> Result<Self, String> {
+        #[cfg(target_os = "android")]
+        let (device, config) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            select_realtime_input_device_and_config(config)
+        }))
+        .map_err(|_| {
+            "audio input unavailable: Android app context was not initialized".to_string()
+        })??;
+        #[cfg(not(target_os = "android"))]
         let (device, config) = select_realtime_input_device_and_config(config)?;
 
         let sample_rate = config.sample_rate().0;
