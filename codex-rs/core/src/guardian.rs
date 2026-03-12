@@ -324,20 +324,25 @@ async fn run_guardian_review(
     let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, request).await;
     let schema = guardian_output_schema();
     let cancel_token = CancellationToken::new();
-    let review = tokio::select! {
+    enum GuardianReviewOutcome {
+        Completed(anyhow::Result<GuardianAssessment>),
+        TimedOut,
+        Aborted,
+    }
+    let outcome = tokio::select! {
         review = run_guardian_subagent(
             session.clone(),
             turn.clone(),
             prompt_items,
             schema,
             cancel_token.clone(),
-        ) => Some(review),
+        ) => GuardianReviewOutcome::Completed(review),
         _ = tokio::time::sleep(GUARDIAN_REVIEW_TIMEOUT) => {
             // Cancel the delegate token before failing closed so the one-shot
             // subagent tears down its background streams instead of lingering
             // after the caller has already timed out.
             cancel_token.cancel();
-            None
+            GuardianReviewOutcome::TimedOut
         },
         _ = async {
             if let Some(external_cancel) = external_cancel.as_ref() {
@@ -347,24 +352,31 @@ async fn run_guardian_review(
             }
         } => {
             cancel_token.cancel();
-            return ReviewDecision::Abort;
+            GuardianReviewOutcome::Aborted
         },
     };
 
-    let assessment = match review {
-        Some(Ok(assessment)) => assessment,
-        Some(Err(err)) => GuardianAssessment {
+    let aborted = matches!(outcome, GuardianReviewOutcome::Aborted);
+    let assessment = match outcome {
+        GuardianReviewOutcome::Completed(Ok(assessment)) => assessment,
+        GuardianReviewOutcome::Completed(Err(err)) => GuardianAssessment {
             risk_level: GuardianRiskLevel::High,
             risk_score: 100,
             rationale: format!("Automatic approval review failed: {err}"),
             evidence: vec![],
         },
-        None => GuardianAssessment {
+        GuardianReviewOutcome::TimedOut => GuardianAssessment {
             risk_level: GuardianRiskLevel::High,
             risk_score: 100,
             rationale:
                 "Automatic approval review timed out while evaluating the requested approval."
                     .to_string(),
+            evidence: vec![],
+        },
+        GuardianReviewOutcome::Aborted => GuardianAssessment {
+            risk_level: GuardianRiskLevel::High,
+            risk_score: 100,
+            rationale: "Automatic approval review was cancelled before completion.".to_string(),
             evidence: vec![],
         },
     };
@@ -405,7 +417,9 @@ async fn run_guardian_review(
         )
         .await;
 
-    if approved {
+    if aborted {
+        ReviewDecision::Abort
+    } else if approved {
         ReviewDecision::Approved
     } else {
         ReviewDecision::Denied
