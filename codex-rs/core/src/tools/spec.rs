@@ -10,6 +10,10 @@ use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
+use crate::tools::discoverable::DiscoverablePluginInfo;
+use crate::tools::discoverable::DiscoverableTool;
+use crate::tools::discoverable::DiscoverableToolAction;
+use crate::tools::discoverable::DiscoverableToolType;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
 use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
@@ -23,7 +27,6 @@ use crate::tools::handlers::multi_agents::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolRegistryBuilder;
-use codex_app_server_protocol::AppInfo;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -1443,10 +1446,10 @@ fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSp
     })
 }
 
-fn create_tool_suggest_tool(discoverable_tools: &[AppInfo]) -> ToolSpec {
+fn create_tool_suggest_tool(discoverable_tools: &[DiscoverableTool]) -> ToolSpec {
     let discoverable_tool_ids = discoverable_tools
         .iter()
-        .map(|connector| connector.id.as_str())
+        .map(DiscoverableTool::id)
         .collect::<Vec<_>>()
         .join(", ");
     let properties = BTreeMap::from([
@@ -1508,29 +1511,65 @@ fn create_tool_suggest_tool(discoverable_tools: &[AppInfo]) -> ToolSpec {
     })
 }
 
-fn format_discoverable_tools(discoverable_tools: &[AppInfo]) -> String {
-    let mut connectors = discoverable_tools.to_vec();
-    connectors.sort_by(|left, right| {
-        left.name
-            .cmp(&right.name)
-            .then_with(|| left.id.cmp(&right.id))
+fn format_discoverable_tools(discoverable_tools: &[DiscoverableTool]) -> String {
+    let mut discoverable_tools = discoverable_tools.to_vec();
+    discoverable_tools.sort_by(|left, right| {
+        left.name()
+            .cmp(right.name())
+            .then_with(|| left.id().cmp(right.id()))
     });
 
-    connectors
+    discoverable_tools
         .into_iter()
-        .map(|connector| {
-            let description = connector
-                .description
-                .as_deref()
+        .map(|tool| {
+            let description = tool
+                .description()
                 .filter(|description| !description.trim().is_empty())
-                .unwrap_or("No description provided.");
+                .map(ToString::to_string)
+                .unwrap_or_else(|| match &tool {
+                    DiscoverableTool::Connector(_) => "No description provided.".to_string(),
+                    DiscoverableTool::Plugin(plugin) => format_plugin_summary(plugin),
+                });
+            let default_action = match tool.tool_type() {
+                DiscoverableToolType::Connector => DiscoverableToolAction::Install,
+                DiscoverableToolType::Plugin => DiscoverableToolAction::Enable,
+            };
             format!(
-                "- {} (`{}`, connector, install): {}",
-                connector.name, connector.id, description
+                "- {} (`{}`, {}, {}): {}",
+                tool.name(),
+                tool.id(),
+                tool.tool_type().as_str(),
+                default_action.as_str(),
+                description
             )
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn format_plugin_summary(plugin: &DiscoverablePluginInfo) -> String {
+    let mut details = Vec::new();
+    if plugin.has_skills {
+        details.push("skills".to_string());
+    }
+    if !plugin.mcp_server_names.is_empty() {
+        details.push(format!(
+            "MCP servers: {}",
+            plugin.mcp_server_names.join(", ")
+        ));
+    }
+    if !plugin.app_connector_ids.is_empty() {
+        details.push(format!(
+            "app connectors: {}",
+            plugin.app_connector_ids.join(", ")
+        ));
+    }
+
+    if details.is_empty() {
+        "No description provided.".to_string()
+    } else {
+        details.join("; ")
+    }
 }
 
 fn create_read_file_tool() -> ToolSpec {
@@ -2146,7 +2185,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
     app_tools: Option<HashMap<String, ToolInfo>>,
-    discoverable_tools: Option<Vec<AppInfo>>,
+    discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
@@ -2629,6 +2668,7 @@ mod tests {
     use crate::models_manager::manager::ModelsManager;
     use crate::models_manager::model_info::with_config_overrides;
     use crate::tools::registry::ConfiguredToolSpec;
+    use codex_app_server_protocol::AppInfo;
     use codex_protocol::openai_models::InputModality;
     use codex_protocol::openai_models::ModelInfo;
     use codex_protocol::openai_models::ModelsResponse;
@@ -2652,6 +2692,25 @@ mod tests {
             icons: None,
             meta: None,
         }
+    }
+
+    fn discoverable_connector(id: &str, name: &str, description: &str) -> DiscoverableTool {
+        let slug = name.replace(' ', "-").to_lowercase();
+        DiscoverableTool::Connector(AppInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: Some(description.to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some(format!("https://chatgpt.com/apps/{slug}/{id}")),
+            is_accessible: false,
+            is_enabled: true,
+            plugin_display_names: Vec::new(),
+        })
     }
 
     #[test]
@@ -4171,24 +4230,11 @@ mod tests {
             &tools_config,
             None,
             None,
-            Some(vec![AppInfo {
-                id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
-                name: "Google Calendar".to_string(),
-                description: Some("Plan events and schedules.".to_string()),
-                logo_url: None,
-                logo_url_dark: None,
-                distribution_channel: None,
-                branding: None,
-                app_metadata: None,
-                labels: None,
-                install_url: Some(
-                    "https://chatgpt.com/apps/google-calendar/connector_2128aebfecb84f64a069897515042a44"
-                        .to_string(),
-                ),
-                is_accessible: false,
-                is_enabled: true,
-                plugin_display_names: Vec::new(),
-            }]),
+            Some(vec![discoverable_connector(
+                "connector_2128aebfecb84f64a069897515042a44",
+                "Google Calendar",
+                "Plan events and schedules.",
+            )]),
             &[],
         )
         .build();
@@ -4245,42 +4291,24 @@ mod tests {
         });
 
         let discoverable_tools = vec![
-            AppInfo {
-                id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
-                name: "Google Calendar".to_string(),
-                description: Some("Plan events and schedules.".to_string()),
-                logo_url: None,
-                logo_url_dark: None,
-                distribution_channel: None,
-                branding: None,
-                app_metadata: None,
-                labels: None,
-                install_url: Some(
-                    "https://chatgpt.com/apps/google-calendar/connector_2128aebfecb84f64a069897515042a44"
-                        .to_string(),
-                ),
-                is_accessible: false,
-                is_enabled: true,
-                plugin_display_names: Vec::new(),
-            },
-            AppInfo {
-                id: "connector_68df038e0ba48191908c8434991bbac2".to_string(),
-                name: "Gmail".to_string(),
-                description: Some("Find and summarize email threads.".to_string()),
-                logo_url: None,
-                logo_url_dark: None,
-                distribution_channel: None,
-                branding: None,
-                app_metadata: None,
-                labels: None,
-                install_url: Some(
-                    "https://chatgpt.com/apps/gmail/connector_68df038e0ba48191908c8434991bbac2"
-                        .to_string(),
-                ),
-                is_accessible: false,
-                is_enabled: true,
-                plugin_display_names: Vec::new(),
-            },
+            discoverable_connector(
+                "connector_2128aebfecb84f64a069897515042a44",
+                "Google Calendar",
+                "Plan events and schedules.",
+            ),
+            discoverable_connector(
+                "connector_68df038e0ba48191908c8434991bbac2",
+                "Gmail",
+                "Find and summarize email threads.",
+            ),
+            DiscoverableTool::Plugin(DiscoverablePluginInfo {
+                id: "sample@test".to_string(),
+                name: "Sample Plugin".to_string(),
+                description: None,
+                has_skills: true,
+                mcp_server_names: vec!["sample-docs".to_string()],
+                app_connector_ids: vec!["connector_sample".to_string()],
+            }),
         ];
 
         let (tools, _) = build_specs_with_discoverable_tools(
@@ -4303,8 +4331,14 @@ mod tests {
         };
         assert!(description.contains("Google Calendar"));
         assert!(description.contains("Gmail"));
+        assert!(description.contains("Sample Plugin"));
         assert!(description.contains("Plan events and schedules."));
         assert!(description.contains("Find and summarize email threads."));
+        assert!(description.contains("plugin, enable"));
+        assert!(
+            description
+                .contains("skills; MCP servers: sample-docs; app connectors: connector_sample")
+        );
         assert!(
             description.contains("DO NOT explore or recommend tools that are not on this list.")
         );

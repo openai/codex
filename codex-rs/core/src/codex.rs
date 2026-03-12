@@ -287,6 +287,7 @@ use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::discoverable::DiscoverableTool;
 use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
 use crate::tools::js_repl::JsReplHandle;
 use crate::tools::js_repl::resolve_compatible_node;
@@ -6286,7 +6287,9 @@ pub(crate) async fn built_tools(
             .await
             {
                 Ok(connectors) if connectors.is_empty() => None,
-                Ok(connectors) => Some(connectors),
+                Ok(connectors) => {
+                    Some(connectors.into_iter().map(DiscoverableTool::from).collect())
+                }
                 Err(err) => {
                     warn!("failed to load discoverable tool suggestions: {err:#}");
                     None

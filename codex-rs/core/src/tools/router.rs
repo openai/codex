@@ -8,12 +8,12 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::discoverable::DiscoverableTool;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::build_specs_with_discoverable_tools;
-use codex_app_server_protocol::AppInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::ResponseInputItem;
@@ -41,7 +41,7 @@ pub struct ToolRouter {
 pub(crate) struct ToolRouterParams<'a> {
     pub(crate) mcp_tools: Option<HashMap<String, Tool>>,
     pub(crate) app_tools: Option<HashMap<String, ToolInfo>>,
-    pub(crate) discoverable_tools: Option<Vec<AppInfo>>,
+    pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
 }
 

@@ -20,6 +20,9 @@ use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::discoverable::DiscoverableTool;
+use crate::tools::discoverable::DiscoverableToolAction;
+use crate::tools::discoverable::DiscoverableToolType;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -27,51 +30,12 @@ use crate::tools::registry::ToolKind;
 pub struct ToolSuggestHandler;
 
 pub(crate) const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
-const TOOL_SUGGEST_APPROVAL_KIND_KEY: &str = "codex_approval_kind";
 const TOOL_SUGGEST_APPROVAL_KIND_VALUE: &str = "tool_suggestion";
-const TOOL_SUGGEST_TOOL_TYPE_KEY: &str = "tool_type";
-const TOOL_SUGGEST_SUGGEST_TYPE_KEY: &str = "suggest_type";
-const TOOL_SUGGEST_REASON_KEY: &str = "suggest_reason";
-const TOOL_SUGGEST_TOOL_ID_KEY: &str = "tool_id";
-const TOOL_SUGGEST_TOOL_NAME_KEY: &str = "tool_name";
-const TOOL_SUGGEST_INSTALL_URL_KEY: &str = "install_url";
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum ToolSuggestToolType {
-    Connector,
-    Plugin,
-}
-
-impl ToolSuggestToolType {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Connector => "connector",
-            Self::Plugin => "plugin",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum ToolSuggestActionType {
-    Install,
-    Enable,
-}
-
-impl ToolSuggestActionType {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Install => "install",
-            Self::Enable => "enable",
-        }
-    }
-}
 
 #[derive(Debug, Deserialize)]
 struct ToolSuggestArgs {
-    tool_type: ToolSuggestToolType,
-    action_type: ToolSuggestActionType,
+    tool_type: DiscoverableToolType,
+    action_type: DiscoverableToolAction,
     tool_id: String,
     suggest_reason: String,
 }
@@ -80,11 +44,22 @@ struct ToolSuggestArgs {
 struct ToolSuggestResult {
     completed: bool,
     user_confirmed: bool,
-    tool_type: ToolSuggestToolType,
-    action_type: ToolSuggestActionType,
+    tool_type: DiscoverableToolType,
+    action_type: DiscoverableToolAction,
     tool_id: String,
     tool_name: String,
     suggest_reason: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct ToolSuggestMeta<'a> {
+    codex_approval_kind: &'static str,
+    tool_type: DiscoverableToolType,
+    suggest_type: DiscoverableToolAction,
+    suggest_reason: &'a str,
+    tool_id: &'a str,
+    tool_name: &'a str,
+    install_url: &'a str,
 }
 
 #[async_trait]
@@ -120,54 +95,57 @@ impl ToolHandler for ToolSuggestHandler {
                 "suggest_reason must not be empty".to_string(),
             ));
         }
+        if args.tool_type == DiscoverableToolType::Plugin {
+            return Err(FunctionCallError::RespondToModel(
+                "plugin tool suggestions are not currently available".to_string(),
+            ));
+        }
+        if args.action_type != DiscoverableToolAction::Install {
+            return Err(FunctionCallError::RespondToModel(
+                "connector tool suggestions currently support only action_type=\"install\""
+                    .to_string(),
+            ));
+        }
 
-        let (connector, auth) = match args.tool_type {
-            ToolSuggestToolType::Connector => {
-                if args.action_type != ToolSuggestActionType::Install {
-                    return Err(FunctionCallError::RespondToModel(
-                        "connector tool suggestions currently support only action_type=\"install\""
-                            .to_string(),
-                    ));
+        let auth = session.services.auth_manager.auth().await;
+        let manager = session.services.mcp_connection_manager.read().await;
+        let mcp_tools = manager.list_all_tools().await;
+        drop(manager);
+        let accessible_connectors = connectors::with_app_enabled_state(
+            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+            &turn.config,
+        );
+        let discoverable_tools = connectors::list_tool_suggest_discoverable_tools_with_auth(
+            &turn.config,
+            auth.as_ref(),
+            &accessible_connectors,
+        )
+        .await
+        .map(|connectors| {
+            connectors
+                .into_iter()
+                .map(DiscoverableTool::from)
+                .collect::<Vec<_>>()
+        })
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "tool suggestions are unavailable right now: {err}"
+            ))
+        })?;
+
+        let connector = discoverable_tools
+            .into_iter()
+            .find_map(|tool| match tool {
+                DiscoverableTool::Connector(connector) if connector.id == args.tool_id => {
+                    Some(connector)
                 }
-
-                let auth = session.services.auth_manager.auth().await;
-                let manager = session.services.mcp_connection_manager.read().await;
-                let mcp_tools = manager.list_all_tools().await;
-                drop(manager);
-                let accessible_connectors = connectors::with_app_enabled_state(
-                    connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
-                    &turn.config,
-                );
-                let discoverable_tools =
-                    connectors::list_tool_suggest_discoverable_tools_with_auth(
-                        &turn.config,
-                        auth.as_ref(),
-                        &accessible_connectors,
-                    )
-                    .await
-                    .map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
-                            "tool suggestions are unavailable right now: {err}"
-                        ))
-                    })?;
-
-                let connector = discoverable_tools
-                    .into_iter()
-                    .find(|connector| connector.id == args.tool_id)
-                    .ok_or_else(|| {
-                        FunctionCallError::RespondToModel(format!(
-                            "tool_id must match one of the discoverable tools exposed by {TOOL_SUGGEST_TOOL_NAME}"
-                        ))
-                    })?;
-
-                (connector, auth)
-            }
-            ToolSuggestToolType::Plugin => {
-                return Err(FunctionCallError::RespondToModel(
-                    "plugin tool suggestions are not currently available".to_string(),
-                ));
-            }
-        };
+                DiscoverableTool::Connector(_) | DiscoverableTool::Plugin(_) => None,
+            })
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel(format!(
+                    "tool_id must match one of the discoverable tools exposed by {TOOL_SUGGEST_TOOL_NAME}"
+                ))
+            })?;
 
         let request_id = RequestId::String(format!("tool_suggestion_{call_id}").into());
         let params = build_tool_suggestion_elicitation_request(
@@ -263,14 +241,14 @@ fn build_tool_suggestion_elicitation_request(
         turn_id: Some(turn_id),
         server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
         request: McpServerElicitationRequest::Form {
-            meta: Some(build_tool_suggestion_meta(
+            meta: Some(json!(build_tool_suggestion_meta(
                 args.tool_type,
                 args.action_type,
                 suggest_reason,
                 connector.id.as_str(),
                 tool_name.as_str(),
                 install_url.as_str(),
-            )),
+            ))),
             message,
             requested_schema: McpElicitationSchema {
                 schema_uri: None,
@@ -282,27 +260,27 @@ fn build_tool_suggestion_elicitation_request(
     }
 }
 
-fn build_tool_suggestion_meta(
-    tool_type: ToolSuggestToolType,
-    action_type: ToolSuggestActionType,
-    suggest_reason: &str,
-    tool_id: &str,
-    tool_name: &str,
-    install_url: &str,
-) -> serde_json::Value {
-    json!({
-        TOOL_SUGGEST_APPROVAL_KIND_KEY: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
-        TOOL_SUGGEST_TOOL_TYPE_KEY: tool_type.as_str(),
-        TOOL_SUGGEST_SUGGEST_TYPE_KEY: action_type.as_str(),
-        TOOL_SUGGEST_REASON_KEY: suggest_reason,
-        TOOL_SUGGEST_TOOL_ID_KEY: tool_id,
-        TOOL_SUGGEST_TOOL_NAME_KEY: tool_name,
-        TOOL_SUGGEST_INSTALL_URL_KEY: install_url,
-    })
+fn build_tool_suggestion_meta<'a>(
+    tool_type: DiscoverableToolType,
+    action_type: DiscoverableToolAction,
+    suggest_reason: &'a str,
+    tool_id: &'a str,
+    tool_name: &'a str,
+    install_url: &'a str,
+) -> ToolSuggestMeta<'a> {
+    ToolSuggestMeta {
+        codex_approval_kind: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
+        tool_type,
+        suggest_type: action_type,
+        suggest_reason,
+        tool_id,
+        tool_name,
+        install_url,
+    }
 }
 
 fn verified_connector_suggestion_completed(
-    action_type: ToolSuggestActionType,
+    action_type: DiscoverableToolAction,
     tool_id: &str,
     accessible_connectors: &[AppInfo],
 ) -> bool {
@@ -310,8 +288,8 @@ fn verified_connector_suggestion_completed(
         .iter()
         .find(|connector| connector.id == tool_id)
         .is_some_and(|connector| match action_type {
-            ToolSuggestActionType::Install => connector.is_accessible,
-            ToolSuggestActionType::Enable => connector.is_accessible && connector.is_enabled,
+            DiscoverableToolAction::Install => connector.is_accessible,
+            DiscoverableToolAction::Enable => connector.is_accessible && connector.is_enabled,
         })
 }
 
@@ -323,8 +301,8 @@ mod tests {
     #[test]
     fn build_tool_suggestion_elicitation_request_uses_expected_shape() {
         let args = ToolSuggestArgs {
-            tool_type: ToolSuggestToolType::Connector,
-            action_type: ToolSuggestActionType::Install,
+            tool_type: DiscoverableToolType::Connector,
+            action_type: DiscoverableToolAction::Install,
             tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
             suggest_reason: "Plan and reference events from your calendar".to_string(),
         };
@@ -362,14 +340,14 @@ mod tests {
                 turn_id: Some("turn-1".to_string()),
                 server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 request: McpServerElicitationRequest::Form {
-                    meta: Some(json!({
-                        "codex_approval_kind": "tool_suggestion",
-                        "tool_type": "connector",
-                        "suggest_type": "install",
-                        "suggest_reason": "Plan and reference events from your calendar",
-                        "tool_id": "connector_2128aebfecb84f64a069897515042a44",
-                        "tool_name": "Google Calendar",
-                        "install_url": "https://chatgpt.com/apps/google-calendar/connector_2128aebfecb84f64a069897515042a44",
+                    meta: Some(json!(ToolSuggestMeta {
+                        codex_approval_kind: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
+                        tool_type: DiscoverableToolType::Connector,
+                        suggest_type: DiscoverableToolAction::Install,
+                        suggest_reason: "Plan and reference events from your calendar",
+                        tool_id: "connector_2128aebfecb84f64a069897515042a44",
+                        tool_name: "Google Calendar",
+                        install_url: "https://chatgpt.com/apps/google-calendar/connector_2128aebfecb84f64a069897515042a44",
                     })),
                     message: "Google Calendar could help with this request.\n\nPlan and reference events from your calendar\n\nOpen ChatGPT to install it, then confirm here if you finish.".to_string(),
                     requested_schema: McpElicitationSchema {
@@ -386,8 +364,8 @@ mod tests {
     #[test]
     fn build_tool_suggestion_meta_uses_expected_shape() {
         let meta = build_tool_suggestion_meta(
-            ToolSuggestToolType::Connector,
-            ToolSuggestActionType::Install,
+            DiscoverableToolType::Connector,
+            DiscoverableToolAction::Install,
             "Find and reference emails from your inbox",
             "connector_68df038e0ba48191908c8434991bbac2",
             "Gmail",
@@ -396,15 +374,15 @@ mod tests {
 
         assert_eq!(
             meta,
-            json!({
-                "codex_approval_kind": "tool_suggestion",
-                "tool_type": "connector",
-                "suggest_type": "install",
-                "suggest_reason": "Find and reference emails from your inbox",
-                "tool_id": "connector_68df038e0ba48191908c8434991bbac2",
-                "tool_name": "Gmail",
-                "install_url": "https://chatgpt.com/apps/gmail/connector_68df038e0ba48191908c8434991bbac2",
-            })
+            ToolSuggestMeta {
+                codex_approval_kind: TOOL_SUGGEST_APPROVAL_KIND_VALUE,
+                tool_type: DiscoverableToolType::Connector,
+                suggest_type: DiscoverableToolAction::Install,
+                suggest_reason: "Find and reference emails from your inbox",
+                tool_id: "connector_68df038e0ba48191908c8434991bbac2",
+                tool_name: "Gmail",
+                install_url: "https://chatgpt.com/apps/gmail/connector_68df038e0ba48191908c8434991bbac2",
+            }
         );
     }
 
@@ -427,12 +405,12 @@ mod tests {
         }];
 
         assert!(verified_connector_suggestion_completed(
-            ToolSuggestActionType::Install,
+            DiscoverableToolAction::Install,
             "calendar",
             &accessible_connectors,
         ));
         assert!(!verified_connector_suggestion_completed(
-            ToolSuggestActionType::Install,
+            DiscoverableToolAction::Install,
             "gmail",
             &accessible_connectors,
         ));
@@ -474,12 +452,12 @@ mod tests {
         ];
 
         assert!(!verified_connector_suggestion_completed(
-            ToolSuggestActionType::Enable,
+            DiscoverableToolAction::Enable,
             "calendar",
             &accessible_connectors,
         ));
         assert!(verified_connector_suggestion_completed(
-            ToolSuggestActionType::Enable,
+            DiscoverableToolAction::Enable,
             "gmail",
             &accessible_connectors,
         ));

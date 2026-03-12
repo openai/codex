@@ -49,6 +49,15 @@ const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
 const TOOL_SUGGEST_DISCOVERABLE_CONNECTOR_IDS: &[&str] = &[
     "connector_2128aebfecb84f64a069897515042a44",
     "connector_68df038e0ba48191908c8434991bbac2",
+    "asdk_app_69a1d78e929881919bba0dbda1f6436d",
+    "connector_4964e3b22e3e427e9b4ae1acf2c1fa34",
+    "connector_9d7cfa34e6654a5f98d3387af34b2e1c",
+    "connector_6f1ec045b8fa4ced8738e32c7f74514b",
+    "connector_947e0d954944416db111db556030eea6",
+    "connector_5f3c8c41a1e54ad7a76272c89e2554fa",
+    "connector_686fad9b54914a35b75be6d06a0f6f31",
+    "connector_76869538009648d5b282a4bb21c3d157",
+    "connector_37316be7febe4224b3d31465bae4dbd7",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
