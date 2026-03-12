@@ -11,6 +11,7 @@ use crate::config_api::ConfigApi;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::external_agent_config_api::ExternalAgentConfigApi;
 use crate::fs_api::FsApi;
+use crate::fs_watch::FsWatchManager;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -36,6 +37,8 @@ use codex_app_server_protocol::FsGetMetadataParams;
 use codex_app_server_protocol::FsReadDirectoryParams;
 use codex_app_server_protocol::FsReadFileParams;
 use codex_app_server_protocol::FsRemoveParams;
+use codex_app_server_protocol::FsUnwatchParams;
+use codex_app_server_protocol::FsWatchParams;
 use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCError;
@@ -152,6 +155,7 @@ pub(crate) struct MessageProcessor {
     external_agent_config_api: ExternalAgentConfigApi,
     fs_api: FsApi,
     auth_manager: Arc<AuthManager>,
+    fs_watch_manager: FsWatchManager,
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
 }
@@ -248,6 +252,7 @@ impl MessageProcessor {
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
         let fs_api = FsApi::default();
+        let fs_watch_manager = FsWatchManager::new(outgoing.clone());
 
         Self {
             outgoing,
@@ -256,6 +261,7 @@ impl MessageProcessor {
             external_agent_config_api,
             fs_api,
             auth_manager,
+            fs_watch_manager,
             config,
             config_warnings: Arc::new(config_warnings),
         }
@@ -463,6 +469,7 @@ impl MessageProcessor {
 
     pub(crate) async fn connection_closed(&mut self, connection_id: ConnectionId) {
         self.outgoing.connection_closed(connection_id).await;
+        self.fs_watch_manager.connection_closed(connection_id).await;
         self.codex_message_processor
             .connection_closed(connection_id)
             .await;
@@ -755,6 +762,28 @@ impl MessageProcessor {
                 )
                 .await;
             }
+            ClientRequest::FsWatch { request_id, params } => {
+                self.handle_fs_watch(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    connection_id,
+                    params,
+                )
+                .await;
+            }
+            ClientRequest::FsUnwatch { request_id, params } => {
+                self.handle_fs_unwatch(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    connection_id,
+                    params,
+                )
+                .await;
+            }
             other => {
                 // Box the delegated future so this wrapper's async state machine does not
                 // inline the full `CodexMessageProcessor::process_request` future, which
@@ -902,6 +931,30 @@ impl MessageProcessor {
 
     async fn handle_fs_copy(&self, request_id: ConnectionRequestId, params: FsCopyParams) {
         match self.fs_api.copy(params).await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_fs_watch(
+        &self,
+        request_id: ConnectionRequestId,
+        connection_id: ConnectionId,
+        params: FsWatchParams,
+    ) {
+        match self.fs_watch_manager.watch(connection_id, params).await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_fs_unwatch(
+        &self,
+        request_id: ConnectionRequestId,
+        connection_id: ConnectionId,
+        params: FsUnwatchParams,
+    ) {
+        match self.fs_watch_manager.unwatch(connection_id, params).await {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }
