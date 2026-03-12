@@ -756,19 +756,18 @@ impl Default for ExecToolCallOutput {
     }
 }
 
-#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
 async fn exec(
     params: ExecParams,
-    sandbox: SandboxType,
-    sandbox_policy: &SandboxPolicy,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    _sandbox: SandboxType,
+    _sandbox_policy: &SandboxPolicy,
+    _file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
-    if sandbox == SandboxType::WindowsRestrictedToken {
-        return exec_windows_sandbox(params, sandbox_policy).await;
+    if _sandbox == SandboxType::WindowsRestrictedToken {
+        return exec_windows_sandbox(params, _sandbox_policy).await;
     }
     let ExecParams {
         command,
