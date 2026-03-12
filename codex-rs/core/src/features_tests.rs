@@ -74,16 +74,13 @@ fn guardian_approval_is_experimental_and_user_toggleable() {
     let stage = spec.stage;
 
     assert!(matches!(stage, Stage::Experimental { .. }));
+    assert_eq!(stage.experimental_menu_name(), Some("Smart Approvals"));
     assert_eq!(
-        stage.experimental_menu_name(),
-        Some("Automatic approval review")
+        stage.experimental_menu_description().map(str::to_owned),
+        Some(
+            "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), dispatch those approval requests to a carefully-prompted security reviewer subagent instead of blocking on your input.".to_string()
+        )
     );
-    assert_eq!(
-            stage.experimental_menu_description().map(str::to_owned),
-            Some(
-                "Dispatch `on-request` approval prompts (for e.g. sandbox escapes or blocked network access) to a carefully-prompted security reviewer subagent rather than blocking the agent on your input.".to_string()
-            )
-        );
     assert_eq!(stage.experimental_announcement(), None);
     assert_eq!(Feature::GuardianApproval.default_enabled(), false);
 }
