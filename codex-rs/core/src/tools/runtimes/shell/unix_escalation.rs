@@ -121,6 +121,7 @@ pub(super) async fn try_run_zsh_fork(
     let crate::sandboxing::ExecRequest {
         command,
         cwd: sandbox_cwd,
+        sandbox_policy_cwd,
         env: sandbox_env,
         network: sandbox_network,
         expiration: _sandbox_expiration,
@@ -154,7 +155,7 @@ pub(super) async fn try_run_zsh_fork(
         sandbox_permissions,
         justification,
         arg0,
-        sandbox_policy_cwd: ctx.turn.cwd.clone(),
+        sandbox_policy_cwd,
         macos_seatbelt_profile_extensions: ctx
             .turn
             .config
@@ -271,7 +272,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         sandbox_permissions: exec_request.sandbox_permissions,
         justification: exec_request.justification.clone(),
         arg0: exec_request.arg0.clone(),
-        sandbox_policy_cwd: ctx.turn.cwd.clone(),
+        sandbox_policy_cwd: exec_request.sandbox_policy_cwd.clone(),
         macos_seatbelt_profile_extensions: ctx
             .turn
             .config
@@ -919,6 +920,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
             crate::sandboxing::ExecRequest {
                 command: self.command.clone(),
                 cwd: self.cwd.clone(),
+                sandbox_policy_cwd: self.sandbox_policy_cwd.clone(),
                 env: exec_env,
                 network: self.network.clone(),
                 expiration: ExecExpiration::Cancellation(cancel_rx),
