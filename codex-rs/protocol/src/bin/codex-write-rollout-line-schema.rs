@@ -1,7 +1,5 @@
 use codex_protocol::protocol::RolloutLine;
-use schemars::JsonSchema;
 use schemars::r#gen::SchemaSettings;
-use schemars::schema::RootSchema;
 use serde_json::Map;
 use serde_json::Value;
 use std::any::TypeId;
@@ -22,53 +20,38 @@ fn main() -> io::Result<()> {
     let out_dir = std::env::args_os()
         .nth(1)
         .map(PathBuf::from)
-        .unwrap_or_else(default_rollout_line_schema_dir);
-    write_rollout_line_schema_artifacts(&out_dir)?;
+        .unwrap_or_else(|| {
+            let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+            let codex_rs_dir = manifest_dir.parent().unwrap_or(manifest_dir);
+            codex_rs_dir.join("out/rollout-line-schema")
+        });
+
+    std::fs::create_dir_all(&out_dir)?;
+    std::fs::write(
+        out_dir.join(JSON_SCHEMA_FILENAME),
+        rollout_line_schema_json()?,
+    )?;
+    std::fs::write(
+        out_dir.join(TYPESCRIPT_FILENAME),
+        generate_typescript_bundle::<RolloutLine>(),
+    )?;
+
     for filename in [JSON_SCHEMA_FILENAME, TYPESCRIPT_FILENAME] {
         println!("Wrote {}", out_dir.join(filename).display());
     }
     Ok(())
 }
 
-fn default_rollout_line_schema_dir() -> PathBuf {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let codex_rs_dir = manifest_dir.parent().unwrap_or(manifest_dir);
-    codex_rs_dir.join("out/rollout-line-schema")
-}
-
-fn write_rollout_line_schema_artifacts(out_dir: &Path) -> io::Result<()> {
-    std::fs::create_dir_all(out_dir)?;
-
-    let schema_path = out_dir.join(JSON_SCHEMA_FILENAME);
-    std::fs::write(&schema_path, rollout_line_schema_json()?)?;
-
-    let typescript_path = out_dir.join(TYPESCRIPT_FILENAME);
-    std::fs::write(&typescript_path, rollout_line_schema_typescript())?;
-
-    Ok(())
-}
-
 fn rollout_line_schema_json() -> io::Result<Vec<u8>> {
-    let schema = schema_for_type::<RolloutLine>();
-    let value = serde_json::to_value(schema).map_err(io::Error::other)?;
-    let value = canonicalize_json(&value);
-    serde_json::to_vec_pretty(&value).map_err(io::Error::other)
-}
-
-fn rollout_line_schema_typescript() -> String {
-    generate_typescript_bundle::<RolloutLine>()
-}
-
-fn schema_for_type<T>() -> RootSchema
-where
-    T: JsonSchema,
-{
-    SchemaSettings::draft07()
+    let schema = SchemaSettings::draft07()
         .with(|settings| {
             settings.option_add_null_type = false;
         })
         .into_generator()
-        .into_root_schema_for::<T>()
+        .into_root_schema_for::<RolloutLine>();
+    let value = serde_json::to_value(schema).map_err(io::Error::other)?;
+    let value = canonicalize_json(&value);
+    serde_json::to_vec_pretty(&value).map_err(io::Error::other)
 }
 
 fn canonicalize_json(value: &Value) -> Value {
