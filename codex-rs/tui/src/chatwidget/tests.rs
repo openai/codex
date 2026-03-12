@@ -6073,6 +6073,28 @@ async fn slash_help_search_navigates_matches_with_n_and_p() {
 }
 
 #[tokio::test]
+async fn slash_help_search_restarts_from_empty_input() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Help);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char('/')));
+    for ch in "maintainers".chars() {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+    }
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let active = render_bottom_popup(&chat, 100);
+    assert!(active.contains("1/1 |"));
+    assert!(active.contains("n/p match"));
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char('/')));
+    let restarted = render_bottom_popup(&chat, 100);
+    assert!(restarted.contains("Search: /"));
+    assert!(!restarted.contains("Search: /maintainers"));
+    assert!(!restarted.contains("1/1 |"));
+}
+
+#[tokio::test]
 async fn slash_help_esc_dismisses_popup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 

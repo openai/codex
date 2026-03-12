@@ -212,7 +212,7 @@ impl SlashHelpView {
             ]);
         }
 
-        Line::from(vec![
+        let mut spans = vec![
             key_hint::plain(KeyCode::Up).into(),
             "/".into(),
             key_hint::plain(KeyCode::Down).into(),
@@ -222,11 +222,16 @@ impl SlashHelpView {
             key_hint::plain(KeyCode::PageDown).into(),
             " page  ".dim(),
             "/ search  ".dim(),
-            "n/p match  ".dim(),
+        ];
+        if !self.search.active_query.is_empty() {
+            spans.push("n/p match  ".dim());
+        }
+        spans.extend([
             "q/".dim(),
             key_hint::plain(KeyCode::Esc).into(),
             " close".dim(),
-        ])
+        ]);
+        Line::from(spans)
     }
 
     fn wrap_rows(rows: &[HelpRow], width: u16) -> (Vec<Line<'static>>, Vec<usize>, Vec<usize>) {
@@ -321,7 +326,10 @@ impl BottomPaneView for SlashHelpView {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.search.input = Some(self.search.active_query.clone());
+                self.search.active_query.clear();
+                self.search.selected_match = 0;
+                self.follow_selected_match.set(false);
+                self.search.input = Some(String::new());
             }
             KeyEvent {
                 code: KeyCode::Up, ..
