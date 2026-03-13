@@ -1656,7 +1656,7 @@ text(JSON.stringify({
     assert_eq!(
         parsed,
         serde_json::json!({
-            "hasExecCommand": true,
+            "hasExecCommand": !cfg!(windows),
             "hasNamespacedEcho": true,
         })
     );
