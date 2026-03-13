@@ -16,7 +16,6 @@ use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
-use codex_core::ThreadManager;
 use codex_core::ThreadSortKey;
 use codex_core::auth::AuthMode;
 use codex_core::auth::enforce_login_restrictions;
@@ -222,11 +221,6 @@ mod voice {
     }
 }
 
-pub(crate) struct EmbeddedAppServer {
-    pub(crate) client: InProcessAppServerClient,
-    pub(crate) auth_manager: Arc<AuthManager>,
-    pub(crate) thread_manager: Arc<ThreadManager>,
-}
 mod wrapping;
 
 #[cfg(test)]
@@ -249,7 +243,7 @@ async fn start_embedded_app_server(
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
-) -> color_eyre::Result<EmbeddedAppServer> {
+) -> color_eyre::Result<InProcessAppServerClient> {
     start_embedded_app_server_with(
         arg0_paths,
         config,
@@ -270,7 +264,7 @@ async fn start_embedded_app_server_with<F, Fut>(
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     start_client: F,
-) -> color_eyre::Result<EmbeddedAppServer>
+) -> color_eyre::Result<InProcessAppServerClient>
 where
     F: FnOnce(InProcessClientStartArgs) -> Fut,
     Fut: Future<Output = std::io::Result<InProcessAppServerClient>>,
@@ -303,14 +297,7 @@ where
     })
     .await
     .wrap_err("failed to start embedded app server")?;
-    let auth_manager = client.auth_manager();
-    let thread_manager = client.thread_manager();
-
-    Ok(EmbeddedAppServer {
-        client,
-        auth_manager,
-        thread_manager,
-    })
+    Ok(client)
 }
 
 pub async fn run_main(
@@ -1014,7 +1001,7 @@ async fn run_ratatui_app(
 
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
-    let embedded_app_server = match start_embedded_app_server(
+    let app_server = match start_embedded_app_server(
         arg0_paths,
         config.clone(),
         cli_kv_overrides.clone(),
@@ -1024,7 +1011,7 @@ async fn run_ratatui_app(
     )
     .await
     {
-        Ok(embedded_app_server) => embedded_app_server,
+        Ok(app_server) => app_server,
         Err(err) => {
             restore();
             session_log::log_session_end();
@@ -1034,7 +1021,7 @@ async fn run_ratatui_app(
 
     let app_result = App::run(
         &mut tui,
-        embedded_app_server,
+        app_server,
         config,
         cli_kv_overrides.clone(),
         overrides.clone(),
@@ -1313,7 +1300,7 @@ mod tests {
 
     async fn start_test_embedded_app_server(
         config: Config,
-    ) -> color_eyre::Result<EmbeddedAppServer> {
+    ) -> color_eyre::Result<InProcessAppServerClient> {
         start_embedded_app_server(
             Arg0DispatchPaths::default(),
             config,
@@ -1342,21 +1329,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embedded_app_server_exposes_client_owned_managers() -> color_eyre::Result<()> {
+    async fn embedded_app_server_exposes_client_manager_accessors() -> color_eyre::Result<()> {
         let temp_dir = TempDir::new()?;
         let config = build_config(&temp_dir).await?;
-        let embedded_app_server = start_test_embedded_app_server(config).await?;
+        let app_server = start_test_embedded_app_server(config).await?;
 
         assert!(Arc::ptr_eq(
-            &embedded_app_server.auth_manager,
-            &embedded_app_server.client.auth_manager()
+            &app_server.auth_manager(),
+            &app_server.auth_manager()
         ));
         assert!(Arc::ptr_eq(
-            &embedded_app_server.thread_manager,
-            &embedded_app_server.client.thread_manager()
+            &app_server.thread_manager(),
+            &app_server.thread_manager()
         ));
 
-        embedded_app_server.client.shutdown().await?;
+        app_server.shutdown().await?;
         Ok(())
     }
 

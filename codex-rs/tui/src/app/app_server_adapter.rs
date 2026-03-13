@@ -15,7 +15,6 @@ use super::App;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessServerEvent;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::ServerRequest;
 
 impl App {
     pub(super) async fn handle_app_server_event(
@@ -33,18 +32,15 @@ impl App {
             InProcessServerEvent::ServerNotification(_) => {}
             InProcessServerEvent::LegacyNotification(_) => {}
             InProcessServerEvent::ServerRequest(request) => {
-                let method = Self::server_request_method_name(&request);
                 let request_id = request.id().clone();
                 tracing::warn!(
                     ?request_id,
-                    method,
                     "rejecting app-server request while TUI still uses direct core APIs"
                 );
                 if let Err(err) = self
                     .reject_app_server_request(
                         app_server_client,
                         request_id,
-                        &method,
                         "TUI client does not yet handle this app-server server request".to_string(),
                     )
                     .await
@@ -59,7 +55,6 @@ impl App {
         &self,
         app_server_client: &InProcessAppServerClient,
         request_id: codex_app_server_protocol::RequestId,
-        method: &str,
         reason: String,
     ) -> std::result::Result<(), String> {
         app_server_client
@@ -72,18 +67,6 @@ impl App {
                 },
             )
             .await
-            .map_err(|err| format!("failed to reject `{method}` server request: {err}"))
-    }
-
-    fn server_request_method_name(request: &ServerRequest) -> String {
-        serde_json::to_value(request)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("method")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            })
-            .unwrap_or_else(|| "unknown".to_string())
+            .map_err(|err| format!("failed to reject app-server request: {err}"))
     }
 }

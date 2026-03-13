@@ -1,4 +1,3 @@
-use crate::EmbeddedAppServer;
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
@@ -40,6 +39,7 @@ use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
+use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
@@ -1712,7 +1712,7 @@ impl App {
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
-        mut app_server: EmbeddedAppServer,
+        mut app_server: InProcessAppServerClient,
         mut config: Config,
         cli_kv_overrides: Vec<(String, TomlValue)>,
         harness_overrides: ConfigOverrides,
@@ -1732,8 +1732,8 @@ impl App {
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
-        let auth_manager = app_server.auth_manager.clone();
-        let thread_manager = app_server.thread_manager.clone();
+        let auth_manager = app_server.auth_manager();
+        let thread_manager = app_server.thread_manager();
         let mut model = thread_manager
             .get_models_manager()
             .get_default_model(&config.model, RefreshStrategy::Offline)
@@ -1752,7 +1752,6 @@ impl App {
         .await;
         if let Some(exit_info) = exit_info {
             app_server
-                .client
                 .shutdown()
                 .await
                 .inspect_err(|err| {
@@ -2046,9 +2045,9 @@ impl App {
                             Err(err) => break Err(err),
                         }
                     }
-                    app_server_event = app_server.client.next_event(), if listen_for_app_server_events => {
+                    app_server_event = app_server.next_event(), if listen_for_app_server_events => {
                         match app_server_event {
-                            Some(event) => app.handle_app_server_event(&app_server.client, event).await,
+                            Some(event) => app.handle_app_server_event(&app_server, event).await,
                             None => {
                                 listen_for_app_server_events = false;
                                 tracing::warn!("app-server event stream closed");
@@ -2086,7 +2085,7 @@ impl App {
                 }
             }
         };
-        if let Err(err) = app_server.client.shutdown().await {
+        if let Err(err) = app_server.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }
         let clear_result = tui.terminal.clear();
