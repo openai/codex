@@ -1,7 +1,10 @@
+use crate::endpoint::realtime_websocket::protocol_common::parse_error_event;
+use crate::endpoint::realtime_websocket::protocol_common::parse_realtime_payload;
+use crate::endpoint::realtime_websocket::protocol_common::parse_session_updated_event;
+use crate::endpoint::realtime_websocket::protocol_common::parse_transcript_delta_event;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
-use codex_protocol::protocol::RealtimeTranscriptDelta;
 use serde_json::Map as JsonMap;
 use serde_json::Value;
 use tracing::debug;
@@ -12,33 +15,20 @@ const DEFAULT_AUDIO_CHANNELS: u16 = 1;
 const TOOL_ARGUMENT_KEYS: [&str; 5] = ["input_transcript", "input", "text", "prompt", "query"];
 
 pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
-    let parsed: Value = match serde_json::from_str(payload) {
-        Ok(msg) => msg,
-        Err(err) => {
-            debug!("failed to parse realtime v2 event: {err}, data: {payload}");
-            return None;
-        }
-    };
+    let (parsed, message_type) = parse_realtime_payload(payload, "realtime v2")?;
 
-    let message_type = match parsed.get("type").and_then(Value::as_str) {
-        Some(message_type) => message_type,
-        None => {
-            debug!("received realtime v2 event without type field: {payload}");
-            return None;
-        }
-    };
-
-    match message_type {
+    match message_type.as_str() {
         "session.updated" => parse_session_updated_event(&parsed),
         "response.output_audio.delta" => parse_output_audio_delta_event(&parsed),
         "conversation.item.input_audio_transcription.delta" => {
-            parse_transcript_delta_event(&parsed).map(RealtimeEvent::InputTranscriptDelta)
+            parse_transcript_delta_event(&parsed, "delta").map(RealtimeEvent::InputTranscriptDelta)
         }
         "conversation.item.input_audio_transcription.completed" => {
-            parse_transcript_completed_event(&parsed).map(RealtimeEvent::InputTranscriptDelta)
+            parse_transcript_delta_event(&parsed, "transcript")
+                .map(RealtimeEvent::InputTranscriptDelta)
         }
         "response.output_text.delta" | "response.output_audio_transcript.delta" => {
-            parse_transcript_delta_event(&parsed).map(RealtimeEvent::OutputTranscriptDelta)
+            parse_transcript_delta_event(&parsed, "delta").map(RealtimeEvent::OutputTranscriptDelta)
         }
         "conversation.item.added" => parsed
             .get("item")
@@ -51,25 +41,6 @@ pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
             None
         }
     }
-}
-
-fn parse_session_updated_event(parsed: &Value) -> Option<RealtimeEvent> {
-    let session_id = parsed
-        .get("session")
-        .and_then(Value::as_object)
-        .and_then(|session| session.get("id"))
-        .and_then(Value::as_str)
-        .map(str::to_string)?;
-    let instructions = parsed
-        .get("session")
-        .and_then(Value::as_object)
-        .and_then(|session| session.get("instructions"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    Some(RealtimeEvent::SessionUpdated {
-        session_id,
-        instructions,
-    })
 }
 
 fn parse_output_audio_delta_event(parsed: &Value) -> Option<RealtimeEvent> {
@@ -97,22 +68,6 @@ fn parse_output_audio_delta_event(parsed: &Value) -> Option<RealtimeEvent> {
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok()),
     }))
-}
-
-fn parse_transcript_delta_event(parsed: &Value) -> Option<RealtimeTranscriptDelta> {
-    parsed
-        .get("delta")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .map(|delta| RealtimeTranscriptDelta { delta })
-}
-
-fn parse_transcript_completed_event(parsed: &Value) -> Option<RealtimeTranscriptDelta> {
-    parsed
-        .get("transcript")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .map(|delta| RealtimeTranscriptDelta { delta })
 }
 
 fn parse_conversation_item_done_event(parsed: &Value) -> Option<RealtimeEvent> {
@@ -172,21 +127,4 @@ fn extract_input_transcript(arguments: &str) -> String {
     }
 
     arguments.to_string()
-}
-
-fn parse_error_event(parsed: &Value) -> Option<RealtimeEvent> {
-    parsed
-        .get("message")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .or_else(|| {
-            parsed
-                .get("error")
-                .and_then(Value::as_object)
-                .and_then(|error| error.get("message"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .or_else(|| parsed.get("error").map(ToString::to_string))
-        .map(RealtimeEvent::Error)
 }

@@ -1,5 +1,7 @@
 pub mod methods;
 pub mod protocol;
+mod protocol_common;
+mod protocol_v1;
 mod protocol_v2;
 
 pub use codex_protocol::protocol::RealtimeAudioFrame;
