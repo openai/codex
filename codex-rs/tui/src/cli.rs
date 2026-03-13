@@ -110,11 +110,6 @@ pub struct Cli {
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
 
-    /// Route eligible operations through the embedded app-server instead of
-    /// codex-core directly.
-    #[arg(long = "app-server", default_value_t = false)]
-    pub app_server: bool,
-
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }

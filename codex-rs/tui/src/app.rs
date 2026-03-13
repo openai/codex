@@ -753,7 +753,6 @@ impl App {
             startup_tooltip_override: None,
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             session_telemetry: self.session_telemetry.clone(),
-            use_app_server: self.chat_widget.use_app_server(),
         }
     }
 
@@ -1802,7 +1801,6 @@ impl App {
             startup_tooltip_override: None,
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             session_telemetry: self.session_telemetry.clone(),
-            use_app_server: self.chat_widget.use_app_server(),
         };
         self.chat_widget = ChatWidget::new(init, self.server.clone());
         self.reset_thread_event_state();
@@ -1931,7 +1929,6 @@ impl App {
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
-        use_app_server: bool,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -2038,7 +2035,6 @@ impl App {
                     startup_tooltip_override,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
-                    use_app_server,
                 };
                 ChatWidget::new(init, thread_manager.clone())
             }
@@ -2075,7 +2071,6 @@ impl App {
                     startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
-                    use_app_server,
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
@@ -2114,7 +2109,6 @@ impl App {
                     startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
-                    use_app_server,
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
             }
@@ -2230,8 +2224,7 @@ impl App {
                 let control = select! {
                     Some(event) = app_event_rx.recv() => {
                         match event {
-                            AppEvent::CodexOp(Op::ListSkills { cwds, force_reload })
-                                if app.chat_widget.use_app_server() =>
+                            AppEvent::CodexOp(Op::ListSkills { cwds, force_reload }) =>
                             {
                                 let cwds = effective_skills_list_cwds(
                                     cwds,
