@@ -21,6 +21,7 @@ pub use codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools
 use codex_core::connectors::merge_connectors;
 use codex_core::connectors::merge_plugin_apps;
 pub use codex_core::connectors::with_app_enabled_state;
+use codex_core::plugins::AppConnectorId;
 use codex_core::plugins::PluginsManager;
 
 const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
@@ -118,6 +119,21 @@ fn plugin_apps_for_config(config: &Config) -> Vec<codex_core::plugins::AppConnec
         .effective_apps()
 }
 
+pub fn connectors_for_plugin_apps(
+    connectors: Vec<AppInfo>,
+    plugin_apps: &[AppConnectorId],
+) -> Vec<AppInfo> {
+    let plugin_app_ids = plugin_apps
+        .iter()
+        .map(|connector_id| connector_id.0.as_str())
+        .collect::<HashSet<_>>();
+
+    filter_disallowed_connectors(merge_plugin_apps(connectors, plugin_apps.to_vec()))
+        .into_iter()
+        .filter(|connector| plugin_app_ids.contains(connector.id.as_str()))
+        .collect()
+}
+
 pub fn merge_connectors_with_accessible(
     connectors: Vec<AppInfo>,
     accessible_connectors: Vec<AppInfo>,
@@ -143,6 +159,7 @@ pub fn merge_connectors_with_accessible(
 mod tests {
     use super::*;
     use codex_core::connectors::connector_install_url;
+    use codex_core::plugins::AppConnectorId;
     use pretty_assertions::assert_eq;
 
     fn app(id: &str) -> AppInfo {
@@ -242,5 +259,28 @@ mod tests {
             merged,
             vec![merged_app("alpha", true), merged_app("beta", true)]
         );
+    }
+
+    #[test]
+    fn connectors_for_plugin_apps_returns_only_requested_plugin_apps() {
+        let connectors = connectors_for_plugin_apps(
+            vec![app("alpha"), app("beta")],
+            &[
+                AppConnectorId("alpha".to_string()),
+                AppConnectorId("gmail".to_string()),
+            ],
+        );
+        assert_eq!(connectors, vec![app("alpha"), merged_app("gmail", false)]);
+    }
+
+    #[test]
+    fn connectors_for_plugin_apps_filters_disallowed_plugin_apps() {
+        let connectors = connectors_for_plugin_apps(
+            Vec::new(),
+            &[AppConnectorId(
+                "asdk_app_6938a94a61d881918ef32cb999ff937c".to_string(),
+            )],
+        );
+        assert_eq!(connectors, Vec::<AppInfo>::new());
     }
 }

@@ -36,6 +36,28 @@ Codex stores the SQLite-backed state DB under `sqlite_home` (config key) or the
 `CODEX_SQLITE_HOME` environment variable. When unset, WorkspaceWrite sandbox
 sessions default to a temp directory; other modes default to `CODEX_HOME`.
 
+## Custom CA Certificates
+
+Codex can trust a custom root CA bundle for outbound HTTPS and secure websocket
+connections when enterprise proxies or gateways intercept TLS. This applies to
+login flows and to Codex's other external connections, including Codex
+components that build reqwest clients or secure websocket clients through the
+shared `codex-client` CA-loading path and remote MCP connections that use it.
+
+Set `CODEX_CA_CERTIFICATE` to the path of a PEM file containing one or more
+certificate blocks to use a Codex-specific CA bundle. If
+`CODEX_CA_CERTIFICATE` is unset, Codex falls back to `SSL_CERT_FILE`. If
+neither variable is set, Codex uses the system root certificates.
+
+`CODEX_CA_CERTIFICATE` takes precedence over `SSL_CERT_FILE`. Empty values are
+treated as unset.
+
+The PEM file may contain multiple certificates. Codex also tolerates OpenSSL
+`TRUSTED CERTIFICATE` labels and ignores well-formed `X509 CRL` sections in the
+same bundle. If the file is empty, unreadable, or malformed, the affected Codex
+HTTP or secure websocket connection reports a user-facing error that points
+back to these environment variables.
+
 ## Notices
 
 Codex stores "do not show again" flags for some UI prompts under the `[notice]` table.

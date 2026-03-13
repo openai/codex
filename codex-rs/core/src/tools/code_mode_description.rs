@@ -74,14 +74,42 @@ fn append_code_mode_sample(
     input_type: String,
     output_type: String,
 ) -> String {
-    let reference = code_mode_tool_reference(tool_name);
-    format!(
-        "{description}\n\nCode mode declaration:\n```ts\nimport {{ {} }} from \"{}\";\ndeclare function {}({input_name}: {input_type}): Promise<{output_type}>;\n```",
-        reference.tool_key, reference.module_path, reference.tool_key
-    )
+    let declaration = format!(
+        "declare const tools: {{\n  {}\n}};",
+        render_code_mode_tool_declaration(tool_name, input_name, input_type, output_type)
+    );
+    format!("{description}\n\nCode mode declaration:\n```ts\n{declaration}\n```")
 }
 
-fn code_mode_local_name(tool_key: &str) -> String {
+fn render_code_mode_tool_declaration(
+    tool_name: &str,
+    input_name: &str,
+    input_type: String,
+    output_type: String,
+) -> String {
+    let input_type = indent_multiline_type(&input_type, 2);
+    let output_type = indent_multiline_type(&output_type, 2);
+    let tool_name = normalize_code_mode_identifier(tool_name);
+    format!("{tool_name}({input_name}: {input_type}): Promise<{output_type}>;")
+}
+
+fn indent_multiline_type(type_name: &str, spaces: usize) -> String {
+    let indent = " ".repeat(spaces);
+    type_name
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            if index == 0 {
+                line.to_string()
+            } else {
+                format!("{indent}{line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub(crate) fn normalize_code_mode_identifier(tool_key: &str) -> String {
     let mut identifier = String::new();
 
     for (index, ch) in tool_key.chars().enumerate() {
@@ -98,7 +126,11 @@ fn code_mode_local_name(tool_key: &str) -> String {
         }
     }
 
-    identifier
+    if identifier.is_empty() {
+        "_".to_string()
+    } else {
+        identifier
+    }
 }
 
 fn render_json_schema_to_typescript(schema: &JsonValue) -> String {
@@ -279,7 +311,7 @@ fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>, indent: u
 }
 
 fn render_json_schema_property_name(name: &str) -> String {
-    if code_mode_local_name(name) == name {
+    if normalize_code_mode_identifier(name) == name {
         name.to_string()
     } else {
         serde_json::to_string(name).unwrap_or_else(|_| format!("\"{}\"", name.replace('"', "\\\"")))

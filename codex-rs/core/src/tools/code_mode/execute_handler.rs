@@ -4,7 +4,6 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
-use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
@@ -25,20 +24,15 @@ impl CodeModeExecuteHandler {
         &self,
         session: std::sync::Arc<Session>,
         turn: std::sync::Arc<TurnContext>,
-        tracker: SharedTurnDiffTracker,
         code: String,
     ) -> Result<FunctionToolOutput, FunctionCallError> {
-        let exec = ExecContext {
-            session,
-            turn,
-            tracker,
-        };
+        let exec = ExecContext { session, turn };
         let enabled_tools = build_enabled_tools(&exec).await;
         let service = &exec.session.services.code_mode_service;
         let stored_values = service.stored_values().await;
         let source =
             build_source(&code, &enabled_tools).map_err(FunctionCallError::RespondToModel)?;
-        let session_id = service.allocate_session_id().await;
+        let cell_id = service.allocate_cell_id().await;
         let request_id = service.allocate_request_id().await;
         let process_slot = service
             .ensure_started()
@@ -47,7 +41,8 @@ impl CodeModeExecuteHandler {
         let started_at = std::time::Instant::now();
         let message = HostToNodeMessage::Start {
             request_id: request_id.clone(),
-            session_id,
+            cell_id: cell_id.clone(),
+            default_yield_time_ms: super::DEFAULT_EXEC_YIELD_TIME_MS,
             enabled_tools,
             stored_values,
             source,
@@ -67,7 +62,7 @@ impl CodeModeExecuteHandler {
                 Ok(message) => message,
                 Err(error) => return Err(FunctionCallError::RespondToModel(error)),
             };
-            handle_node_message(&exec, session_id, message, None, started_at).await
+            handle_node_message(&exec, cell_id, message, None, started_at).await
         };
         match result {
             Ok(CodeModeSessionProgress::Finished(output))
@@ -93,7 +88,6 @@ impl ToolHandler for CodeModeExecuteHandler {
         let ToolInvocation {
             session,
             turn,
-            tracker,
             tool_name,
             payload,
             ..
@@ -101,7 +95,7 @@ impl ToolHandler for CodeModeExecuteHandler {
 
         match payload {
             ToolPayload::Custom { input } if tool_name == PUBLIC_TOOL_NAME => {
-                self.execute(session, turn, tracker, input).await
+                self.execute(session, turn, input).await
             }
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "{PUBLIC_TOOL_NAME} expects raw JavaScript source text"

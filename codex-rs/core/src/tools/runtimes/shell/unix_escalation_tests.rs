@@ -16,8 +16,8 @@ use crate::config::Permissions;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::exec::SandboxType;
 use crate::protocol::AskForApproval;
+use crate::protocol::GranularApprovalConfig;
 use crate::protocol::ReadOnlyAccess;
-use crate::protocol::RejectConfig;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::SandboxPermissions;
 #[cfg(target_os = "macos")]
@@ -105,12 +105,12 @@ fn execve_prompt_rejection_uses_skill_approval_for_skill_scripts() {
 
     assert_eq!(
         super::execve_prompt_is_rejected_by_policy(
-            AskForApproval::Reject(RejectConfig {
+            AskForApproval::Granular(GranularApprovalConfig {
                 sandbox_approval: true,
                 rules: true,
-                skill_approval: false,
-                request_permissions: false,
-                mcp_elicitations: false,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
             }),
             &decision_source,
         ),
@@ -118,16 +118,16 @@ fn execve_prompt_rejection_uses_skill_approval_for_skill_scripts() {
     );
     assert_eq!(
         super::execve_prompt_is_rejected_by_policy(
-            AskForApproval::Reject(RejectConfig {
-                sandbox_approval: false,
-                rules: false,
-                skill_approval: true,
-                request_permissions: false,
-                mcp_elicitations: false,
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: false,
+                request_permissions: true,
+                mcp_elicitations: true,
             }),
             &decision_source,
         ),
-        Some("approval required by skill, but AskForApproval::Reject.skill_approval is set"),
+        Some("approval required by skill, but AskForApproval::Granular.skill_approval is false"),
     );
 }
 
@@ -135,16 +135,16 @@ fn execve_prompt_rejection_uses_skill_approval_for_skill_scripts() {
 fn execve_prompt_rejection_keeps_prefix_rules_on_rules_flag() {
     assert_eq!(
         super::execve_prompt_is_rejected_by_policy(
-            AskForApproval::Reject(RejectConfig {
+            AskForApproval::Granular(GranularApprovalConfig {
                 sandbox_approval: true,
-                rules: true,
-                skill_approval: false,
-                request_permissions: false,
-                mcp_elicitations: false,
+                rules: false,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
             }),
             &super::DecisionSource::PrefixRule,
         ),
-        Some("approval required by policy rule, but AskForApproval::Reject.rules is set"),
+        Some("approval required by policy rule, but AskForApproval::Granular.rules is false"),
     );
 }
 
@@ -152,16 +152,16 @@ fn execve_prompt_rejection_keeps_prefix_rules_on_rules_flag() {
 fn execve_prompt_rejection_keeps_unmatched_commands_on_sandbox_flag() {
     assert_eq!(
         super::execve_prompt_is_rejected_by_policy(
-            AskForApproval::Reject(RejectConfig {
-                sandbox_approval: true,
-                rules: false,
-                skill_approval: false,
-                request_permissions: false,
-                mcp_elicitations: false,
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: false,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
             }),
             &super::DecisionSource::UnmatchedCommandFallback,
         ),
-        Some("approval required by policy, but AskForApproval::Reject.sandbox_approval is set"),
+        Some("approval required by policy, but AskForApproval::Granular.sandbox_approval is false"),
     );
 }
 

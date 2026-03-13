@@ -516,11 +516,13 @@ pub enum AskForApproval {
     #[default]
     OnRequest,
 
-    /// Fine-grained rejection controls for approval prompts.
+    /// Fine-grained controls for individual approval flows.
     ///
-    /// When a field is `true`, prompts of that category are automatically
-    /// rejected instead of shown to the user.
-    Reject(RejectConfig),
+    /// When a field is `true`, commands in that category are allowed. When it
+    /// is `false`, those requests are automatically rejected instead of shown
+    /// to the user.
+    #[strum(serialize = "granular")]
+    Granular(GranularApprovalConfig),
 
     /// Never ask the user to approve commands. Failures are immediately returned
     /// to the model, and never escalated to the user for approval.
@@ -528,39 +530,40 @@ pub enum AskForApproval {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
-pub struct RejectConfig {
-    /// Reject approval prompts related to sandbox escalation.
+pub struct GranularApprovalConfig {
+    /// Whether to allow shell command approval requests, including inline
+    /// `with_additional_permissions` and `require_escalated` requests.
     pub sandbox_approval: bool,
-    /// Reject prompts triggered by execpolicy `prompt` rules.
+    /// Whether to allow prompts triggered by execpolicy `prompt` rules.
     pub rules: bool,
-    /// Reject approval prompts triggered by skill script execution.
+    /// Whether to allow approval prompts triggered by skill script execution.
     #[serde(default)]
     pub skill_approval: bool,
-    /// Reject approval prompts related to built-in permission requests.
+    /// Whether to allow prompts triggered by the `request_permissions` tool.
     #[serde(default)]
     pub request_permissions: bool,
-    /// Reject MCP elicitation prompts.
+    /// Whether to allow MCP elicitation prompts.
     pub mcp_elicitations: bool,
 }
 
-impl RejectConfig {
-    pub const fn rejects_sandbox_approval(self) -> bool {
+impl GranularApprovalConfig {
+    pub const fn allows_sandbox_approval(self) -> bool {
         self.sandbox_approval
     }
 
-    pub const fn rejects_rules_approval(self) -> bool {
+    pub const fn allows_rules_approval(self) -> bool {
         self.rules
     }
 
-    pub const fn rejects_skill_approval(self) -> bool {
+    pub const fn allows_skill_approval(self) -> bool {
         self.skill_approval
     }
 
-    pub const fn rejects_request_permissions(self) -> bool {
+    pub const fn allows_request_permissions(self) -> bool {
         self.request_permissions
     }
 
-    pub const fn rejects_mcp_elicitations(self) -> bool {
+    pub const fn allows_mcp_elicitations(self) -> bool {
         self.mcp_elicitations
     }
 }
@@ -3465,89 +3468,89 @@ mod tests {
     }
 
     #[test]
-    fn reject_config_mcp_elicitation_flag_is_field_driven() {
+    fn granular_approval_config_mcp_elicitation_flag_is_field_driven() {
         assert!(
-            RejectConfig {
+            GranularApprovalConfig {
                 sandbox_approval: false,
                 rules: false,
                 skill_approval: false,
                 request_permissions: false,
                 mcp_elicitations: true,
             }
-            .rejects_mcp_elicitations()
+            .allows_mcp_elicitations()
         );
         assert!(
-            !RejectConfig {
+            !GranularApprovalConfig {
                 sandbox_approval: false,
                 rules: false,
                 skill_approval: false,
                 request_permissions: false,
                 mcp_elicitations: false,
             }
-            .rejects_mcp_elicitations()
+            .allows_mcp_elicitations()
         );
     }
 
     #[test]
-    fn reject_config_skill_approval_flag_is_field_driven() {
+    fn granular_approval_config_skill_approval_flag_is_field_driven() {
         assert!(
-            RejectConfig {
+            GranularApprovalConfig {
                 sandbox_approval: false,
                 rules: false,
                 skill_approval: true,
                 request_permissions: false,
                 mcp_elicitations: false,
             }
-            .rejects_skill_approval()
+            .allows_skill_approval()
         );
         assert!(
-            !RejectConfig {
+            !GranularApprovalConfig {
                 sandbox_approval: false,
                 rules: false,
                 skill_approval: false,
                 request_permissions: false,
                 mcp_elicitations: false,
             }
-            .rejects_skill_approval()
+            .allows_skill_approval()
         );
     }
 
     #[test]
-    fn reject_config_request_permissions_flag_is_field_driven() {
+    fn granular_approval_config_request_permissions_flag_is_field_driven() {
         assert!(
-            RejectConfig {
+            GranularApprovalConfig {
                 sandbox_approval: false,
                 rules: false,
                 skill_approval: false,
                 request_permissions: true,
                 mcp_elicitations: false,
             }
-            .rejects_request_permissions()
+            .allows_request_permissions()
         );
         assert!(
-            !RejectConfig {
+            !GranularApprovalConfig {
                 sandbox_approval: false,
                 rules: false,
                 skill_approval: false,
                 request_permissions: false,
                 mcp_elicitations: false,
             }
-            .rejects_request_permissions()
+            .allows_request_permissions()
         );
     }
 
     #[test]
-    fn reject_config_defaults_missing_optional_flags_to_false() {
-        let decoded = serde_json::from_value::<RejectConfig>(serde_json::json!({
+    fn granular_approval_config_defaults_missing_optional_flags_to_false() {
+        let decoded = serde_json::from_value::<GranularApprovalConfig>(serde_json::json!({
             "sandbox_approval": true,
             "rules": false,
             "mcp_elicitations": true,
         }))
-        .expect("legacy reject config should deserialize");
+        .expect("granular approval config should deserialize");
 
         assert_eq!(
             decoded,
-            RejectConfig {
+            GranularApprovalConfig {
                 sandbox_approval: true,
                 rules: false,
                 skill_approval: false,

@@ -34,8 +34,12 @@ use crate::default_client::build_reqwest_client;
 use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
+use crate::skills::SkillMetadata;
+use crate::skills::loader::SkillRoot;
+use crate::skills::loader::load_skills_from_roots;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::MergeStrategy;
+use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde_json::Map as JsonMap;
@@ -72,11 +76,40 @@ pub struct PluginInstallRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginReadRequest {
+    pub plugin_name: String,
+    pub marketplace_path: AbsolutePathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallOutcome {
     pub plugin_id: PluginId,
     pub plugin_version: String,
     pub installed_path: AbsolutePathBuf,
     pub auth_policy: MarketplacePluginAuthPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginReadOutcome {
+    pub marketplace_name: String,
+    pub marketplace_path: AbsolutePathBuf,
+    pub plugin: PluginDetailSummary,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginDetailSummary {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub source: MarketplacePluginSourceSummary,
+    pub install_policy: MarketplacePluginInstallPolicy,
+    pub auth_policy: MarketplacePluginAuthPolicy,
+    pub interface: Option<PluginManifestInterfaceSummary>,
+    pub installed: bool,
+    pub enabled: bool,
+    pub skills: Vec<SkillMetadata>,
+    pub apps: Vec<AppConnectorId>,
+    pub mcp_server_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -647,20 +680,7 @@ impl PluginsManager {
         config: &Config,
         additional_roots: &[AbsolutePathBuf],
     ) -> Result<Vec<ConfiguredMarketplaceSummary>, MarketplaceError> {
-        let installed_plugins = configured_plugins_from_stack(&config.config_layer_stack)
-            .into_keys()
-            .filter(|plugin_key| {
-                PluginId::parse(plugin_key)
-                    .ok()
-                    .is_some_and(|plugin_id| self.store.is_installed(&plugin_id))
-            })
-            .collect::<HashSet<_>>();
-        let configured_plugins = self
-            .plugins_for_config(config)
-            .plugins()
-            .iter()
-            .map(|plugin| (plugin.config_name.clone(), plugin.enabled))
-            .collect::<HashMap<String, bool>>();
+        let (installed_plugins, configured_plugins) = self.configured_plugin_states(config);
         let marketplaces = list_marketplaces(&self.marketplace_roots(additional_roots))?;
         let mut seen_plugin_keys = HashSet::new();
 
@@ -703,6 +723,83 @@ impl PluginsManager {
                 })
             })
             .collect())
+    }
+
+    pub fn read_plugin_for_config(
+        &self,
+        config: &Config,
+        request: &PluginReadRequest,
+    ) -> Result<PluginReadOutcome, MarketplaceError> {
+        let marketplace = load_marketplace_summary(&request.marketplace_path)?;
+        let marketplace_name = marketplace.name.clone();
+        let plugin = marketplace
+            .plugins
+            .into_iter()
+            .find(|plugin| plugin.name == request.plugin_name);
+        let Some(plugin) = plugin else {
+            return Err(MarketplaceError::PluginNotFound {
+                plugin_name: request.plugin_name.clone(),
+                marketplace_name,
+            });
+        };
+
+        let plugin_id = PluginId::new(plugin.name.clone(), marketplace.name.clone()).map_err(
+            |err| match err {
+                PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
+            },
+        )?;
+        let plugin_key = plugin_id.as_key();
+        let (installed_plugins, configured_plugins) = self.configured_plugin_states(config);
+        let source_path = match &plugin.source {
+            MarketplacePluginSourceSummary::Local { path } => path.clone(),
+        };
+        let manifest = load_plugin_manifest(source_path.as_path()).ok_or_else(|| {
+            MarketplaceError::InvalidPlugin(
+                "missing or invalid .codex-plugin/plugin.json".to_string(),
+            )
+        })?;
+        let description = manifest.description.clone();
+        let manifest_paths = plugin_manifest_paths(&manifest, source_path.as_path());
+        let skill_roots = plugin_skill_roots(source_path.as_path(), &manifest_paths);
+        let skills = load_skills_from_roots(skill_roots.into_iter().map(|path| SkillRoot {
+            path,
+            scope: SkillScope::User,
+        }))
+        .skills;
+        let apps = load_plugin_apps(source_path.as_path());
+        let mcp_config_paths = plugin_mcp_config_paths(source_path.as_path(), &manifest_paths);
+        let mut mcp_server_names = Vec::new();
+        for mcp_config_path in mcp_config_paths {
+            mcp_server_names.extend(
+                load_mcp_servers_from_file(source_path.as_path(), &mcp_config_path)
+                    .mcp_servers
+                    .into_keys(),
+            );
+        }
+        mcp_server_names.sort_unstable();
+        mcp_server_names.dedup();
+
+        Ok(PluginReadOutcome {
+            marketplace_name: marketplace.name,
+            marketplace_path: marketplace.path,
+            plugin: PluginDetailSummary {
+                id: plugin_key.clone(),
+                name: plugin.name,
+                description,
+                source: plugin.source,
+                install_policy: plugin.install_policy,
+                auth_policy: plugin.auth_policy,
+                interface: plugin.interface,
+                installed: installed_plugins.contains(&plugin_key),
+                enabled: configured_plugins
+                    .get(&plugin_key)
+                    .copied()
+                    .unwrap_or(false),
+                skills,
+                apps,
+                mcp_server_names,
+            },
+        })
     }
 
     pub fn maybe_start_curated_repo_sync_for_config(self: &Arc<Self>, config: &Config) {
@@ -770,6 +867,27 @@ impl PluginsManager {
             CURATED_REPO_SYNC_STARTED.store(false, Ordering::SeqCst);
             warn!("failed to start curated plugins repo sync task: {err}");
         }
+    }
+
+    fn configured_plugin_states(
+        &self,
+        config: &Config,
+    ) -> (HashSet<String>, HashMap<String, bool>) {
+        let installed_plugins = configured_plugins_from_stack(&config.config_layer_stack)
+            .into_keys()
+            .filter(|plugin_key| {
+                PluginId::parse(plugin_key)
+                    .ok()
+                    .is_some_and(|plugin_id| self.store.is_installed(&plugin_id))
+            })
+            .collect::<HashSet<_>>();
+        let configured_plugins = self
+            .plugins_for_config(config)
+            .plugins()
+            .iter()
+            .map(|plugin| (plugin.config_name.clone(), plugin.enabled))
+            .collect::<HashMap<String, bool>>();
+        (installed_plugins, configured_plugins)
     }
 
     fn marketplace_roots(&self, additional_roots: &[AbsolutePathBuf]) -> Vec<AbsolutePathBuf> {

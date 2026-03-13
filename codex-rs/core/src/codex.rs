@@ -2912,8 +2912,8 @@ impl Session {
                     scope: PermissionGrantScope::Turn,
                 });
             }
-            AskForApproval::Reject(reject_config)
-                if reject_config.rejects_request_permissions() =>
+            AskForApproval::Granular(granular_config)
+                if !granular_config.allows_request_permissions() =>
             {
                 return Some(RequestPermissionsResponse {
                     permissions: PermissionProfile::default(),
@@ -2923,7 +2923,7 @@ impl Session {
             AskForApproval::OnFailure
             | AskForApproval::OnRequest
             | AskForApproval::UnlessTrusted
-            | AskForApproval::Reject(_) => {}
+            | AskForApproval::Granular(_) => {}
         }
 
         let (tx_response, rx_response) = oneshot::channel();
@@ -3381,7 +3381,9 @@ impl Session {
                 turn_context.approval_policy.value(),
                 self.services.exec_policy.current().as_ref(),
                 &turn_context.cwd,
-                turn_context.features.enabled(Feature::RequestPermissions),
+                turn_context
+                    .features
+                    .enabled(Feature::ExecPermissionApprovals),
             )
             .into_text(),
         );
@@ -5551,11 +5553,6 @@ pub(crate) async fn run_turn(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let _code_mode_worker = sess
-        .services
-        .code_mode_service
-        .start_turn_worker(&sess, &turn_context, &turn_diff_tracker)
-        .await;
     let mut server_model_warning_emitted_for_turn = false;
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
@@ -5570,7 +5567,7 @@ pub(crate) async fn run_turn(
                 AskForApproval::UnlessTrusted
                 | AskForApproval::OnFailure
                 | AskForApproval::OnRequest
-                | AskForApproval::Reject(_) => "default",
+                | AskForApproval::Granular(_) => "default",
             }
             .to_string();
             let session_start_request = codex_hooks::SessionStartRequest {
@@ -5719,7 +5716,7 @@ pub(crate) async fn run_turn(
                         AskForApproval::UnlessTrusted
                         | AskForApproval::OnFailure
                         | AskForApproval::OnRequest
-                        | AskForApproval::Reject(_) => "default",
+                        | AskForApproval::Granular(_) => "default",
                     }
                     .to_string();
                     let stop_request = codex_hooks::StopRequest {
@@ -6161,10 +6158,26 @@ async fn run_sampling_request(
         turn_context.as_ref(),
         base_instructions,
     );
+    let tool_runtime = ToolCallRuntime::new(
+        Arc::clone(&router),
+        Arc::clone(&sess),
+        Arc::clone(&turn_context),
+        Arc::clone(&turn_diff_tracker),
+    );
+    let _code_mode_worker = sess
+        .services
+        .code_mode_service
+        .start_turn_worker(
+            &sess,
+            &turn_context,
+            Arc::clone(&router),
+            Arc::clone(&turn_diff_tracker),
+        )
+        .await;
     let mut retries = 0;
     loop {
         let err = match try_run_sampling_request(
-            Arc::clone(&router),
+            tool_runtime.clone(),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             client_session,
@@ -6919,7 +6932,7 @@ async fn drain_in_flight(
     )
 )]
 async fn try_run_sampling_request(
-    router: Arc<ToolRouter>,
+    tool_runtime: ToolCallRuntime,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     client_session: &mut ModelClientSession,
@@ -6950,13 +6963,6 @@ async fn try_run_sampling_request(
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
         .await??;
-
-    let tool_runtime = ToolCallRuntime::new(
-        Arc::clone(&router),
-        Arc::clone(&sess),
-        Arc::clone(&turn_context),
-        Arc::clone(&turn_diff_tracker),
-    );
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;

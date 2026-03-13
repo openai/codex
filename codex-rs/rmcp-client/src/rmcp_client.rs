@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_client::build_reqwest_client_with_custom_ca;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::BoxFuture;
@@ -97,6 +98,11 @@ impl StreamableHttpResponseClient {
     ) -> StreamableHttpError<StreamableHttpResponseClientError> {
         StreamableHttpError::Client(StreamableHttpResponseClientError::from(error))
     }
+}
+
+fn build_http_client(default_headers: &HeaderMap) -> Result<reqwest::Client> {
+    let builder = apply_default_headers(reqwest::Client::builder(), default_headers);
+    Ok(build_reqwest_client_with_custom_ca(builder)?)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -922,9 +928,7 @@ impl RmcpClient {
                             let http_config =
                                 StreamableHttpClientTransportConfig::with_uri(url.clone())
                                     .auth_header(access_token);
-                            let http_client =
-                                apply_default_headers(reqwest::Client::builder(), &default_headers)
-                                    .build()?;
+                            let http_client = build_http_client(&default_headers)?;
                             let transport = StreamableHttpClientTransport::with_client(
                                 StreamableHttpResponseClient::new(http_client),
                                 http_config,
@@ -940,9 +944,7 @@ impl RmcpClient {
                         http_config = http_config.auth_header(bearer_token);
                     }
 
-                    let http_client =
-                        apply_default_headers(reqwest::Client::builder(), &default_headers)
-                            .build()?;
+                    let http_client = build_http_client(&default_headers)?;
 
                     let transport = StreamableHttpClientTransport::with_client(
                         StreamableHttpResponseClient::new(http_client),
@@ -1130,8 +1132,7 @@ async fn create_oauth_transport_and_runtime(
     StreamableHttpClientTransport<AuthClient<StreamableHttpResponseClient>>,
     OAuthPersistor,
 )> {
-    let http_client =
-        apply_default_headers(reqwest::Client::builder(), &default_headers).build()?;
+    let http_client = build_http_client(&default_headers)?;
     let mut oauth_state = OAuthState::new(url.to_string(), Some(http_client.clone())).await?;
 
     oauth_state
