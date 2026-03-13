@@ -19,6 +19,11 @@ async def main() -> None:
         thread = await codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
         turn = await thread.turn(TextInput("Give 3 bullets about SIMD."))
         result = await turn.run()
+        persisted = await thread.read(include_turns=True)
+        persisted_turn = next(
+            (turn for turn in persisted.thread.turns or [] if turn.id == result.turn_id),
+            None,
+        )
 
         print("thread_id:", result.thread_id)
         print("turn_id:", result.turn_id)
@@ -26,7 +31,10 @@ async def main() -> None:
         if result.error is not None:
             print("error:", result.error)
         print("text:", result.text)
-        print("items.count:", len(result.items))
+        print(
+            "persisted.items.count:",
+            0 if persisted_turn is None else len(persisted_turn.items or []),
+        )
         if result.usage is None:
             raise RuntimeError("missing usage for completed turn")
         print("usage.thread_id:", result.usage.thread_id)
