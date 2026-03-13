@@ -162,6 +162,7 @@ impl ExecApprovalRequestEvent {
         match &self.available_decisions {
             Some(decisions) => decisions.clone(),
             None => Self::default_available_decisions(
+                &self.command,
                 self.network_approval_context.as_ref(),
                 self.proposed_execpolicy_amendment.as_ref(),
                 self.proposed_network_policy_amendments.as_deref(),
@@ -171,6 +172,7 @@ impl ExecApprovalRequestEvent {
     }
 
     pub fn default_available_decisions(
+        command: &[String],
         network_approval_context: Option<&NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<&ExecPolicyAmendment>,
         proposed_network_policy_amendments: Option<&[NetworkPolicyAmendment]>,
@@ -192,10 +194,21 @@ impl ExecApprovalRequestEvent {
         }
 
         if additional_permissions.is_some() {
-            return vec![ReviewDecision::Approved, ReviewDecision::Abort];
+            return vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedOverrideCommand {
+                    command: command.to_vec(),
+                },
+                ReviewDecision::Abort,
+            ];
         }
 
-        let mut decisions = vec![ReviewDecision::Approved];
+        let mut decisions = vec![
+            ReviewDecision::Approved,
+            ReviewDecision::ApprovedOverrideCommand {
+                command: command.to_vec(),
+            },
+        ];
         if let Some(prefix) = proposed_execpolicy_amendment {
             decisions.push(ReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment: prefix.clone(),
