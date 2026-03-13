@@ -222,6 +222,7 @@ fn request_app_server_skills_list(
     client: InProcessAppServerRequester,
     cwds: Vec<PathBuf>,
     force_reload: bool,
+    generation: u64,
 ) {
     tokio::spawn(async move {
         let requested_cwds = cwds.clone();
@@ -243,6 +244,7 @@ fn request_app_server_skills_list(
 
         app_event_tx.send(AppEvent::SkillsListLoaded {
             requested_cwds,
+            generation,
             result,
         });
     });
@@ -863,6 +865,9 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
+
+    next_skills_list_generation: u64,
+    latest_skills_list_generation_by_cwd: HashMap<PathBuf, u64>,
 }
 
 #[derive(Default)]
@@ -2105,6 +2110,8 @@ impl App {
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
+            next_skills_list_generation: 0,
+            latest_skills_list_generation_by_cwd: HashMap::new(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -2185,11 +2192,19 @@ impl App {
                                     cwds,
                                     &app.chat_widget.config_ref().cwd,
                                 );
+                                let generation = app.next_skills_list_generation;
+                                app.next_skills_list_generation += 1;
+
+                                for cwd in &cwds {
+                                    app.latest_skills_list_generation_by_cwd.insert(cwd.clone(), generation);
+                                }
+
                                 request_app_server_skills_list(
                                     app.app_event_tx.clone(),
                                     app_server.requester(),
                                     cwds,
                                     force_reload,
+                                    generation,
                                 );
 
                                 AppRunControl::Continue
@@ -2354,12 +2369,22 @@ impl App {
     fn handle_skills_list_loaded(
         &mut self,
         requested_cwds: Vec<PathBuf>,
+        generation: u64,
         result: std::result::Result<ListSkillsResponseEvent, String>,
     ) -> Result<()> {
         let event = result.map_err(|err| color_eyre::eyre::eyre!(err))?;
         let current_cwd = self.chat_widget.config_ref().cwd.clone();
 
         if !requested_cwds.contains(&current_cwd) {
+            return Ok(());
+        }
+
+        let Some(latest_generation) = self.latest_skills_list_generation_by_cwd.get(&current_cwd)
+        else {
+            return Ok(());
+        };
+
+        if *latest_generation != generation {
             return Ok(());
         }
 
@@ -2681,9 +2706,10 @@ impl App {
             }
             AppEvent::SkillsListLoaded {
                 requested_cwds,
+                generation,
                 result,
             } => {
-                self.handle_skills_list_loaded(requested_cwds, result)?;
+                self.handle_skills_list_loaded(requested_cwds, generation, result)?;
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
@@ -5856,6 +5882,8 @@ mod tests {
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
+            next_skills_list_generation: 0,
+            latest_skills_list_generation_by_cwd: HashMap::new(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -5916,6 +5944,8 @@ mod tests {
                 suppress_shutdown_complete: false,
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
+                next_skills_list_generation: 0,
+                latest_skills_list_generation_by_cwd: HashMap::new(),
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),
@@ -6488,10 +6518,58 @@ mod tests {
 
         app.handle_skills_list_loaded(
             vec![stale_cwd.clone()],
+            0,
             Ok(test_skill_response(stale_cwd, "stale-skill")),
         )?;
 
         assert_eq!(app.chat_widget.loaded_skill_names(), vec!["current-skill"]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stale_skills_list_loaded_for_same_cwd_does_not_overwrite_newer_skills() -> Result<()> {
+        let mut app = make_test_app().await;
+        let cwd_tmp = tempdir()?;
+        let cwd = cwd_tmp.path().to_path_buf();
+
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: cwd.clone(),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        app.latest_skills_list_generation_by_cwd
+            .insert(cwd.clone(), 2);
+
+        app.handle_skills_list_loaded(
+            vec![cwd.clone()],
+            2,
+            Ok(test_skill_response(cwd.clone(), "new-skill")),
+        )?;
+        assert_eq!(app.chat_widget.loaded_skill_names(), vec!["new-skill"]);
+
+        app.handle_skills_list_loaded(
+            vec![cwd.clone()],
+            1,
+            Ok(test_skill_response(cwd, "old-skill")),
+        )?;
+        assert_eq!(app.chat_widget.loaded_skill_names(), vec!["new-skill"]);
 
         Ok(())
     }
