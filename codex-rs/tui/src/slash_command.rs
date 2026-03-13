@@ -55,7 +55,7 @@ pub enum SlashCommand {
     Realtime,
     Settings,
     TestApproval,
-    #[strum(serialize = "subagents")]
+    #[strum(serialize = "subagents", serialize = "multi-agents")]
     MultiAgents,
     // Debugging commands.
     #[strum(serialize = "debug-m-drop")]
@@ -118,7 +118,59 @@ impl SlashCommand {
     /// Command string without the leading '/'. Provided for compatibility with
     /// existing code that expects a method named `command()`.
     pub fn command(self) -> &'static str {
-        self.into()
+        match self {
+            SlashCommand::MultiAgents => "subagents",
+            _ => self.into(),
+        }
+    }
+
+    /// Additional accepted built-in names besides `command()`.
+    pub fn command_aliases(self) -> &'static [&'static str] {
+        match self {
+            SlashCommand::Help
+            | SlashCommand::Model
+            | SlashCommand::Fast
+            | SlashCommand::Approvals
+            | SlashCommand::Permissions
+            | SlashCommand::ElevateSandbox
+            | SlashCommand::SandboxReadRoot
+            | SlashCommand::Experimental
+            | SlashCommand::Skills
+            | SlashCommand::Review
+            | SlashCommand::Rename
+            | SlashCommand::New
+            | SlashCommand::Resume
+            | SlashCommand::Fork
+            | SlashCommand::Init
+            | SlashCommand::Compact
+            | SlashCommand::Plan
+            | SlashCommand::Collab
+            | SlashCommand::Agent
+            | SlashCommand::Diff
+            | SlashCommand::Copy
+            | SlashCommand::Mention
+            | SlashCommand::Status
+            | SlashCommand::DebugConfig
+            | SlashCommand::Statusline
+            | SlashCommand::Theme
+            | SlashCommand::Mcp
+            | SlashCommand::Apps
+            | SlashCommand::Logout
+            | SlashCommand::Quit
+            | SlashCommand::Exit
+            | SlashCommand::Feedback
+            | SlashCommand::Rollout
+            | SlashCommand::Ps
+            | SlashCommand::Clean
+            | SlashCommand::Clear
+            | SlashCommand::Personality
+            | SlashCommand::Realtime
+            | SlashCommand::Settings
+            | SlashCommand::TestApproval
+            | SlashCommand::MemoryDrop
+            | SlashCommand::MemoryUpdate => &[],
+            SlashCommand::MultiAgents => &["multi-agents"],
+        }
     }
 
     /// Human-facing forms accepted by the TUI.
@@ -312,6 +364,21 @@ pub enum SlashCommandExecutionKind {
 pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
     SlashCommand::iter()
         .filter(|command| command.is_visible())
-        .map(|c| (c.command(), c))
+        .flat_map(|command| {
+            std::iter::once((command.command(), command)).chain(
+                command
+                    .command_aliases()
+                    .iter()
+                    .copied()
+                    .map(move |alias| (alias, command)),
+            )
+        })
+        .collect()
+}
+
+/// Return all visible built-in commands once each, in presentation order.
+pub fn visible_built_in_slash_commands() -> Vec<SlashCommand> {
+    SlashCommand::iter()
+        .filter(|command| command.is_visible())
         .collect()
 }

@@ -83,6 +83,19 @@ mod tests {
     }
 
     #[test]
+    fn multi_agents_alias_still_resolves_for_dispatch() {
+        assert_eq!(
+            find_builtin_command("multi-agents", all_enabled_flags()),
+            Some(SlashCommand::MultiAgents)
+        );
+        assert_eq!(
+            find_builtin_command("subagents", all_enabled_flags()),
+            Some(SlashCommand::MultiAgents)
+        );
+        assert_eq!(SlashCommand::MultiAgents.command(), "subagents");
+    }
+
+    #[test]
     fn fast_command_is_hidden_when_disabled() {
         let mut flags = all_enabled_flags();
         flags.fast_command_enabled = false;

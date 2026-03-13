@@ -19,7 +19,7 @@ use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::popup_consts::MAX_POPUP_ROWS;
 use crate::bottom_pane::selection_popup_common::render_menu_surface;
 use crate::key_hint;
-use crate::slash_command::built_in_slash_commands;
+use crate::slash_command::visible_built_in_slash_commands;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
 
@@ -103,7 +103,7 @@ impl SlashHelpView {
             },
         ];
 
-        for (_, cmd) in built_in_slash_commands() {
+        for cmd in visible_built_in_slash_commands() {
             rows.push(HelpRow {
                 plain_text: format!("/{}", cmd.command()),
                 line: Line::from(format!("/{}", cmd.command()).cyan().bold()),
