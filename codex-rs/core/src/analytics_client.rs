@@ -142,7 +142,7 @@ impl AnalyticsEventsQueue {
         if emitted.len() >= ANALYTICS_APP_USED_DEDUPE_MAX_KEYS {
             emitted.clear();
         }
-        emitted.insert((tracking.turn_id.clone(), plugin.plugin_id.clone()))
+        emitted.insert((tracking.turn_id.clone(), plugin.plugin_id.as_key()))
     }
 }
 
@@ -636,13 +636,24 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
 }
 
 fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPluginMetadata {
+    let capability_summary = plugin.capability_summary;
     CodexPluginMetadata {
-        plugin_id: Some(plugin.plugin_id),
-        plugin_name: plugin.plugin_name,
-        marketplace_name: plugin.marketplace_name,
-        has_skills: plugin.has_skills,
-        mcp_server_count: plugin.mcp_server_count,
-        connector_ids: plugin.connector_ids,
+        plugin_id: Some(plugin.plugin_id.as_key()),
+        plugin_name: Some(plugin.plugin_id.plugin_name),
+        marketplace_name: Some(plugin.plugin_id.marketplace_name),
+        has_skills: capability_summary
+            .as_ref()
+            .map(|summary| summary.has_skills),
+        mcp_server_count: capability_summary
+            .as_ref()
+            .map(|summary| summary.mcp_server_names.len()),
+        connector_ids: capability_summary.map(|summary| {
+            summary
+                .app_connector_ids
+                .into_iter()
+                .map(|connector_id| connector_id.0)
+                .collect()
+        }),
         product_client_id: Some(crate::default_client::originator().value),
     }
 }

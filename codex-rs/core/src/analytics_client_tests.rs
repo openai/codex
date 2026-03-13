@@ -11,6 +11,9 @@ use super::codex_app_metadata;
 use super::codex_plugin_metadata;
 use super::codex_plugin_used_metadata;
 use super::normalize_path_for_skill_id;
+use crate::plugins::AppConnectorId;
+use crate::plugins::PluginCapabilitySummary;
+use crate::plugins::PluginId;
 use crate::plugins::PluginTelemetryMetadata;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -270,11 +273,17 @@ fn plugin_used_dedupe_is_keyed_by_turn_and_plugin() {
 
 fn sample_plugin_metadata() -> PluginTelemetryMetadata {
     PluginTelemetryMetadata {
-        plugin_id: "sample@test".to_string(),
-        plugin_name: Some("sample".to_string()),
-        marketplace_name: Some("test".to_string()),
-        has_skills: Some(true),
-        mcp_server_count: Some(2),
-        connector_ids: Some(vec!["calendar".to_string(), "drive".to_string()]),
+        plugin_id: PluginId::parse("sample@test").expect("valid plugin id"),
+        capability_summary: Some(PluginCapabilitySummary {
+            config_name: "sample@test".to_string(),
+            display_name: "sample".to_string(),
+            description: None,
+            has_skills: true,
+            mcp_server_names: vec!["mcp-1".to_string(), "mcp-2".to_string()],
+            app_connector_ids: vec![
+                AppConnectorId("calendar".to_string()),
+                AppConnectorId("drive".to_string()),
+            ],
+        }),
     }
 }

@@ -163,23 +163,15 @@ pub struct PluginCapabilitySummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginTelemetryMetadata {
-    pub plugin_id: String,
-    pub plugin_name: Option<String>,
-    pub marketplace_name: Option<String>,
-    pub has_skills: Option<bool>,
-    pub mcp_server_count: Option<usize>,
-    pub connector_ids: Option<Vec<String>>,
+    pub plugin_id: PluginId,
+    pub capability_summary: Option<PluginCapabilitySummary>,
 }
 
 impl PluginTelemetryMetadata {
     pub fn from_plugin_id(plugin_id: &PluginId) -> Self {
         Self {
-            plugin_id: plugin_id.as_key(),
-            plugin_name: Some(plugin_id.plugin_name.clone()),
-            marketplace_name: Some(plugin_id.marketplace_name.clone()),
-            has_skills: None,
-            mcp_server_count: None,
-            connector_ids: None,
+            plugin_id: plugin_id.clone(),
+            capability_summary: None,
         }
     }
 }
@@ -211,35 +203,13 @@ impl PluginCapabilitySummary {
         .then_some(summary)
     }
 
-    pub fn telemetry_metadata(&self) -> PluginTelemetryMetadata {
-        match PluginId::parse(&self.config_name) {
-            Ok(plugin_id) => PluginTelemetryMetadata {
-                plugin_id: plugin_id.as_key(),
-                plugin_name: Some(plugin_id.plugin_name),
-                marketplace_name: Some(plugin_id.marketplace_name),
-                has_skills: Some(self.has_skills),
-                mcp_server_count: Some(self.mcp_server_names.len()),
-                connector_ids: Some(
-                    self.app_connector_ids
-                        .iter()
-                        .map(|connector_id| connector_id.0.clone())
-                        .collect(),
-                ),
-            },
-            Err(_) => PluginTelemetryMetadata {
-                plugin_id: self.config_name.clone(),
-                plugin_name: Some(self.display_name.clone()),
-                marketplace_name: None,
-                has_skills: Some(self.has_skills),
-                mcp_server_count: Some(self.mcp_server_names.len()),
-                connector_ids: Some(
-                    self.app_connector_ids
-                        .iter()
-                        .map(|connector_id| connector_id.0.clone())
-                        .collect(),
-                ),
-            },
-        }
+    pub fn telemetry_metadata(&self) -> Option<PluginTelemetryMetadata> {
+        PluginId::parse(&self.config_name)
+            .ok()
+            .map(|plugin_id| PluginTelemetryMetadata {
+                plugin_id,
+                capability_summary: Some(self.clone()),
+            })
     }
 }
 
@@ -1459,27 +1429,28 @@ pub fn plugin_telemetry_metadata_from_root(
 
     let manifest_paths = plugin_manifest_paths(&manifest, plugin_root);
     let has_skills = !plugin_skill_roots(plugin_root, &manifest_paths).is_empty();
-    let mcp_server_count = manifest_paths
+    let mut mcp_server_names = manifest_paths
         .mcp_servers
         .as_ref()
         .map(|path| {
             load_mcp_servers_from_file(plugin_root, path)
                 .mcp_servers
-                .len()
+                .into_keys()
+                .collect::<Vec<_>>()
         })
-        .unwrap_or(0);
-    let connector_ids = load_plugin_apps(plugin_root)
-        .into_iter()
-        .map(|connector_id| connector_id.0)
-        .collect();
+        .unwrap_or_default();
+    mcp_server_names.sort_unstable();
 
     PluginTelemetryMetadata {
-        plugin_id: plugin_id.as_key(),
-        plugin_name: Some(plugin_id.plugin_name.clone()),
-        marketplace_name: Some(plugin_id.marketplace_name.clone()),
-        has_skills: Some(has_skills),
-        mcp_server_count: Some(mcp_server_count),
-        connector_ids: Some(connector_ids),
+        plugin_id: plugin_id.clone(),
+        capability_summary: Some(PluginCapabilitySummary {
+            config_name: plugin_id.as_key(),
+            display_name: plugin_id.plugin_name.clone(),
+            description: None,
+            has_skills,
+            mcp_server_names,
+            app_connector_ids: load_plugin_apps(plugin_root),
+        }),
     }
 }
 
