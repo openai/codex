@@ -186,6 +186,12 @@ pub fn generate_json(out_dir: &Path) -> Result<()> {
     generate_json_with_experimental(out_dir, false)
 }
 
+pub fn generate_internal_json_schema(out_dir: &Path) -> Result<()> {
+    ensure_dir(out_dir)?;
+    write_json_schema::<RolloutLine>(out_dir, "RolloutLine")?;
+    Ok(())
+}
+
 pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -> Result<()> {
     ensure_dir(out_dir)?;
     let envelope_emitters: Vec<JsonSchemaEmitter> = vec![
@@ -233,11 +239,6 @@ pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -
     if !experimental_api {
         filter_experimental_json_files(out_dir)?;
     }
-
-    // internal only (not a public stable interface)
-    let internal_out_dir = out_dir.join("internal");
-    ensure_dir(&internal_out_dir)?;
-    write_json_schema::<RolloutLine>(&internal_out_dir, "RolloutLine")?;
 
     Ok(())
 }
