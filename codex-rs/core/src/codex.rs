@@ -5632,6 +5632,9 @@ pub(crate) async fn run_turn(
     let mut last_agent_message: Option<String> = None;
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
         .await;
+    if run_pending_session_start_hooks(&sess, &turn_context).await {
+        return last_agent_message;
+    }
     if run_user_prompt_submit_hooks(&sess, &turn_context, UserMessageItem::new(&input).message())
         .await
     {
@@ -5669,53 +5672,8 @@ pub(crate) async fn run_turn(
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
 
     loop {
-        if let Some(session_start_source) = sess.take_pending_session_start_source().await {
-            let session_start_permission_mode = match turn_context.approval_policy.value() {
-                AskForApproval::Never => "bypassPermissions",
-                AskForApproval::UnlessTrusted
-                | AskForApproval::OnFailure
-                | AskForApproval::OnRequest
-                | AskForApproval::Granular(_) => "default",
-            }
-            .to_string();
-            let session_start_request = codex_hooks::SessionStartRequest {
-                session_id: sess.conversation_id,
-                cwd: turn_context.cwd.clone(),
-                transcript_path: sess.current_rollout_path().await,
-                model: turn_context.model_info.slug.clone(),
-                permission_mode: session_start_permission_mode,
-                source: session_start_source,
-            };
-            for run in sess.hooks().preview_session_start(&session_start_request) {
-                sess.send_event(
-                    &turn_context,
-                    EventMsg::HookStarted(crate::protocol::HookStartedEvent {
-                        turn_id: Some(turn_context.sub_id.clone()),
-                        run,
-                    }),
-                )
-                .await;
-            }
-            let session_start_outcome = sess
-                .hooks()
-                .run_session_start(session_start_request, Some(turn_context.sub_id.clone()))
-                .await;
-            for completed in session_start_outcome.hook_events {
-                sess.send_event(&turn_context, EventMsg::HookCompleted(completed))
-                    .await;
-            }
-            if session_start_outcome.should_stop {
-                break;
-            }
-            if let Some(additional_context) = session_start_outcome.additional_context {
-                let developer_message: ResponseItem =
-                    DeveloperInstructions::new(additional_context).into();
-                sess.record_conversation_items(
-                    &turn_context,
-                    std::slice::from_ref(&developer_message),
-                )
-                .await;
-            }
+        if run_pending_session_start_hooks(&sess, &turn_context).await {
+            break;
         }
 
         // Note that pending_input would be something like a message the user
@@ -6029,6 +5987,58 @@ async fn run_user_prompt_submit_hooks(
             .await;
     }
     user_prompt_submit_outcome.should_stop
+}
+
+async fn run_pending_session_start_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+) -> bool {
+    let Some(session_start_source) = sess.take_pending_session_start_source().await else {
+        return false;
+    };
+
+    let session_start_permission_mode = match turn_context.approval_policy.value() {
+        AskForApproval::Never => "bypassPermissions",
+        AskForApproval::UnlessTrusted
+        | AskForApproval::OnFailure
+        | AskForApproval::OnRequest
+        | AskForApproval::Granular(_) => "default",
+    }
+    .to_string();
+    let session_start_request = codex_hooks::SessionStartRequest {
+        session_id: sess.conversation_id,
+        cwd: turn_context.cwd.clone(),
+        transcript_path: sess.current_rollout_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: session_start_permission_mode,
+        source: session_start_source,
+    };
+    for run in sess.hooks().preview_session_start(&session_start_request) {
+        sess.send_event(
+            turn_context,
+            EventMsg::HookStarted(crate::protocol::HookStartedEvent {
+                turn_id: Some(turn_context.sub_id.clone()),
+                run,
+            }),
+        )
+        .await;
+    }
+    let session_start_outcome = sess
+        .hooks()
+        .run_session_start(session_start_request, Some(turn_context.sub_id.clone()))
+        .await;
+    for completed in session_start_outcome.hook_events {
+        sess.send_event(turn_context, EventMsg::HookCompleted(completed))
+            .await;
+    }
+    if !session_start_outcome.should_stop
+        && let Some(additional_context) = session_start_outcome.additional_context
+    {
+        let developer_message: ResponseItem = DeveloperInstructions::new(additional_context).into();
+        sess.record_conversation_items(turn_context, std::slice::from_ref(&developer_message))
+            .await;
+    }
+    session_start_outcome.should_stop
 }
 
 async fn run_pre_sampling_compact(

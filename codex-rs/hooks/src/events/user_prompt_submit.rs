@@ -43,16 +43,12 @@ struct UserPromptSubmitHandlerData {
 
 pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
-    request: &UserPromptSubmitRequest,
+    _request: &UserPromptSubmitRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
-        handlers,
-        HookEventName::UserPromptSubmit,
-        Some(request.prompt.as_str()),
-    )
-    .into_iter()
-    .map(|handler| dispatcher::running_summary(&handler))
-    .collect()
+    dispatcher::select_handlers(handlers, HookEventName::UserPromptSubmit, None)
+        .into_iter()
+        .map(|handler| dispatcher::running_summary(&handler))
+        .collect()
 }
 
 pub(crate) async fn run(
@@ -60,11 +56,7 @@ pub(crate) async fn run(
     shell: &CommandShell,
     request: UserPromptSubmitRequest,
 ) -> UserPromptSubmitOutcome {
-    let matched = dispatcher::select_handlers(
-        handlers,
-        HookEventName::UserPromptSubmit,
-        Some(request.prompt.as_str()),
-    );
+    let matched = dispatcher::select_handlers(handlers, HookEventName::UserPromptSubmit, None);
     if matched.is_empty() {
         return UserPromptSubmitOutcome {
             hook_events: Vec::new(),
@@ -320,6 +312,42 @@ mod tests {
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
+    }
+
+    #[test]
+    fn claude_block_decision_stops_processing() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(
+                Some(0),
+                r#"{"decision":"block","reason":"slow down","hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"do not inject"}}"#,
+                "",
+            ),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            UserPromptSubmitHandlerData {
+                should_stop: true,
+                stop_reason: Some("slow down".to_string()),
+                additional_context_for_model: None,
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![
+                HookOutputEntry {
+                    kind: HookOutputEntryKind::Context,
+                    text: "do not inject".to_string(),
+                },
+                HookOutputEntry {
+                    kind: HookOutputEntryKind::Stop,
+                    text: "slow down".to_string(),
+                },
+            ]
+        );
     }
 
     #[test]

@@ -30,16 +30,14 @@ pub(crate) fn select_handlers(
         .iter()
         .filter(|handler| handler.event_name == event_name)
         .filter(|handler| match event_name {
-            HookEventName::SessionStart | HookEventName::UserPromptSubmit => {
-                match (&handler.matcher, matcher_input) {
-                    (Some(matcher), Some(input)) => regex::Regex::new(matcher)
-                        .map(|regex| regex.is_match(input))
-                        .unwrap_or(false),
-                    (None, _) => true,
-                    _ => false,
-                }
-            }
-            HookEventName::Stop => true,
+            HookEventName::SessionStart => match (&handler.matcher, matcher_input) {
+                (Some(matcher), Some(input)) => regex::Regex::new(matcher)
+                    .map(|regex| regex.is_match(input))
+                    .unwrap_or(false),
+                (None, _) => true,
+                _ => false,
+            },
+            HookEventName::UserPromptSubmit | HookEventName::Stop => true,
         })
         .cloned()
         .collect()
@@ -175,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn user_prompt_submit_matcher_uses_prompt_text() {
+    fn user_prompt_submit_ignores_matcher() {
         let handlers = vec![
             make_handler(
                 HookEventName::UserPromptSubmit,
@@ -183,19 +181,10 @@ mod tests {
                 "echo first",
                 0,
             ),
-            make_handler(
-                HookEventName::UserPromptSubmit,
-                Some("world$"),
-                "echo second",
-                1,
-            ),
+            make_handler(HookEventName::UserPromptSubmit, Some("["), "echo second", 1),
         ];
 
-        let selected = select_handlers(
-            &handlers,
-            HookEventName::UserPromptSubmit,
-            Some("hello world"),
-        );
+        let selected = select_handlers(&handlers, HookEventName::UserPromptSubmit, None);
 
         assert_eq!(selected.len(), 2);
         assert_eq!(selected[0].display_order, 0);

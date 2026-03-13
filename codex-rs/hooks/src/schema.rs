@@ -99,6 +99,10 @@ pub(crate) struct UserPromptSubmitCommandOutputWire {
     #[serde(flatten)]
     pub universal: HookUniversalOutputWire,
     #[serde(default)]
+    pub decision: Option<BlockDecisionWire>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
     pub hook_specific_output: Option<UserPromptSubmitHookSpecificOutputWire>,
 }
 
@@ -119,7 +123,7 @@ pub(crate) struct StopCommandOutputWire {
     #[serde(flatten)]
     pub universal: HookUniversalOutputWire,
     #[serde(default)]
-    pub decision: Option<StopDecisionWire>,
+    pub decision: Option<BlockDecisionWire>,
     /// Claude requires `reason` when `decision` is `block`; we enforce that
     /// semantic rule during output parsing rather than in the JSON schema.
     #[serde(default)]
@@ -127,7 +131,7 @@ pub(crate) struct StopCommandOutputWire {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub(crate) enum StopDecisionWire {
+pub(crate) enum BlockDecisionWire {
     #[serde(rename = "block")]
     Block,
 }

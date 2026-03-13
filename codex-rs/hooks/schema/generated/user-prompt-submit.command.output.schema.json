@@ -2,6 +2,12 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
+    "BlockDecisionWire": {
+      "enum": [
+        "block"
+      ],
+      "type": "string"
+    },
     "HookEventNameWire": {
       "enum": [
         "SessionStart",
@@ -32,6 +38,14 @@
       "default": true,
       "type": "boolean"
     },
+    "decision": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/BlockDecisionWire"
+        }
+      ],
+      "default": null
+    },
     "hookSpecificOutput": {
       "allOf": [
         {
@@ -39,6 +53,10 @@
         }
       ],
       "default": null
+    },
+    "reason": {
+      "default": null,
+      "type": "string"
     },
     "stopReason": {
       "default": null,
