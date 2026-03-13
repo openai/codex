@@ -443,6 +443,9 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
 async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let saved_path = std::env::temp_dir().join("ig_123.png");
+    let _ = std::fs::remove_file(&saved_path);
+
     let server = MockServer::start().await;
     let image_model_slug = "test-image-model";
     let image_model = test_model_info(
@@ -527,18 +530,41 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
     assert_eq!(requests.len(), 2, "expected two model requests");
 
     let second_request = requests.last().expect("expected second request");
+    let image_generation_calls = second_request.inputs_of_type("image_generation_call");
     assert_eq!(
-        second_request.message_input_image_urls("user"),
-        vec!["data:image/png;base64,Zm9v".to_string()]
+        image_generation_calls.len(),
+        1,
+        "expected generated image history to be replayed as an image_generation_call"
     );
+    assert_eq!(
+        image_generation_calls[0]["id"].as_str(),
+        Some("ig_123"),
+        "expected the original image generation call id to be preserved"
+    );
+    assert_eq!(
+        image_generation_calls[0]["result"].as_str(),
+        Some("Zm9v"),
+        "expected the original generated image payload to be preserved"
+    );
+    assert!(
+        second_request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text.contains("Generated images are saved to")),
+        "second request should include the saved-path note in model-visible history"
+    );
+    let _ = std::fs::remove_file(&saved_path);
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn model_change_from_generated_image_to_text_strips_prior_generated_image_content()
+async fn model_change_from_generated_image_to_text_preserves_prior_generated_image_call()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
+
+    let saved_path = std::env::temp_dir().join("ig_123.png");
+    let _ = std::fs::remove_file(&saved_path);
 
     let server = MockServer::start().await;
     let image_model_slug = "test-image-model";
@@ -631,17 +657,35 @@ async fn model_change_from_generated_image_to_text_strips_prior_generated_image_
     assert_eq!(requests.len(), 2, "expected two model requests");
 
     let second_request = requests.last().expect("expected second request");
+    let image_generation_calls = second_request.inputs_of_type("image_generation_call");
     assert!(
         second_request.message_input_image_urls("user").is_empty(),
-        "second request should strip generated image content for text-only models"
+        "second request should not rewrite generated images into message input images"
+    );
+    assert!(
+        image_generation_calls.len() == 1,
+        "second request should preserve the generated image call for text-only models"
+    );
+    assert_eq!(
+        image_generation_calls[0]["id"].as_str(),
+        Some("ig_123"),
+        "second request should preserve the original generated image call id"
     );
     assert!(
         second_request
             .message_input_texts("user")
             .iter()
-            .any(|text| text == "image content omitted because you do not support image input"),
-        "second request should include the image-omitted placeholder text"
+            .all(|text| text != "image content omitted because you do not support image input"),
+        "second request should not inject the image-omitted placeholder text"
     );
+    assert!(
+        second_request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text.contains("Generated images are saved to")),
+        "second request should include the saved-path note in model-visible history"
+    );
+    let _ = std::fs::remove_file(&saved_path);
 
     Ok(())
 }

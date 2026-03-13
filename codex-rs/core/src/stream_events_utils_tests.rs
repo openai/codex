@@ -1,4 +1,3 @@
-use super::default_image_generation_output_dir;
 use super::handle_non_tool_response_item;
 use super::last_assistant_message_from_item;
 use super::save_image_generation_result;
@@ -71,7 +70,7 @@ fn last_assistant_message_from_item_returns_none_for_plan_only_hidden_message() 
 
 #[tokio::test]
 async fn save_image_generation_result_saves_base64_to_png_in_temp_dir() {
-    let expected_path = default_image_generation_output_dir().join("ig_save_base64.png");
+    let expected_path = std::env::temp_dir().join("ig_save_base64.png");
     let _ = std::fs::remove_file(&expected_path);
 
     let saved_path = save_image_generation_result("ig_save_base64", "Zm9v")
@@ -95,7 +94,7 @@ async fn save_image_generation_result_rejects_data_url_payload() {
 
 #[tokio::test]
 async fn save_image_generation_result_overwrites_existing_file() {
-    let existing_path = default_image_generation_output_dir().join("ig_overwrite.png");
+    let existing_path = std::env::temp_dir().join("ig_overwrite.png");
     std::fs::write(&existing_path, b"existing").expect("seed existing image");
 
     let saved_path = save_image_generation_result("ig_overwrite", "Zm9v")
@@ -109,7 +108,7 @@ async fn save_image_generation_result_overwrites_existing_file() {
 
 #[tokio::test]
 async fn save_image_generation_result_sanitizes_call_id_for_temp_dir_output_path() {
-    let expected_path = default_image_generation_output_dir().join("___ig___.png");
+    let expected_path = std::env::temp_dir().join("___ig___.png");
     let _ = std::fs::remove_file(&expected_path);
 
     let saved_path = save_image_generation_result("../ig/..", "Zm9v")

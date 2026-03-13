@@ -289,48 +289,6 @@ where
     }
 }
 
-pub(crate) fn rewrite_image_generation_calls_for_stateless_input(items: &mut Vec<ResponseItem>) {
-    let original_items = std::mem::take(items);
-    *items = original_items
-        .into_iter()
-        .map(|item| match item {
-            ResponseItem::ImageGenerationCall {
-                id,
-                revised_prompt,
-                result,
-                ..
-            } => {
-                let image_url = if result.starts_with("data:") {
-                    result
-                } else {
-                    format!("data:image/png;base64,{result}")
-                };
-                let revised_prompt = revised_prompt.unwrap_or_default();
-
-                ResponseItem::Message {
-                    id: None,
-                    role: "user".to_string(),
-                    content: vec![
-                        ContentItem::InputText {
-                            text: "Image Generation Call".to_string(),
-                        },
-                        ContentItem::InputText {
-                            text: format!("Image ID: {id}"),
-                        },
-                        ContentItem::InputText {
-                            text: format!("Prompt: {revised_prompt}"),
-                        },
-                        ContentItem::InputImage { image_url },
-                    ],
-                    end_turn: None,
-                    phase: None,
-                }
-            }
-            _ => item,
-        })
-        .collect();
-}
-
 /// Strip image content from messages and tool outputs when the model does not support images.
 /// When `input_modalities` contains `InputModality::Image`, no stripping is performed.
 pub(crate) fn strip_images_when_unsupported(

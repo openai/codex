@@ -19,7 +19,7 @@ use crate::parse_turn_item;
 use crate::state_db;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
-use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
@@ -73,13 +73,9 @@ async fn save_image_generation_result(call_id: &str, result: &str) -> Result<Pat
     if file_stem.is_empty() {
         file_stem = "generated_image".to_string();
     }
-    let path = default_image_generation_output_dir().join(format!("{file_stem}.png"));
+    let path = std::env::temp_dir().join(format!("{file_stem}.png"));
     tokio::fs::write(&path, bytes).await?;
     Ok(path)
-}
-
-pub(crate) fn default_image_generation_output_dir() -> PathBuf {
-    std::env::temp_dir()
 }
 
 /// Persist a completed model response item and record any cited memory usage.
@@ -214,7 +210,6 @@ pub(crate) async fn handle_output_item_done(
                     .emit_turn_item_completed(&ctx.turn_context, turn_item)
                     .await;
             }
-
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await;
             let last_agent_message = last_assistant_message_from_item(&item, plan_mode);
@@ -310,13 +305,20 @@ pub(crate) async fn handle_non_tool_response_item(
                 match save_image_generation_result(&image_item.id, &image_item.result).await {
                     Ok(path) => {
                         image_item.saved_path = Some(path.to_string_lossy().into_owned());
-                        let image_output_dir = default_image_generation_output_dir();
-                        let message: ResponseItem = DeveloperInstructions::new(format!(
-                            "Generated images are saved to {} as {} by default.",
-                            image_output_dir.display(),
-                            image_output_dir.join("<image_id>.png").display(),
-                        ))
-                        .into();
+                        let image_output_dir = std::env::temp_dir();
+                        let message = ResponseItem::Message {
+                            id: None,
+                            role: "user".to_string(),
+                            content: vec![ContentItem::InputText {
+                                text: format!(
+                                    "Generated images are saved to {} as {} by default.",
+                                    image_output_dir.display(),
+                                    image_output_dir.join("<image_id>.png").display(),
+                                ),
+                            }],
+                            end_turn: None,
+                            phase: None,
+                        };
                         sess.record_conversation_items(
                             turn_context,
                             std::slice::from_ref(&message),
@@ -324,7 +326,7 @@ pub(crate) async fn handle_non_tool_response_item(
                         .await;
                     }
                     Err(err) => {
-                        let output_dir = default_image_generation_output_dir();
+                        let output_dir = std::env::temp_dir();
                         tracing::warn!(
                             call_id = %image_item.id,
                             output_dir = %output_dir.display(),
