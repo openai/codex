@@ -357,7 +357,6 @@ async fn run_guardian_review(
         },
     };
 
-    let aborted = matches!(outcome, GuardianReviewOutcome::Aborted);
     let assessment = match outcome {
         GuardianReviewOutcome::Completed(Ok(assessment)) => assessment,
         GuardianReviewOutcome::Completed(Err(err)) => GuardianAssessment {
@@ -374,12 +373,7 @@ async fn run_guardian_review(
                     .to_string(),
             evidence: vec![],
         },
-        GuardianReviewOutcome::Aborted => GuardianAssessment {
-            risk_level: GuardianRiskLevel::High,
-            risk_score: 100,
-            rationale: "Automatic approval review was cancelled before completion.".to_string(),
-            evidence: vec![],
-        },
+        GuardianReviewOutcome::Aborted => return ReviewDecision::Abort,
     };
 
     let approved = assessment.risk_score < GUARDIAN_APPROVAL_RISK_THRESHOLD;
@@ -418,9 +412,7 @@ async fn run_guardian_review(
         )
         .await;
 
-    if aborted {
-        ReviewDecision::Abort
-    } else if approved {
+    if approved {
         ReviewDecision::Approved
     } else {
         ReviewDecision::Denied

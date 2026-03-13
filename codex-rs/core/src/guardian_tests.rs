@@ -10,6 +10,9 @@ use crate::test_support;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ContentItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::ReviewDecision;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses::ev_assistant_message;
@@ -284,6 +287,47 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
         guardian_request_turn_id(&apply_patch, "fallback-turn"),
         "fallback-turn"
     );
+}
+
+#[tokio::test]
+async fn cancelled_guardian_review_does_not_emit_terminal_denial() {
+    let (session, turn, rx) = crate::codex::make_session_and_context_with_rx().await;
+    let cancel_token = CancellationToken::new();
+    cancel_token.cancel();
+
+    let decision = review_approval_request_with_cancel(
+        &session,
+        &turn,
+        GuardianApprovalRequest::ApplyPatch {
+            id: "patch-1".to_string(),
+            cwd: PathBuf::from("/tmp"),
+            files: vec![AbsolutePathBuf::try_from("/tmp/guardian.txt").expect("absolute path")],
+            change_count: 1usize,
+            patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+hello\n*** End Patch"
+                .to_string(),
+        },
+        None,
+        cancel_token,
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Abort);
+
+    let mut guardian_statuses = Vec::new();
+    let mut warnings = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        match event.msg {
+            EventMsg::GuardianAssessment(event) => guardian_statuses.push(event.status),
+            EventMsg::Warning(event) => warnings.push(event.message),
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        guardian_statuses,
+        vec![GuardianAssessmentStatus::InProgress]
+    );
+    assert!(warnings.is_empty());
 }
 
 #[tokio::test]
