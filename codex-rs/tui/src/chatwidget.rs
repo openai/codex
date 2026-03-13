@@ -2460,6 +2460,8 @@ impl ChatWidget {
             // In-progress assessments own the live footer state while the
             // review is pending. Parallel reviews are aggregated into one
             // footer summary by `PendingGuardianReviewStatus`.
+            self.bottom_pane.ensure_status_indicator();
+            self.bottom_pane.set_interrupt_hint_visible(true);
             self.pending_guardian_review_status
                 .start_or_update(ev.id.clone(), detail);
             if let Some(status) = self.pending_guardian_review_status.status_indicator_state() {
@@ -2927,12 +2929,6 @@ impl ChatWidget {
         debug!("BackgroundEvent: {message}");
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(true);
-        if message.starts_with("Reviewing approval request: ") {
-            // Live guardian footer state comes from typed assessment events, so
-            // skip the older background status string here instead of trying to
-            // parse it back into structured footer details.
-            return;
-        }
         self.set_status_header(message);
     }
 

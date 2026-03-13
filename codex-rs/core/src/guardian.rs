@@ -90,67 +90,6 @@ fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
     }
 }
 
-fn guardian_review_status_message(request: &GuardianApprovalRequest) -> String {
-    const MAX_STATUS_DETAIL_CHARS: usize = 120;
-
-    let truncate = |text: String| {
-        if text.chars().count() <= MAX_STATUS_DETAIL_CHARS {
-            text
-        } else {
-            let truncated = text
-                .chars()
-                .take(MAX_STATUS_DETAIL_CHARS.saturating_sub(1))
-                .collect::<String>();
-            format!("{truncated}…")
-        }
-    };
-
-    let detail = match request {
-        GuardianApprovalRequest::Shell { command, .. }
-        | GuardianApprovalRequest::ExecCommand { command, .. } => {
-            codex_shell_command::parse_command::shlex_join(command)
-        }
-        #[cfg(unix)]
-        GuardianApprovalRequest::Execve { program, argv, .. } => {
-            let command = std::iter::once(program.clone())
-                .chain(argv.iter().cloned())
-                .collect::<Vec<_>>();
-            codex_shell_command::parse_command::shlex_join(&command)
-        }
-        GuardianApprovalRequest::ApplyPatch {
-            change_count,
-            files,
-            ..
-        } => {
-            if files.len() == 1 {
-                format!("apply_patch touching {}", files[0].as_path().display())
-            } else {
-                format!(
-                    "apply_patch touching {change_count} changes across {} files",
-                    files.len()
-                )
-            }
-        }
-        GuardianApprovalRequest::NetworkAccess { target, .. } => {
-            format!("network access to {target}")
-        }
-        GuardianApprovalRequest::McpToolCall {
-            tool_name,
-            connector_name,
-            server,
-            ..
-        } => {
-            if let Some(connector_name) = connector_name {
-                format!("MCP {tool_name} on {connector_name}")
-            } else {
-                format!("MCP {tool_name} on {server}")
-            }
-        }
-    };
-
-    format!("Reviewing approval request: {}", truncate(detail))
-}
-
 /// Whether this turn should route `on-request` approval prompts through the
 /// guardian reviewer instead of surfacing them to the user. ARC may still
 /// block actions earlier in the flow.
@@ -303,9 +242,6 @@ async fn run_guardian_review(
     let assessment_id = guardian_request_id(&request).to_string();
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
     let action_summary = guardian_assessment_action_value(&request);
-    session
-        .notify_background_event(turn.as_ref(), guardian_review_status_message(&request))
-        .await;
     session
         .send_event(
             turn.as_ref(),
