@@ -268,6 +268,7 @@ use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
+use crate::resume_picker::SessionTarget;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
@@ -735,6 +736,11 @@ pub(crate) struct ChatWidget {
     // drafts and are replayed through the slash-command evaluator instead of being submitted
     // directly as user turns.
     queued_user_messages: VecDeque<UserMessage>,
+    // Exact rollout targets picked from the resume picker for queued `/resume <thread-id>` drafts.
+    //
+    // The serialized draft stays human-readable, but replay consumes these targets in queue order
+    // so the selected rollout path is preserved instead of being re-resolved by thread id later.
+    queued_resume_targets: VecDeque<SessionTarget>,
     // Steers already submitted to core but not yet committed into history.
     //
     // The bottom pane shows these above queued drafts until core records the
@@ -893,6 +899,7 @@ pub(crate) struct ThreadInputState {
     composer: Option<ThreadComposerState>,
     pending_steers: VecDeque<UserMessage>,
     queued_user_messages: VecDeque<UserMessage>,
+    queued_resume_targets: VecDeque<SessionTarget>,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     agent_turn_running: bool,
@@ -2271,6 +2278,7 @@ impl ChatWidget {
             .map(|steer| steer.user_message)
             .collect();
         to_merge.extend(self.queued_user_messages.drain(..));
+        self.queued_resume_targets.clear();
         if has_existing_message {
             to_merge.push(existing_message);
         }
@@ -2313,6 +2321,7 @@ impl ChatWidget {
                 .map(|pending| pending.user_message.clone())
                 .collect(),
             queued_user_messages: self.queued_user_messages.clone(),
+            queued_resume_targets: self.queued_resume_targets.clone(),
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             agent_turn_running: self.agent_turn_running,
@@ -2355,6 +2364,7 @@ impl ChatWidget {
             self.queued_user_messages = input_state.pending_steers;
             self.queued_user_messages
                 .extend(input_state.queued_user_messages);
+            self.queued_resume_targets = input_state.queued_resume_targets;
         } else {
             self.agent_turn_running = false;
             self.pending_steers.clear();
@@ -2367,6 +2377,7 @@ impl ChatWidget {
             );
             self.bottom_pane.set_composer_pending_pastes(Vec::new());
             self.queued_user_messages.clear();
+            self.queued_resume_targets.clear();
         }
         self.turn_sleep_inhibitor
             .set_turn_running(self.agent_turn_running);
@@ -3656,6 +3667,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            queued_resume_targets: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
@@ -3847,6 +3859,7 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
+            queued_resume_targets: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
@@ -4022,6 +4035,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            queued_resume_targets: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
@@ -4156,6 +4170,12 @@ impl ChatWidget {
             && !self.queued_user_messages.is_empty()
         {
             if let Some(queued_message) = self.queued_user_messages.pop_back() {
+                if self
+                    .parse_builtin_slash_command(&queued_message.text)
+                    .is_some_and(|(cmd, _, _)| cmd == SlashCommand::Resume)
+                {
+                    self.queued_resume_targets.pop_back();
+                }
                 self.restore_user_message_to_composer(queued_message);
                 self.refresh_pending_input_preview();
                 self.request_redraw();
@@ -5335,7 +5355,20 @@ impl ChatWidget {
                 }
                 match ThreadId::from_string(&args[0]) {
                     Ok(thread_id) => {
-                        self.app_event_tx.send(AppEvent::ResumeSession(thread_id));
+                        if self
+                            .queued_resume_targets
+                            .front()
+                            .is_some_and(|target| target.thread_id == thread_id)
+                        {
+                            if let Some(target_session) = self.queued_resume_targets.pop_front() {
+                                self.app_event_tx
+                                    .send(AppEvent::ResumeSessionTarget(target_session));
+                            } else {
+                                self.app_event_tx.send(AppEvent::ResumeSession(thread_id));
+                            }
+                        } else {
+                            self.app_event_tx.send(AppEvent::ResumeSession(thread_id));
+                        }
                         QueueReplayControl::Stop
                     }
                     Err(_) => self.restore_invalid_inline_slash_command(
@@ -5721,6 +5754,17 @@ impl ChatWidget {
             return;
         }
         let _ = self.execute_serialized_slash_command(draft);
+    }
+
+    pub(crate) fn handle_resume_selection(&mut self, target_session: SessionTarget) {
+        self.queued_resume_targets.push_back(target_session.clone());
+        self.handle_serialized_slash_command(
+            SlashCommandInvocation::with_args(
+                SlashCommand::Resume,
+                [target_session.thread_id.to_string()],
+            )
+            .into_user_message(),
+        );
     }
 
     fn submit_plan_user_message(&mut self, user_message: UserMessage) {

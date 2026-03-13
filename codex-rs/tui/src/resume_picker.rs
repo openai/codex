@@ -40,7 +40,7 @@ use unicode_width::UnicodeWidthStr;
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionTarget {
     pub path: PathBuf,
     pub thread_id: ThreadId,

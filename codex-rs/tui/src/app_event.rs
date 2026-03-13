@@ -101,6 +101,9 @@ pub(crate) enum AppEvent {
     /// Resume a saved session by thread id.
     ResumeSession(ThreadId),
 
+    /// Resume a saved session using the exact picker-selected rollout target.
+    ResumeSessionTarget(crate::resume_picker::SessionTarget),
+
     /// Fork the current session into a new thread.
     ForkCurrentSession,
 

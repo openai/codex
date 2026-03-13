@@ -2518,14 +2518,7 @@ impl App {
             AppEvent::OpenResumePicker => {
                 match crate::resume_picker::run_resume_picker(tui, &self.config, false).await? {
                     SessionSelection::Resume(target_session) => {
-                        self.chat_widget.handle_serialized_slash_command(
-                            format!(
-                                "/{} {}",
-                                crate::slash_command::SlashCommand::Resume.command(),
-                                target_session.thread_id
-                            )
-                            .into(),
-                        );
+                        self.chat_widget.handle_resume_selection(target_session);
                         self.refresh_status_line();
                     }
                     SessionSelection::Exit
@@ -2538,6 +2531,9 @@ impl App {
             }
             AppEvent::ResumeSession(thread_id) => {
                 self.resume_session_by_thread_id(tui, thread_id).await?;
+            }
+            AppEvent::ResumeSessionTarget(target_session) => {
+                self.resume_session_target(tui, target_session).await?;
             }
             AppEvent::ForkCurrentSession => {
                 self.session_telemetry.counter(
