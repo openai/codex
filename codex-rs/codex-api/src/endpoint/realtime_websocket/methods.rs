@@ -363,24 +363,28 @@ impl RealtimeWebsocketWriter {
             }
             RealtimeSessionMode::Transcription => ("transcription".to_string(), None, None),
         };
-        let tools = match self.event_parser {
-            RealtimeEventParser::RealtimeV2 => Some(vec![SessionFunctionTool {
-                kind: "function".to_string(),
-                name: REALTIME_V2_CODEX_TOOL_NAME.to_string(),
-                description: REALTIME_V2_CODEX_TOOL_DESCRIPTION.to_string(),
-                parameters: json!({
-                    "type": "object",
-                    "properties": {
-                        "prompt": {
-                            "type": "string",
-                            "description": "Prompt text for the delegated Codex task."
-                        }
-                    },
-                    "required": ["prompt"],
-                    "additionalProperties": false
-                }),
-            }]),
-            RealtimeEventParser::V1 => None,
+        let tools = match (self.event_parser, session_mode) {
+            (RealtimeEventParser::RealtimeV2, RealtimeSessionMode::Conversational) => {
+                Some(vec![SessionFunctionTool {
+                    kind: "function".to_string(),
+                    name: REALTIME_V2_CODEX_TOOL_NAME.to_string(),
+                    description: REALTIME_V2_CODEX_TOOL_DESCRIPTION.to_string(),
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {
+                            "prompt": {
+                                "type": "string",
+                                "description": "Prompt text for the delegated Codex task."
+                            }
+                        },
+                        "required": ["prompt"],
+                        "additionalProperties": false
+                    }),
+                }])
+            }
+            (RealtimeEventParser::RealtimeV2, RealtimeSessionMode::Transcription)
+            | (RealtimeEventParser::V1, RealtimeSessionMode::Conversational)
+            | (RealtimeEventParser::V1, RealtimeSessionMode::Transcription) => None,
         };
         self.send_json(RealtimeOutboundMessage::SessionUpdate {
             session: SessionUpdateSession {
@@ -1533,10 +1537,7 @@ mod tests {
             );
             assert!(first_json["session"].get("instructions").is_none());
             assert!(first_json["session"]["audio"].get("output").is_none());
-            assert_eq!(
-                first_json["session"]["tools"][0]["name"],
-                Value::String("codex".to_string())
-            );
+            assert!(first_json["session"].get("tools").is_none());
 
             ws.send(Message::Text(
                 json!({
