@@ -449,6 +449,7 @@ impl CoreShellActionProvider {
                         &session,
                         &turn,
                         GuardianApprovalRequest::Execve {
+                            id: call_id.clone(),
                             tool_name: tool_name.to_string(),
                             program: program.to_string_lossy().into_owned(),
                             argv: argv.to_vec(),

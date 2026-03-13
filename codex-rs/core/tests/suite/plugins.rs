@@ -307,7 +307,7 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
     assert!(
         request_tools
             .iter()
-            .any(|name| name == "mcp__codex_apps__google-calendar-create-event"),
+            .any(|name| name == "mcp__codex_apps__google_calendar_create_event"),
         "expected plugin app tools to become visible for this turn: {request_tools:?}"
     );
     let echo_description = tool_description(&request_body, "mcp__sample__echo")
@@ -318,7 +318,7 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
     );
     let calendar_description = tool_description(
         &request_body,
-        "mcp__codex_apps__google-calendar-create-event",
+        "mcp__codex_apps__google_calendar_create_event",
     )
     .expect("plugin app tool description should be present");
     assert!(

@@ -161,17 +161,17 @@ fn test_qualify_tools_long_names_same_server() {
 
 #[test]
 fn test_qualify_tools_sanitizes_invalid_characters() {
-    let tools = vec![create_test_tool("server.one", "tool.two")];
+    let tools = vec![create_test_tool("server.one", "tool.two-three")];
 
     let qualified_tools = qualify_tools(tools);
 
     assert_eq!(qualified_tools.len(), 1);
     let (qualified_name, tool) = qualified_tools.into_iter().next().expect("one tool");
-    assert_eq!(qualified_name, "mcp__server_one__tool_two");
+    assert_eq!(qualified_name, "mcp__server_one__tool_two_three");
 
     // The key is sanitized for OpenAI, but we keep original parts for the actual MCP call.
     assert_eq!(tool.server_name, "server.one");
-    assert_eq!(tool.tool_name, "tool.two");
+    assert_eq!(tool.tool_name, "tool.two-three");
 
     assert!(
         qualified_name

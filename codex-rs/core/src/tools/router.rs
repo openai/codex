@@ -4,6 +4,7 @@ use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::sandboxing::SandboxPermissions;
+use crate::tools::code_mode::is_code_mode_nested_tool;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
@@ -39,6 +40,7 @@ pub struct ToolCall {
 pub struct ToolRouter {
     registry: ToolRegistry,
     specs: Vec<ConfiguredToolSpec>,
+    model_visible_specs: Vec<ToolSpec>,
 }
 
 pub(crate) struct ToolRouterParams<'a> {
@@ -64,8 +66,29 @@ impl ToolRouter {
             dynamic_tools,
         );
         let (specs, registry) = builder.build();
+        let model_visible_specs = if config.code_mode_only_enabled {
+            specs
+                .iter()
+                .filter_map(|configured_tool| {
+                    if !is_code_mode_nested_tool(configured_tool.spec.name()) {
+                        Some(configured_tool.spec.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            specs
+                .iter()
+                .map(|configured_tool| configured_tool.spec.clone())
+                .collect()
+        };
 
-        Self { registry, specs }
+        Self {
+            registry,
+            specs,
+            model_visible_specs,
+        }
     }
 
     pub fn specs(&self) -> Vec<ToolSpec> {
@@ -73,6 +96,10 @@ impl ToolRouter {
             .iter()
             .map(|config| config.spec.clone())
             .collect()
+    }
+
+    pub fn model_visible_specs(&self) -> Vec<ToolSpec> {
+        self.model_visible_specs.clone()
     }
 
     pub fn find_spec(&self, tool_name: &str) -> Option<ToolSpec> {
