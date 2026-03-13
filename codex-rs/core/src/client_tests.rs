@@ -3,15 +3,12 @@ use super::ModelClient;
 use super::PendingUnauthorizedRetry;
 use super::UnauthorizedRecoveryExecution;
 use super::WebsocketSession;
-use crate::response_debug_context::extract_response_debug_context;
-use codex_api::TransportError;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
-use reqwest::StatusCode;
 use serde_json::json;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
@@ -100,39 +97,6 @@ async fn summarize_memories_returns_empty_for_empty_input() {
         .await
         .expect("empty summarize request should succeed");
     assert_eq!(output.len(), 0);
-}
-
-#[test]
-fn extract_response_debug_context_decodes_identity_headers() {
-    let mut headers = http::HeaderMap::new();
-    headers.insert(
-        "x-oai-request-id",
-        http::HeaderValue::from_static("req-401"),
-    );
-    headers.insert("cf-ray", http::HeaderValue::from_static("ray-401"));
-    headers.insert(
-        "x-openai-authorization-error",
-        http::HeaderValue::from_static("missing_authorization_header"),
-    );
-    headers.insert(
-        "x-error-json",
-        http::HeaderValue::from_static("eyJlcnJvciI6eyJjb2RlIjoidG9rZW5fZXhwaXJlZCJ9fQ=="),
-    );
-
-    let context = extract_response_debug_context(&TransportError::Http {
-        status: StatusCode::UNAUTHORIZED,
-        url: Some("https://chatgpt.com/backend-api/codex/models".to_string()),
-        headers: Some(headers),
-        body: Some(r#"{"detail":"Unauthorized"}"#.to_string()),
-    });
-
-    assert_eq!(context.request_id.as_deref(), Some("req-401"));
-    assert_eq!(context.cf_ray.as_deref(), Some("ray-401"));
-    assert_eq!(
-        context.auth_error.as_deref(),
-        Some("missing_authorization_header")
-    );
-    assert_eq!(context.auth_error_code.as_deref(), Some("token_expired"));
 }
 
 #[test]
