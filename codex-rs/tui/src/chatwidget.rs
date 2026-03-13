@@ -2435,6 +2435,20 @@ impl ChatWidget {
                 _ => None,
             }
         };
+        let guardian_command = |action: &serde_json::Value| match action.get("command") {
+            Some(serde_json::Value::Array(command)) => Some(
+                command
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>(),
+            )
+            .filter(|command| !command.is_empty()),
+            Some(serde_json::Value::String(command)) => shlex::split(command)
+                .filter(|command| !command.is_empty())
+                .or_else(|| Some(vec![command.clone()])),
+            _ => None,
+        };
 
         if ev.status == GuardianAssessmentStatus::InProgress
             && let Some(action) = ev.action.as_ref()
@@ -2481,22 +2495,7 @@ impl ChatWidget {
                 return;
             };
 
-            let command = match action.get("command") {
-                Some(serde_json::Value::Array(command)) => Some(
-                    command
-                        .iter()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(ToOwned::to_owned)
-                        .collect::<Vec<_>>(),
-                )
-                .filter(|command| !command.is_empty()),
-                Some(serde_json::Value::String(command)) => shlex::split(command)
-                    .filter(|command| !command.is_empty())
-                    .or_else(|| Some(vec![command.clone()])),
-                _ => None,
-            };
-
-            let cell = if let Some(command) = command {
+            let cell = if let Some(command) = guardian_command(&action) {
                 history_cell::new_approval_decision_cell(
                     command,
                     codex_protocol::protocol::ReviewDecision::Approved,
@@ -2523,22 +2522,7 @@ impl ChatWidget {
         };
 
         let tool = action.get("tool").and_then(serde_json::Value::as_str);
-        let command = match action.get("command") {
-            Some(serde_json::Value::Array(command)) => Some(
-                command
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>(),
-            )
-            .filter(|command| !command.is_empty()),
-            Some(serde_json::Value::String(command)) => shlex::split(command)
-                .filter(|command| !command.is_empty())
-                .or_else(|| Some(vec![command.clone()])),
-            _ => None,
-        };
-
-        let cell = if let Some(command) = command {
+        let cell = if let Some(command) = guardian_command(&action) {
             history_cell::new_approval_decision_cell(
                 command,
                 codex_protocol::protocol::ReviewDecision::Denied,
@@ -2940,22 +2924,13 @@ impl ChatWidget {
         debug!("BackgroundEvent: {message}");
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(true);
-        if let Some(command) = message.strip_prefix("Reviewing approval request: ") {
-            // Older guardian flows only emit the background string. Keep this
-            // as a fallback, but let typed `GuardianAssessment(InProgress)`
-            // events own the footer once they start arriving.
-            if !self.pending_guardian_review_status.is_empty() {
-                return;
-            }
-            self.set_status(
-                String::from("Reviewing approval request"),
-                Some(command.to_string()),
-                StatusDetailsCapitalization::Preserve,
-                1,
-            );
-        } else {
-            self.set_status_header(message);
+        if message.starts_with("Reviewing approval request: ") {
+            // Live guardian footer state comes from typed assessment events, so
+            // skip the older background status string here instead of trying to
+            // parse it back into structured footer details.
+            return;
         }
+        self.set_status_header(message);
     }
 
     fn on_hook_started(&mut self, event: codex_protocol::protocol::HookStartedEvent) {

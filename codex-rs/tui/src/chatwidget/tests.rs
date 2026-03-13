@@ -9480,25 +9480,6 @@ async fn background_event_updates_status_header() {
 }
 
 #[tokio::test]
-async fn guardian_review_background_event_renders_reviewed_command_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.on_task_started();
-
-    chat.handle_codex_event(Event {
-        id: "bg-guardian-1".into(),
-        msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
-            message: "Reviewing approval request: rm -rf '/tmp/guardian target'".to_string(),
-        }),
-    });
-
-    let rendered = render_bottom_popup(&chat, 72);
-    assert_snapshot!(
-        "guardian_review_background_event_renders_reviewed_command",
-        rendered
-    );
-}
-
-#[tokio::test]
 async fn guardian_parallel_reviews_render_aggregate_status_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();

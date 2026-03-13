@@ -863,6 +863,7 @@ impl App {
         }
 
         let smart_approvals_mode = smart_approvals_mode();
+        let mut next_config = self.config.clone();
         let active_profile = self.active_profile.clone();
         let scoped_segments = |key: &str| {
             if let Some(profile) = active_profile.as_deref() {
@@ -880,11 +881,12 @@ impl App {
         let mut approval_policy_override = None;
         let mut approvals_reviewer_override = None;
         let mut sandbox_policy_override = None;
+        let mut feature_updates_to_apply = Vec::with_capacity(updates.len());
         // Smart Approvals owns `approvals_reviewer`, but disabling the feature
         // from inside a profile should not silently clear a value configured at
         // the root scope.
         let (root_approvals_reviewer_configured, profile_approvals_reviewer_configured) = {
-            let effective_config = self.config.config_layer_stack.effective_config();
+            let effective_config = next_config.config_layer_stack.effective_config();
             let root_configured = effective_config
                 .as_table()
                 .is_some_and(|table| table.contains_key("approvals_reviewer"));
@@ -949,7 +951,7 @@ impl App {
                     );
                 continue;
             }
-            if let Err(err) = self.config.features.set_enabled(feature, enabled) {
+            if let Err(err) = next_config.features.set_enabled(feature, enabled) {
                 tracing::error!(
                     error = %err,
                     feature = feature_key,
@@ -960,18 +962,15 @@ impl App {
                 ));
                 continue;
             }
-            let effective_enabled = self.config.features.enabled(feature);
-            self.chat_widget
-                .set_feature_enabled(feature, effective_enabled);
+            let effective_enabled = next_config.features.enabled(feature);
+            feature_updates_to_apply.push((feature, effective_enabled));
             if feature == Feature::GuardianApproval {
-                let previous_approvals_reviewer = self.config.approvals_reviewer;
+                let previous_approvals_reviewer = next_config.approvals_reviewer;
                 if effective_enabled {
                     // Persist the reviewer setting so future sessions keep the
                     // experiment's matching `/approvals` mode until the user
                     // changes it explicitly.
-                    self.set_approvals_reviewer_in_app_and_widget(
-                        smart_approvals_mode.approvals_reviewer,
-                    );
+                    next_config.approvals_reviewer = smart_approvals_mode.approvals_reviewer;
                     builder = builder.with_edits([ConfigEdit::SetPath {
                         segments: scoped_segments("approvals_reviewer"),
                         value: smart_approvals_mode.approvals_reviewer.to_string().into(),
@@ -985,20 +984,19 @@ impl App {
                             segments: scoped_segments("approvals_reviewer"),
                         }]);
                     }
-                    self.set_approvals_reviewer_in_app_and_widget(ApprovalsReviewer::User);
+                    next_config.approvals_reviewer = ApprovalsReviewer::User;
                     if previous_approvals_reviewer != ApprovalsReviewer::User {
                         permissions_history_label = Some("Default");
                     }
                 }
-                approvals_reviewer_override = Some(self.config.approvals_reviewer);
+                approvals_reviewer_override = Some(next_config.approvals_reviewer);
             }
             if feature == Feature::GuardianApproval && effective_enabled {
                 // The feature flag alone is not enough for the live session.
                 // We also align approval policy + sandbox to the Smart
                 // Approvals preset so enabling the experiment immediately makes
                 // guardian review observable in the current thread.
-                if let Err(err) = self
-                    .config
+                if let Err(err) = next_config
                     .permissions
                     .approval_policy
                     .set(smart_approvals_mode.approval_policy)
@@ -1011,8 +1009,7 @@ impl App {
                         .add_error_message(format!("Failed to enable Smart Approvals: {err}"));
                     continue;
                 }
-                if let Err(err) = self
-                    .config
+                if let Err(err) = next_config
                     .permissions
                     .sandbox_policy
                     .set(smart_approvals_mode.sandbox_policy.clone())
@@ -1020,20 +1017,6 @@ impl App {
                     tracing::error!(
                         error = %err,
                         "failed to set smart approvals sandbox policy on app config"
-                    );
-                    self.chat_widget
-                        .add_error_message(format!("Failed to enable Smart Approvals: {err}"));
-                    continue;
-                }
-                self.chat_widget
-                    .set_approval_policy(smart_approvals_mode.approval_policy);
-                if let Err(err) = self
-                    .chat_widget
-                    .set_sandbox_policy(smart_approvals_mode.sandbox_policy.clone())
-                {
-                    tracing::error!(
-                        error = %err,
-                        "failed to set smart approvals sandbox policy on chat config"
                     );
                     self.chat_widget
                         .add_error_message(format!("Failed to enable Smart Approvals: {err}"));
@@ -1053,6 +1036,41 @@ impl App {
                 sandbox_policy_override = Some(smart_approvals_mode.sandbox_policy.clone());
             }
             builder = builder.set_feature_enabled(feature_key, effective_enabled);
+        }
+
+        // Persist first so the live session does not diverge from disk if the
+        // config edit fails. Runtime/UI state is patched below only after the
+        // durable config update succeeds.
+        if let Err(err) = builder.apply().await {
+            tracing::error!(error = %err, "failed to persist feature flags");
+            self.chat_widget
+                .add_error_message(format!("Failed to update experimental features: {err}"));
+            return;
+        }
+
+        self.config = next_config;
+        for (feature, effective_enabled) in feature_updates_to_apply {
+            self.chat_widget
+                .set_feature_enabled(feature, effective_enabled);
+        }
+        if approvals_reviewer_override.is_some() {
+            self.set_approvals_reviewer_in_app_and_widget(self.config.approvals_reviewer);
+        }
+        if approval_policy_override.is_some() {
+            self.chat_widget
+                .set_approval_policy(self.config.permissions.approval_policy.value());
+        }
+        if sandbox_policy_override.is_some()
+            && let Err(err) = self
+                .chat_widget
+                .set_sandbox_policy(self.config.permissions.sandbox_policy.get().clone())
+        {
+            tracing::error!(
+                error = %err,
+                "failed to set smart approvals sandbox policy on chat config"
+            );
+            self.chat_widget
+                .add_error_message(format!("Failed to enable Smart Approvals: {err}"));
         }
 
         if approval_policy_override.is_some()
@@ -1110,12 +1128,6 @@ impl App {
         if let Some(label) = permissions_history_label {
             self.chat_widget
                 .add_info_message(format!("Permissions updated to {label}"), None);
-        }
-
-        if let Err(err) = builder.apply().await {
-            tracing::error!(error = %err, "failed to persist feature flags");
-            self.chat_widget
-                .add_error_message(format!("Failed to update experimental features: {err}"));
         }
     }
 
