@@ -280,8 +280,7 @@ impl ToolHandler for UnifiedExecHandler {
                     .await
                     .map_err(|err| {
                         FunctionCallError::RespondToModel(format!(
-                            "exec_command failed for `{}`: {err:?}",
-                            command_for_display
+                            "exec_command failed for `{command_for_display}`: {err:?}"
                         ))
                     })?
             }
