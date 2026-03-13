@@ -289,6 +289,11 @@ mod windows_impl {
         ) {
             anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
+        if !policy.has_full_disk_read_access() {
+            anyhow::bail!(
+                "Restricted read-only access requires the elevated Windows sandbox backend"
+            );
+        }
         let caps = load_or_create_cap_sids(codex_home)?;
         let (h_token, psid_generic, psid_workspace): (HANDLE, *mut c_void, Option<*mut c_void>) = unsafe {
             match &policy {

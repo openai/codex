@@ -249,6 +249,38 @@ fn windows_restricted_token_allows_legacy_restricted_policies() {
 }
 
 #[test]
+fn windows_restricted_token_rejects_restricted_read_only_policies() {
+    let policy = SandboxPolicy::ReadOnly {
+        access: codex_protocol::protocol::ReadOnlyAccess::Restricted {
+            include_platform_defaults: true,
+            readable_roots: vec![],
+        },
+        network_access: false,
+    };
+    let file_system_policy = FileSystemSandboxPolicy::from(&policy);
+
+    assert_eq!(
+        should_use_windows_restricted_token_sandbox(
+            SandboxType::WindowsRestrictedToken,
+            &policy,
+            &file_system_policy,
+        ),
+        false
+    );
+    assert_eq!(
+        unsupported_windows_restricted_token_sandbox_reason(
+            SandboxType::WindowsRestrictedToken,
+            &policy,
+            &file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+        ),
+        Some(
+            "windows sandbox backend cannot enforce file_system=Restricted, network=Restricted, legacy_policy=ReadOnly { access: Restricted { include_platform_defaults: true, readable_roots: [] }, network_access: false }; refusing to run unsandboxed".to_string()
+        )
+    );
+}
+
+#[test]
 fn windows_restricted_token_allows_legacy_workspace_write_policies() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
