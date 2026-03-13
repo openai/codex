@@ -14,7 +14,6 @@ use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
 use crate::history_cell::UserHistoryCell;
-use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
@@ -1887,9 +1886,7 @@ async fn make_chatwidget_manual(
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
-        current_status_header: String::from("Working"),
-        current_status_details: None,
-        current_status_details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
+        current_status: StatusIndicatorState::working(),
         retry_status_header: None,
         pending_status_indicator_restore: false,
         suppress_queue_autosend: false,
@@ -5203,7 +5200,7 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
 
     assert!(chat.active_cell.is_none());
     assert_eq!(
-        chat.current_status_header,
+        chat.current_status.header,
         "Waiting for background terminal"
     );
     let status = chat
@@ -5223,7 +5220,7 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
     terminal_interaction(&mut chat, "call-wait-1a", "proc-1", "");
     terminal_interaction(&mut chat, "call-wait-1b", "proc-1", "");
     assert_eq!(
-        chat.current_status_header,
+        chat.current_status.header,
         "Waiting for background terminal"
     );
     let status = chat
@@ -5295,7 +5292,7 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
     terminal_interaction(&mut chat, "call-wait-3a", "proc-3", "pwd\n");
     terminal_interaction(&mut chat, "call-wait-3b", "proc-3", "");
     assert_eq!(
-        chat.current_status_header,
+        chat.current_status.header,
         "Waiting for background terminal"
     );
     let status = chat
@@ -9478,7 +9475,7 @@ async fn background_event_updates_status_header() {
     });
 
     assert!(chat.bottom_pane.status_indicator_visible());
-    assert_eq!(chat.current_status_header, "Waiting for `vim`");
+    assert_eq!(chat.current_status.header, "Waiting for `vim`");
     assert!(drain_insert_history(&mut rx).is_empty());
 }
 
@@ -9585,9 +9582,9 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
         }),
     });
 
-    assert_eq!(chat.current_status_header, "Reviewing approval request");
+    assert_eq!(chat.current_status.header, "Reviewing approval request");
     assert_eq!(
-        chat.current_status_details,
+        chat.current_status.details,
         Some("rm -rf '/tmp/guardian target 2'".to_string())
     );
 }
@@ -10152,7 +10149,7 @@ async fn replayed_stream_error_does_not_set_retry_status_or_status_indicator() {
         cells.is_empty(),
         "expected no history cell for replayed StreamError event"
     );
-    assert_eq!(chat.current_status_header, "Idle");
+    assert_eq!(chat.current_status.header, "Idle");
     assert!(chat.retry_status_header.is_none());
     assert!(chat.bottom_pane.status_widget().is_none());
 }
@@ -10225,7 +10222,7 @@ async fn resume_replay_interrupted_reconnect_does_not_leave_stale_working_state(
     );
     assert!(!chat.bottom_pane.is_task_running());
     assert!(chat.bottom_pane.status_widget().is_none());
-    assert_eq!(chat.current_status_header, "Idle");
+    assert_eq!(chat.current_status.header, "Idle");
     assert!(chat.retry_status_header.is_none());
 }
 

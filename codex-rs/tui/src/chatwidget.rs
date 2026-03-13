@@ -537,6 +537,20 @@ struct StatusIndicatorState {
     details_max_lines: usize,
 }
 
+impl StatusIndicatorState {
+    fn working() -> Self {
+        Self {
+            header: String::from("Working"),
+            details: None,
+            details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
+        }
+    }
+
+    fn is_guardian_review(&self) -> bool {
+        self.header == "Reviewing approval request" || self.header.starts_with("Reviewing ")
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct PendingGuardianReviewStatus {
     entries: Vec<PendingGuardianReviewStatusEntry>,
@@ -568,6 +582,10 @@ impl PendingGuardianReviewStatus {
         self.entries.is_empty()
     }
 
+    // Guardian review status is derived from the full set of currently pending
+    // review entries. The generic status cache on `ChatWidget` stores whichever
+    // footer is currently rendered; this helper computes the guardian-specific
+    // footer snapshot that should replace it while reviews remain in flight.
     fn status_indicator_state(&self) -> Option<StatusIndicatorState> {
         let details = if self.entries.len() == 1 {
             self.entries.first().map(|entry| entry.detail.clone())
@@ -684,11 +702,12 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
-    // Current status header shown in the status indicator.
-    current_status_header: String,
-    // Current status details shown beneath the header, if any, after formatting.
-    current_status_details: Option<String>,
-    current_status_details_max_lines: usize,
+    // The currently rendered footer state. We keep the already-formatted
+    // details here so transient stream interruptions can restore the footer
+    // exactly as it was shown.
+    current_status: StatusIndicatorState,
+    // Guardian review keeps its own pending set so it can derive a single
+    // footer summary from one or more in-flight review events.
     pending_guardian_review_status: PendingGuardianReviewStatus,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
@@ -1128,17 +1147,16 @@ impl ChatWidget {
 
         self.bottom_pane.ensure_status_indicator();
         self.set_status(
-            self.current_status_header.clone(),
-            self.current_status_details.clone(),
+            self.current_status.header.clone(),
+            self.current_status.details.clone(),
             StatusDetailsCapitalization::Preserve,
-            self.current_status_details_max_lines,
+            self.current_status.details_max_lines,
         );
         self.pending_status_indicator_restore = false;
     }
 
     fn current_status_is_guardian_review(&self) -> bool {
-        self.current_status_header == "Reviewing approval request"
-            || self.current_status_header.starts_with("Reviewing ")
+        self.current_status.is_guardian_review()
     }
 
     /// Update the status indicator header and details.
@@ -1162,9 +1180,11 @@ impl ChatWidget {
                     StatusDetailsCapitalization::Preserve => trimmed.to_string(),
                 }
             });
-        self.current_status_header = header.clone();
-        self.current_status_details = details.clone();
-        self.current_status_details_max_lines = details_max_lines;
+        self.current_status = StatusIndicatorState {
+            header: header.clone(),
+            details: details.clone(),
+            details_max_lines,
+        };
         self.bottom_pane.update_status(
             header,
             details,
@@ -2354,6 +2374,9 @@ impl ChatWidget {
     }
 
     fn on_guardian_assessment(&mut self, ev: GuardianAssessmentEvent) {
+        // Guardian emits a compact JSON action payload; map the stable fields we
+        // care about into a short footer/history summary without depending on
+        // the full raw JSON shape in the rest of the widget.
         let guardian_action_summary = |action: &serde_json::Value| {
             let tool = action.get("tool").and_then(serde_json::Value::as_str)?;
             match tool {
@@ -2417,6 +2440,9 @@ impl ChatWidget {
             && let Some(action) = ev.action.as_ref()
             && let Some(detail) = guardian_action_summary(action)
         {
+            // In-progress assessments own the live footer state while the
+            // review is pending. Parallel reviews are aggregated into one
+            // footer summary by `PendingGuardianReviewStatus`.
             self.pending_guardian_review_status
                 .start_or_update(ev.id.clone(), detail);
             if let Some(status) = self.pending_guardian_review_status.status_indicator_state() {
@@ -2431,6 +2457,8 @@ impl ChatWidget {
             return;
         }
 
+        // Terminal assessments remove the matching pending footer entry first,
+        // then render the final approved/denied history cell below.
         if self.pending_guardian_review_status.finish(&ev.id) {
             if let Some(status) = self.pending_guardian_review_status.status_indicator_state() {
                 self.set_status(
@@ -2913,6 +2941,9 @@ impl ChatWidget {
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(true);
         if let Some(command) = message.strip_prefix("Reviewing approval request: ") {
+            // Older guardian flows only emit the background string. Keep this
+            // as a fallback, but let typed `GuardianAssessment(InProgress)`
+            // events own the footer once they start arriving.
             if !self.pending_guardian_review_status.is_empty() {
                 return;
             }
@@ -2986,7 +3017,7 @@ impl ChatWidget {
 
     fn on_stream_error(&mut self, message: String, additional_details: Option<String>) {
         if self.retry_status_header.is_none() {
-            self.retry_status_header = Some(self.current_status_header.clone());
+            self.retry_status_header = Some(self.current_status.header.clone());
         }
         self.bottom_pane.ensure_status_indicator();
         self.set_status(
@@ -3610,9 +3641,7 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            current_status_header: String::from("Working"),
-            current_status_details: None,
-            current_status_details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
+            current_status: StatusIndicatorState::working(),
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             retry_status_header: None,
             pending_status_indicator_restore: false,
@@ -3798,9 +3827,7 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            current_status_header: String::from("Working"),
-            current_status_details: None,
-            current_status_details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
+            current_status: StatusIndicatorState::working(),
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             retry_status_header: None,
             pending_status_indicator_restore: false,
@@ -3978,9 +4005,7 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            current_status_header: String::from("Working"),
-            current_status_details: None,
-            current_status_details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
+            current_status: StatusIndicatorState::working(),
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             retry_status_header: None,
             pending_status_indicator_restore: false,
