@@ -403,6 +403,10 @@ sandbox_mode = "read-only"
 model_provider = "mock_provider"
 experimental_realtime_ws_base_url = "{realtime_server_uri}"
 
+[realtime]
+version = "v2"
+type = "conversational"
+
 [features]
 {realtime_feature_key} = {realtime_enabled}
 

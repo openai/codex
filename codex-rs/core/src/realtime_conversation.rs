@@ -2,10 +2,11 @@ use crate::CodexAuth;
 use crate::api_bridge::map_api_error;
 use crate::auth::read_openai_api_key_from_env;
 use crate::codex::Session;
+use crate::config::RealtimeWsMode;
+use crate::config::RealtimeWsVersion;
 use crate::default_client::default_headers;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use crate::features::Feature;
 use crate::realtime_context::build_realtime_startup_context;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -294,14 +295,13 @@ pub(crate) async fn handle_start(
         format!("{prompt}\n\n{startup_context}")
     };
     let model = config.experimental_realtime_ws_model.clone();
-    let event_parser = if config.features.enabled(Feature::RealtimeConversationV2) {
-        RealtimeEventParser::RealtimeV2
-    } else {
-        RealtimeEventParser::V1
+    let event_parser = match config.realtime.version {
+        RealtimeWsVersion::V1 => RealtimeEventParser::V1,
+        RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
     };
-    let session_mode = match config.experimental_realtime_ws_mode {
-        crate::config::RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
-        crate::config::RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
+    let session_mode = match config.realtime.session_type {
+        RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
+        RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
     };
     let requested_session_id = params
         .session_id
