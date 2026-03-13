@@ -282,7 +282,7 @@ impl ConfigService {
             .map_err(|err| ConfigServiceError::io("failed to load configuration", err))?;
         let user_layer = match layers.get_user_layer() {
             Some(layer) => Cow::Borrowed(layer),
-            None => Cow::Owned(create_empty_user_layer(&allowed_path).await?),
+            None => Cow::Owned(create_empty_user_layer(&provided_path).await?),
         };
 
         if let Some(expected) = expected_version.as_deref()
