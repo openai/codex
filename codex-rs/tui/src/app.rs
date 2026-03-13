@@ -2101,16 +2101,10 @@ impl App {
                 );
             }
             InProcessServerEvent::ServerNotification(notification) => {
-                tracing::debug!(
-                    ?notification,
-                    "ignoring embedded app-server notification during hybrid TUI startup"
-                );
+                self.handle_ignored_embedded_app_server_notification(notification);
             }
             InProcessServerEvent::LegacyNotification(notification) => {
-                tracing::debug!(
-                    method = %notification.method,
-                    "ignoring embedded app-server legacy notification during hybrid TUI startup"
-                );
+                self.handle_ignored_embedded_app_server_legacy_notification(notification);
             }
             InProcessServerEvent::ServerRequest(request) => {
                 let request_id = request.id().clone();
@@ -2135,6 +2129,18 @@ impl App {
                 }
             }
         }
+    }
+
+    fn handle_ignored_embedded_app_server_notification(
+        &mut self,
+        _notification: codex_app_server_protocol::ServerNotification,
+    ) {
+    }
+
+    fn handle_ignored_embedded_app_server_legacy_notification(
+        &mut self,
+        _notification: codex_app_server_protocol::JSONRPCNotification,
+    ) {
     }
 
     pub(crate) async fn handle_tui_event(

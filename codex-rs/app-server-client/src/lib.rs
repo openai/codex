@@ -128,6 +128,10 @@ impl Error for TypedRequestError {
 
 #[derive(Clone)]
 struct SharedCoreManagers {
+    // Temporary bootstrap escape hatch for embedders that still need direct
+    // core handles during the in-process app-server migration. Once TUI/exec
+    // stop depending on direct manager access, remove this wrapper and keep
+    // manager ownership entirely inside the app-server runtime.
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
 }
