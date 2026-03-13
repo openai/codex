@@ -142,6 +142,14 @@ impl ChatWidget {
         self.skills_all = skills;
         self.set_skills(Some(enabled_skills_for_mentions(&self.skills_all)));
     }
+
+    #[cfg(test)]
+    pub(crate) fn loaded_skill_names(&self) -> Vec<String> {
+        self.skills_all
+            .iter()
+            .map(|skill| skill.name.clone())
+            .collect()
+    }
 }
 
 fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<ProtocolSkillMetadata> {
