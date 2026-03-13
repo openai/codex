@@ -218,6 +218,7 @@ fn windows_restricted_token_rejects_network_only_restrictions() {
         network_access: codex_protocol::protocol::NetworkAccess::Restricted,
     };
     let file_system_policy = FileSystemSandboxPolicy::unrestricted();
+    let sandbox_policy_cwd = std::env::current_dir().expect("cwd");
 
     assert_eq!(
             unsupported_windows_restricted_token_sandbox_reason(
@@ -225,7 +226,7 @@ fn windows_restricted_token_rejects_network_only_restrictions() {
                 &policy,
                 &file_system_policy,
                 NetworkSandboxPolicy::Restricted,
-                Path::new("/tmp"),
+                &sandbox_policy_cwd,
             ),
             Some(
                 "windows sandbox backend cannot enforce file_system=Unrestricted, network=Restricted, legacy_policy=ExternalSandbox { network_access: Restricted }; refusing to run unsandboxed".to_string()
@@ -237,6 +238,7 @@ fn windows_restricted_token_rejects_network_only_restrictions() {
 fn windows_restricted_token_allows_legacy_restricted_policies() {
     let policy = SandboxPolicy::new_read_only_policy();
     let file_system_policy = FileSystemSandboxPolicy::from(&policy);
+    let sandbox_policy_cwd = std::env::current_dir().expect("cwd");
 
     assert_eq!(
         unsupported_windows_restricted_token_sandbox_reason(
@@ -244,7 +246,7 @@ fn windows_restricted_token_allows_legacy_restricted_policies() {
             &policy,
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
-            Path::new("/tmp"),
+            &sandbox_policy_cwd,
         ),
         None
     );
@@ -260,6 +262,7 @@ fn windows_restricted_token_allows_legacy_workspace_write_policies() {
         exclude_slash_tmp: false,
     };
     let file_system_policy = FileSystemSandboxPolicy::from(&policy);
+    let sandbox_policy_cwd = std::env::current_dir().expect("cwd");
 
     assert_eq!(
         unsupported_windows_restricted_token_sandbox_reason(
@@ -267,7 +270,7 @@ fn windows_restricted_token_allows_legacy_workspace_write_policies() {
             &policy,
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
-            Path::new("/tmp"),
+            &sandbox_policy_cwd,
         ),
         None
     );
@@ -403,7 +406,7 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
     let env: HashMap<String, String> = std::env::vars().collect();
     let params = ExecParams {
         command,
-        cwd: cwd.clone(),
+        cwd,
         expiration: 500.into(),
         env,
         network: None,
