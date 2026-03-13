@@ -29,6 +29,7 @@ use pretty_assertions::assert_eq;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::TempDir;
 

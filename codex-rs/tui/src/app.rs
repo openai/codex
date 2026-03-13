@@ -34,6 +34,9 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
+use crate::terminal_multiplexer::FORK_PLACEMENT_REQUIRES_MULTIPLEXER_MESSAGE;
+use crate::terminal_multiplexer::ForkPaneSpawnResult;
+use crate::terminal_multiplexer::spawn_fork_in_new_pane;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -55,6 +58,7 @@ use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+use codex_core::terminal::terminal_info;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::SessionTelemetry;
@@ -2275,7 +2279,7 @@ impl App {
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::ForkCurrentSession => {
+            AppEvent::ForkCurrentSession { placement } => {
                 self.session_telemetry.counter(
                     "codex.thread.fork",
                     1,
@@ -2294,6 +2298,48 @@ impl App {
                     // Fresh threads expose a precomputed path, but the file is
                     // materialized lazily on first user message.
                     if path.exists() {
+                        let current_thread_id = self.chat_widget.thread_id();
+                        let terminal_info = terminal_info();
+                        if let Some(multiplexer) = terminal_info.multiplexer.as_ref() {
+                            if let Some(current_thread_id) = current_thread_id.as_ref() {
+                                match spawn_fork_in_new_pane(
+                                    multiplexer,
+                                    current_thread_id,
+                                    &self.config,
+                                    &self.harness_overrides.additional_writable_roots,
+                                    placement,
+                                )
+                                .await
+                                {
+                                    ForkPaneSpawnResult::Spawned(description) => {
+                                        self.chat_widget.add_plain_history_lines(vec![
+                                            format!(
+                                                "Forking current session in a new {description}."
+                                            )
+                                            .into(),
+                                        ]);
+                                        tui.frame_requester().schedule_frame();
+                                        return Ok(AppRunControl::Continue);
+                                    }
+                                    ForkPaneSpawnResult::InvalidPlacement(message) => {
+                                        self.chat_widget.add_error_message(message);
+                                        tui.frame_requester().schedule_frame();
+                                        return Ok(AppRunControl::Continue);
+                                    }
+                                    ForkPaneSpawnResult::Failed(err) => {
+                                        self.chat_widget.add_error_message(format!(
+                                            "Failed to open a new pane for /fork: {err}"
+                                        ));
+                                    }
+                                }
+                            }
+                        } else if placement.is_some() {
+                            self.chat_widget.add_error_message(
+                                FORK_PLACEMENT_REQUIRES_MULTIPLEXER_MESSAGE.to_string(),
+                            );
+                            tui.frame_requester().schedule_frame();
+                            return Ok(AppRunControl::Continue);
+                        }
                         match self
                             .server
                             .fork_thread(usize::MAX, self.config.clone(), path.clone(), false, None)
