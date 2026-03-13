@@ -1981,28 +1981,6 @@ impl App {
             }
         }
 
-        #[cfg(not(debug_assertions))]
-        if let Some(latest_version) = upgrade_version {
-            let control = app
-                .handle_event(
-                    tui,
-                    AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
-                        latest_version,
-                        crate::update_action::get_update_action(),
-                    ))),
-                )
-                .await?;
-            if let AppRunControl::Exit(exit_reason) = control {
-                return Ok(AppExitInfo {
-                    token_usage: app.token_usage(),
-                    thread_id: app.chat_widget.thread_id(),
-                    thread_name: app.chat_widget.thread_name(),
-                    update_action: app.pending_update_action,
-                    exit_reason,
-                });
-            }
-        }
-
         let tui_events = tui.event_stream();
         tokio::pin!(tui_events);
 
@@ -2013,66 +1991,91 @@ impl App {
         let mut listen_for_app_server_events = true;
         let mut waiting_for_initial_session_configured = wait_for_initial_session_configured;
 
-        let exit_reason = loop {
-            let control = select! {
-                Some(event) = app_event_rx.recv() => {
-                    app.handle_event(tui, event).await?
-                }
-                active = async {
-                    if let Some(rx) = app.active_thread_rx.as_mut() {
-                        rx.recv().await
-                    } else {
-                        None
-                    }
-                }, if App::should_handle_active_thread_events(
-                    waiting_for_initial_session_configured,
-                    app.active_thread_rx.is_some()
-                ) => {
-                    if let Some(event) = active {
-                        app.handle_active_thread_event(tui, event).await?;
-                    } else {
-                        app.clear_active_thread().await;
-                    }
-                    AppRunControl::Continue
-                }
-                Some(event) = tui_events.next() => {
-                    app.handle_tui_event(tui, event).await?
-                }
-                app_server_event = embedded_app_server.client.next_event(), if listen_for_app_server_events => {
-                    match app_server_event {
-                        Some(event) => app.handle_embedded_app_server_event(&embedded_app_server.client, event).await,
-                        None => {
-                            listen_for_app_server_events = false;
-                            tracing::warn!("embedded app-server event stream closed");
-                        }
-                    }
-                    AppRunControl::Continue
-                }
-                // Listen on new thread creation due to collab tools.
-                created = thread_created_rx.recv(), if listen_for_threads => {
-                    match created {
-                        Ok(thread_id) => {
-                            app.handle_thread_created(thread_id).await?;
-                        }
-                        Err(broadcast::error::RecvError::Lagged(_)) => {
-                            tracing::warn!("thread_created receiver lagged; skipping resync");
-                        }
-                        Err(broadcast::error::RecvError::Closed) => {
-                            listen_for_threads = false;
-                        }
-                    }
-                    AppRunControl::Continue
-                }
-            };
-            if App::should_stop_waiting_for_initial_session(
-                waiting_for_initial_session_configured,
-                app.primary_thread_id,
-            ) {
-                waiting_for_initial_session_configured = false;
-            }
+        #[cfg(not(debug_assertions))]
+        let pre_loop_exit_reason = if let Some(latest_version) = upgrade_version {
+            let control = app
+                .handle_event(
+                    tui,
+                    AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
+                        latest_version,
+                        crate::update_action::get_update_action(),
+                    ))),
+                )
+                .await?;
             match control {
-                AppRunControl::Continue => {}
-                AppRunControl::Exit(reason) => break reason,
+                AppRunControl::Continue => None,
+                AppRunControl::Exit(exit_reason) => Some(exit_reason),
+            }
+        } else {
+            None
+        };
+        #[cfg(debug_assertions)]
+        let pre_loop_exit_reason: Option<ExitReason> = None;
+
+        let exit_reason = if let Some(exit_reason) = pre_loop_exit_reason {
+            exit_reason
+        } else {
+            loop {
+                let control = select! {
+                    Some(event) = app_event_rx.recv() => {
+                        app.handle_event(tui, event).await?
+                    }
+                    active = async {
+                        if let Some(rx) = app.active_thread_rx.as_mut() {
+                            rx.recv().await
+                        } else {
+                            None
+                        }
+                    }, if App::should_handle_active_thread_events(
+                        waiting_for_initial_session_configured,
+                        app.active_thread_rx.is_some()
+                    ) => {
+                        if let Some(event) = active {
+                            app.handle_active_thread_event(tui, event).await?;
+                        } else {
+                            app.clear_active_thread().await;
+                        }
+                        AppRunControl::Continue
+                    }
+                    Some(event) = tui_events.next() => {
+                        app.handle_tui_event(tui, event).await?
+                    }
+                    app_server_event = embedded_app_server.client.next_event(), if listen_for_app_server_events => {
+                        match app_server_event {
+                            Some(event) => app.handle_embedded_app_server_event(&embedded_app_server.client, event).await,
+                            None => {
+                                listen_for_app_server_events = false;
+                                tracing::warn!("embedded app-server event stream closed");
+                            }
+                        }
+                        AppRunControl::Continue
+                    }
+                    // Listen on new thread creation due to collab tools.
+                    created = thread_created_rx.recv(), if listen_for_threads => {
+                        match created {
+                            Ok(thread_id) => {
+                                app.handle_thread_created(thread_id).await?;
+                            }
+                            Err(broadcast::error::RecvError::Lagged(_)) => {
+                                tracing::warn!("thread_created receiver lagged; skipping resync");
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
+                                listen_for_threads = false;
+                            }
+                        }
+                        AppRunControl::Continue
+                    }
+                };
+                if App::should_stop_waiting_for_initial_session(
+                    waiting_for_initial_session_configured,
+                    app.primary_thread_id,
+                ) {
+                    waiting_for_initial_session_configured = false;
+                }
+                match control {
+                    AppRunControl::Continue => {}
+                    AppRunControl::Exit(reason) => break reason,
+                }
             }
         };
         if let Err(err) = embedded_app_server.client.shutdown().await {
