@@ -1595,17 +1595,27 @@ impl App {
     }
 
     async fn select_agent_thread(&mut self, tui: &mut tui::Tui, thread_id: ThreadId) -> Result<()> {
-        let btw_thread_to_discard = if let Some(btw_thread_id) = self.current_displayed_thread_id()
-            && self.btw_parent_threads.contains_key(&btw_thread_id)
-            && btw_thread_id != thread_id
-            && self.btw_parent_threads.get(&thread_id).copied() != Some(btw_thread_id)
-        {
-            Some(btw_thread_id)
-        } else {
-            None
-        };
         if self.active_thread_id == Some(thread_id) {
             return Ok(());
+        }
+        let mut btw_threads_to_discard = Vec::new();
+        if let Some(mut btw_thread_id) = self.current_displayed_thread_id()
+            && self.btw_parent_threads.contains_key(&btw_thread_id)
+            && self.btw_parent_threads.get(&thread_id).copied() != Some(btw_thread_id)
+        {
+            loop {
+                btw_threads_to_discard.push(btw_thread_id);
+                let Some(parent_thread_id) = self.btw_parent_threads.get(&btw_thread_id).copied()
+                else {
+                    break;
+                };
+                if parent_thread_id == thread_id
+                    || !self.btw_parent_threads.contains_key(&parent_thread_id)
+                {
+                    break;
+                }
+                btw_thread_id = parent_thread_id;
+            }
         }
 
         let live_thread = match self.server.get_thread(thread_id).await {
@@ -1659,7 +1669,7 @@ impl App {
         }
         self.drain_active_thread_events(tui).await?;
         self.refresh_pending_thread_approvals().await;
-        if let Some(btw_thread_id) = btw_thread_to_discard {
+        for btw_thread_id in btw_threads_to_discard {
             self.discard_btw_thread(btw_thread_id).await;
         }
 
@@ -5505,6 +5515,29 @@ mod tests {
             !app.thread_event_channels
                 .contains_key(&grandchild_thread_id)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn switching_away_from_nested_btw_discards_full_hidden_chain() -> Result<()> {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut tui = make_test_tui();
+
+        let parent_thread_id = setup_btw_parent_thread(&mut app, None).await?;
+        let child_thread_id = start_btw_thread(&mut app, &mut tui, parent_thread_id).await?;
+        let grandchild_thread_id = start_btw_thread(&mut app, &mut tui, child_thread_id).await?;
+
+        app.select_agent_thread(&mut tui, parent_thread_id).await?;
+
+        assert_eq!(app.active_thread_id, Some(parent_thread_id));
+        assert_eq!(app.active_btw_parent_thread(), None);
+        assert!(!app.thread_event_channels.contains_key(&child_thread_id));
+        assert!(
+            !app.thread_event_channels
+                .contains_key(&grandchild_thread_id)
+        );
+        assert!(app.server.get_thread(child_thread_id).await.is_err());
+        assert!(app.server.get_thread(grandchild_thread_id).await.is_err());
         Ok(())
     }
 
