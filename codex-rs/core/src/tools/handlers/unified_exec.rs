@@ -157,6 +157,7 @@ impl ToolHandler for UnifiedExecHandler {
                     turn.tools_config.allow_login_shell,
                 )
                 .map_err(FunctionCallError::RespondToModel)?;
+                let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
 
                 let ExecCommandArgs {
                     workdir,
@@ -278,7 +279,10 @@ impl ToolHandler for UnifiedExecHandler {
                     )
                     .await
                     .map_err(|err| {
-                        FunctionCallError::RespondToModel(format!("exec_command failed: {err:?}"))
+                        FunctionCallError::RespondToModel(format!(
+                            "exec_command failed for `{}`: {err:?}",
+                            command_for_display
+                        ))
                     })?
             }
             "write_stdin" => {
