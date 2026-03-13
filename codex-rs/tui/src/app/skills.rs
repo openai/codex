@@ -2,16 +2,11 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use codex_app_server_client::InProcessAppServerRequester;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SkillErrorInfo;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicI64;
-use std::sync::atomic::Ordering;
-
-static NEXT_APP_SERVER_REQUEST_ID: AtomicI64 = AtomicI64::new(1);
 
 pub(super) fn errors_for_cwd(cwd: &Path, response: &SkillsListResponse) -> Vec<SkillErrorInfo> {
     response
@@ -40,10 +35,8 @@ pub(super) fn request_skills_list(
     tokio::spawn(async move {
         let requested_cwds = cwds.clone();
 
-        let request_id =
-            RequestId::Integer(NEXT_APP_SERVER_REQUEST_ID.fetch_add(1, Ordering::Relaxed));
         let result = client
-            .request_typed(ClientRequest::SkillsList {
+            .request_typed_with_generated_id(|request_id| ClientRequest::SkillsList {
                 request_id,
                 params: SkillsListParams {
                     cwds,
