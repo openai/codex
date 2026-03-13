@@ -21,6 +21,7 @@ use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
@@ -73,6 +74,10 @@ impl ShellHandler {
             network: turn_context.network.clone(),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
+            windows_sandbox_private_desktop: turn_context
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
             justification: params.justification.clone(),
             arg0: None,
         }
@@ -123,6 +128,10 @@ impl ShellCommandHandler {
             network: turn_context.network.clone(),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
+            windows_sandbox_private_desktop: turn_context
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
             justification: params.justification.clone(),
             arg0: None,
         })
@@ -335,20 +344,35 @@ impl ShellHandler {
             }
         }
 
-        let request_permission_enabled = session.features().enabled(Feature::RequestPermissions);
+        let exec_permission_approvals_enabled =
+            session.features().enabled(Feature::ExecPermissionApprovals);
+        let requested_additional_permissions = additional_permissions.clone();
         let effective_additional_permissions = apply_granted_turn_permissions(
             session.as_ref(),
             exec_params.sandbox_permissions,
             additional_permissions,
         )
         .await;
-        let normalized_additional_permissions = normalize_and_validate_additional_permissions(
-            request_permission_enabled,
-            turn.approval_policy.value(),
-            effective_additional_permissions.sandbox_permissions,
-            effective_additional_permissions.additional_permissions,
-            effective_additional_permissions.permissions_preapproved,
-            &exec_params.cwd,
+        let additional_permissions_allowed = exec_permission_approvals_enabled
+            || (session.features().enabled(Feature::RequestPermissionsTool)
+                && effective_additional_permissions.permissions_preapproved);
+        let normalized_additional_permissions = implicit_granted_permissions(
+            exec_params.sandbox_permissions,
+            requested_additional_permissions.as_ref(),
+            &effective_additional_permissions,
+        )
+        .map_or_else(
+            || {
+                normalize_and_validate_additional_permissions(
+                    additional_permissions_allowed,
+                    turn.approval_policy.value(),
+                    effective_additional_permissions.sandbox_permissions,
+                    effective_additional_permissions.additional_permissions,
+                    effective_additional_permissions.permissions_preapproved,
+                    &exec_params.cwd,
+                )
+            },
+            |permissions| Ok(Some(permissions)),
         )
         .map_err(FunctionCallError::RespondToModel)?;
 

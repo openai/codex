@@ -12,6 +12,7 @@ use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::SandboxMode;
+use codex_core::AnalyticsEventsClient;
 use codex_core::ThreadManager;
 use codex_core::config::ConfigService;
 use codex_core::config::ConfigServiceError;
@@ -20,6 +21,9 @@ use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::ResidencyRequirement as CoreResidencyRequirement;
 use codex_core::config_loader::SandboxModeRequirement as CoreSandboxModeRequirement;
+use codex_core::plugins::PluginId;
+use codex_core::plugins::collect_plugin_enabled_candidates;
+use codex_core::plugins::installed_plugin_telemetry_metadata;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::Op;
 use serde_json::json;
@@ -56,6 +60,7 @@ pub(crate) struct ConfigApi {
     loader_overrides: LoaderOverrides,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     user_config_reloader: Arc<dyn UserConfigReloader>,
+    analytics_events_client: AnalyticsEventsClient,
 }
 
 impl ConfigApi {
@@ -65,6 +70,7 @@ impl ConfigApi {
         loader_overrides: LoaderOverrides,
         cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
         user_config_reloader: Arc<dyn UserConfigReloader>,
+        analytics_events_client: AnalyticsEventsClient,
     ) -> Self {
         Self {
             codex_home,
@@ -72,6 +78,7 @@ impl ConfigApi {
             loader_overrides,
             cloud_requirements,
             user_config_reloader,
+            analytics_events_client,
         }
     }
 
@@ -113,10 +120,15 @@ impl ConfigApi {
         &self,
         params: ConfigValueWriteParams,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
-        self.config_service()
+        let pending_changes =
+            collect_plugin_enabled_candidates([(&params.key_path, &params.value)].into_iter());
+        let response = self
+            .config_service()
             .write_value(params)
             .await
-            .map_err(map_error)
+            .map_err(map_error)?;
+        self.emit_plugin_toggle_events(pending_changes);
+        Ok(response)
     }
 
     pub(crate) async fn batch_write(
@@ -124,15 +136,37 @@ impl ConfigApi {
         params: ConfigBatchWriteParams,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
         let reload_user_config = params.reload_user_config;
+        let pending_changes = collect_plugin_enabled_candidates(
+            params
+                .edits
+                .iter()
+                .map(|edit| (&edit.key_path, &edit.value)),
+        );
         let response = self
             .config_service()
             .batch_write(params)
             .await
             .map_err(map_error)?;
+        self.emit_plugin_toggle_events(pending_changes);
         if reload_user_config {
             self.user_config_reloader.reload_user_config().await;
         }
         Ok(response)
+    }
+
+    fn emit_plugin_toggle_events(&self, pending_changes: std::collections::BTreeMap<String, bool>) {
+        for (plugin_id, enabled) in pending_changes {
+            let Ok(plugin_id) = PluginId::parse(&plugin_id) else {
+                continue;
+            };
+            let metadata =
+                installed_plugin_telemetry_metadata(self.codex_home.as_path(), &plugin_id);
+            if enabled {
+                self.analytics_events_client.track_plugin_enabled(metadata);
+            } else {
+                self.analytics_events_client.track_plugin_disabled(metadata);
+            }
+        }
     }
 }
 
@@ -229,6 +263,7 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::AnalyticsEventsClient;
     use codex_core::config_loader::NetworkRequirementsToml as CoreNetworkRequirementsToml;
     use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
     use pretty_assertions::assert_eq;
@@ -270,6 +305,7 @@ mod tests {
                 ]),
             }),
             mcp_servers: None,
+            apps: None,
             rules: None,
             enforce_residency: Some(CoreResidencyRequirement::Us),
             network: Some(CoreNetworkRequirementsToml {
@@ -340,6 +376,7 @@ mod tests {
             allowed_web_search_modes: Some(Vec::new()),
             feature_requirements: None,
             mcp_servers: None,
+            apps: None,
             rules: None,
             enforce_residency: None,
             network: None,
@@ -359,12 +396,24 @@ mod tests {
         let user_config_path = codex_home.path().join("config.toml");
         std::fs::write(&user_config_path, "").expect("write config");
         let reloader = Arc::new(RecordingUserConfigReloader::default());
+        let analytics_config = Arc::new(
+            codex_core::config::ConfigBuilder::default()
+                .build()
+                .await
+                .expect("load analytics config"),
+        );
         let config_api = ConfigApi::new(
             codex_home.path().to_path_buf(),
             Vec::new(),
             LoaderOverrides::default(),
             Arc::new(RwLock::new(CloudRequirementsLoader::default())),
             reloader.clone(),
+            AnalyticsEventsClient::new(
+                analytics_config,
+                codex_core::test_support::auth_manager_from_auth(
+                    codex_core::CodexAuth::from_api_key("test"),
+                ),
+            ),
         );
 
         let response = config_api

@@ -1146,6 +1146,12 @@ impl AuthManager {
         }
     }
 
+    pub fn clear_external_auth_refresher(&self) {
+        if let Ok(mut guard) = self.inner.write() {
+            guard.external_refresher = None;
+        }
+    }
+
     pub fn set_forced_chatgpt_workspace_id(&self, workspace_id: Option<String>) {
         if let Ok(mut guard) = self.forced_chatgpt_workspace_id.write() {
             *guard = workspace_id;

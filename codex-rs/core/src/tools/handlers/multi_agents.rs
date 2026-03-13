@@ -16,6 +16,7 @@ use crate::function_tool::FunctionCallError;
 use crate::models_manager::manager::RefreshStrategy;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -23,6 +24,7 @@ use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
@@ -42,10 +44,15 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::sync::Arc;
 
-/// Function-tool handler for the multi-agent collaboration API.
-pub struct MultiAgentHandler;
+pub(crate) use close_agent::Handler as CloseAgentHandler;
+pub(crate) use resume_agent::Handler as ResumeAgentHandler;
+pub(crate) use send_input::Handler as SendInputHandler;
+pub(crate) use spawn::Handler as SpawnAgentHandler;
+pub(crate) use wait::Handler as WaitHandler;
 
 /// Minimum wait timeout to prevent tight polling loops from burning CPU.
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
@@ -57,723 +64,52 @@ struct CloseAgentArgs {
     id: String,
 }
 
-#[async_trait]
-impl ToolHandler for MultiAgentHandler {
-    type Output = FunctionToolOutput;
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            tool_name,
-            payload,
-            call_id,
-            ..
-        } = invocation;
-
-        let arguments = match payload {
-            ToolPayload::Function { arguments } => arguments,
-            _ => {
-                return Err(FunctionCallError::RespondToModel(
-                    "collab handler received unsupported payload".to_string(),
-                ));
-            }
-        };
-
-        match tool_name.as_str() {
-            "spawn_agent" => spawn::handle(session, turn, call_id, arguments).await,
-            "send_input" => send_input::handle(session, turn, call_id, arguments).await,
-            "resume_agent" => resume_agent::handle(session, turn, call_id, arguments).await,
-            "wait" => wait::handle(session, turn, call_id, arguments).await,
-            "close_agent" => close_agent::handle(session, turn, call_id, arguments).await,
-            other => Err(FunctionCallError::RespondToModel(format!(
-                "unsupported collab tool {other}"
-            ))),
-        }
+fn function_arguments(payload: ToolPayload) -> Result<String, FunctionCallError> {
+    match payload {
+        ToolPayload::Function { arguments } => Ok(arguments),
+        _ => Err(FunctionCallError::RespondToModel(
+            "collab handler received unsupported payload".to_string(),
+        )),
     }
 }
 
-mod spawn {
-    use super::*;
-    use crate::agent::control::SpawnAgentOptions;
-    use crate::agent::role::DEFAULT_ROLE_NAME;
-    use crate::agent::role::apply_role_to_config;
-
-    use crate::agent::exceeds_thread_spawn_depth_limit;
-    use crate::agent::next_thread_spawn_depth;
-    use std::sync::Arc;
-
-    #[derive(Debug, Deserialize)]
-    struct SpawnAgentArgs {
-        message: Option<String>,
-        items: Option<Vec<UserInput>>,
-        agent_type: Option<String>,
-        model: Option<String>,
-        reasoning_effort: Option<ReasoningEffort>,
-        #[serde(default)]
-        fork_context: bool,
-    }
-
-    #[derive(Debug, Serialize)]
-    struct SpawnAgentResult {
-        agent_id: String,
-        nickname: Option<String>,
-    }
-
-    pub async fn handle(
-        session: Arc<Session>,
-        turn: Arc<TurnContext>,
-        call_id: String,
-        arguments: String,
-    ) -> Result<FunctionToolOutput, FunctionCallError> {
-        let args: SpawnAgentArgs = parse_arguments(&arguments)?;
-        let role_name = args
-            .agent_type
-            .as_deref()
-            .map(str::trim)
-            .filter(|role| !role.is_empty());
-        let input_items = parse_collab_input(args.message, args.items)?;
-        let prompt = input_preview(&input_items);
-        let session_source = turn.session_source.clone();
-        let child_depth = next_thread_spawn_depth(&session_source);
-        let max_depth = turn.config.agent_max_depth;
-        if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
-            return Err(FunctionCallError::RespondToModel(
-                "Agent depth limit reached. Solve the task yourself.".to_string(),
-            ));
-        }
-        session
-            .send_event(
-                &turn,
-                CollabAgentSpawnBeginEvent {
-                    call_id: call_id.clone(),
-                    sender_thread_id: session.conversation_id,
-                    prompt: prompt.clone(),
-                    model: args.model.clone().unwrap_or_default(),
-                    reasoning_effort: args.reasoning_effort.unwrap_or_default(),
-                }
-                .into(),
-            )
-            .await;
-        let mut config =
-            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
-        apply_requested_spawn_agent_model_overrides(
-            &session,
-            turn.as_ref(),
-            &mut config,
-            args.model.as_deref(),
-            args.reasoning_effort,
-        )
-        .await?;
-        apply_role_to_config(&mut config, role_name)
-            .await
-            .map_err(FunctionCallError::RespondToModel)?;
-        apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
-        apply_spawn_agent_overrides(&mut config, child_depth);
-
-        let result = session
-            .services
-            .agent_control
-            .spawn_agent_with_options(
-                config,
-                input_items,
-                Some(thread_spawn_source(
-                    session.conversation_id,
-                    child_depth,
-                    role_name,
-                )),
-                SpawnAgentOptions {
-                    fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
-                },
-            )
-            .await
-            .map_err(collab_spawn_error);
-        let (new_thread_id, status) = match &result {
-            Ok(thread_id) => (
-                Some(*thread_id),
-                session.services.agent_control.get_status(*thread_id).await,
-            ),
-            Err(_) => (None, AgentStatus::NotFound),
-        };
-        let (new_agent_nickname, new_agent_role) = match new_thread_id {
-            Some(thread_id) => session
-                .services
-                .agent_control
-                .get_agent_nickname_and_role(thread_id)
-                .await
-                .unwrap_or((None, None)),
-            None => (None, None),
-        };
-        let nickname = new_agent_nickname.clone();
-        session
-            .send_event(
-                &turn,
-                CollabAgentSpawnEndEvent {
-                    call_id,
-                    sender_thread_id: session.conversation_id,
-                    new_thread_id,
-                    new_agent_nickname,
-                    new_agent_role,
-                    prompt,
-                    model: args.model.clone().unwrap_or_default(),
-                    reasoning_effort: args.reasoning_effort.unwrap_or_default(),
-                    status,
-                }
-                .into(),
-            )
-            .await;
-        let new_thread_id = result?;
-        let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
-        turn.session_telemetry
-            .counter("codex.multi_agent.spawn", 1, &[("role", role_tag)]);
-
-        let content = serde_json::to_string(&SpawnAgentResult {
-            agent_id: new_thread_id.to_string(),
-            nickname,
-        })
-        .map_err(|err| {
-            FunctionCallError::Fatal(format!("failed to serialize spawn_agent result: {err}"))
-        })?;
-
-        Ok(FunctionToolOutput::from_text(content, Some(true)))
-    }
+fn tool_output_json_text<T>(value: &T, tool_name: &str) -> String
+where
+    T: Serialize,
+{
+    serde_json::to_string(value).unwrap_or_else(|err| {
+        JsonValue::String(format!("failed to serialize {tool_name} result: {err}")).to_string()
+    })
 }
 
-mod send_input {
-    use super::*;
-    use std::sync::Arc;
-
-    #[derive(Debug, Deserialize)]
-    struct SendInputArgs {
-        id: String,
-        message: Option<String>,
-        items: Option<Vec<UserInput>>,
-        #[serde(default)]
-        interrupt: bool,
-    }
-
-    #[derive(Debug, Serialize)]
-    struct SendInputResult {
-        submission_id: String,
-    }
-
-    pub async fn handle(
-        session: Arc<Session>,
-        turn: Arc<TurnContext>,
-        call_id: String,
-        arguments: String,
-    ) -> Result<FunctionToolOutput, FunctionCallError> {
-        let args: SendInputArgs = parse_arguments(&arguments)?;
-        let receiver_thread_id = agent_id(&args.id)?;
-        let input_items = parse_collab_input(args.message, args.items)?;
-        let prompt = input_preview(&input_items);
-        let (receiver_agent_nickname, receiver_agent_role) = session
-            .services
-            .agent_control
-            .get_agent_nickname_and_role(receiver_thread_id)
-            .await
-            .unwrap_or((None, None));
-        if args.interrupt {
-            session
-                .services
-                .agent_control
-                .interrupt_agent(receiver_thread_id)
-                .await
-                .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
-        }
-        session
-            .send_event(
-                &turn,
-                CollabAgentInteractionBeginEvent {
-                    call_id: call_id.clone(),
-                    sender_thread_id: session.conversation_id,
-                    receiver_thread_id,
-                    prompt: prompt.clone(),
-                }
-                .into(),
-            )
-            .await;
-        let result = session
-            .services
-            .agent_control
-            .send_input(receiver_thread_id, input_items)
-            .await
-            .map_err(|err| collab_agent_error(receiver_thread_id, err));
-        let status = session
-            .services
-            .agent_control
-            .get_status(receiver_thread_id)
-            .await;
-        session
-            .send_event(
-                &turn,
-                CollabAgentInteractionEndEvent {
-                    call_id,
-                    sender_thread_id: session.conversation_id,
-                    receiver_thread_id,
-                    receiver_agent_nickname,
-                    receiver_agent_role,
-                    prompt,
-                    status,
-                }
-                .into(),
-            )
-            .await;
-        let submission_id = result?;
-
-        let content = serde_json::to_string(&SendInputResult { submission_id }).map_err(|err| {
-            FunctionCallError::Fatal(format!("failed to serialize send_input result: {err}"))
-        })?;
-
-        Ok(FunctionToolOutput::from_text(content, Some(true)))
-    }
+fn tool_output_response_item<T>(
+    call_id: &str,
+    payload: &ToolPayload,
+    value: &T,
+    success: Option<bool>,
+    tool_name: &str,
+) -> ResponseInputItem
+where
+    T: Serialize,
+{
+    FunctionToolOutput::from_text(tool_output_json_text(value, tool_name), success)
+        .to_response_item(call_id, payload)
 }
 
-mod resume_agent {
-    use super::*;
-    use crate::agent::next_thread_spawn_depth;
-    use std::sync::Arc;
-
-    #[derive(Debug, Deserialize)]
-    struct ResumeAgentArgs {
-        id: String,
-    }
-
-    #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
-    pub(super) struct ResumeAgentResult {
-        pub(super) status: AgentStatus,
-    }
-
-    pub async fn handle(
-        session: Arc<Session>,
-        turn: Arc<TurnContext>,
-        call_id: String,
-        arguments: String,
-    ) -> Result<FunctionToolOutput, FunctionCallError> {
-        let args: ResumeAgentArgs = parse_arguments(&arguments)?;
-        let receiver_thread_id = agent_id(&args.id)?;
-        let (receiver_agent_nickname, receiver_agent_role) = session
-            .services
-            .agent_control
-            .get_agent_nickname_and_role(receiver_thread_id)
-            .await
-            .unwrap_or((None, None));
-        let child_depth = next_thread_spawn_depth(&turn.session_source);
-        let max_depth = turn.config.agent_max_depth;
-        if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
-            return Err(FunctionCallError::RespondToModel(
-                "Agent depth limit reached. Solve the task yourself.".to_string(),
-            ));
-        }
-
-        session
-            .send_event(
-                &turn,
-                CollabResumeBeginEvent {
-                    call_id: call_id.clone(),
-                    sender_thread_id: session.conversation_id,
-                    receiver_thread_id,
-                    receiver_agent_nickname: receiver_agent_nickname.clone(),
-                    receiver_agent_role: receiver_agent_role.clone(),
-                }
-                .into(),
-            )
-            .await;
-
-        let mut status = session
-            .services
-            .agent_control
-            .get_status(receiver_thread_id)
-            .await;
-        let error = if matches!(status, AgentStatus::NotFound) {
-            // If the thread is no longer active, attempt to restore it from rollout.
-            match try_resume_closed_agent(&session, &turn, receiver_thread_id, child_depth).await {
-                Ok(resumed_status) => {
-                    status = resumed_status;
-                    None
-                }
-                Err(err) => {
-                    status = session
-                        .services
-                        .agent_control
-                        .get_status(receiver_thread_id)
-                        .await;
-                    Some(err)
-                }
-            }
-        } else {
-            None
-        };
-
-        let (receiver_agent_nickname, receiver_agent_role) = session
-            .services
-            .agent_control
-            .get_agent_nickname_and_role(receiver_thread_id)
-            .await
-            .unwrap_or((receiver_agent_nickname, receiver_agent_role));
-        session
-            .send_event(
-                &turn,
-                CollabResumeEndEvent {
-                    call_id,
-                    sender_thread_id: session.conversation_id,
-                    receiver_thread_id,
-                    receiver_agent_nickname,
-                    receiver_agent_role,
-                    status: status.clone(),
-                }
-                .into(),
-            )
-            .await;
-
-        if let Some(err) = error {
-            return Err(err);
-        }
-        turn.session_telemetry
-            .counter("codex.multi_agent.resume", 1, &[]);
-
-        let content = serde_json::to_string(&ResumeAgentResult { status }).map_err(|err| {
-            FunctionCallError::Fatal(format!("failed to serialize resume_agent result: {err}"))
-        })?;
-
-        Ok(FunctionToolOutput::from_text(content, Some(true)))
-    }
-
-    async fn try_resume_closed_agent(
-        session: &Arc<Session>,
-        turn: &Arc<TurnContext>,
-        receiver_thread_id: ThreadId,
-        child_depth: i32,
-    ) -> Result<AgentStatus, FunctionCallError> {
-        let config = build_agent_resume_config(turn.as_ref(), child_depth)?;
-        let resumed_thread_id = session
-            .services
-            .agent_control
-            .resume_agent_from_rollout(
-                config,
-                receiver_thread_id,
-                thread_spawn_source(session.conversation_id, child_depth, None),
-            )
-            .await
-            .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
-
-        Ok(session
-            .services
-            .agent_control
-            .get_status(resumed_thread_id)
-            .await)
-    }
+fn tool_output_code_mode_result<T>(value: &T, tool_name: &str) -> JsonValue
+where
+    T: Serialize,
+{
+    serde_json::to_value(value).unwrap_or_else(|err| {
+        JsonValue::String(format!("failed to serialize {tool_name} result: {err}"))
+    })
 }
 
-pub(crate) mod wait {
-    use super::*;
-    use crate::agent::status::is_final;
-    use futures::FutureExt;
-    use futures::StreamExt;
-    use futures::stream::FuturesUnordered;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use std::time::Duration;
-    use tokio::sync::watch::Receiver;
-    use tokio::time::Instant;
-
-    use tokio::time::timeout_at;
-
-    #[derive(Debug, Deserialize)]
-    struct WaitArgs {
-        ids: Vec<String>,
-        timeout_ms: Option<i64>,
-    }
-
-    #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
-    pub(crate) struct WaitResult {
-        pub(crate) status: HashMap<ThreadId, AgentStatus>,
-        pub(crate) timed_out: bool,
-    }
-
-    pub async fn handle(
-        session: Arc<Session>,
-        turn: Arc<TurnContext>,
-        call_id: String,
-        arguments: String,
-    ) -> Result<FunctionToolOutput, FunctionCallError> {
-        let args: WaitArgs = parse_arguments(&arguments)?;
-        if args.ids.is_empty() {
-            return Err(FunctionCallError::RespondToModel(
-                "ids must be non-empty".to_owned(),
-            ));
-        }
-        let receiver_thread_ids = args
-            .ids
-            .iter()
-            .map(|id| agent_id(id))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut receiver_agents = Vec::with_capacity(receiver_thread_ids.len());
-        for receiver_thread_id in &receiver_thread_ids {
-            let (agent_nickname, agent_role) = session
-                .services
-                .agent_control
-                .get_agent_nickname_and_role(*receiver_thread_id)
-                .await
-                .unwrap_or((None, None));
-            receiver_agents.push(CollabAgentRef {
-                thread_id: *receiver_thread_id,
-                agent_nickname,
-                agent_role,
-            });
-        }
-
-        // Validate timeout.
-        // Very short timeouts encourage busy-polling loops in the orchestrator prompt and can
-        // cause high CPU usage even with a single active worker, so clamp to a minimum.
-        let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
-        let timeout_ms = match timeout_ms {
-            ms if ms <= 0 => {
-                return Err(FunctionCallError::RespondToModel(
-                    "timeout_ms must be greater than zero".to_owned(),
-                ));
-            }
-            ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
-        };
-
-        session
-            .send_event(
-                &turn,
-                CollabWaitingBeginEvent {
-                    sender_thread_id: session.conversation_id,
-                    receiver_thread_ids: receiver_thread_ids.clone(),
-                    receiver_agents: receiver_agents.clone(),
-                    call_id: call_id.clone(),
-                }
-                .into(),
-            )
-            .await;
-
-        let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
-        let mut initial_final_statuses = Vec::new();
-        for id in &receiver_thread_ids {
-            match session.services.agent_control.subscribe_status(*id).await {
-                Ok(rx) => {
-                    let status = rx.borrow().clone();
-                    if is_final(&status) {
-                        initial_final_statuses.push((*id, status));
-                    }
-                    status_rxs.push((*id, rx));
-                }
-                Err(CodexErr::ThreadNotFound(_)) => {
-                    initial_final_statuses.push((*id, AgentStatus::NotFound));
-                }
-                Err(err) => {
-                    let mut statuses = HashMap::with_capacity(1);
-                    statuses.insert(*id, session.services.agent_control.get_status(*id).await);
-                    session
-                        .send_event(
-                            &turn,
-                            CollabWaitingEndEvent {
-                                sender_thread_id: session.conversation_id,
-                                call_id: call_id.clone(),
-                                agent_statuses: build_wait_agent_statuses(
-                                    &statuses,
-                                    &receiver_agents,
-                                ),
-                                statuses,
-                            }
-                            .into(),
-                        )
-                        .await;
-                    return Err(collab_agent_error(*id, err));
-                }
-            }
-        }
-
-        let statuses = if !initial_final_statuses.is_empty() {
-            initial_final_statuses
-        } else {
-            // Wait for the first agent to reach a final status.
-            let mut futures = FuturesUnordered::new();
-            for (id, rx) in status_rxs.into_iter() {
-                let session = session.clone();
-                futures.push(wait_for_final_status(session, id, rx));
-            }
-            let mut results = Vec::new();
-            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-            loop {
-                match timeout_at(deadline, futures.next()).await {
-                    Ok(Some(Some(result))) => {
-                        results.push(result);
-                        break;
-                    }
-                    Ok(Some(None)) => continue,
-                    Ok(None) | Err(_) => break,
-                }
-            }
-            if !results.is_empty() {
-                // Drain the unlikely last elements to prevent race.
-                loop {
-                    match futures.next().now_or_never() {
-                        Some(Some(Some(result))) => results.push(result),
-                        Some(Some(None)) => continue,
-                        Some(None) | None => break,
-                    }
-                }
-            }
-            results
-        };
-
-        // Convert payload.
-        let statuses_map = statuses.clone().into_iter().collect::<HashMap<_, _>>();
-        let agent_statuses = build_wait_agent_statuses(&statuses_map, &receiver_agents);
-        let result = WaitResult {
-            status: statuses_map.clone(),
-            timed_out: statuses.is_empty(),
-        };
-
-        // Final event emission.
-        session
-            .send_event(
-                &turn,
-                CollabWaitingEndEvent {
-                    sender_thread_id: session.conversation_id,
-                    call_id,
-                    agent_statuses,
-                    statuses: statuses_map,
-                }
-                .into(),
-            )
-            .await;
-
-        let content = serde_json::to_string(&result).map_err(|err| {
-            FunctionCallError::Fatal(format!("failed to serialize wait result: {err}"))
-        })?;
-
-        Ok(FunctionToolOutput::from_text(content, None))
-    }
-
-    async fn wait_for_final_status(
-        session: Arc<Session>,
-        thread_id: ThreadId,
-        mut status_rx: Receiver<AgentStatus>,
-    ) -> Option<(ThreadId, AgentStatus)> {
-        let mut status = status_rx.borrow().clone();
-        if is_final(&status) {
-            return Some((thread_id, status));
-        }
-
-        loop {
-            if status_rx.changed().await.is_err() {
-                let latest = session.services.agent_control.get_status(thread_id).await;
-                return is_final(&latest).then_some((thread_id, latest));
-            }
-            status = status_rx.borrow().clone();
-            if is_final(&status) {
-                return Some((thread_id, status));
-            }
-        }
-    }
-}
-
-pub mod close_agent {
-    use super::*;
-    use std::sync::Arc;
-
-    #[derive(Debug, Deserialize, Serialize)]
-    pub(super) struct CloseAgentResult {
-        pub(super) status: AgentStatus,
-    }
-
-    pub async fn handle(
-        session: Arc<Session>,
-        turn: Arc<TurnContext>,
-        call_id: String,
-        arguments: String,
-    ) -> Result<FunctionToolOutput, FunctionCallError> {
-        let args: CloseAgentArgs = parse_arguments(&arguments)?;
-        let agent_id = agent_id(&args.id)?;
-        let (receiver_agent_nickname, receiver_agent_role) = session
-            .services
-            .agent_control
-            .get_agent_nickname_and_role(agent_id)
-            .await
-            .unwrap_or((None, None));
-        session
-            .send_event(
-                &turn,
-                CollabCloseBeginEvent {
-                    call_id: call_id.clone(),
-                    sender_thread_id: session.conversation_id,
-                    receiver_thread_id: agent_id,
-                }
-                .into(),
-            )
-            .await;
-        let status = match session
-            .services
-            .agent_control
-            .subscribe_status(agent_id)
-            .await
-        {
-            Ok(mut status_rx) => status_rx.borrow_and_update().clone(),
-            Err(err) => {
-                let status = session.services.agent_control.get_status(agent_id).await;
-                session
-                    .send_event(
-                        &turn,
-                        CollabCloseEndEvent {
-                            call_id: call_id.clone(),
-                            sender_thread_id: session.conversation_id,
-                            receiver_thread_id: agent_id,
-                            receiver_agent_nickname: receiver_agent_nickname.clone(),
-                            receiver_agent_role: receiver_agent_role.clone(),
-                            status,
-                        }
-                        .into(),
-                    )
-                    .await;
-                return Err(collab_agent_error(agent_id, err));
-            }
-        };
-        let result = if !matches!(status, AgentStatus::Shutdown) {
-            session
-                .services
-                .agent_control
-                .shutdown_agent(agent_id)
-                .await
-                .map_err(|err| collab_agent_error(agent_id, err))
-                .map(|_| ())
-        } else {
-            Ok(())
-        };
-        session
-            .send_event(
-                &turn,
-                CollabCloseEndEvent {
-                    call_id,
-                    sender_thread_id: session.conversation_id,
-                    receiver_thread_id: agent_id,
-                    receiver_agent_nickname,
-                    receiver_agent_role,
-                    status: status.clone(),
-                }
-                .into(),
-            )
-            .await;
-        result?;
-
-        let content = serde_json::to_string(&CloseAgentResult { status }).map_err(|err| {
-            FunctionCallError::Fatal(format!("failed to serialize close_agent result: {err}"))
-        })?;
-
-        Ok(FunctionToolOutput::from_text(content, Some(true)))
-    }
-}
+pub mod close_agent;
+mod resume_agent;
+mod send_input;
+mod spawn;
+pub(crate) mod wait;
 
 fn agent_id(id: &str) -> Result<ThreadId, FunctionCallError> {
     ThreadId::from_string(id)

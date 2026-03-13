@@ -1,12 +1,12 @@
 use http::Error as HttpError;
+use http::HeaderMap;
+use http::HeaderName;
+use http::HeaderValue;
 use opentelemetry::global;
 use opentelemetry::propagation::Injector;
 use reqwest::IntoUrl;
 use reqwest::Method;
 use reqwest::Response;
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderName;
-use reqwest::header::HeaderValue;
 use serde::Serialize;
 use std::fmt::Display;
 use std::time::Duration;

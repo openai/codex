@@ -74,14 +74,24 @@ fn append_code_mode_sample(
     input_type: String,
     output_type: String,
 ) -> String {
-    let reference = code_mode_tool_reference(tool_name);
-    format!(
-        "{description}\n\nCode mode declaration:\n```ts\nimport {{ {} }} from \"{}\";\ndeclare function {}({input_name}: {input_type}): Promise<{output_type}>;\n```",
-        reference.tool_key, reference.module_path, reference.tool_key
-    )
+    let declaration = format!(
+        "declare const tools: {{ {} }};",
+        render_code_mode_tool_declaration(tool_name, input_name, input_type, output_type)
+    );
+    format!("{description}\n\nexec tool declaration:\n```ts\n{declaration}\n```")
 }
 
-fn code_mode_local_name(tool_key: &str) -> String {
+fn render_code_mode_tool_declaration(
+    tool_name: &str,
+    input_name: &str,
+    input_type: String,
+    output_type: String,
+) -> String {
+    let tool_name = normalize_code_mode_identifier(tool_name);
+    format!("{tool_name}({input_name}: {input_type}): Promise<{output_type}>;")
+}
+
+pub(crate) fn normalize_code_mode_identifier(tool_key: &str) -> String {
     let mut identifier = String::new();
 
     for (index, ch) in tool_key.chars().enumerate() {
@@ -98,14 +108,18 @@ fn code_mode_local_name(tool_key: &str) -> String {
         }
     }
 
-    identifier
+    if identifier.is_empty() {
+        "_".to_string()
+    } else {
+        identifier
+    }
 }
 
 fn render_json_schema_to_typescript(schema: &JsonValue) -> String {
-    render_json_schema_to_typescript_inner(schema, 0)
+    render_json_schema_to_typescript_inner(schema)
 }
 
-fn render_json_schema_to_typescript_inner(schema: &JsonValue, indent: usize) -> String {
+fn render_json_schema_to_typescript_inner(schema: &JsonValue) -> String {
     match schema {
         JsonValue::Bool(true) => "unknown".to_string(),
         JsonValue::Bool(false) => "never".to_string(),
@@ -128,7 +142,7 @@ fn render_json_schema_to_typescript_inner(schema: &JsonValue, indent: usize) -> 
                 if let Some(variants) = map.get(key).and_then(serde_json::Value::as_array) {
                     let rendered = variants
                         .iter()
-                        .map(|variant| render_json_schema_to_typescript_inner(variant, indent))
+                        .map(render_json_schema_to_typescript_inner)
                         .collect::<Vec<_>>();
                     if !rendered.is_empty() {
                         return rendered.join(" | ");
@@ -139,7 +153,7 @@ fn render_json_schema_to_typescript_inner(schema: &JsonValue, indent: usize) -> 
             if let Some(variants) = map.get("allOf").and_then(serde_json::Value::as_array) {
                 let rendered = variants
                     .iter()
-                    .map(|variant| render_json_schema_to_typescript_inner(variant, indent))
+                    .map(render_json_schema_to_typescript_inner)
                     .collect::<Vec<_>>();
                 if !rendered.is_empty() {
                     return rendered.join(" & ");
@@ -151,9 +165,7 @@ fn render_json_schema_to_typescript_inner(schema: &JsonValue, indent: usize) -> 
                     let rendered = types
                         .iter()
                         .filter_map(serde_json::Value::as_str)
-                        .map(|schema_type| {
-                            render_json_schema_type_keyword(map, schema_type, indent)
-                        })
+                        .map(|schema_type| render_json_schema_type_keyword(map, schema_type))
                         .collect::<Vec<_>>();
                     if !rendered.is_empty() {
                         return rendered.join(" | ");
@@ -161,7 +173,7 @@ fn render_json_schema_to_typescript_inner(schema: &JsonValue, indent: usize) -> 
                 }
 
                 if let Some(schema_type) = schema_type.as_str() {
-                    return render_json_schema_type_keyword(map, schema_type, indent);
+                    return render_json_schema_type_keyword(map, schema_type);
                 }
             }
 
@@ -169,11 +181,11 @@ fn render_json_schema_to_typescript_inner(schema: &JsonValue, indent: usize) -> 
                 || map.contains_key("additionalProperties")
                 || map.contains_key("required")
             {
-                return render_json_schema_object(map, indent);
+                return render_json_schema_object(map);
             }
 
             if map.contains_key("items") || map.contains_key("prefixItems") {
-                return render_json_schema_array(map, indent);
+                return render_json_schema_array(map);
             }
 
             "unknown".to_string()
@@ -185,29 +197,28 @@ fn render_json_schema_to_typescript_inner(schema: &JsonValue, indent: usize) -> 
 fn render_json_schema_type_keyword(
     map: &serde_json::Map<String, JsonValue>,
     schema_type: &str,
-    indent: usize,
 ) -> String {
     match schema_type {
         "string" => "string".to_string(),
         "number" | "integer" => "number".to_string(),
         "boolean" => "boolean".to_string(),
         "null" => "null".to_string(),
-        "array" => render_json_schema_array(map, indent),
-        "object" => render_json_schema_object(map, indent),
+        "array" => render_json_schema_array(map),
+        "object" => render_json_schema_object(map),
         _ => "unknown".to_string(),
     }
 }
 
-fn render_json_schema_array(map: &serde_json::Map<String, JsonValue>, indent: usize) -> String {
+fn render_json_schema_array(map: &serde_json::Map<String, JsonValue>) -> String {
     if let Some(items) = map.get("items") {
-        let item_type = render_json_schema_to_typescript_inner(items, indent + 2);
+        let item_type = render_json_schema_to_typescript_inner(items);
         return format!("Array<{item_type}>");
     }
 
     if let Some(items) = map.get("prefixItems").and_then(serde_json::Value::as_array) {
         let item_types = items
             .iter()
-            .map(|item| render_json_schema_to_typescript_inner(item, indent + 2))
+            .map(render_json_schema_to_typescript_inner)
             .collect::<Vec<_>>();
         if !item_types.is_empty() {
             return format!("[{}]", item_types.join(", "));
@@ -217,7 +228,7 @@ fn render_json_schema_array(map: &serde_json::Map<String, JsonValue>, indent: us
     "unknown[]".to_string()
 }
 
-fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>, indent: usize) -> String {
+fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>) -> String {
     let required = map
         .get("required")
         .and_then(serde_json::Value::as_array)
@@ -236,7 +247,6 @@ fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>, indent: u
 
     let mut sorted_properties = properties.iter().collect::<Vec<_>>();
     sorted_properties.sort_unstable_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
-
     let mut lines = sorted_properties
         .into_iter()
         .map(|(name, value)| {
@@ -246,11 +256,8 @@ fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>, indent: u
                 "?"
             };
             let property_name = render_json_schema_property_name(name);
-            let property_type = render_json_schema_to_typescript_inner(value, indent + 2);
-            format!(
-                "{}{property_name}{optional}: {property_type};",
-                " ".repeat(indent + 2)
-            )
+            let property_type = render_json_schema_to_typescript_inner(value);
+            format!("{property_name}{optional}: {property_type};")
         })
         .collect::<Vec<_>>();
 
@@ -258,28 +265,25 @@ fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>, indent: u
         let additional_type = match additional_properties {
             JsonValue::Bool(true) => Some("unknown".to_string()),
             JsonValue::Bool(false) => None,
-            value => Some(render_json_schema_to_typescript_inner(value, indent + 2)),
+            value => Some(render_json_schema_to_typescript_inner(value)),
         };
 
         if let Some(additional_type) = additional_type {
-            lines.push(format!(
-                "{}[key: string]: {additional_type};",
-                " ".repeat(indent + 2)
-            ));
+            lines.push(format!("[key: string]: {additional_type};"));
         }
     } else if properties.is_empty() {
-        lines.push(format!("{}[key: string]: unknown;", " ".repeat(indent + 2)));
+        lines.push("[key: string]: unknown;".to_string());
     }
 
     if lines.is_empty() {
         return "{}".to_string();
     }
 
-    format!("{{\n{}\n{}}}", lines.join("\n"), " ".repeat(indent))
+    format!("{{ {} }}", lines.join(" "))
 }
 
 fn render_json_schema_property_name(name: &str) -> String {
-    if code_mode_local_name(name) == name {
+    if normalize_code_mode_identifier(name) == name {
         name.to_string()
     } else {
         serde_json::to_string(name).unwrap_or_else(|_| format!("\"{}\"", name.replace('"', "\\\"")))

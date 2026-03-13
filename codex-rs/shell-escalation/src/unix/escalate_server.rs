@@ -319,16 +319,6 @@ async fn handle_escalate_session_with_policy(
                 ));
             }
 
-            if msg
-                .fds
-                .iter()
-                .any(|src_fd| fds.iter().any(|dst_fd| dst_fd.as_raw_fd() == *src_fd))
-            {
-                return Err(anyhow::anyhow!(
-                    "overlapping fds not yet supported in SuperExecMessage"
-                ));
-            }
-
             let PreparedExec {
                 command,
                 cwd,
@@ -398,6 +388,7 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
+    use std::io::Write;
     use std::os::fd::AsRawFd;
     use std::os::fd::FromRawFd;
     use std::path::PathBuf;
@@ -808,6 +799,126 @@ mod tests {
 
         let result = client.receive::<SuperExecResult>().await?;
         assert_eq!(42, result.exit_code);
+
+        server_task.await?
+    }
+
+    /// Saves a target descriptor, closes it, and restores it when dropped.
+    ///
+    /// The overlap regression test needs the next received `SCM_RIGHTS` handle
+    /// to land on a specific descriptor number such as stdin. Temporarily
+    /// closing the descriptor makes that allocation possible while still
+    /// letting the test put the process back the way it found it.
+    struct RestoredFd {
+        target_fd: i32,
+        original_fd: std::os::fd::OwnedFd,
+    }
+
+    impl RestoredFd {
+        /// Duplicates `target_fd`, then closes the original descriptor number.
+        ///
+        /// The duplicate is kept alive so `Drop` can restore the original
+        /// process state after the test finishes.
+        fn close_temporarily(target_fd: i32) -> anyhow::Result<Self> {
+            let original_fd = unsafe { libc::dup(target_fd) };
+            if original_fd == -1 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            if unsafe { libc::close(target_fd) } == -1 {
+                let err = std::io::Error::last_os_error();
+                unsafe {
+                    libc::close(original_fd);
+                }
+                return Err(err.into());
+            }
+            Ok(Self {
+                target_fd,
+                original_fd: unsafe { std::os::fd::OwnedFd::from_raw_fd(original_fd) },
+            })
+        }
+    }
+
+    /// Restores the original descriptor back onto its original fd number.
+    ///
+    /// This keeps the overlap test self-contained even though it mutates the
+    /// current process's stdio table.
+    impl Drop for RestoredFd {
+        fn drop(&mut self) {
+            unsafe {
+                libc::dup2(self.original_fd.as_raw_fd(), self.target_fd);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_escalate_session_accepts_received_fds_that_overlap_destinations()
+    -> anyhow::Result<()> {
+        let _guard = ESCALATE_SERVER_TEST_LOCK.lock().await;
+        let mut pipe_fds = [0; 2];
+        if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } == -1 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let read_end = unsafe { std::os::fd::OwnedFd::from_raw_fd(pipe_fds[0]) };
+        let mut write_end = unsafe { std::fs::File::from_raw_fd(pipe_fds[1]) };
+
+        // Force the receive-side overlap case for stdin.
+        //
+        // SCM_RIGHTS installs received descriptors into the lowest available fd
+        // numbers in the receiving process. The pipe is opened first so its
+        // read end does not consume fd 0. After stdin is temporarily closed,
+        // receiving `read_end` should reuse descriptor 0. The message below
+        // also asks the server to map that received fd to destination fd 0, so
+        // the pre-exec dup2 loop exercises the src_fd == dst_fd case.
+        let stdin_restore = RestoredFd::close_temporarily(libc::STDIN_FILENO)?;
+        let (server, client) = AsyncSocket::pair()?;
+        let server_task = tokio::spawn(handle_escalate_session_with_policy(
+            server,
+            Arc::new(DeterministicEscalationPolicy {
+                decision: EscalationDecision::escalate(EscalationExecution::Unsandboxed),
+            }),
+            Arc::new(ForwardingShellCommandExecutor),
+            CancellationToken::new(),
+            CancellationToken::new(),
+        ));
+
+        client
+            .send(EscalateRequest {
+                file: PathBuf::from("/bin/sh"),
+                argv: vec![
+                    "sh".to_string(),
+                    "-c".to_string(),
+                    "IFS= read -r line && [ \"$line\" = overlap-ok ]".to_string(),
+                ],
+                workdir: AbsolutePathBuf::current_dir()?,
+                env: HashMap::new(),
+            })
+            .await?;
+
+        let response = client.receive::<EscalateResponse>().await?;
+        assert_eq!(
+            EscalateResponse {
+                action: EscalateAction::Escalate,
+            },
+            response
+        );
+
+        client
+            .send_with_fds(
+                SuperExecMessage {
+                    fds: vec![libc::STDIN_FILENO],
+                },
+                &[read_end],
+            )
+            .await?;
+        write_end.write_all(b"overlap-ok\n")?;
+        drop(write_end);
+
+        let result = client.receive::<SuperExecResult>().await?;
+        assert_eq!(
+            0, result.exit_code,
+            "expected the escalated child to read the sent stdin payload even when the received fd reuses fd 0"
+        );
+        drop(stdin_restore);
 
         server_task.await?
     }

@@ -77,6 +77,7 @@ use codex_utils_oss::get_default_model_for_oss_provider;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::io::IsTerminal;
@@ -914,6 +915,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
+        config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
         ..ThreadStartParams::default()
     }
@@ -928,8 +930,16 @@ fn thread_resume_params_from_config(config: &Config, path: Option<PathBuf>) -> T
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
+        config: config_request_overrides_from_config(config),
         ..ThreadResumeParams::default()
     }
+}
+
+fn config_request_overrides_from_config(config: &Config) -> Option<HashMap<String, Value>> {
+    config
+        .active_profile
+        .as_ref()
+        .map(|profile| HashMap::from([("profile".to_string(), Value::String(profile.clone()))]))
 }
 
 async fn send_request_with_response<T>(

@@ -47,22 +47,6 @@ function codeModeWorkerMain() {
   const vm = require('node:vm');
   const { SourceTextModule, SyntheticModule } = vm;
 
-  const DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL = 10000;
-
-  function normalizeMaxOutputTokensPerExecCall(value) {
-    if (!Number.isSafeInteger(value) || value < 0) {
-      throw new TypeError('max_output_tokens_per_exec_call must be a non-negative safe integer');
-    }
-    return value;
-  }
-
-  function normalizeYieldTime(value) {
-    if (!Number.isSafeInteger(value) || value < 0) {
-      throw new TypeError('yield_time must be a non-negative safe integer');
-    }
-    return value;
-  }
-
   function formatErrorText(error) {
     return String(error && error.stack ? error.stack : error);
   }
@@ -131,11 +115,26 @@ function codeModeWorkerMain() {
     return contentItems;
   }
 
-  function createToolsNamespace(callTool, enabledTools) {
+  function createGlobalToolsNamespace(callTool, enabledTools) {
     const tools = Object.create(null);
 
-    for (const { tool_name } of enabledTools) {
-      Object.defineProperty(tools, tool_name, {
+    for (const { tool_name, global_name } of enabledTools) {
+      Object.defineProperty(tools, global_name, {
+        value: async (args) => callTool(tool_name, args),
+        configurable: false,
+        enumerable: true,
+        writable: false,
+      });
+    }
+
+    return Object.freeze(tools);
+  }
+
+  function createModuleToolsNamespace(callTool, enabledTools) {
+    const tools = Object.create(null);
+
+    for (const { tool_name, global_name } of enabledTools) {
+      Object.defineProperty(tools, global_name, {
         value: async (args) => callTool(tool_name, args),
         configurable: false,
         enumerable: true,
@@ -148,10 +147,9 @@ function codeModeWorkerMain() {
 
   function createAllToolsMetadata(enabledTools) {
     return Object.freeze(
-      enabledTools.map(({ module: modulePath, name, description }) =>
+      enabledTools.map(({ global_name, description }) =>
         Object.freeze({
-          module: modulePath,
-          name,
+          name: global_name,
           description,
         })
       )
@@ -159,13 +157,13 @@ function codeModeWorkerMain() {
   }
 
   function createToolsModule(context, callTool, enabledTools) {
-    const tools = createToolsNamespace(callTool, enabledTools);
+    const tools = createModuleToolsNamespace(callTool, enabledTools);
     const allTools = createAllToolsMetadata(enabledTools);
     const exportNames = ['ALL_TOOLS'];
 
-    for (const { tool_name } of enabledTools) {
-      if (tool_name !== 'ALL_TOOLS') {
-        exportNames.push(tool_name);
+    for (const { global_name } of enabledTools) {
+      if (global_name !== 'ALL_TOOLS') {
+        exportNames.push(global_name);
       }
     }
 
@@ -216,15 +214,15 @@ function codeModeWorkerMain() {
 
   function normalizeOutputImageUrl(value) {
     if (typeof value !== 'string' || !value) {
-      throw new TypeError('output_image expects a non-empty image URL string');
+      throw new TypeError('image expects a non-empty image URL string');
     }
     if (/^(?:https?:\/\/|data:)/i.test(value)) {
       return value;
     }
-    throw new TypeError('output_image expects an http(s) or data URL');
+    throw new TypeError('image expects an http(s) or data URL');
   }
 
-  function createCodeModeModule(context, state) {
+  function createCodeModeHelpers(context, state) {
     const load = (key) => {
       if (typeof key !== 'string') {
         throw new TypeError('load key must be a string');
@@ -240,7 +238,7 @@ function codeModeWorkerMain() {
       }
       state.storedValues[key] = cloneJsonValue(value);
     };
-    const outputText = (value) => {
+    const text = (value) => {
       const item = {
         type: 'input_text',
         text: serializeOutputText(value),
@@ -248,7 +246,7 @@ function codeModeWorkerMain() {
       ensureContentItems(context).push(item);
       return item;
     };
-    const outputImage = (value) => {
+    const image = (value) => {
       const item = {
         type: 'input_image',
         image_url: normalizeOutputImageUrl(value),
@@ -256,45 +254,47 @@ function codeModeWorkerMain() {
       ensureContentItems(context).push(item);
       return item;
     };
+    const yieldControl = () => {
+      parentPort.postMessage({ type: 'yield' });
+    };
 
+    return Object.freeze({
+      image,
+      load,
+      output_image: image,
+      output_text: text,
+      store,
+      text,
+      yield_control: yieldControl,
+    });
+  }
+
+  function createCodeModeModule(context, helpers) {
     return new SyntheticModule(
-      [
-        'load',
-        'output_text',
-        'output_image',
-        'set_max_output_tokens_per_exec_call',
-        'set_yield_time',
-        'store',
-        'background',
-      ],
+      ['image', 'load', 'output_text', 'output_image', 'store', 'text', 'yield_control'],
       function initCodeModeModule() {
-        this.setExport('load', load);
-        this.setExport('output_text', outputText);
-        this.setExport('output_image', outputImage);
-        this.setExport('set_max_output_tokens_per_exec_call', (value) => {
-          const normalized = normalizeMaxOutputTokensPerExecCall(value);
-          state.maxOutputTokensPerExecCall = normalized;
-          parentPort.postMessage({
-            type: 'set_max_output_tokens_per_exec_call',
-            value: normalized,
-          });
-          return normalized;
-        });
-        this.setExport('set_yield_time', (value) => {
-          const normalized = normalizeYieldTime(value);
-          parentPort.postMessage({
-            type: 'set_yield_time',
-            value: normalized,
-          });
-          return normalized;
-        });
-        this.setExport('store', store);
-        this.setExport('background', () => {
-          parentPort.postMessage({ type: 'yield' });
-        });
+        this.setExport('image', helpers.image);
+        this.setExport('load', helpers.load);
+        this.setExport('output_text', helpers.output_text);
+        this.setExport('output_image', helpers.output_image);
+        this.setExport('store', helpers.store);
+        this.setExport('text', helpers.text);
+        this.setExport('yield_control', helpers.yield_control);
       },
       { context }
     );
+  }
+
+  function createBridgeRuntime(callTool, enabledTools, helpers) {
+    return Object.freeze({
+      ALL_TOOLS: createAllToolsMetadata(enabledTools),
+      image: helpers.image,
+      load: helpers.load,
+      store: helpers.store,
+      text: helpers.text,
+      tools: createGlobalToolsNamespace(callTool, enabledTools),
+      yield_control: helpers.yield_control,
+    });
   }
 
   function namespacesMatch(left, right) {
@@ -347,16 +347,18 @@ function codeModeWorkerMain() {
     );
   }
 
-  function createModuleResolver(context, callTool, enabledTools, state) {
-    const toolsModule = createToolsModule(context, callTool, enabledTools);
-    const codeModeModule = createCodeModeModule(context, state);
+  function createModuleResolver(context, callTool, enabledTools, helpers) {
+    let toolsModule;
+    let codeModeModule;
     const namespacedModules = new Map();
 
     return function resolveModule(specifier) {
       if (specifier === 'tools.js') {
+        toolsModule ??= createToolsModule(context, callTool, enabledTools);
         return toolsModule;
       }
       if (specifier === '@openai/code_mode' || specifier === 'openai/code_mode') {
+        codeModeModule ??= createCodeModeModule(context, helpers);
         return codeModeModule;
       }
       const namespacedMatch = /^tools\/(.+)\.js$/.exec(specifier);
@@ -382,17 +384,36 @@ function codeModeWorkerMain() {
     };
   }
 
-  async function runModule(context, start, state, callTool) {
+  async function resolveDynamicModule(specifier, resolveModule) {
+    const module = resolveModule(specifier);
+
+    if (module.status === 'unlinked') {
+      await module.link(resolveModule);
+    }
+
+    if (module.status === 'linked' || module.status === 'evaluating') {
+      await module.evaluate();
+    }
+
+    if (module.status === 'errored') {
+      throw module.error;
+    }
+
+    return module;
+  }
+
+  async function runModule(context, start, callTool, helpers) {
     const resolveModule = createModuleResolver(
       context,
       callTool,
       start.enabled_tools ?? [],
-      state
+      helpers
     );
     const mainModule = new SourceTextModule(start.source, {
       context,
       identifier: 'exec_main.mjs',
-      importModuleDynamically: async (specifier) => resolveModule(specifier),
+      importModuleDynamically: async (specifier) =>
+        resolveDynamicModule(specifier, resolveModule),
     });
 
     await mainModule.link(resolveModule);
@@ -402,17 +423,24 @@ function codeModeWorkerMain() {
   async function main() {
     const start = workerData ?? {};
     const state = {
-      maxOutputTokensPerExecCall: DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL,
       storedValues: cloneJsonValue(start.stored_values ?? {}),
     };
     const callTool = createToolCaller();
+    const enabledTools = start.enabled_tools ?? [];
+    const contentItems = createContentItems();
     const context = vm.createContext({
-      __codexContentItems: createContentItems(),
-      __codex_tool_call: callTool,
+      __codexContentItems: contentItems,
+    });
+    const helpers = createCodeModeHelpers(context, state);
+    Object.defineProperty(context, '__codexRuntime', {
+      value: createBridgeRuntime(callTool, enabledTools, helpers),
+      configurable: true,
+      enumerable: false,
+      writable: false,
     });
 
     try {
-      await runModule(context, start, state, callTool);
+      await runModule(context, start, callTool, helpers);
       parentPort.postMessage({
         type: 'result',
         stored_values: state.storedValues,
@@ -468,7 +496,7 @@ function createProtocol() {
     }
 
     if (message.type === 'poll') {
-      const session = sessions.get(message.session_id);
+      const session = sessions.get(message.cell_id);
       if (session) {
         session.request_id = String(message.request_id);
         if (session.pending_result) {
@@ -482,7 +510,7 @@ function createProtocol() {
           request_id: message.request_id,
           content_items: [],
           stored_values: {},
-          error_text: `exec session ${message.session_id} not found`,
+          error_text: `exec cell ${message.cell_id} not found`,
           max_output_tokens_per_exec_call: DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL,
         });
       }
@@ -490,7 +518,7 @@ function createProtocol() {
     }
 
     if (message.type === 'terminate') {
-      const session = sessions.get(message.session_id);
+      const session = sessions.get(message.cell_id);
       if (session) {
         session.request_id = String(message.request_id);
         void terminateSession(protocol, sessions, session);
@@ -500,7 +528,7 @@ function createProtocol() {
           request_id: message.request_id,
           content_items: [],
           stored_values: {},
-          error_text: `exec session ${message.session_id} not found`,
+          error_text: `exec cell ${message.cell_id} not found`,
           max_output_tokens_per_exec_call: DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL,
         });
       }
@@ -569,13 +597,18 @@ function sessionWorkerSource() {
 }
 
 function startSession(protocol, sessions, start) {
+  const maxOutputTokensPerExecCall =
+    start.max_output_tokens == null
+      ? DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL
+      : normalizeMaxOutputTokensPerExecCall(start.max_output_tokens);
   const session = {
     completed: false,
     content_items: [],
-    id: start.session_id,
+    default_yield_time_ms: normalizeYieldTime(start.default_yield_time_ms),
+    id: start.cell_id,
     initial_yield_timer: null,
     initial_yield_triggered: false,
-    max_output_tokens_per_exec_call: DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL,
+    max_output_tokens_per_exec_call: maxOutputTokensPerExecCall,
     pending_result: null,
     poll_yield_timer: null,
     request_id: String(start.request_id),
@@ -585,6 +618,11 @@ function startSession(protocol, sessions, start) {
     }),
   };
   sessions.set(session.id, session);
+  const initialYieldTime =
+    start.yield_time_ms == null
+      ? session.default_yield_time_ms
+      : normalizeYieldTime(start.yield_time_ms);
+  scheduleInitialYield(protocol, session, initialYieldTime);
 
   session.worker.on('message', (message) => {
     void handleWorkerMessage(protocol, sessions, session, message).catch((error) => {
@@ -620,16 +658,6 @@ async function handleWorkerMessage(protocol, sessions, session, message) {
 
   if (message.type === 'content_item') {
     session.content_items.push(cloneJsonValue(message.item));
-    return;
-  }
-
-  if (message.type === 'set_yield_time') {
-    scheduleInitialYield(protocol, session, normalizeYieldTime(message.value ?? 0));
-    return;
-  }
-
-  if (message.type === 'set_max_output_tokens_per_exec_call') {
-    session.max_output_tokens_per_exec_call = normalizeMaxOutputTokensPerExecCall(message.value);
     return;
   }
 
@@ -697,6 +725,9 @@ async function sendYielded(protocol, session) {
   if (session.completed || session.request_id === null) {
     return;
   }
+  session.initial_yield_timer = clearTimer(session.initial_yield_timer);
+  session.initial_yield_triggered = true;
+  session.poll_yield_timer = clearTimer(session.poll_yield_timer);
   const contentItems = takeContentItems(session);
   const requestId = session.request_id;
   try {

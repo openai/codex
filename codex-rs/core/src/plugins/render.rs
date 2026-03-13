@@ -14,12 +14,16 @@ pub(crate) fn render_plugins_section(plugins: &[PluginCapabilitySummary]) -> Opt
     lines.extend(
         plugins
             .iter()
-            .map(|plugin| format!("- `{}`", plugin.display_name)),
+            .map(|plugin| match plugin.description.as_deref() {
+                Some(description) => format!("- `{}`: {description}", plugin.display_name),
+                None => format!("- `{}`", plugin.display_name),
+            }),
     );
 
     lines.push("### How to use plugins".to_string());
     lines.push(
         r###"- Discovery: The list above is the plugins available in this session.
+- Skill naming: If a plugin contributes skills, those skill entries are prefixed with `plugin_name:` in the Skills list.
 - Trigger rules: If the user explicitly names a plugin, prefer capabilities associated with that plugin for that turn.
 - Relationship to capabilities: Plugins are not invoked directly. Use their underlying skills, MCP tools, and app tools to help solve the task.
 - Preference: When a relevant plugin is available, prefer using capabilities associated with that plugin over standalone capabilities that provide similar functionality.

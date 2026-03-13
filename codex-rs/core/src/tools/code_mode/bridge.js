@@ -1,42 +1,9 @@
-const __codexEnabledTools = __CODE_MODE_ENABLED_TOOLS_PLACEHOLDER__;
-const __codexEnabledToolNames = __codexEnabledTools.map((tool) => tool.tool_name);
 const __codexContentItems = Array.isArray(globalThis.__codexContentItems)
   ? globalThis.__codexContentItems
   : [];
+const __codexRuntime = globalThis.__codexRuntime;
 
-function __codexCloneContentItem(item) {
-  if (!item || typeof item !== 'object') {
-    throw new TypeError('content item must be an object');
-  }
-  switch (item.type) {
-    case 'input_text':
-      if (typeof item.text !== 'string') {
-        throw new TypeError('content item "input_text" requires a string text field');
-      }
-      return { type: 'input_text', text: item.text };
-    case 'input_image':
-      if (typeof item.image_url !== 'string') {
-        throw new TypeError('content item "input_image" requires a string image_url field');
-      }
-      return { type: 'input_image', image_url: item.image_url };
-    default:
-      throw new TypeError(`unsupported content item type "${item.type}"`);
-  }
-}
-
-function __codexNormalizeRawContentItems(value) {
-  if (Array.isArray(value)) {
-    return value.flatMap((entry) => __codexNormalizeRawContentItems(entry));
-  }
-  return [__codexCloneContentItem(value)];
-}
-
-function __codexNormalizeContentItems(value) {
-  if (typeof value === 'string') {
-    return [{ type: 'input_text', text: value }];
-  }
-  return __codexNormalizeRawContentItems(value);
-}
+delete globalThis.__codexRuntime;
 
 Object.defineProperty(globalThis, '__codexContentItems', {
   value: __codexContentItems,
@@ -45,33 +12,38 @@ Object.defineProperty(globalThis, '__codexContentItems', {
   writable: false,
 });
 
-globalThis.codex = {
-  enabledTools: Object.freeze(__codexEnabledToolNames.slice()),
-};
+(() => {
+  if (!__codexRuntime || typeof __codexRuntime !== 'object') {
+    throw new Error('code mode runtime is unavailable');
+  }
 
-globalThis.add_content = (value) => {
-  const contentItems = __codexNormalizeContentItems(value);
-  __codexContentItems.push(...contentItems);
-  return contentItems;
-};
-
-globalThis.console = Object.freeze({
-  log() {},
-  info() {},
-  warn() {},
-  error() {},
-  debug() {},
-});
-
-for (const name of __codexEnabledToolNames) {
-  if (!(name in globalThis)) {
+  function defineGlobal(name, value) {
     Object.defineProperty(globalThis, name, {
-      value: async (args) => __codex_tool_call(name, args),
+      value,
       configurable: true,
-      enumerable: false,
+      enumerable: true,
       writable: false,
     });
   }
-}
+
+  defineGlobal('ALL_TOOLS', __codexRuntime.ALL_TOOLS);
+  defineGlobal('image', __codexRuntime.image);
+  defineGlobal('load', __codexRuntime.load);
+  defineGlobal('store', __codexRuntime.store);
+  defineGlobal('text', __codexRuntime.text);
+  defineGlobal('tools', __codexRuntime.tools);
+  defineGlobal('yield_control', __codexRuntime.yield_control);
+
+  defineGlobal(
+    'console',
+    Object.freeze({
+      log() {},
+      info() {},
+      warn() {},
+      error() {},
+      debug() {},
+    })
+  );
+})();
 
 __CODE_MODE_USER_CODE_PLACEHOLDER__

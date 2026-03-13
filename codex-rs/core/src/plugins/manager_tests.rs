@@ -227,6 +227,117 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
 }
 
 #[test]
+fn plugin_telemetry_metadata_uses_default_mcp_config_path() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "sample"
+}"#,
+    );
+    write_file(
+        &plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "sample": {
+      "type": "http",
+      "url": "https://sample.example/mcp"
+    }
+  }
+}"#,
+    );
+
+    let metadata = plugin_telemetry_metadata_from_root(
+        &PluginId::parse("sample@test").expect("plugin id should parse"),
+        &plugin_root,
+    );
+
+    assert_eq!(
+        metadata.capability_summary,
+        Some(PluginCapabilitySummary {
+            config_name: "sample@test".to_string(),
+            display_name: "sample".to_string(),
+            description: None,
+            has_skills: false,
+            mcp_server_names: vec!["sample".to_string()],
+            app_connector_ids: Vec::new(),
+        })
+    );
+}
+
+#[test]
+fn capability_summary_sanitizes_plugin_descriptions_to_one_line() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "sample",
+  "description": "Plugin that\n includes   the sample\tserver"
+}"#,
+    );
+    write_file(
+        &plugin_root.join("skills/sample-search/SKILL.md"),
+        "---\nname: sample-search\ndescription: search sample data\n---\n",
+    );
+
+    let outcome = load_plugins_from_config(&plugin_config_toml(true, true), codex_home.path());
+
+    assert_eq!(
+        outcome.plugins[0].manifest_description.as_deref(),
+        Some("Plugin that\n includes   the sample\tserver")
+    );
+    assert_eq!(
+        outcome.capability_summaries()[0].description.as_deref(),
+        Some("Plugin that includes the sample server")
+    );
+}
+
+#[test]
+fn capability_summary_truncates_overlong_plugin_descriptions() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+    let too_long = "x".repeat(MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN + 1);
+
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        &format!(
+            r#"{{
+  "name": "sample",
+  "description": "{too_long}"
+}}"#
+        ),
+    );
+    write_file(
+        &plugin_root.join("skills/sample-search/SKILL.md"),
+        "---\nname: sample-search\ndescription: search sample data\n---\n",
+    );
+
+    let outcome = load_plugins_from_config(&plugin_config_toml(true, true), codex_home.path());
+
+    assert_eq!(
+        outcome.plugins[0].manifest_description.as_deref(),
+        Some(too_long.as_str())
+    );
+    assert_eq!(
+        outcome.capability_summaries()[0].description,
+        Some("x".repeat(MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN))
+    );
+}
+
+#[test]
 fn load_plugins_uses_manifest_configured_component_paths() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home

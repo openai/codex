@@ -30,6 +30,10 @@ const ALIASES: &[Alias] = &[
         feature: Feature::ApplyPatchFreeform,
     },
     Alias {
+        legacy_key: "request_permissions",
+        feature: Feature::ExecPermissionApprovals,
+    },
+    Alias {
         legacy_key: "web_search",
         feature: Feature::WebSearchRequest,
     },

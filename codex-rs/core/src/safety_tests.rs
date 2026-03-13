@@ -3,7 +3,7 @@ use codex_protocol::protocol::FileSystemAccessMode;
 use codex_protocol::protocol::FileSystemPath;
 use codex_protocol::protocol::FileSystemSandboxEntry;
 use codex_protocol::protocol::FileSystemSpecialPath;
-use codex_protocol::protocol::RejectConfig;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -87,7 +87,7 @@ fn external_sandbox_auto_approves_in_on_request() {
 }
 
 #[test]
-fn reject_with_all_flags_false_matches_on_request_for_out_of_root_patch() {
+fn granular_with_all_flags_true_matches_on_request_for_out_of_root_patch() {
     let tmp = TempDir::new().unwrap();
     let cwd = tmp.path().to_path_buf();
     let parent = cwd.parent().unwrap().to_path_buf();
@@ -115,12 +115,12 @@ fn reject_with_all_flags_false_matches_on_request_for_out_of_root_patch() {
     assert_eq!(
         assess_patch_safety(
             &add_outside,
-            AskForApproval::Reject(RejectConfig {
-                sandbox_approval: false,
-                rules: false,
-                skill_approval: false,
-                request_permissions: false,
-                mcp_elicitations: false,
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
             }),
             &policy_workspace_only,
             &FileSystemSandboxPolicy::from(&policy_workspace_only),
@@ -132,7 +132,7 @@ fn reject_with_all_flags_false_matches_on_request_for_out_of_root_patch() {
 }
 
 #[test]
-fn reject_sandbox_approval_rejects_out_of_root_patch() {
+fn granular_sandbox_approval_false_rejects_out_of_root_patch() {
     let tmp = TempDir::new().unwrap();
     let cwd = tmp.path().to_path_buf();
     let parent = cwd.parent().unwrap().to_path_buf();
@@ -149,12 +149,12 @@ fn reject_sandbox_approval_rejects_out_of_root_patch() {
     assert_eq!(
         assess_patch_safety(
             &add_outside,
-            AskForApproval::Reject(RejectConfig {
-                sandbox_approval: true,
-                rules: false,
-                skill_approval: false,
-                request_permissions: false,
-                mcp_elicitations: false,
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: false,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
             }),
             &policy_workspace_only,
             &FileSystemSandboxPolicy::from(&policy_workspace_only),

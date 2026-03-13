@@ -75,6 +75,19 @@ pub fn resolve_windows_sandbox_mode(
         .or_else(|| legacy_windows_sandbox_mode(cfg.features.as_ref()))
 }
 
+pub fn resolve_windows_sandbox_private_desktop(cfg: &ConfigToml, profile: &ConfigProfile) -> bool {
+    profile
+        .windows
+        .as_ref()
+        .and_then(|windows| windows.sandbox_private_desktop)
+        .or_else(|| {
+            cfg.windows
+                .as_ref()
+                .and_then(|windows| windows.sandbox_private_desktop)
+        })
+        .unwrap_or(true)
+}
+
 fn legacy_windows_sandbox_keys_present(features: Option<&FeaturesToml>) -> bool {
     let Some(entries) = features.map(|features| &features.entries) else {
         return false;

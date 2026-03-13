@@ -28,6 +28,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use thiserror::Error;
 use tokio::fs;
 use tokio::task::spawn_blocking;
+use tracing::instrument;
 
 use crate::bash::parse_shell_lc_plain_commands;
 use crate::bash::parse_shell_lc_single_command_prefix;
@@ -38,9 +39,9 @@ use shlex::try_join as shlex_try_join;
 const PROMPT_CONFLICT_REASON: &str =
     "approval required by policy, but AskForApproval is set to Never";
 const REJECT_SANDBOX_APPROVAL_REASON: &str =
-    "approval required by policy, but AskForApproval::Reject.sandbox_approval is set";
+    "approval required by policy, but AskForApproval::Granular.sandbox_approval is false";
 const REJECT_RULES_APPROVAL_REASON: &str =
-    "approval required by policy rule, but AskForApproval::Reject.rules is set";
+    "approval required by policy rule, but AskForApproval::Granular.rules is false";
 const RULES_DIR_NAME: &str = "rules";
 const RULE_EXTENSION: &str = "rules";
 const DEFAULT_POLICY_FILE: &str = "default.rules";
@@ -104,7 +105,7 @@ fn is_policy_match(rule_match: &RuleMatch) -> bool {
 /// current prompt to the user.
 ///
 /// `prompt_is_rule` distinguishes policy-rule prompts from sandbox/escalation
-/// prompts so `Reject.rules` and `Reject.sandbox_approval` are honored
+/// prompts so granular `rules` and `sandbox_approval` settings are honored
 /// independently. When both are present, policy-rule prompts take precedence.
 pub(crate) fn prompt_is_rejected_by_policy(
     approval_policy: AskForApproval,
@@ -115,14 +116,14 @@ pub(crate) fn prompt_is_rejected_by_policy(
         AskForApproval::OnFailure => None,
         AskForApproval::OnRequest => None,
         AskForApproval::UnlessTrusted => None,
-        AskForApproval::Reject(reject_config) => {
+        AskForApproval::Granular(granular_config) => {
             if prompt_is_rule {
-                if reject_config.rejects_rules_approval() {
+                if !granular_config.allows_rules_approval() {
                     Some(REJECT_RULES_APPROVAL_REASON)
                 } else {
                     None
                 }
-            } else if reject_config.rejects_sandbox_approval() {
+            } else if !granular_config.allows_sandbox_approval() {
                 Some(REJECT_SANDBOX_APPROVAL_REASON)
             } else {
                 None
@@ -187,6 +188,7 @@ impl ExecPolicyManager {
         }
     }
 
+    #[instrument(level = "info", skip_all)]
     pub(crate) async fn load(config_stack: &ConfigLayerStack) -> Result<Self, ExecPolicyError> {
         let (policy, warning) = load_exec_policy_with_warning(config_stack).await?;
         if let Some(err) = warning.as_ref() {
@@ -519,7 +521,7 @@ pub fn render_decision_for_unmatched_command(
             AskForApproval::OnFailure
             | AskForApproval::OnRequest
             | AskForApproval::UnlessTrusted
-            | AskForApproval::Reject(_) => Decision::Prompt,
+            | AskForApproval::Granular(_) => Decision::Prompt,
         };
     }
 
@@ -554,7 +556,7 @@ pub fn render_decision_for_unmatched_command(
                 }
             }
         }
-        AskForApproval::Reject(_) => match file_system_sandbox_policy.kind {
+        AskForApproval::Granular(_) => match file_system_sandbox_policy.kind {
             FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => {
                 // Mirror on-request behavior for unmatched commands; prompt-vs-reject is handled
                 // by `prompt_is_rejected_by_policy`.

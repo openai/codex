@@ -161,8 +161,8 @@ impl ExecApprovalRequirement {
 
 /// - Never, OnFailure: do not ask
 /// - OnRequest: ask unless filesystem access is unrestricted
-/// - Reject: ask unless filesystem access is unrestricted, but auto-reject
-///   when `sandbox_approval` rejection is enabled.
+/// - Granular: ask unless filesystem access is unrestricted, but auto-reject
+///   when granular sandbox approval is disabled.
 /// - UnlessTrusted: always ask
 pub(crate) fn default_exec_approval_requirement(
     policy: AskForApproval,
@@ -170,7 +170,7 @@ pub(crate) fn default_exec_approval_requirement(
 ) -> ExecApprovalRequirement {
     let needs_approval = match policy {
         AskForApproval::Never | AskForApproval::OnFailure => false,
-        AskForApproval::OnRequest | AskForApproval::Reject(_) => {
+        AskForApproval::OnRequest | AskForApproval::Granular(_) => {
             matches!(
                 file_system_sandbox_policy.kind,
                 FileSystemSandboxKind::Restricted
@@ -182,11 +182,12 @@ pub(crate) fn default_exec_approval_requirement(
     if needs_approval
         && matches!(
             policy,
-            AskForApproval::Reject(reject_config) if reject_config.rejects_sandbox_approval()
+            AskForApproval::Granular(granular_config)
+                if !granular_config.allows_sandbox_approval()
         )
     {
         ExecApprovalRequirement::Forbidden {
-            reason: "approval policy rejected sandbox approval prompt".to_string(),
+            reason: "approval policy disallowed sandbox approval prompt".to_string(),
         }
     } else if needs_approval {
         ExecApprovalRequirement::NeedsApproval {
@@ -268,7 +269,7 @@ pub(crate) trait Approvable<Req> {
             AskForApproval::UnlessTrusted => true,
             AskForApproval::Never => false,
             AskForApproval::OnRequest => false,
-            AskForApproval::Reject(reject_config) => !reject_config.sandbox_approval,
+            AskForApproval::Granular(granular_config) => granular_config.sandbox_approval,
         }
     }
 
@@ -332,6 +333,7 @@ pub(crate) struct SandboxAttempt<'a> {
     pub codex_linux_sandbox_exe: Option<&'a std::path::PathBuf>,
     pub use_legacy_landlock: bool,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
+    pub windows_sandbox_private_desktop: bool,
 }
 
 impl<'a> SandboxAttempt<'a> {
@@ -355,6 +357,7 @@ impl<'a> SandboxAttempt<'a> {
                 codex_linux_sandbox_exe: self.codex_linux_sandbox_exe,
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
+                windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
             })
     }
 }

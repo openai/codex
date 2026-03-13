@@ -28,6 +28,8 @@ pub use unix::ShellCommandExecutor;
 #[cfg(unix)]
 pub use unix::Stopwatch;
 #[cfg(unix)]
+pub use unix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
+#[cfg(unix)]
 pub use unix::main_execve_wrapper;
 #[cfg(unix)]
 pub use unix::run_shell_escalation_execve_wrapper;

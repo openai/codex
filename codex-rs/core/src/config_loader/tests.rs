@@ -605,6 +605,7 @@ allowed_approval_policies = ["on-request"]
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -654,6 +655,7 @@ allowed_approval_policies = ["on-request"]
             allowed_web_search_modes: None,
             feature_requirements: None,
             mcp_servers: None,
+            apps: None,
             rules: None,
             enforce_residency: None,
             network: None,
@@ -692,6 +694,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         allowed_web_search_modes: None,
         feature_requirements: None,
         mcp_servers: None,
+        apps: None,
         rules: None,
         enforce_residency: None,
         network: None,
@@ -741,7 +744,11 @@ async fn load_config_layers_fails_when_cloud_requirements_loader_fails() -> anyh
         &[] as &[(String, TomlValue)],
         LoaderOverrides::default(),
         CloudRequirementsLoader::new(async {
-            Err(CloudRequirementsLoadError::new("cloud requirements failed"))
+            Err(CloudRequirementsLoadError::new(
+                codex_config::CloudRequirementsLoadErrorCode::RequestFailed,
+                None,
+                "cloud requirements failed",
+            ))
         }),
     )
     .await

@@ -43,7 +43,7 @@ pub fn assess_patch_safety(
         AskForApproval::OnFailure
         | AskForApproval::Never
         | AskForApproval::OnRequest
-        | AskForApproval::Reject(_) => {
+        | AskForApproval::Granular(_) => {
             // Continue to see if this can be auto-approved.
         }
         // TODO(ragona): I'm not sure this is actually correct? I believe in this case
@@ -56,7 +56,7 @@ pub fn assess_patch_safety(
     let rejects_sandbox_approval = matches!(policy, AskForApproval::Never)
         || matches!(
             policy,
-            AskForApproval::Reject(reject_config) if reject_config.sandbox_approval
+            AskForApproval::Granular(granular_config) if !granular_config.sandbox_approval
         );
 
     // Even though the patch appears to be constrained to writable paths, it is

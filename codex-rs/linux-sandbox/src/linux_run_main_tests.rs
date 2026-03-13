@@ -5,7 +5,11 @@ use codex_protocol::protocol::FileSystemSandboxPolicy;
 #[cfg(test)]
 use codex_protocol::protocol::NetworkSandboxPolicy;
 #[cfg(test)]
+use codex_protocol::protocol::ReadOnlyAccess;
+#[cfg(test)]
 use codex_protocol::protocol::SandboxPolicy;
+#[cfg(test)]
+use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(test)]
 use pretty_assertions::assert_eq;
 
@@ -108,6 +112,54 @@ fn proxy_only_mode_takes_precedence_over_full_network_policy() {
 }
 
 #[test]
+fn split_only_filesystem_policy_requires_direct_runtime_enforcement() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let docs = temp_dir.path().join("docs");
+    std::fs::create_dir_all(&docs).expect("create docs");
+    let docs = AbsolutePathBuf::from_absolute_path(&docs).expect("absolute docs");
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Special {
+                value: codex_protocol::permissions::FileSystemSpecialPath::CurrentWorkingDirectory,
+            },
+            access: codex_protocol::permissions::FileSystemAccessMode::Write,
+        },
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
+            access: codex_protocol::permissions::FileSystemAccessMode::Read,
+        },
+    ]);
+
+    assert!(
+        policy.needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, temp_dir.path(),)
+    );
+}
+
+#[test]
+fn root_write_read_only_carveout_requires_direct_runtime_enforcement() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let docs = temp_dir.path().join("docs");
+    std::fs::create_dir_all(&docs).expect("create docs");
+    let docs = AbsolutePathBuf::from_absolute_path(&docs).expect("absolute docs");
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Special {
+                value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+            },
+            access: codex_protocol::permissions::FileSystemAccessMode::Write,
+        },
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
+            access: codex_protocol::permissions::FileSystemAccessMode::Read,
+        },
+    ]);
+
+    assert!(
+        policy.needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, temp_dir.path(),)
+    );
+}
+
+#[test]
 fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
     let mode = bwrap_network_mode(NetworkSandboxPolicy::Enabled, true);
     let argv = build_preflight_bwrap_argv(
@@ -191,7 +243,8 @@ fn resolve_sandbox_policies_derives_split_policies_from_legacy_policy() {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
 
     let resolved =
-        resolve_sandbox_policies(Path::new("/tmp"), Some(sandbox_policy.clone()), None, None);
+        resolve_sandbox_policies(Path::new("/tmp"), Some(sandbox_policy.clone()), None, None)
+            .expect("legacy policy should resolve");
 
     assert_eq!(resolved.sandbox_policy, sandbox_policy);
     assert_eq!(
@@ -215,7 +268,8 @@ fn resolve_sandbox_policies_derives_legacy_policy_from_split_policies() {
         None,
         Some(file_system_sandbox_policy.clone()),
         Some(network_sandbox_policy),
-    );
+    )
+    .expect("split policies should resolve");
 
     assert_eq!(resolved.sandbox_policy, sandbox_policy);
     assert_eq!(
@@ -227,21 +281,143 @@ fn resolve_sandbox_policies_derives_legacy_policy_from_split_policies() {
 
 #[test]
 fn resolve_sandbox_policies_rejects_partial_split_policies() {
-    let result = std::panic::catch_unwind(|| {
-        resolve_sandbox_policies(
-            Path::new("/tmp"),
-            Some(SandboxPolicy::new_read_only_policy()),
-            Some(FileSystemSandboxPolicy::default()),
-            None,
-        )
-    });
+    let err = resolve_sandbox_policies(
+        Path::new("/tmp"),
+        Some(SandboxPolicy::new_read_only_policy()),
+        Some(FileSystemSandboxPolicy::default()),
+        None,
+    )
+    .expect_err("partial split policies should fail");
 
-    assert!(result.is_err());
+    assert_eq!(err, ResolveSandboxPoliciesError::PartialSplitPolicies);
+}
+
+#[test]
+fn resolve_sandbox_policies_rejects_mismatched_legacy_and_split_inputs() {
+    let err = resolve_sandbox_policies(
+        Path::new("/tmp"),
+        Some(SandboxPolicy::new_read_only_policy()),
+        Some(FileSystemSandboxPolicy::unrestricted()),
+        Some(NetworkSandboxPolicy::Enabled),
+    )
+    .expect_err("mismatched legacy and split policies should fail");
+    assert!(
+        matches!(
+            err,
+            ResolveSandboxPoliciesError::MismatchedLegacyPolicy { .. }
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn resolve_sandbox_policies_accepts_split_policies_requiring_direct_runtime_enforcement() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let docs = temp_dir.path().join("docs");
+    std::fs::create_dir_all(&docs).expect("create docs");
+    let docs = AbsolutePathBuf::from_absolute_path(&docs).expect("absolute docs");
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Special {
+                value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+            },
+            access: codex_protocol::permissions::FileSystemAccessMode::Read,
+        },
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
+            access: codex_protocol::permissions::FileSystemAccessMode::Write,
+        },
+    ]);
+
+    let resolved = resolve_sandbox_policies(
+        temp_dir.path(),
+        Some(sandbox_policy.clone()),
+        Some(file_system_sandbox_policy.clone()),
+        Some(NetworkSandboxPolicy::Restricted),
+    )
+    .expect("split-only policy should preserve provided legacy fallback");
+
+    assert_eq!(resolved.sandbox_policy, sandbox_policy);
+    assert_eq!(
+        resolved.file_system_sandbox_policy,
+        file_system_sandbox_policy
+    );
+    assert_eq!(
+        resolved.network_sandbox_policy,
+        NetworkSandboxPolicy::Restricted
+    );
+}
+
+#[test]
+fn resolve_sandbox_policies_accepts_semantically_equivalent_workspace_write_inputs() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let workspace = temp_dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let workspace = AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute workspace");
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![workspace],
+        read_only_access: ReadOnlyAccess::FullAccess,
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+    let file_system_sandbox_policy =
+        FileSystemSandboxPolicy::from(&SandboxPolicy::new_workspace_write_policy());
+
+    let resolved = resolve_sandbox_policies(
+        temp_dir.path().join("workspace").as_path(),
+        Some(sandbox_policy.clone()),
+        Some(file_system_sandbox_policy.clone()),
+        Some(NetworkSandboxPolicy::Restricted),
+    )
+    .expect("semantically equivalent legacy workspace-write policy should resolve");
+
+    assert_eq!(resolved.sandbox_policy, sandbox_policy);
+    assert_eq!(
+        resolved.file_system_sandbox_policy,
+        file_system_sandbox_policy
+    );
+    assert_eq!(
+        resolved.network_sandbox_policy,
+        NetworkSandboxPolicy::Restricted
+    );
 }
 
 #[test]
 fn apply_seccomp_then_exec_with_legacy_landlock_panics() {
     let result = std::panic::catch_unwind(|| ensure_inner_stage_mode_is_valid(true, true));
+    assert!(result.is_err());
+}
+
+#[test]
+fn legacy_landlock_rejects_split_only_filesystem_policies() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let docs = temp_dir.path().join("docs");
+    std::fs::create_dir_all(&docs).expect("create docs");
+    let docs = AbsolutePathBuf::from_absolute_path(&docs).expect("absolute docs");
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Special {
+                value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+            },
+            access: codex_protocol::permissions::FileSystemAccessMode::Read,
+        },
+        codex_protocol::permissions::FileSystemSandboxEntry {
+            path: codex_protocol::permissions::FileSystemPath::Path { path: docs },
+            access: codex_protocol::permissions::FileSystemAccessMode::Write,
+        },
+    ]);
+
+    let result = std::panic::catch_unwind(|| {
+        ensure_legacy_landlock_mode_supports_policy(
+            true,
+            &policy,
+            NetworkSandboxPolicy::Restricted,
+            temp_dir.path(),
+        );
+    });
+
     assert!(result.is_err());
 }
 

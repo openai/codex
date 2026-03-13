@@ -59,6 +59,16 @@ fn js_repl_is_experimental_and_user_toggleable() {
 }
 
 #[test]
+fn code_mode_only_requires_code_mode() {
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeModeOnly);
+    features.normalize_dependencies();
+
+    assert_eq!(features.enabled(Feature::CodeModeOnly), true);
+    assert_eq!(features.enabled(Feature::CodeMode), true);
+}
+
+#[test]
 fn guardian_approval_is_experimental_and_user_toggleable() {
     let spec = Feature::GuardianApproval.info();
     let stage = spec.stage;
@@ -80,8 +90,11 @@ fn guardian_approval_is_experimental_and_user_toggleable() {
 
 #[test]
 fn request_permissions_is_under_development() {
-    assert_eq!(Feature::RequestPermissions.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::RequestPermissions.default_enabled(), false);
+    assert_eq!(
+        Feature::ExecPermissionApprovals.stage(),
+        Stage::UnderDevelopment
+    );
+    assert_eq!(Feature::ExecPermissionApprovals.default_enabled(), false);
 }
 
 #[test]
@@ -133,18 +146,18 @@ fn collab_is_legacy_alias_for_multi_agent() {
 }
 
 #[test]
-fn spawn_csv_is_under_development() {
+fn enable_fanout_is_under_development() {
     assert_eq!(Feature::SpawnCsv.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::SpawnCsv.default_enabled(), false);
 }
 
 #[test]
-fn spawn_csv_normalization_enables_multi_agent_one_way() {
-    let mut spawn_csv_features = Features::with_defaults();
-    spawn_csv_features.enable(Feature::SpawnCsv);
-    spawn_csv_features.normalize_dependencies();
-    assert_eq!(spawn_csv_features.enabled(Feature::SpawnCsv), true);
-    assert_eq!(spawn_csv_features.enabled(Feature::Collab), true);
+fn enable_fanout_normalization_enables_multi_agent_one_way() {
+    let mut enable_fanout_features = Features::with_defaults();
+    enable_fanout_features.enable(Feature::SpawnCsv);
+    enable_fanout_features.normalize_dependencies();
+    assert_eq!(enable_fanout_features.enabled(Feature::SpawnCsv), true);
+    assert_eq!(enable_fanout_features.enabled(Feature::Collab), true);
 
     let mut collab_features = Features::with_defaults();
     collab_features.enable(Feature::Collab);

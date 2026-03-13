@@ -158,6 +158,11 @@ impl TracingHarness {
         self.tracing.exporter.reset();
     }
 
+    async fn shutdown(self) {
+        self.processor.shutdown_threads().await;
+        self.processor.drain_background_tasks().await;
+    }
+
     async fn request<T>(&mut self, request: ClientRequest, trace: Option<W3cTraceContext>) -> T
     where
         T: serde::de::DeserializeOwned,
@@ -234,6 +239,8 @@ fn build_test_processor(
         cli_overrides: Vec::new(),
         loader_overrides: LoaderOverrides::default(),
         cloud_requirements: CloudRequirementsLoader::default(),
+        auth_manager: None,
+        thread_manager: None,
         feedback: CodexFeedback::new(),
         log_db: None,
         config_warnings: Vec::new(),
@@ -275,17 +282,21 @@ fn find_rpc_span_with_trace<'a>(
         })
 }
 
-fn find_span_by_name_with_trace<'a>(
+fn find_span_with_trace<'a, F>(
     spans: &'a [SpanData],
-    name: &str,
     trace_id: TraceId,
-) -> &'a SpanData {
+    description: &str,
+    predicate: F,
+) -> &'a SpanData
+where
+    F: Fn(&SpanData) -> bool,
+{
     spans
         .iter()
-        .find(|span| span.name.as_ref() == name && span.span_context.trace_id() == trace_id)
+        .find(|span| span.span_context.trace_id() == trace_id && predicate(span))
         .unwrap_or_else(|| {
             panic!(
-                "missing span named {name} for trace={trace_id}; exported spans:\n{}",
+                "missing span matching {description} for trace={trace_id}; exported spans:\n{}",
                 format_spans(spans)
             )
         })
@@ -310,12 +321,17 @@ fn format_spans(spans: &[SpanData]) -> String {
         .join("\n")
 }
 
-fn assert_span_descends_from(spans: &[SpanData], child: &SpanData, ancestor: &SpanData) {
+fn span_depth_from_ancestor(
+    spans: &[SpanData],
+    child: &SpanData,
+    ancestor: &SpanData,
+) -> Option<usize> {
     let ancestor_span_id = ancestor.span_context.span_id();
     let mut parent_span_id = child.parent_span_id;
+    let mut depth = 1;
     while parent_span_id != SpanId::INVALID {
         if parent_span_id == ancestor_span_id {
-            return;
+            return Some(depth);
         }
         let Some(parent_span) = spans
             .iter()
@@ -324,11 +340,41 @@ fn assert_span_descends_from(spans: &[SpanData], child: &SpanData, ancestor: &Sp
             break;
         };
         parent_span_id = parent_span.parent_span_id;
+        depth += 1;
+    }
+
+    None
+}
+
+fn assert_span_descends_from(spans: &[SpanData], child: &SpanData, ancestor: &SpanData) {
+    if span_depth_from_ancestor(spans, child, ancestor).is_some() {
+        return;
     }
 
     panic!(
         "span {} does not descend from {}; exported spans:\n{}",
         child.name,
+        ancestor.name,
+        format_spans(spans)
+    );
+}
+
+fn assert_has_internal_descendant_at_min_depth(
+    spans: &[SpanData],
+    ancestor: &SpanData,
+    min_depth: usize,
+) {
+    if spans.iter().any(|span| {
+        span.span_kind == SpanKind::Internal
+            && span.span_context.trace_id() == ancestor.span_context.trace_id()
+            && span_depth_from_ancestor(spans, span, ancestor)
+                .is_some_and(|depth| depth >= min_depth)
+    }) {
+        return;
+    }
+
+    panic!(
+        "missing internal descendant at depth >= {min_depth} below {}; exported spans:\n{}",
         ancestor.name,
         format_spans(spans)
     );
@@ -434,6 +480,21 @@ where
     );
 }
 
+async fn wait_for_new_exported_spans<F>(
+    tracing: &TestTracing,
+    baseline_len: usize,
+    predicate: F,
+) -> Vec<SpanData>
+where
+    F: Fn(&[SpanData]) -> bool,
+{
+    let spans = wait_for_exported_spans(tracing, |spans| {
+        spans.len() > baseline_len && predicate(&spans[baseline_len..])
+    })
+    .await;
+    spans.into_iter().skip(baseline_len).collect()
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() -> Result<()> {
     let _guard = tracing_test_guard().lock().await;
@@ -441,32 +502,66 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
 
     let RemoteTrace {
         trace_id: remote_trace_id,
+        parent_span_id: remote_parent_span_id,
         context: remote_trace,
         ..
     } = RemoteTrace::new("00000000000000000000000000000011", "0000000000000022");
 
-    let _: ThreadStartResponse = harness.start_thread(2, Some(remote_trace)).await;
-    drop(harness.processor);
-    let spans = wait_for_exported_spans(harness.tracing, |spans| {
+    let _: ThreadStartResponse = harness.start_thread(20_002, None).await;
+    let untraced_spans = wait_for_exported_spans(harness.tracing, |spans| {
+        spans.iter().any(|span| {
+            span.span_kind == SpanKind::Server
+                && span_attr(span, "rpc.method") == Some("thread/start")
+        })
+    })
+    .await;
+    let untraced_server_span = find_rpc_span_with_trace(
+        &untraced_spans,
+        SpanKind::Server,
+        "thread/start",
+        untraced_spans
+            .iter()
+            .rev()
+            .find(|span| {
+                span.span_kind == SpanKind::Server
+                    && span_attr(span, "rpc.system") == Some("jsonrpc")
+                    && span_attr(span, "rpc.method") == Some("thread/start")
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing latest thread/start server span; exported spans:\n{}",
+                    format_spans(&untraced_spans)
+                )
+            })
+            .span_context
+            .trace_id(),
+    );
+    assert_has_internal_descendant_at_min_depth(&untraced_spans, untraced_server_span, 1);
+
+    let baseline_len = untraced_spans.len();
+    let _: ThreadStartResponse = harness.start_thread(20_003, Some(remote_trace)).await;
+    let spans = wait_for_new_exported_spans(harness.tracing, baseline_len, |spans| {
         spans.iter().any(|span| {
             span.span_kind == SpanKind::Server
                 && span_attr(span, "rpc.method") == Some("thread/start")
                 && span.span_context.trace_id() == remote_trace_id
-        }) && spans
-            .iter()
-            .any(|span| span.name.as_ref() == "thread_spawn")
+        }) && spans.iter().any(|span| {
+            span.name.as_ref() == "app_server.thread_start.notify_started"
+                && span.span_context.trace_id() == remote_trace_id
+        })
     })
     .await;
 
     let server_request_span =
         find_rpc_span_with_trace(&spans, SpanKind::Server, "thread/start", remote_trace_id);
-    let thread_spawn_span = find_span_by_name_with_trace(&spans, "thread_spawn", remote_trace_id);
-    let session_init_span = find_span_by_name_with_trace(&spans, "session_init", remote_trace_id);
     assert_eq!(server_request_span.name.as_ref(), "thread/start");
+    assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);
+    assert!(server_request_span.parent_span_is_remote);
     assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
     assert_ne!(server_request_span.span_context.span_id(), SpanId::INVALID);
-    assert_span_descends_from(&spans, thread_spawn_span, server_request_span);
-    assert_span_descends_from(&spans, session_init_span, server_request_span);
+    assert_has_internal_descendant_at_min_depth(&spans, server_request_span, 1);
+    assert_has_internal_descendant_at_min_depth(&spans, server_request_span, 2);
+    harness.shutdown().await;
 
     Ok(())
 }
@@ -511,34 +606,29 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
         )
         .await;
     let spans = wait_for_exported_spans(harness.tracing, |spans| {
-        spans
-            .iter()
-            .any(|span| span.name.as_ref() == "submission_dispatch")
-            && spans
-                .iter()
-                .any(|span| span.name.as_ref() == "session_task.turn")
-            && spans.iter().any(|span| span.name.as_ref() == "run_turn")
+        spans.iter().any(|span| {
+            span.span_kind == SpanKind::Server
+                && span_attr(span, "rpc.method") == Some("turn/start")
+                && span.span_context.trace_id() == remote_trace_id
+        }) && spans.iter().any(|span| {
+            span_attr(span, "codex.op") == Some("user_input")
+                && span.span_context.trace_id() == remote_trace_id
+        })
     })
     .await;
-    drop(harness.processor);
-    tokio::task::yield_now().await;
 
     let server_request_span =
         find_rpc_span_with_trace(&spans, SpanKind::Server, "turn/start", remote_trace_id);
-    let submission_dispatch_span =
-        find_span_by_name_with_trace(&spans, "submission_dispatch", remote_trace_id);
-    let session_task_turn_span =
-        find_span_by_name_with_trace(&spans, "session_task.turn", remote_trace_id);
-    let run_turn_span = find_span_by_name_with_trace(&spans, "run_turn", remote_trace_id);
+    let core_turn_span =
+        find_span_with_trace(&spans, remote_trace_id, "codex.op=user_input", |span| {
+            span_attr(span, "codex.op") == Some("user_input")
+        });
 
     assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);
     assert!(server_request_span.parent_span_is_remote);
     assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
-    assert_span_descends_from(&spans, submission_dispatch_span, server_request_span);
-    assert_span_descends_from(&spans, session_task_turn_span, server_request_span);
-    assert_span_descends_from(&spans, run_turn_span, server_request_span);
-    assert_span_descends_from(&spans, session_task_turn_span, submission_dispatch_span);
-    assert_span_descends_from(&spans, run_turn_span, session_task_turn_span);
+    assert_span_descends_from(&spans, core_turn_span, server_request_span);
+    harness.shutdown().await;
 
     Ok(())
 }
