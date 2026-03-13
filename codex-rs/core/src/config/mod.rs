@@ -1413,16 +1413,14 @@ pub enum RealtimeWsVersion {
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeConfig {
     pub version: RealtimeWsVersion,
-    #[serde(rename = "type")]
-    pub session_type: RealtimeWsMode,
+    pub r#type: RealtimeWsMode,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeToml {
     pub version: Option<RealtimeWsVersion>,
-    #[serde(rename = "type")]
-    pub session_type: Option<RealtimeWsMode>,
+    pub r#type: Option<RealtimeWsMode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -2511,7 +2509,7 @@ impl Config {
                 .realtime
                 .map_or_else(RealtimeConfig::default, |realtime| RealtimeConfig {
                     version: realtime.version.unwrap_or_default(),
-                    session_type: realtime.session_type.unwrap_or_default(),
+                    r#type: realtime.r#type.unwrap_or_default(),
                 }),
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,

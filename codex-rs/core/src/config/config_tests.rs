@@ -5589,7 +5589,7 @@ type = "transcription"
         cfg.realtime,
         Some(RealtimeToml {
             version: Some(RealtimeWsVersion::V2),
-            session_type: Some(RealtimeWsMode::Transcription),
+            r#type: Some(RealtimeWsMode::Transcription),
         })
     );
 
@@ -5604,7 +5604,7 @@ type = "transcription"
         config.realtime,
         RealtimeConfig {
             version: RealtimeWsVersion::V2,
-            session_type: RealtimeWsMode::Transcription,
+            r#type: RealtimeWsMode::Transcription,
         }
     );
     Ok(())
