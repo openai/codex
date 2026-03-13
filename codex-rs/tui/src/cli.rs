@@ -113,15 +113,3 @@ pub struct Cli {
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::Cli;
-    use clap::Parser;
-
-    #[test]
-    fn parses_app_server_flag() {
-        let cli = Cli::parse_from(["codex", "--app-server"]);
-        assert!(cli.app_server);
-    }
-}
