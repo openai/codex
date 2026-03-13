@@ -5711,11 +5711,7 @@ impl ChatWidget {
 
     pub(crate) fn handle_serialized_slash_command(&mut self, draft: UserMessage) {
         let Some((cmd, _, _)) = self.parse_builtin_slash_command(&draft.text) else {
-            if let Some((name, _, _)) = parse_slash_name(&draft.text)
-                && !name.contains('/')
-                && SlashCommand::from_str(name).is_ok()
-            {
-                self.queue_user_message(draft);
+            if self.reject_unavailable_builtin_slash_command(&draft) {
                 return;
             }
             self.add_error_message(format!("Failed to handle slash command: {}", draft.text));
@@ -5798,11 +5794,7 @@ impl ChatWidget {
     fn execute_serialized_slash_command(&mut self, draft: UserMessage) -> QueueReplayControl {
         let preview = draft.text.clone();
         let Some((cmd, rest, rest_offset)) = self.parse_builtin_slash_command(&preview) else {
-            if let Some((name, _, _)) = parse_slash_name(&preview)
-                && !name.contains('/')
-                && SlashCommand::from_str(name).is_ok()
-            {
-                self.submit_user_message(draft);
+            if self.reject_unavailable_builtin_slash_command(&draft) {
                 return QueueReplayControl::Stop;
             }
             self.add_error_message(format!("Failed to replay queued slash command: {preview}"));

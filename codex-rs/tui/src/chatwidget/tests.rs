@@ -8846,8 +8846,8 @@ async fn disabled_fast_slash_command_with_args_restores_draft_instead_of_queuein
 }
 
 #[tokio::test]
-async fn queued_disabled_fast_slash_draft_replays_as_user_text() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+async fn queued_disabled_fast_slash_draft_is_rejected_on_replay() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::FastMode, false);
     chat.on_task_started();
@@ -8861,16 +8861,15 @@ async fn queued_disabled_fast_slash_draft_replays_as_user_text() {
 
     chat.on_task_complete(None, false);
 
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "/fast on".to_string(),
-                text_elements: Vec::new(),
-            }]
-        ),
-        other => panic!("expected queued disabled slash draft Op::UserTurn, got {other:?}"),
-    }
+    assert_no_submit_op(&mut op_rx);
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(chat.bottom_pane.composer_text(), "/fast on");
+
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(
+        lines_to_single_string(&inserted[0]).contains("/fast is not available in this session.")
+    );
 }
 
 #[tokio::test]
