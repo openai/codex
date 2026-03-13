@@ -102,23 +102,19 @@ pub(crate) fn emit_feedback_auth_recovery_tags(
     auth_error: Option<&str>,
     auth_error_code: Option<&str>,
 ) {
+    let auth_401_request_id = auth_request_id.unwrap_or("");
+    let auth_401_cf_ray = auth_cf_ray.unwrap_or("");
+    let auth_401_error = auth_error.unwrap_or("");
+    let auth_401_error_code = auth_error_code.unwrap_or("");
     feedback_tags!(
         auth_recovery_mode = auth_recovery_mode,
         auth_recovery_phase = auth_recovery_phase,
-        auth_recovery_outcome = auth_recovery_outcome
+        auth_recovery_outcome = auth_recovery_outcome,
+        auth_401_request_id = auth_401_request_id,
+        auth_401_cf_ray = auth_401_cf_ray,
+        auth_401_error = auth_401_error,
+        auth_401_error_code = auth_401_error_code
     );
-    if let Some(auth_request_id) = auth_request_id {
-        feedback_tags!(auth_401_request_id = auth_request_id);
-    }
-    if let Some(auth_cf_ray) = auth_cf_ray {
-        feedback_tags!(auth_401_cf_ray = auth_cf_ray);
-    }
-    if let Some(auth_error) = auth_error {
-        feedback_tags!(auth_401_error = auth_error);
-    }
-    if let Some(auth_error_code) = auth_error_code {
-        feedback_tags!(auth_401_error_code = auth_error_code);
-    }
 }
 
 pub fn backoff(attempt: u64) -> Duration {

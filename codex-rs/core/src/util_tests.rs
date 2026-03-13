@@ -178,6 +178,48 @@ fn emit_feedback_auth_recovery_tags_preserves_401_specific_fields() {
 }
 
 #[test]
+fn emit_feedback_auth_recovery_tags_clears_stale_401_fields() {
+    let tags = Arc::new(Mutex::new(BTreeMap::new()));
+    let _guard = tracing_subscriber::registry()
+        .with(TagCollectorLayer { tags: tags.clone() })
+        .set_default();
+
+    emit_feedback_auth_recovery_tags(
+        "managed",
+        "refresh_token",
+        "recovery_failed_transient",
+        Some("req-401-a"),
+        Some("ray-401-a"),
+        Some("missing_authorization_header"),
+        Some("token_expired"),
+    );
+    emit_feedback_auth_recovery_tags(
+        "managed",
+        "done",
+        "recovery_not_run",
+        Some("req-401-b"),
+        None,
+        None,
+        None,
+    );
+
+    let tags = tags.lock().unwrap().clone();
+    assert_eq!(
+        tags.get("auth_401_request_id").map(String::as_str),
+        Some("\"req-401-b\"")
+    );
+    assert_eq!(
+        tags.get("auth_401_cf_ray").map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(tags.get("auth_401_error").map(String::as_str), Some("\"\""));
+    assert_eq!(
+        tags.get("auth_401_error_code").map(String::as_str),
+        Some("\"\"")
+    );
+}
+
+#[test]
 fn emit_feedback_request_tags_preserves_latest_auth_fields_after_unauthorized() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
     let _guard = tracing_subscriber::registry()
