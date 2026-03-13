@@ -392,9 +392,9 @@ struct McpToolApprovalElicitationRequest<'a> {
     prompt_options: McpToolApprovalPromptOptions,
 }
 
-const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_call_approval";
-const MCP_TOOL_APPROVAL_ACCEPT: &str = "Allow";
-const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this session";
+pub(crate) const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_call_approval";
+pub(crate) const MCP_TOOL_APPROVAL_ACCEPT: &str = "Allow";
+pub(crate) const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this session";
 const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Allow and don't ask me again";
 const MCP_TOOL_APPROVAL_CANCEL: &str = "Cancel";
 const MCP_TOOL_APPROVAL_KIND_KEY: &str = "codex_approval_kind";
@@ -411,6 +411,12 @@ const MCP_TOOL_APPROVAL_TOOL_TITLE_KEY: &str = "tool_title";
 const MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY: &str = "tool_description";
 const MCP_TOOL_APPROVAL_TOOL_PARAMS_KEY: &str = "tool_params";
 const MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY: &str = "tool_params_display";
+
+pub(crate) fn is_mcp_tool_approval_question_id(question_id: &str) -> bool {
+    question_id
+        .strip_prefix(MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX)
+        .is_some_and(|suffix| suffix.starts_with('_'))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct McpToolApprovalKey {

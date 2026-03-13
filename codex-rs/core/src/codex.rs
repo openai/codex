@@ -982,19 +982,9 @@ fn local_time_context() -> (String, String) {
     }
 }
 
-fn mirrored_guardian_review_event_for_ancestors(
-    child_thread_id: ThreadId,
-    msg: &EventMsg,
-) -> Option<EventMsg> {
+fn mirrored_guardian_review_event_for_ancestors(msg: &EventMsg) -> Option<EventMsg> {
     match msg {
-        EventMsg::GuardianAssessment(event) => {
-            let mut event = event.clone();
-            if !event.id.starts_with("thread:") {
-                let event_id = event.id.clone();
-                event.id = format!("thread:{child_thread_id}:{event_id}");
-            }
-            Some(EventMsg::GuardianAssessment(event))
-        }
+        EventMsg::GuardianAssessment(event) => Some(EventMsg::GuardianAssessment(event.clone())),
         EventMsg::Warning(codex_protocol::protocol::WarningEvent { message }) => {
             Some(EventMsg::Warning(codex_protocol::protocol::WarningEvent {
                 message: message.clone(),
@@ -2609,8 +2599,7 @@ impl Session {
         turn_context: &TurnContext,
         msg: EventMsg,
     ) {
-        let mirrored_ancestor_event =
-            mirrored_guardian_review_event_for_ancestors(self.conversation_id, &msg);
+        let mirrored_ancestor_event = mirrored_guardian_review_event_for_ancestors(&msg);
         self.send_event(turn_context, msg).await;
         if let Some(mirrored_ancestor_event) = mirrored_ancestor_event {
             self.mirror_event_to_thread_spawn_ancestors(turn_context, mirrored_ancestor_event)

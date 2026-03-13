@@ -42,7 +42,10 @@ use crate::error::CodexErr;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request_with_cancel;
 use crate::guardian::routes_approval_to_guardian;
+use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT;
+use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION;
 use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
+use crate::mcp_tool_call::is_mcp_tool_approval_question_id;
 use crate::mcp_tool_call::lookup_mcp_tool_metadata;
 use crate::models_manager::manager::ModelsManager;
 use codex_protocol::protocol::InitialHistory;
@@ -617,15 +620,10 @@ async fn maybe_auto_review_mcp_request_user_input(
     event: &RequestUserInputEvent,
     cancel_token: &CancellationToken,
 ) -> Option<RequestUserInputResponse> {
-    const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_call_approval_";
-    const MCP_TOOL_APPROVAL_ACCEPT: &str = "Allow";
-    const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this session";
-
-    let question = event.questions.iter().find(|question| {
-        question
-            .id
-            .starts_with(MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX)
-    })?;
+    let question = event
+        .questions
+        .iter()
+        .find(|question| is_mcp_tool_approval_question_id(&question.id))?;
     let invocation = pending_mcp_invocations
         .lock()
         .await

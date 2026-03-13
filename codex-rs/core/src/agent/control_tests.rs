@@ -431,9 +431,6 @@ async fn guardian_review_events_mirror_to_all_thread_spawn_ancestors() {
         )
         .await
         .expect("spawn grandchild thread");
-    let grandchild_thread_id = grandchild.thread_id;
-    let grandchild_assessment_id = format!("thread:{grandchild_thread_id}:approval-1");
-
     let grandchild_turn = grandchild.thread.codex.session.new_default_turn().await;
     let action = json!({
         "tool": "shell",
@@ -449,7 +446,7 @@ async fn guardian_review_events_mirror_to_all_thread_spawn_ancestors() {
         action: Some(action.clone()),
     });
     let mirrored_assessment = EventMsg::GuardianAssessment(GuardianAssessmentEvent {
-        id: grandchild_assessment_id.clone(),
+        id: "approval-1".to_string(),
         turn_id: grandchild_turn.sub_id.clone(),
         status: GuardianAssessmentStatus::InProgress,
         risk_score: None,
@@ -497,7 +494,7 @@ async fn guardian_review_events_mirror_to_all_thread_spawn_ancestors() {
         matches!(
             &event.msg,
             EventMsg::GuardianAssessment(GuardianAssessmentEvent { id, .. })
-                if id == &grandchild_assessment_id
+                if id == "approval-1"
         )
     })
     .await;
@@ -517,7 +514,7 @@ async fn guardian_review_events_mirror_to_all_thread_spawn_ancestors() {
         matches!(
             &event.msg,
             EventMsg::GuardianAssessment(GuardianAssessmentEvent { id, .. })
-                if id == &grandchild_assessment_id
+                if id == "approval-1"
         )
     })
     .await;

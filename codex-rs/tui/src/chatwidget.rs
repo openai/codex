@@ -2265,6 +2265,11 @@ impl ChatWidget {
     }
 
     fn on_guardian_assessment(&mut self, ev: GuardianAssessmentEvent) {
+        let review_key = if ev.turn_id.is_empty() {
+            ev.id.clone()
+        } else {
+            format!("{}:{}", ev.turn_id, ev.id)
+        };
         let guardian_action_summary = |action: &serde_json::Value| {
             let tool = action.get("tool").and_then(serde_json::Value::as_str)?;
             match tool {
@@ -2370,11 +2375,12 @@ impl ChatWidget {
             if let Some((_, existing_detail)) = self
                 .active_guardian_reviews
                 .iter_mut()
-                .find(|(id, _)| id == &ev.id)
+                .find(|(id, _)| id == &review_key)
             {
                 *existing_detail = detail;
             } else {
-                self.active_guardian_reviews.push((ev.id.clone(), detail));
+                self.active_guardian_reviews
+                    .push((review_key.clone(), detail));
             }
             refresh_guardian_review_status(self);
             self.request_redraw();
@@ -2382,7 +2388,8 @@ impl ChatWidget {
         }
 
         let original_len = self.active_guardian_reviews.len();
-        self.active_guardian_reviews.retain(|(id, _)| id != &ev.id);
+        self.active_guardian_reviews
+            .retain(|(id, _)| id != &review_key);
         if self.active_guardian_reviews.len() != original_len {
             refresh_guardian_review_status(self);
         } else if self.active_guardian_reviews.is_empty()
