@@ -17,6 +17,7 @@ use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
+use codex_app_server_protocol::SkillScope;
 use codex_core::CodexAuth;
 use codex_core::config::ApprovalsReviewer;
 use codex_core::config::Config;
@@ -36,7 +37,6 @@ use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::ModelsManager;
-use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
@@ -99,7 +99,6 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_protocol::protocol::ThreadRolledBackEvent;
@@ -1020,11 +1019,9 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             short_description: None,
             interface: None,
             dependencies: None,
-            policy: None,
-            permission_profile: None,
-            managed_network_override: None,
-            path_to_skills_md: repo_skill_path,
+            path: repo_skill_path,
             scope: SkillScope::Repo,
+            enabled: true,
         },
         SkillMetadata {
             name: "figma".to_string(),
@@ -1032,11 +1029,9 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             short_description: None,
             interface: None,
             dependencies: None,
-            policy: None,
-            permission_profile: None,
-            managed_network_override: None,
-            path_to_skills_md: user_skill_path.clone(),
+            path: user_skill_path.clone(),
             scope: SkillScope::User,
+            enabled: true,
         },
     ]));
 
@@ -1769,7 +1764,6 @@ async fn helpers_are_available_and_do_not_panic() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
-        use_app_server: false,
     };
     let mut w = ChatWidget::new(init, thread_manager);
     // Basic construction sanity.
@@ -1795,17 +1789,6 @@ fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
 // --- Helpers for tests that need direct construction and event draining ---
 async fn make_chatwidget_manual(
     model_override: Option<&str>,
-) -> (
-    ChatWidget,
-    tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-    tokio::sync::mpsc::UnboundedReceiver<Op>,
-) {
-    make_chatwidget_manual_with_use_app_server(model_override, false).await
-}
-
-async fn make_chatwidget_manual_with_use_app_server(
-    model_override: Option<&str>,
-    use_app_server: bool,
 ) -> (
     ChatWidget,
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
@@ -1940,7 +1923,6 @@ async fn make_chatwidget_manual_with_use_app_server(
         external_editor_state: ExternalEditorState::Closed,
         realtime_conversation: RealtimeConversationUiState::default(),
         last_rendered_user_message_event: None,
-        use_app_server,
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
@@ -2000,8 +1982,7 @@ async fn list_skills_without_app_server_uses_core_op_channel() {
 
 #[tokio::test]
 async fn list_skills_with_app_server_uses_app_event_channel() {
-    let (mut chat, mut app_rx, mut op_rx) =
-        make_chatwidget_manual_with_use_app_server(None, true).await;
+    let (mut chat, mut app_rx, mut op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_codex_event(Event {
         id: "skills-update".into(),
@@ -5681,7 +5662,6 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
-        use_app_server: false,
     };
 
     let chat = ChatWidget::new(init, thread_manager);
@@ -5732,7 +5712,6 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
-        use_app_server: false,
     };
 
     let chat = ChatWidget::new(init, thread_manager);

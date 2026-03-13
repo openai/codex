@@ -41,6 +41,7 @@ use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::SkillsListResponse;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
@@ -73,7 +74,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FinalOutput;
-use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
@@ -2403,7 +2403,7 @@ impl App {
         &mut self,
         requested_cwds: Vec<PathBuf>,
         generation: u64,
-        result: std::result::Result<ListSkillsResponseEvent, String>,
+        result: std::result::Result<SkillsListResponse, String>,
     ) -> Result<()> {
         let event = result.map_err(|err| color_eyre::eyre::eyre!(err))?;
         let current_cwd = self.chat_widget.config_ref().cwd.clone();
@@ -3784,11 +3784,6 @@ impl App {
             self.suppress_shutdown_complete = false;
             return;
         }
-        if let EventMsg::ListSkillsResponse(response) = &event.msg {
-            let cwd = self.chat_widget.config_ref().cwd.clone();
-            let errors = errors_for_cwd(&cwd, response);
-            emit_skill_load_warnings(&self.app_event_tx, &errors);
-        }
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
 
@@ -4237,13 +4232,9 @@ mod tests {
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
-    use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionConfiguredEvent;
     use codex_protocol::protocol::SessionSource;
-    use codex_protocol::protocol::SkillMetadata;
-    use codex_protocol::protocol::SkillScope;
-    use codex_protocol::protocol::SkillsListEntry;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
@@ -6530,18 +6521,18 @@ smart_approvals = true
             .and_then(TomlValue::as_bool)
     }
 
-    fn test_skill_response(cwd: PathBuf, skill_name: &str) -> ListSkillsResponseEvent {
-        ListSkillsResponseEvent {
-            skills: vec![SkillsListEntry {
+    fn test_skill_response(cwd: PathBuf, skill_name: &str) -> SkillsListResponse {
+        SkillsListResponse {
+            data: vec![codex_app_server_protocol::SkillsListEntry {
                 cwd: cwd.clone(),
-                skills: vec![SkillMetadata {
+                skills: vec![codex_app_server_protocol::SkillMetadata {
                     name: skill_name.to_string(),
                     description: format!("{skill_name} description"),
                     short_description: None,
                     interface: None,
                     dependencies: None,
                     path: cwd.join(format!("{skill_name}/SKILL.md")),
-                    scope: SkillScope::Repo,
+                    scope: codex_app_server_protocol::SkillScope::Repo,
                     enabled: true,
                 }],
                 errors: Vec::new(),

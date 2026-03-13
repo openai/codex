@@ -15,7 +15,6 @@ use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::Event;
-use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_approval_presets::ApprovalPreset;
 
@@ -142,7 +141,7 @@ pub(crate) enum AppEvent {
     SkillsListLoaded {
         requested_cwds: Vec<PathBuf>,
         generation: u64,
-        result: Result<ListSkillsResponseEvent, String>,
+        result: Result<codex_app_server_protocol::SkillsListResponse, String>,
     },
 
     /// Result of computing a `/diff` command.
