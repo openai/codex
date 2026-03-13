@@ -68,6 +68,8 @@ mod client_websockets;
 mod code_mode;
 mod codex_delegate;
 mod collaboration_instructions;
+#[cfg(not(target_os = "windows"))]
+mod commit_attribution;
 mod compact;
 mod compact_remote;
 mod compact_resume_fork;

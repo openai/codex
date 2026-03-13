@@ -160,6 +160,18 @@ consolidation_model = "gpt-5"
 }
 
 #[test]
+fn config_toml_ignores_malformed_commit_attribution() {
+    let cfg = toml::from_str::<ConfigToml>(
+        r#"
+commit_attribution = true
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(cfg.commit_attribution, None);
+}
+
+#[test]
 fn parses_bundled_skills_config() {
     let cfg: ConfigToml = toml::from_str(
         r#"

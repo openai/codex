@@ -13,8 +13,11 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::commit_attribution::configure_git_hooks_env_for_config;
+use crate::commit_attribution::injected_git_config_env;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
+use crate::features::Feature;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecRequest;
 use crate::tools::context::ExecCommandToolOutput;
@@ -573,10 +576,18 @@ impl UnifiedExecProcessManager {
         cwd: PathBuf,
         context: &UnifiedExecContext,
     ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
-        let env = apply_unified_exec_env(create_env(
+        let mut env = create_env(
             &context.turn.shell_environment_policy,
             Some(context.session.conversation_id),
-        ));
+        );
+        if context.turn.features.enabled(Feature::CodexGitCommit) {
+            configure_git_hooks_env_for_config(&mut env, context.turn.config.as_ref());
+        }
+        let env = apply_unified_exec_env(env);
+        let mut explicit_env_overrides = context.turn.shell_environment_policy.r#set.clone();
+        for (key, value) in injected_git_config_env(&env) {
+            explicit_env_overrides.insert(key, value);
+        }
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime =
             UnifiedExecRuntime::new(self, context.turn.tools_config.unified_exec_backend);
@@ -601,7 +612,7 @@ impl UnifiedExecProcessManager {
             command: request.command.clone(),
             cwd,
             env,
-            explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
+            explicit_env_overrides,
             network: request.network.clone(),
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,
