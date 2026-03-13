@@ -1430,17 +1430,16 @@ pub fn plugin_telemetry_metadata_from_root(
 
     let manifest_paths = plugin_manifest_paths(&manifest, plugin_root);
     let has_skills = !plugin_skill_roots(plugin_root, &manifest_paths).is_empty();
-    let mut mcp_server_names = manifest_paths
-        .mcp_servers
-        .as_ref()
-        .map(|path| {
-            load_mcp_servers_from_file(plugin_root, path)
+    let mut mcp_server_names = Vec::new();
+    for path in plugin_mcp_config_paths(plugin_root, &manifest_paths) {
+        mcp_server_names.extend(
+            load_mcp_servers_from_file(plugin_root, &path)
                 .mcp_servers
-                .into_keys()
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+                .into_keys(),
+        );
+    }
     mcp_server_names.sort_unstable();
+    mcp_server_names.dedup();
 
     PluginTelemetryMetadata {
         plugin_id: plugin_id.clone(),
