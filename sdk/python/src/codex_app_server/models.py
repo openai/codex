@@ -95,3 +95,5 @@ class ServerInfo(BaseModel):
 class InitializeResponse(BaseModel):
     serverInfo: ServerInfo | None = None
     userAgent: str | None = None
+    platformFamily: str | None = None
+    platformOs: str | None = None

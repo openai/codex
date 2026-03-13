@@ -25,6 +25,11 @@ use codex_core::config::ConstraintError;
 use codex_core::config::types::Notifications;
 #[cfg(target_os = "windows")]
 use codex_core::config::types::WindowsSandboxModeToml;
+use codex_core::config_loader::AppRequirementToml;
+use codex_core::config_loader::AppsRequirementsToml;
+use codex_core::config_loader::ConfigLayerStack;
+use codex_core::config_loader::ConfigRequirements;
+use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::config_loader::RequirementSource;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
@@ -998,6 +1003,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: repo_skill_path,
             scope: SkillScope::Repo,
         },
@@ -1009,6 +1015,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             dependencies: None,
             policy: None,
             permission_profile: None,
+            managed_network_override: None,
             path_to_skills_md: user_skill_path.clone(),
             scope: SkillScope::User,
         },
@@ -7170,6 +7177,144 @@ async fn apps_initial_load_applies_enabled_state_from_config() {
 }
 
 #[tokio::test]
+async fn apps_initial_load_applies_enabled_state_from_requirements_with_user_override() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    set_chatgpt_auth(&mut chat);
+    chat.config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow feature update");
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    let requirements = ConfigRequirementsToml {
+        apps: Some(AppsRequirementsToml {
+            apps: BTreeMap::from([(
+                "connector_1".to_string(),
+                AppRequirementToml {
+                    enabled: Some(false),
+                },
+            )]),
+        }),
+        ..Default::default()
+    };
+    let temp = tempdir().expect("tempdir");
+    let config_toml_path =
+        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    chat.config.config_layer_stack =
+        ConfigLayerStack::new(Vec::new(), ConfigRequirements::default(), requirements)
+            .expect("requirements stack")
+            .with_user_config(
+                &config_toml_path,
+                toml::from_str::<TomlValue>(
+                    "[apps.connector_1]\nenabled = true\ndisabled_reason = \"user\"\n",
+                )
+                .expect("apps config"),
+            );
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![codex_chatgpt::connectors::AppInfo {
+                id: "connector_1".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: Vec::new(),
+            }],
+        }),
+        true,
+    );
+
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot)
+            if snapshot
+                .connectors
+                .iter()
+                .find(|connector| connector.id == "connector_1")
+                .is_some_and(|connector| !connector.is_enabled)
+    );
+
+    chat.add_connectors_output();
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Installed · Disabled. Press Enter to open the app page"),
+        "expected requirements-disabled connector to render as disabled, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn apps_initial_load_applies_enabled_state_from_requirements_without_user_entry() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    set_chatgpt_auth(&mut chat);
+    chat.config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow feature update");
+    chat.bottom_pane.set_connectors_enabled(true);
+
+    let requirements = ConfigRequirementsToml {
+        apps: Some(AppsRequirementsToml {
+            apps: BTreeMap::from([(
+                "connector_1".to_string(),
+                AppRequirementToml {
+                    enabled: Some(false),
+                },
+            )]),
+        }),
+        ..Default::default()
+    };
+    chat.config.config_layer_stack =
+        ConfigLayerStack::new(Vec::new(), ConfigRequirements::default(), requirements)
+            .expect("requirements stack");
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![codex_chatgpt::connectors::AppInfo {
+                id: "connector_1".to_string(),
+                name: "Notion".to_string(),
+                description: Some("Workspace docs".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/notion".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: Vec::new(),
+            }],
+        }),
+        true,
+    );
+
+    assert_matches!(
+        &chat.connectors_cache,
+        ConnectorsCacheState::Ready(snapshot)
+            if snapshot
+                .connectors
+                .iter()
+                .find(|connector| connector.id == "connector_1")
+                .is_some_and(|connector| !connector.is_enabled)
+    );
+
+    chat.add_connectors_output();
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Installed · Disabled. Press Enter to open the app page"),
+        "expected requirements-disabled connector to render as disabled, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
 async fn apps_refresh_preserves_toggled_enabled_state() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     set_chatgpt_auth(&mut chat);
@@ -7427,7 +7572,7 @@ async fn multi_agent_enable_prompt_updates_feature_and_emits_notice() {
         other => panic!("expected InsertHistoryCell event, got {other:?}"),
     };
     let rendered = lines_to_single_string(&cell.display_lines(120));
-    assert!(rendered.contains("Multi-agent will be enabled in the next session."));
+    assert!(rendered.contains("Subagents will be enabled in the next session."));
 }
 
 #[tokio::test]

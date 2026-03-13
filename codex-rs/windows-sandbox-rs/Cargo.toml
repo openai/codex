@@ -73,6 +73,9 @@ features = [
     "Win32_System_Com",
     "Win32_Security_Cryptography",
     "Win32_Security_Authentication_Identity",
+    "Win32_Graphics_Gdi",
+    "Win32_System_StationsAndDesktops",
+    "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
     "Win32_System_Registry",
 ]

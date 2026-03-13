@@ -81,6 +81,7 @@ pub struct ExecParams {
     pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
+    pub windows_sandbox_private_desktop: bool,
     pub justification: Option<String>,
     pub arg0: Option<String>,
 }
@@ -231,6 +232,7 @@ pub fn build_exec_request(
         network,
         sandbox_permissions,
         windows_sandbox_level,
+        windows_sandbox_private_desktop,
         justification,
         arg0: _,
     } = params;
@@ -271,6 +273,7 @@ pub fn build_exec_request(
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_ref(),
             use_legacy_landlock,
             windows_sandbox_level,
+            windows_sandbox_private_desktop,
         })
         .map_err(CodexErr::from)?;
     Ok(exec_req)
@@ -290,6 +293,7 @@ pub(crate) async fn execute_exec_request(
         expiration,
         sandbox,
         windows_sandbox_level,
+        windows_sandbox_private_desktop,
         sandbox_permissions,
         sandbox_policy: _sandbox_policy_from_env,
         file_system_sandbox_policy,
@@ -307,6 +311,7 @@ pub(crate) async fn execute_exec_request(
         network: network.clone(),
         sandbox_permissions,
         windows_sandbox_level,
+        windows_sandbox_private_desktop,
         justification,
         arg0,
     };
@@ -409,6 +414,7 @@ async fn exec_windows_sandbox(
         network,
         expiration,
         windows_sandbox_level,
+        windows_sandbox_private_desktop,
         ..
     } = params;
     if let Some(network) = network.as_ref() {
@@ -443,6 +449,7 @@ async fn exec_windows_sandbox(
                 &cwd,
                 env,
                 timeout_ms,
+                windows_sandbox_private_desktop,
             )
         } else {
             run_windows_sandbox_capture(
@@ -453,6 +460,7 @@ async fn exec_windows_sandbox(
                 &cwd,
                 env,
                 timeout_ms,
+                windows_sandbox_private_desktop,
             )
         }
     })

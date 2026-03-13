@@ -971,7 +971,7 @@ async fn includes_apps_guidance_as_developer_message_for_chatgpt_auth() {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
     let input = request_body["input"].as_array().expect("input array");
-    let apps_snippet = "Apps are mentioned in the prompt in the format";
+    let apps_snippet = "Apps are mentioned in user messages in the format";
 
     let has_developer_apps_guidance = input.iter().any(|item| {
         item.get("role").and_then(|value| value.as_str()) == Some("developer")

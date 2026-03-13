@@ -46,9 +46,15 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     let JSONRPCMessage::Response(response) = message else {
         anyhow::bail!("expected initialize response, got {message:?}");
     };
-    let InitializeResponse { user_agent } = to_response::<InitializeResponse>(response)?;
+    let InitializeResponse {
+        user_agent,
+        platform_family,
+        platform_os,
+    } = to_response::<InitializeResponse>(response)?;
 
     assert!(user_agent.starts_with("codex_vscode/"));
+    assert_eq!(platform_family, std::env::consts::FAMILY);
+    assert_eq!(platform_os, std::env::consts::OS);
     Ok(())
 }
 
@@ -80,9 +86,15 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
     let JSONRPCMessage::Response(response) = message else {
         anyhow::bail!("expected initialize response, got {message:?}");
     };
-    let InitializeResponse { user_agent } = to_response::<InitializeResponse>(response)?;
+    let InitializeResponse {
+        user_agent,
+        platform_family,
+        platform_os,
+    } = to_response::<InitializeResponse>(response)?;
 
     assert!(user_agent.starts_with("codex_originator_via_env_var/"));
+    assert_eq!(platform_family, std::env::consts::FAMILY);
+    assert_eq!(platform_os, std::env::consts::OS);
     Ok(())
 }
 

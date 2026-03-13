@@ -123,6 +123,7 @@ use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
@@ -699,7 +700,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     turn_id: request.turn_id.clone(),
                     item_id: request.call_id.clone(),
                     reason: request.reason,
-                    permissions: request.permissions.into(),
+                    permissions: CorePermissionProfile::from(request.permissions).into(),
                 };
                 let (pending_request_id, rx) = outgoing
                     .send_request(ServerRequestPayload::PermissionsRequestApproval(params))
@@ -2227,7 +2228,7 @@ fn mcp_server_elicitation_response_from_client_result(
 
 async fn on_request_permissions_response(
     call_id: String,
-    requested_permissions: CorePermissionProfile,
+    requested_permissions: CoreRequestPermissionProfile,
     pending_request_id: RequestId,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
@@ -2255,7 +2256,7 @@ async fn on_request_permissions_response(
 }
 
 fn request_permissions_response_from_client_result(
-    requested_permissions: CorePermissionProfile,
+    requested_permissions: CoreRequestPermissionProfile,
     response: std::result::Result<ClientRequestResult, oneshot::error::RecvError>,
 ) -> Option<CoreRequestPermissionsResponse> {
     let value = match response {
@@ -2287,9 +2288,10 @@ fn request_permissions_response_from_client_result(
         });
     Some(CoreRequestPermissionsResponse {
         permissions: intersect_permission_profiles(
-            requested_permissions,
+            requested_permissions.into(),
             response.permissions.into(),
-        ),
+        )
+        .into(),
         scope: response.scope.to_core(),
     })
 }
@@ -2646,10 +2648,8 @@ mod tests {
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_protocol::mcp::CallToolResult;
-    use codex_protocol::models::MacOsAutomationPermission;
-    use codex_protocol::models::MacOsContactsPermission;
-    use codex_protocol::models::MacOsPreferencesPermission;
-    use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+    use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
+    use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
     use codex_protocol::protocol::CollabResumeBeginEvent;
@@ -2660,6 +2660,7 @@ mod tests {
     use codex_protocol::protocol::RateLimitWindow;
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use rmcp::model::Content;
     use serde_json::Value as JsonValue;
@@ -2721,7 +2722,7 @@ mod tests {
         };
 
         let response = request_permissions_response_from_client_result(
-            CorePermissionProfile::default(),
+            CoreRequestPermissionProfile::default(),
             Ok(Err(error)),
         );
 
@@ -2729,156 +2730,91 @@ mod tests {
     }
 
     #[test]
-    fn request_permissions_response_accepts_partial_macos_grants() {
-        let requested_permissions = CorePermissionProfile {
-            macos: Some(MacOsSeatbeltProfileExtensions {
-                macos_preferences: MacOsPreferencesPermission::ReadWrite,
-                macos_automation: MacOsAutomationPermission::BundleIds(vec![
-                    "com.apple.Notes".to_string(),
-                    "com.apple.Reminders".to_string(),
-                ]),
-                macos_launch_services: true,
-                macos_accessibility: true,
-                macos_calendar: true,
-                macos_reminders: true,
-                macos_contacts: MacOsContactsPermission::ReadWrite,
+    fn request_permissions_response_accepts_partial_network_and_file_system_grants() {
+        let input_path = if cfg!(target_os = "windows") {
+            r"C:\tmp\input"
+        } else {
+            "/tmp/input"
+        };
+        let output_path = if cfg!(target_os = "windows") {
+            r"C:\tmp\output"
+        } else {
+            "/tmp/output"
+        };
+        let ignored_path = if cfg!(target_os = "windows") {
+            r"C:\tmp\ignored"
+        } else {
+            "/tmp/ignored"
+        };
+        let absolute_path = |path: &str| {
+            AbsolutePathBuf::try_from(std::path::PathBuf::from(path)).expect("absolute path")
+        };
+        let requested_permissions = CoreRequestPermissionProfile {
+            network: Some(CoreNetworkPermissions {
+                enabled: Some(true),
             }),
-            ..Default::default()
+            file_system: Some(CoreFileSystemPermissions {
+                read: Some(vec![absolute_path(input_path)]),
+                write: Some(vec![absolute_path(output_path)]),
+            }),
         };
         let cases = vec![
-            (serde_json::json!({}), CorePermissionProfile::default()),
             (
-                serde_json::json!({
-                    "preferences": "read_only",
-                }),
-                CorePermissionProfile {
-                    macos: Some(MacOsSeatbeltProfileExtensions {
-                        macos_preferences: MacOsPreferencesPermission::ReadOnly,
-                        macos_automation: MacOsAutomationPermission::None,
-                        macos_launch_services: false,
-                        macos_accessibility: false,
-                        macos_calendar: false,
-                        macos_reminders: false,
-                        macos_contacts: MacOsContactsPermission::None,
-                    }),
-                    ..Default::default()
-                },
+                serde_json::json!({}),
+                CoreRequestPermissionProfile::default(),
             ),
             (
                 serde_json::json!({
-                    "automations": {
-                        "bundle_ids": ["com.apple.Notes"],
+                    "network": {
+                        "enabled": true,
                     },
                 }),
-                CorePermissionProfile {
-                    macos: Some(MacOsSeatbeltProfileExtensions {
-                        macos_preferences: MacOsPreferencesPermission::None,
-                        macos_automation: MacOsAutomationPermission::BundleIds(vec![
-                            "com.apple.Notes".to_string(),
-                        ]),
-                        macos_launch_services: false,
-                        macos_accessibility: false,
-                        macos_calendar: false,
-                        macos_reminders: false,
-                        macos_contacts: MacOsContactsPermission::None,
+                CoreRequestPermissionProfile {
+                    network: Some(CoreNetworkPermissions {
+                        enabled: Some(true),
                     }),
-                    ..Default::default()
+                    ..CoreRequestPermissionProfile::default()
                 },
             ),
             (
                 serde_json::json!({
-                    "launchServices": true,
+                    "fileSystem": {
+                        "write": [output_path],
+                    },
                 }),
-                CorePermissionProfile {
-                    macos: Some(MacOsSeatbeltProfileExtensions {
-                        macos_preferences: MacOsPreferencesPermission::None,
-                        macos_automation: MacOsAutomationPermission::None,
-                        macos_launch_services: true,
-                        macos_accessibility: false,
-                        macos_calendar: false,
-                        macos_reminders: false,
-                        macos_contacts: MacOsContactsPermission::None,
+                CoreRequestPermissionProfile {
+                    file_system: Some(CoreFileSystemPermissions {
+                        read: None,
+                        write: Some(vec![absolute_path(output_path)]),
                     }),
-                    ..Default::default()
+                    ..CoreRequestPermissionProfile::default()
                 },
             ),
             (
                 serde_json::json!({
-                    "accessibility": true,
+                    "fileSystem": {
+                        "read": [input_path],
+                        "write": [output_path, ignored_path],
+                    },
+                    "macos": {
+                        "calendar": true,
+                    },
                 }),
-                CorePermissionProfile {
-                    macos: Some(MacOsSeatbeltProfileExtensions {
-                        macos_preferences: MacOsPreferencesPermission::None,
-                        macos_automation: MacOsAutomationPermission::None,
-                        macos_launch_services: false,
-                        macos_accessibility: true,
-                        macos_calendar: false,
-                        macos_reminders: false,
-                        macos_contacts: MacOsContactsPermission::None,
+                CoreRequestPermissionProfile {
+                    file_system: Some(CoreFileSystemPermissions {
+                        read: Some(vec![absolute_path(input_path)]),
+                        write: Some(vec![absolute_path(output_path)]),
                     }),
-                    ..Default::default()
-                },
-            ),
-            (
-                serde_json::json!({
-                    "calendar": true,
-                }),
-                CorePermissionProfile {
-                    macos: Some(MacOsSeatbeltProfileExtensions {
-                        macos_preferences: MacOsPreferencesPermission::None,
-                        macos_automation: MacOsAutomationPermission::None,
-                        macos_launch_services: false,
-                        macos_accessibility: false,
-                        macos_calendar: true,
-                        macos_reminders: false,
-                        macos_contacts: MacOsContactsPermission::None,
-                    }),
-                    ..Default::default()
-                },
-            ),
-            (
-                serde_json::json!({
-                    "reminders": true,
-                }),
-                CorePermissionProfile {
-                    macos: Some(MacOsSeatbeltProfileExtensions {
-                        macos_preferences: MacOsPreferencesPermission::None,
-                        macos_automation: MacOsAutomationPermission::None,
-                        macos_launch_services: false,
-                        macos_accessibility: false,
-                        macos_calendar: false,
-                        macos_reminders: true,
-                        macos_contacts: MacOsContactsPermission::None,
-                    }),
-                    ..Default::default()
-                },
-            ),
-            (
-                serde_json::json!({
-                    "contacts": "read_only",
-                }),
-                CorePermissionProfile {
-                    macos: Some(MacOsSeatbeltProfileExtensions {
-                        macos_preferences: MacOsPreferencesPermission::None,
-                        macos_automation: MacOsAutomationPermission::None,
-                        macos_launch_services: false,
-                        macos_accessibility: false,
-                        macos_calendar: false,
-                        macos_reminders: false,
-                        macos_contacts: MacOsContactsPermission::ReadOnly,
-                    }),
-                    ..Default::default()
+                    ..CoreRequestPermissionProfile::default()
                 },
             ),
         ];
 
-        for (granted_macos, expected_permissions) in cases {
+        for (granted_permissions, expected_permissions) in cases {
             let response = request_permissions_response_from_client_result(
                 requested_permissions.clone(),
                 Ok(Ok(serde_json::json!({
-                    "permissions": {
-                        "macos": granted_macos,
-                    },
+                    "permissions": granted_permissions,
                 }))),
             )
             .expect("response should be accepted");
@@ -2896,7 +2832,7 @@ mod tests {
     #[test]
     fn request_permissions_response_preserves_session_scope() {
         let response = request_permissions_response_from_client_result(
-            CorePermissionProfile::default(),
+            CoreRequestPermissionProfile::default(),
             Ok(Ok(serde_json::json!({
                 "scope": "session",
                 "permissions": {},
@@ -2907,7 +2843,7 @@ mod tests {
         assert_eq!(
             response,
             CoreRequestPermissionsResponse {
-                permissions: CorePermissionProfile::default(),
+                permissions: CoreRequestPermissionProfile::default(),
                 scope: CorePermissionGrantScope::Session,
             }
         );

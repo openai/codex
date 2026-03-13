@@ -93,6 +93,10 @@ impl JsReplHandle {
             .await
             .cloned()
     }
+
+    pub(crate) fn manager_if_initialized(&self) -> Option<Arc<JsReplManager>> {
+        self.cell.get().cloned()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -115,6 +119,7 @@ struct KernelState {
     stdin: Arc<Mutex<ChildStdin>>,
     pending_execs: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<ExecResultMessage>>>>,
     exec_contexts: Arc<Mutex<HashMap<String, ExecContext>>>,
+    top_level_exec_state: TopLevelExecState,
     shutdown: CancellationToken,
 }
 
@@ -123,6 +128,54 @@ struct ExecContext {
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     tracker: SharedTurnDiffTracker,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum TopLevelExecState {
+    #[default]
+    Idle,
+    FreshKernel {
+        turn_id: String,
+        exec_id: Option<String>,
+    },
+    ReusedKernelPending {
+        turn_id: String,
+        exec_id: String,
+    },
+    Submitted {
+        turn_id: String,
+        exec_id: String,
+    },
+}
+
+impl TopLevelExecState {
+    fn registered_exec_id(&self) -> Option<&str> {
+        match self {
+            Self::Idle => None,
+            Self::FreshKernel {
+                exec_id: Some(exec_id),
+                ..
+            }
+            | Self::ReusedKernelPending { exec_id, .. }
+            | Self::Submitted { exec_id, .. } => Some(exec_id.as_str()),
+            Self::FreshKernel { exec_id: None, .. } => None,
+        }
+    }
+
+    fn should_reset_for_interrupt(&self, turn_id: &str) -> bool {
+        match self {
+            Self::Idle => false,
+            Self::FreshKernel {
+                turn_id: active_turn_id,
+                ..
+            }
+            | Self::Submitted {
+                turn_id: active_turn_id,
+                ..
+            } => active_turn_id == turn_id,
+            Self::ReusedKernelPending { .. } => false,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -451,6 +504,94 @@ impl JsReplManager {
         }
     }
 
+    async fn register_top_level_exec(&self, exec_id: String, turn_id: String) {
+        let mut kernel = self.kernel.lock().await;
+        let Some(state) = kernel.as_mut() else {
+            return;
+        };
+        state.top_level_exec_state = match &state.top_level_exec_state {
+            TopLevelExecState::FreshKernel {
+                turn_id: active_turn_id,
+                ..
+            } if active_turn_id == &turn_id => TopLevelExecState::FreshKernel {
+                turn_id,
+                exec_id: Some(exec_id),
+            },
+            TopLevelExecState::Idle
+            | TopLevelExecState::ReusedKernelPending { .. }
+            | TopLevelExecState::Submitted { .. }
+            | TopLevelExecState::FreshKernel { .. } => {
+                TopLevelExecState::ReusedKernelPending { turn_id, exec_id }
+            }
+        };
+    }
+
+    async fn mark_top_level_exec_submitted(&self, exec_id: &str) {
+        let mut kernel = self.kernel.lock().await;
+        let Some(state) = kernel.as_mut() else {
+            return;
+        };
+        let next_state = match &state.top_level_exec_state {
+            TopLevelExecState::FreshKernel {
+                turn_id,
+                exec_id: Some(active_exec_id),
+            }
+            | TopLevelExecState::ReusedKernelPending {
+                turn_id,
+                exec_id: active_exec_id,
+            } if active_exec_id == exec_id => Some(TopLevelExecState::Submitted {
+                turn_id: turn_id.clone(),
+                exec_id: active_exec_id.clone(),
+            }),
+            TopLevelExecState::Idle
+            | TopLevelExecState::FreshKernel { .. }
+            | TopLevelExecState::ReusedKernelPending { .. }
+            | TopLevelExecState::Submitted { .. } => None,
+        };
+        if let Some(next_state) = next_state {
+            state.top_level_exec_state = next_state;
+        }
+    }
+
+    async fn clear_top_level_exec_if_matches(&self, exec_id: &str) {
+        Self::clear_top_level_exec_if_matches_map(&self.kernel, exec_id).await;
+    }
+
+    async fn clear_top_level_exec_if_matches_map(
+        kernel: &Arc<Mutex<Option<KernelState>>>,
+        exec_id: &str,
+    ) {
+        let mut kernel = kernel.lock().await;
+        if let Some(state) = kernel.as_mut()
+            && state.top_level_exec_state.registered_exec_id() == Some(exec_id)
+        {
+            state.top_level_exec_state = TopLevelExecState::Idle;
+        }
+    }
+
+    async fn clear_top_level_exec_if_matches_any_map(
+        kernel: &Arc<Mutex<Option<KernelState>>>,
+        exec_ids: &[String],
+    ) {
+        let mut kernel = kernel.lock().await;
+        if let Some(state) = kernel.as_mut()
+            && state
+                .top_level_exec_state
+                .registered_exec_id()
+                .is_some_and(|exec_id| exec_ids.iter().any(|pending_id| pending_id == exec_id))
+        {
+            state.top_level_exec_state = TopLevelExecState::Idle;
+        }
+    }
+
+    async fn turn_interrupt_requires_reset(&self, turn_id: &str) -> bool {
+        self.kernel.lock().await.as_ref().is_some_and(|state| {
+            state
+                .top_level_exec_state
+                .should_reset_for_interrupt(turn_id)
+        })
+    }
+
     fn log_tool_call_response(
         req: &RunToolRequest,
         ok: bool,
@@ -663,6 +804,18 @@ impl JsReplManager {
         Ok(())
     }
 
+    pub async fn interrupt_turn_exec(&self, turn_id: &str) -> Result<bool, FunctionCallError> {
+        let _permit = self.exec_lock.clone().acquire_owned().await.map_err(|_| {
+            FunctionCallError::RespondToModel("js_repl execution unavailable".to_string())
+        })?;
+        if !self.turn_interrupt_requires_reset(turn_id).await {
+            return Ok(false);
+        }
+        self.reset_kernel().await;
+        Self::clear_all_exec_tool_calls_map(&self.exec_tool_calls).await;
+        Ok(true)
+    }
+
     async fn reset_kernel(&self) {
         let state = {
             let mut guard = self.kernel.lock().await;
@@ -689,7 +842,7 @@ impl JsReplManager {
             let mut kernel = self.kernel.lock().await;
             if kernel.is_none() {
                 let dependency_env = session.dependency_env().await;
-                let state = self
+                let mut state = self
                     .start_kernel(
                         Arc::clone(&turn),
                         &dependency_env,
@@ -697,6 +850,10 @@ impl JsReplManager {
                     )
                     .await
                     .map_err(FunctionCallError::RespondToModel)?;
+                state.top_level_exec_state = TopLevelExecState::FreshKernel {
+                    turn_id: turn.sub_id.clone(),
+                    exec_id: None,
+                };
                 *kernel = Some(state);
             }
 
@@ -732,6 +889,8 @@ impl JsReplManager {
             );
             (req_id, rx)
         };
+        self.register_top_level_exec(req_id.clone(), turn.sub_id.clone())
+            .await;
         self.register_exec_tool_calls(&req_id).await;
 
         let payload = HostToKernel::Exec {
@@ -740,8 +899,25 @@ impl JsReplManager {
             timeout_ms: args.timeout_ms,
         };
 
-        if let Err(err) = Self::write_message(&stdin, &payload).await {
-            pending_execs.lock().await.remove(&req_id);
+        let write_result = {
+            // Treat the exec as submitted before the async pipe writes begin: once we start
+            // awaiting `write_all`, the kernel may already observe runnable JS even if the turn is
+            // aborted before control returns here.
+            self.mark_top_level_exec_submitted(&req_id).await;
+            let write_result = Self::write_message(&stdin, &payload).await;
+            match write_result {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    self.clear_top_level_exec_if_matches(&req_id).await;
+                    Err(err)
+                }
+            }
+        };
+
+        if let Err(err) = write_result {
+            if pending_execs.lock().await.remove(&req_id).is_some() {
+                self.clear_top_level_exec_if_matches(&req_id).await;
+            }
             exec_contexts.lock().await.remove(&req_id);
             self.clear_exec_tool_calls(&req_id).await;
             let snapshot = Self::kernel_debug_snapshot(&child, &recent_stderr).await;
@@ -773,7 +949,11 @@ impl JsReplManager {
             Ok(Ok(msg)) => msg,
             Ok(Err(_)) => {
                 let mut pending = pending_execs.lock().await;
-                pending.remove(&req_id);
+                let removed = pending.remove(&req_id).is_some();
+                drop(pending);
+                if removed {
+                    self.clear_top_level_exec_if_matches(&req_id).await;
+                }
                 exec_contexts.lock().await.remove(&req_id);
                 self.wait_for_exec_tool_calls(&req_id).await;
                 self.clear_exec_tool_calls(&req_id).await;
@@ -794,6 +974,7 @@ impl JsReplManager {
                 self.reset_kernel().await;
                 self.wait_for_exec_tool_calls(&req_id).await;
                 self.exec_tool_calls.lock().await.clear();
+                self.clear_top_level_exec_if_matches(&req_id).await;
                 return Err(FunctionCallError::RespondToModel(
                     "js_repl execution timed out; kernel reset, rerun your request".to_string(),
                 ));
@@ -886,6 +1067,10 @@ impl JsReplManager {
                 codex_linux_sandbox_exe: turn.codex_linux_sandbox_exe.as_ref(),
                 use_legacy_landlock: turn.features.use_legacy_landlock(),
                 windows_sandbox_level: turn.windows_sandbox_level,
+                windows_sandbox_private_desktop: turn
+                    .config
+                    .permissions
+                    .windows_sandbox_private_desktop,
             })
             .map_err(|err| format!("failed to configure sandbox for js_repl: {err}"))?;
 
@@ -961,6 +1146,7 @@ impl JsReplManager {
             stdin: stdin_arc,
             pending_execs,
             exec_contexts,
+            top_level_exec_state: TopLevelExecState::Idle,
             shutdown,
         })
     }
@@ -1123,8 +1309,12 @@ impl JsReplManager {
                             .map(|state| state.content_items.clone())
                             .unwrap_or_default()
                     };
-                    let mut pending = pending_execs.lock().await;
-                    if let Some(tx) = pending.remove(&id) {
+                    let tx = {
+                        let mut pending = pending_execs.lock().await;
+                        pending.remove(&id)
+                    };
+                    if let Some(tx) = tx {
+                        Self::clear_top_level_exec_if_matches_map(&manager_kernel, &id).await;
                         let payload = if ok {
                             ExecResultMessage::Ok {
                                 content_items: build_exec_result_content_items(
@@ -1316,6 +1506,9 @@ impl JsReplManager {
             });
         }
         drop(pending);
+        if !pending_exec_ids.is_empty() {
+            Self::clear_top_level_exec_if_matches_any_map(&manager_kernel, &pending_exec_ids).await;
+        }
 
         if !matches!(end_reason, KernelStreamEnd::Shutdown) {
             let mut pending_exec_ids = pending_exec_ids;

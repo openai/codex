@@ -2,6 +2,8 @@ use crate::CodexAuth;
 use crate::api_bridge::map_api_error;
 use crate::auth::read_openai_api_key_from_env;
 use crate::codex::Session;
+use crate::config::RealtimeWsMode;
+use crate::config::RealtimeWsVersion;
 use crate::default_client::default_headers;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -12,7 +14,9 @@ use async_channel::TrySendError;
 use codex_api::Provider as ApiProvider;
 use codex_api::RealtimeAudioFrame;
 use codex_api::RealtimeEvent;
+use codex_api::RealtimeEventParser;
 use codex_api::RealtimeSessionConfig;
+use codex_api::RealtimeSessionMode;
 use codex_api::RealtimeWebsocketClient;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketEvents;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketWriter;
@@ -114,9 +118,7 @@ impl RealtimeConversationManager {
         &self,
         api_provider: ApiProvider,
         extra_headers: Option<HeaderMap>,
-        prompt: String,
-        model: Option<String>,
-        session_id: Option<String>,
+        session_config: RealtimeSessionConfig,
     ) -> CodexResult<(Receiver<RealtimeEvent>, Arc<AtomicBool>)> {
         let previous_state = {
             let mut guard = self.state.lock().await;
@@ -128,11 +130,6 @@ impl RealtimeConversationManager {
             let _ = state.task.await;
         }
 
-        let session_config = RealtimeSessionConfig {
-            instructions: prompt,
-            model,
-            session_id,
-        };
         let client = RealtimeWebsocketClient::new(api_provider);
         let connection = client
             .connect(
@@ -298,22 +295,30 @@ pub(crate) async fn handle_start(
         format!("{prompt}\n\n{startup_context}")
     };
     let model = config.experimental_realtime_ws_model.clone();
-
+    let event_parser = match config.realtime.version {
+        RealtimeWsVersion::V1 => RealtimeEventParser::V1,
+        RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
+    };
+    let session_mode = match config.realtime.session_type {
+        RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
+        RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
+    };
     let requested_session_id = params
         .session_id
         .or_else(|| Some(sess.conversation_id.to_string()));
+    let session_config = RealtimeSessionConfig {
+        instructions: prompt,
+        model,
+        session_id: requested_session_id.clone(),
+        event_parser,
+        session_mode,
+    };
     let extra_headers =
         realtime_request_headers(requested_session_id.as_deref(), realtime_api_key.as_str())?;
     info!("starting realtime conversation");
     let (events_rx, realtime_active) = match sess
         .conversation
-        .start(
-            api_provider,
-            extra_headers,
-            prompt,
-            model,
-            requested_session_id.clone(),
-        )
+        .start(api_provider, extra_headers, session_config)
         .await
     {
         Ok(events_rx) => events_rx,

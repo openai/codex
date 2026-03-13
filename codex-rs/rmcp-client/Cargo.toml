@@ -13,6 +13,7 @@ axum = { workspace = true, default-features = false, features = [
     "http1",
     "tokio",
 ] }
+codex-client = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-pty = { workspace = true }

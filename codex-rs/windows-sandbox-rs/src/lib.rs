@@ -9,6 +9,7 @@ windows_modules!(
     allow,
     audit,
     cap,
+    desktop,
     dpapi,
     env,
     helper_materialization,
@@ -126,6 +127,8 @@ pub use windows_impl::run_windows_sandbox_legacy_preflight;
 #[cfg(target_os = "windows")]
 pub use windows_impl::CaptureResult;
 #[cfg(target_os = "windows")]
+pub use winutil::quote_windows_arg;
+#[cfg(target_os = "windows")]
 pub use winutil::string_from_sid_bytes;
 #[cfg(target_os = "windows")]
 pub use winutil::to_wide;
@@ -158,19 +161,15 @@ mod windows_impl {
     use super::env::apply_no_network_to_env;
     use super::env::ensure_non_interactive_pager;
     use super::env::normalize_null_device_env;
-    use super::logging::debug_log;
     use super::logging::log_failure;
     use super::logging::log_start;
     use super::logging::log_success;
     use super::path_normalization::canonicalize_path;
     use super::policy::parse_policy;
     use super::policy::SandboxPolicy;
-    use super::process::make_env_block;
+    use super::process::create_process_as_user;
     use super::token::convert_string_sid_to_sid;
     use super::token::create_workspace_write_token_with_caps_from;
-    use super::winutil::format_last_error;
-    use super::winutil::quote_windows_arg;
-    use super::winutil::to_wide;
     use super::workspace_acl::is_command_cwd_root;
     use super::workspace_acl::protect_workspace_agents_dir;
     use super::workspace_acl::protect_workspace_codex_dir;
@@ -187,14 +186,9 @@ mod windows_impl {
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
     use windows_sys::Win32::System::Pipes::CreatePipe;
-    use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
     use windows_sys::Win32::System::Threading::GetExitCodeProcess;
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
-    use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
     use windows_sys::Win32::System::Threading::INFINITE;
-    use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
-    use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
-    use windows_sys::Win32::System::Threading::STARTUPINFOW;
 
     type PipeHandles = ((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE));
 
@@ -242,6 +236,7 @@ mod windows_impl {
         pub timed_out: bool,
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture(
         policy_json_or_preset: &str,
         sandbox_policy_cwd: &Path,
@@ -250,6 +245,7 @@ mod windows_impl {
         cwd: &Path,
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
+        use_private_desktop: bool,
     ) -> Result<CaptureResult> {
         let policy = parse_policy(policy_json_or_preset)?;
         let apply_network_block = should_apply_network_block(&policy);
@@ -358,61 +354,34 @@ mod windows_impl {
 
         let (stdin_pair, stdout_pair, stderr_pair) = unsafe { setup_stdio_pipes()? };
         let ((in_r, in_w), (out_r, out_w), (err_r, err_w)) = (stdin_pair, stdout_pair, stderr_pair);
-        let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
-        si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
-        si.dwFlags |= STARTF_USESTDHANDLES;
-        si.hStdInput = in_r;
-        si.hStdOutput = out_w;
-        si.hStdError = err_w;
-
-        let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
-        let cmdline_str = command
-            .iter()
-            .map(|a| quote_windows_arg(a))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
-        let env_block = make_env_block(&env_map);
-        let desktop = to_wide("Winsta0\\Default");
-        si.lpDesktop = desktop.as_ptr() as *mut u16;
         let spawn_res = unsafe {
-            CreateProcessAsUserW(
+            create_process_as_user(
                 h_token,
-                ptr::null(),
-                cmdline.as_mut_ptr(),
-                ptr::null_mut(),
-                ptr::null_mut(),
-                1,
-                CREATE_UNICODE_ENVIRONMENT,
-                env_block.as_ptr() as *mut c_void,
-                to_wide(cwd).as_ptr(),
-                &si,
-                &mut pi,
+                &command,
+                cwd,
+                &env_map,
+                logs_base_dir,
+                Some((in_r, out_w, err_w)),
+                use_private_desktop,
             )
         };
-        if spawn_res == 0 {
-            let err = unsafe { GetLastError() } as i32;
-            let dbg = format!(
-                "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={}",
-                err,
-                format_last_error(err),
-                cwd.display(),
-                cmdline_str,
-                env_block.len(),
-                si.dwFlags,
-            );
-            debug_log(&dbg, logs_base_dir);
-            unsafe {
-                CloseHandle(in_r);
-                CloseHandle(in_w);
-                CloseHandle(out_r);
-                CloseHandle(out_w);
-                CloseHandle(err_r);
-                CloseHandle(err_w);
-                CloseHandle(h_token);
+        let created = match spawn_res {
+            Ok(v) => v,
+            Err(err) => {
+                unsafe {
+                    CloseHandle(in_r);
+                    CloseHandle(in_w);
+                    CloseHandle(out_r);
+                    CloseHandle(out_w);
+                    CloseHandle(err_r);
+                    CloseHandle(err_w);
+                    CloseHandle(h_token);
+                }
+                return Err(err);
             }
-            return Err(anyhow::anyhow!("CreateProcessAsUserW failed: {}", err));
-        }
+        };
+        let pi = created.process_info;
+        let _desktop = created;
 
         unsafe {
             CloseHandle(in_r);
@@ -617,6 +586,7 @@ mod stub {
         pub timed_out: bool,
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture(
         _policy_json_or_preset: &str,
         _sandbox_policy_cwd: &Path,
@@ -625,6 +595,7 @@ mod stub {
         _cwd: &Path,
         _env_map: HashMap<String, String>,
         _timeout_ms: Option<u64>,
+        _use_private_desktop: bool,
     ) -> Result<CaptureResult> {
         bail!("Windows sandbox is only available on Windows")
     }

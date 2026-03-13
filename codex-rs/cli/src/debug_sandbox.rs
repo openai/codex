@@ -165,6 +165,7 @@ async fn run_command_under_sandbox(
                         &cwd_clone,
                         env_map,
                         None,
+                        config.permissions.windows_sandbox_private_desktop,
                     )
                 } else {
                     run_windows_sandbox_capture(
@@ -175,6 +176,7 @@ async fn run_command_under_sandbox(
                         &cwd_clone,
                         env_map,
                         None,
+                        config.permissions.windows_sandbox_private_desktop,
                     )
                 }
             })

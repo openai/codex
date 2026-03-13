@@ -29,11 +29,6 @@ Object.defineProperty(globalThis, '__codexContentItems', {
   defineGlobal('ALL_TOOLS', __codexRuntime.ALL_TOOLS);
   defineGlobal('image', __codexRuntime.image);
   defineGlobal('load', __codexRuntime.load);
-  defineGlobal(
-    'set_max_output_tokens_per_exec_call',
-    __codexRuntime.set_max_output_tokens_per_exec_call
-  );
-  defineGlobal('set_yield_time', __codexRuntime.set_yield_time);
   defineGlobal('store', __codexRuntime.store);
   defineGlobal('text', __codexRuntime.text);
   defineGlobal('tools', __codexRuntime.tools);

@@ -39,6 +39,7 @@ use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
+use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
@@ -51,7 +52,6 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::Feature;
-use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
@@ -112,6 +112,7 @@ use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
 
 mod agent_navigation;
+mod app_server_adapter;
 mod pending_interactive_replay;
 
 use self::agent_navigation::AgentNavigationDirection;
@@ -1436,7 +1437,7 @@ impl App {
             .collect();
 
         self.chat_widget.show_selection_view(SelectionViewParams {
-            title: Some("Multi-agents".to_string()),
+            title: Some("Subagents".to_string()),
             subtitle: Some(AgentNavigationState::picker_subtitle()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
@@ -1711,7 +1712,7 @@ impl App {
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
-        auth_manager: Arc<AuthManager>,
+        mut app_server: InProcessAppServerClient,
         mut config: Config,
         cli_kv_overrides: Vec<(String, TomlValue)>,
         harness_overrides: ConfigOverrides,
@@ -1731,20 +1732,8 @@ impl App {
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
-        let thread_manager = Arc::new(ThreadManager::new(
-            &config,
-            auth_manager.clone(),
-            SessionSource::Cli,
-            CollaborationModesConfig {
-                default_mode_request_user_input: config
-                    .features
-                    .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
-            },
-        ));
-        // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
-        thread_manager
-            .plugins_manager()
-            .maybe_start_curated_repo_sync_for_config(&config);
+        let auth_manager = app_server.auth_manager();
+        let thread_manager = app_server.thread_manager();
         let mut model = thread_manager
             .get_models_manager()
             .get_default_model(&config.model, RefreshStrategy::Offline)
@@ -1762,6 +1751,13 @@ impl App {
         )
         .await;
         if let Some(exit_info) = exit_info {
+            app_server
+                .shutdown()
+                .await
+                .inspect_err(|err| {
+                    tracing::warn!("app-server shutdown failed: {err}");
+                })
+                .ok();
             return Ok(exit_info);
         }
         if let Some(updated_model) = config.model.clone() {
@@ -1982,8 +1978,18 @@ impl App {
             }
         }
 
+        let tui_events = tui.event_stream();
+        tokio::pin!(tui_events);
+
+        tui.frame_requester().schedule_frame();
+
+        let mut thread_created_rx = thread_manager.subscribe_thread_created();
+        let mut listen_for_threads = true;
+        let mut listen_for_app_server_events = true;
+        let mut waiting_for_initial_session_configured = wait_for_initial_session_configured;
+
         #[cfg(not(debug_assertions))]
-        if let Some(latest_version) = upgrade_version {
+        let pre_loop_exit_reason = if let Some(latest_version) = upgrade_version {
             let control = app
                 .handle_event(
                     tui,
@@ -1993,79 +1999,108 @@ impl App {
                     ))),
                 )
                 .await?;
-            if let AppRunControl::Exit(exit_reason) = control {
-                return Ok(AppExitInfo {
-                    token_usage: app.token_usage(),
-                    thread_id: app.chat_widget.thread_id(),
-                    thread_name: app.chat_widget.thread_name(),
-                    update_action: app.pending_update_action,
-                    exit_reason,
-                });
-            }
-        }
-
-        let tui_events = tui.event_stream();
-        tokio::pin!(tui_events);
-
-        tui.frame_requester().schedule_frame();
-
-        let mut thread_created_rx = thread_manager.subscribe_thread_created();
-        let mut listen_for_threads = true;
-        let mut waiting_for_initial_session_configured = wait_for_initial_session_configured;
-
-        let exit_reason = loop {
-            let control = select! {
-                Some(event) = app_event_rx.recv() => {
-                    app.handle_event(tui, event).await?
-                }
-                active = async {
-                    if let Some(rx) = app.active_thread_rx.as_mut() {
-                        rx.recv().await
-                    } else {
-                        None
-                    }
-                }, if App::should_handle_active_thread_events(
-                    waiting_for_initial_session_configured,
-                    app.active_thread_rx.is_some()
-                ) => {
-                    if let Some(event) = active {
-                        app.handle_active_thread_event(tui, event).await?;
-                    } else {
-                        app.clear_active_thread().await;
-                    }
-                    AppRunControl::Continue
-                }
-                Some(event) = tui_events.next() => {
-                    app.handle_tui_event(tui, event).await?
-                }
-                // Listen on new thread creation due to collab tools.
-                created = thread_created_rx.recv(), if listen_for_threads => {
-                    match created {
-                        Ok(thread_id) => {
-                            app.handle_thread_created(thread_id).await?;
-                        }
-                        Err(broadcast::error::RecvError::Lagged(_)) => {
-                            tracing::warn!("thread_created receiver lagged; skipping resync");
-                        }
-                        Err(broadcast::error::RecvError::Closed) => {
-                            listen_for_threads = false;
-                        }
-                    }
-                    AppRunControl::Continue
-                }
-            };
-            if App::should_stop_waiting_for_initial_session(
-                waiting_for_initial_session_configured,
-                app.primary_thread_id,
-            ) {
-                waiting_for_initial_session_configured = false;
-            }
             match control {
-                AppRunControl::Continue => {}
-                AppRunControl::Exit(reason) => break reason,
+                AppRunControl::Continue => None,
+                AppRunControl::Exit(exit_reason) => Some(exit_reason),
+            }
+        } else {
+            None
+        };
+        #[cfg(debug_assertions)]
+        let pre_loop_exit_reason: Option<ExitReason> = None;
+
+        let exit_reason_result = if let Some(exit_reason) = pre_loop_exit_reason {
+            Ok(exit_reason)
+        } else {
+            loop {
+                let control = select! {
+                    Some(event) = app_event_rx.recv() => {
+                        match app.handle_event(tui, event).await {
+                            Ok(control) => control,
+                            Err(err) => break Err(err),
+                        }
+                    }
+                    active = async {
+                        if let Some(rx) = app.active_thread_rx.as_mut() {
+                            rx.recv().await
+                        } else {
+                            None
+                        }
+                    }, if App::should_handle_active_thread_events(
+                        waiting_for_initial_session_configured,
+                        app.active_thread_rx.is_some()
+                    ) => {
+                        if let Some(event) = active {
+                            if let Err(err) = app.handle_active_thread_event(tui, event).await {
+                                break Err(err);
+                            }
+                        } else {
+                            app.clear_active_thread().await;
+                        }
+                        AppRunControl::Continue
+                    }
+                    Some(event) = tui_events.next() => {
+                        match app.handle_tui_event(tui, event).await {
+                            Ok(control) => control,
+                            Err(err) => break Err(err),
+                        }
+                    }
+                    app_server_event = app_server.next_event(), if listen_for_app_server_events => {
+                        match app_server_event {
+                            Some(event) => app.handle_app_server_event(&app_server, event).await,
+                            None => {
+                                listen_for_app_server_events = false;
+                                tracing::warn!("app-server event stream closed");
+                            }
+                        }
+                        AppRunControl::Continue
+                    }
+                    // Listen on new thread creation due to collab tools.
+                    created = thread_created_rx.recv(), if listen_for_threads => {
+                        match created {
+                            Ok(thread_id) => {
+                                if let Err(err) = app.handle_thread_created(thread_id).await {
+                                    break Err(err);
+                                }
+                            }
+                            Err(broadcast::error::RecvError::Lagged(_)) => {
+                                tracing::warn!("thread_created receiver lagged; skipping resync");
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
+                                listen_for_threads = false;
+                            }
+                        }
+                        AppRunControl::Continue
+                    }
+                };
+                if App::should_stop_waiting_for_initial_session(
+                    waiting_for_initial_session_configured,
+                    app.primary_thread_id,
+                ) {
+                    waiting_for_initial_session_configured = false;
+                }
+                match control {
+                    AppRunControl::Continue => {}
+                    AppRunControl::Exit(reason) => break Ok(reason),
+                }
             }
         };
-        tui.terminal.clear()?;
+        if let Err(err) = app_server.shutdown().await {
+            tracing::warn!(error = %err, "failed to shut down embedded app server");
+        }
+        let clear_result = tui.terminal.clear();
+        let exit_reason = match exit_reason_result {
+            Ok(exit_reason) => {
+                clear_result?;
+                exit_reason
+            }
+            Err(err) => {
+                if let Err(clear_err) = clear_result {
+                    tracing::warn!(error = %clear_err, "failed to clear terminal UI");
+                }
+                return Err(err);
+            }
+        };
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
             thread_id: app.chat_widget.thread_id(),
@@ -3306,7 +3341,7 @@ impl App {
                         lines.push(Line::from(""));
                     }
                     if let Some(rule_line) =
-                        crate::bottom_pane::format_additional_permissions_rule(&permissions)
+                        crate::bottom_pane::format_requested_permissions_rule(&permissions)
                     {
                         lines.push(Line::from(vec![
                             "Permission rule: ".into(),
@@ -5058,7 +5093,7 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("Multi-agent will be enabled in the next session."));
+        assert!(rendered.contains("Subagents will be enabled in the next session."));
         Ok(())
     }
 

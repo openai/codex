@@ -4082,6 +4082,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
                 allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
+                windows_sandbox_private_desktop: true,
                 macos_seatbelt_profile_extensions: None,
             },
             enforce_residency: Constrained::allow_any(None),
@@ -4129,6 +4130,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             experimental_realtime_start_instructions: None,
             experimental_realtime_ws_base_url: None,
             experimental_realtime_ws_model: None,
+            realtime: RealtimeConfig::default(),
             experimental_realtime_ws_backend_prompt: None,
             experimental_realtime_ws_startup_context: None,
             base_instructions: None,
@@ -4218,6 +4220,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
+            windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
         enforce_residency: Constrained::allow_any(None),
@@ -4265,6 +4268,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
+        realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
@@ -4352,6 +4356,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
+            windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
         enforce_residency: Constrained::allow_any(None),
@@ -4399,6 +4404,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
+        realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
@@ -4472,6 +4478,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
+            windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
         enforce_residency: Constrained::allow_any(None),
@@ -4519,6 +4526,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
+        realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
@@ -4571,6 +4579,7 @@ fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> any
         ]),
         feature_requirements: None,
         mcp_servers: None,
+        apps: None,
         rules: None,
         enforce_residency: None,
         network: None,
@@ -5169,6 +5178,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         allowed_web_search_modes: None,
         feature_requirements: None,
         mcp_servers: None,
+        apps: None,
         rules: None,
         enforce_residency: None,
         network: None,
@@ -5562,6 +5572,42 @@ experimental_realtime_ws_model = "realtime-test-model"
     assert_eq!(
         config.experimental_realtime_ws_model.as_deref(),
         Some("realtime-test-model")
+    );
+    Ok(())
+}
+
+#[test]
+fn realtime_loads_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[realtime]
+version = "v2"
+type = "transcription"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.realtime,
+        Some(RealtimeToml {
+            version: Some(RealtimeWsVersion::V2),
+            session_type: Some(RealtimeWsMode::Transcription),
+        })
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.realtime,
+        RealtimeConfig {
+            version: RealtimeWsVersion::V2,
+            session_type: RealtimeWsMode::Transcription,
+        }
     );
     Ok(())
 }

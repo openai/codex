@@ -47,6 +47,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
+use codex_core::AnalyticsEventsClient;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::auth::ExternalAuthRefreshContext;
@@ -147,6 +148,7 @@ pub(crate) struct MessageProcessor {
     config_api: ConfigApi,
     external_agent_config_api: ExternalAgentConfigApi,
     fs_api: FsApi,
+    auth_manager: Arc<AuthManager>,
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
 }
@@ -167,6 +169,8 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) cloud_requirements: CloudRequirementsLoader,
+    pub(crate) auth_manager: Option<Arc<AuthManager>>,
+    pub(crate) thread_manager: Option<Arc<ThreadManager>>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
@@ -185,38 +189,52 @@ impl MessageProcessor {
             cli_overrides,
             loader_overrides,
             cloud_requirements,
+            auth_manager,
+            thread_manager,
             feedback,
             log_db,
             config_warnings,
             session_source,
             enable_codex_api_key_env,
         } = args;
-        let auth_manager = AuthManager::shared(
-            config.codex_home.clone(),
-            enable_codex_api_key_env,
-            config.cli_auth_credentials_store_mode,
-        );
+        let (auth_manager, thread_manager) = match (auth_manager, thread_manager) {
+            (Some(auth_manager), Some(thread_manager)) => (auth_manager, thread_manager),
+            (None, None) => {
+                let auth_manager = AuthManager::shared(
+                    config.codex_home.clone(),
+                    enable_codex_api_key_env,
+                    config.cli_auth_credentials_store_mode,
+                );
+                let thread_manager = Arc::new(ThreadManager::new(
+                    config.as_ref(),
+                    auth_manager.clone(),
+                    session_source,
+                    CollaborationModesConfig {
+                        default_mode_request_user_input: config
+                            .features
+                            .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+                    },
+                ));
+                (auth_manager, thread_manager)
+            }
+            _ => panic!("MessageProcessorArgs must provide both auth_manager and thread_manager"),
+        };
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
         auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));
-        let thread_manager = Arc::new(ThreadManager::new(
-            config.as_ref(),
-            auth_manager.clone(),
-            session_source,
-            CollaborationModesConfig {
-                default_mode_request_user_input: config
-                    .features
-                    .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
-            },
-        ));
+        let analytics_events_client =
+            AnalyticsEventsClient::new(Arc::clone(&config), Arc::clone(&auth_manager));
+        thread_manager
+            .plugins_manager()
+            .set_analytics_events_client(analytics_events_client.clone());
         // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
         thread_manager
             .plugins_manager()
             .maybe_start_curated_repo_sync_for_config(&config);
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
-            auth_manager,
+            auth_manager: auth_manager.clone(),
             thread_manager: Arc::clone(&thread_manager),
             outgoing: outgoing.clone(),
             arg0_paths,
@@ -232,6 +250,7 @@ impl MessageProcessor {
             loader_overrides,
             cloud_requirements,
             thread_manager,
+            analytics_events_client,
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
         let fs_api = FsApi;
@@ -242,9 +261,14 @@ impl MessageProcessor {
             config_api,
             external_agent_config_api,
             fs_api,
+            auth_manager,
             config,
             config_warnings: Arc::new(config_warnings),
         }
+    }
+
+    pub(crate) fn clear_runtime_references(&self) {
+        self.auth_manager.clear_external_auth_refresher();
     }
 
     pub(crate) async fn process_request(
@@ -547,7 +571,11 @@ impl MessageProcessor {
                 }
 
                 let user_agent = get_codex_user_agent();
-                let response = InitializeResponse { user_agent };
+                let response = InitializeResponse {
+                    user_agent,
+                    platform_family: std::env::consts::FAMILY.to_string(),
+                    platform_os: std::env::consts::OS.to_string(),
+                };
                 self.outgoing
                     .send_response(connection_request_id, response)
                     .await;

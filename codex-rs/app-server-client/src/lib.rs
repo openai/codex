@@ -36,9 +36,12 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_arg0::Arg0DispatchPaths;
+use codex_core::AuthManager;
+use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use serde::de::DeserializeOwned;
@@ -124,6 +127,16 @@ impl Error for TypedRequestError {
 }
 
 #[derive(Clone)]
+struct SharedCoreManagers {
+    // Temporary bootstrap escape hatch for embedders that still need direct
+    // core handles during the in-process app-server migration. Once TUI/exec
+    // stop depending on direct manager access, remove this wrapper and keep
+    // manager ownership entirely inside the app-server runtime.
+    auth_manager: Arc<AuthManager>,
+    thread_manager: Arc<ThreadManager>,
+}
+
+#[derive(Clone)]
 pub struct InProcessClientStartArgs {
     /// Resolved argv0 dispatch paths used by command execution internals.
     pub arg0_paths: Arg0DispatchPaths,
@@ -156,6 +169,30 @@ pub struct InProcessClientStartArgs {
 }
 
 impl InProcessClientStartArgs {
+    fn shared_core_managers(&self) -> SharedCoreManagers {
+        let auth_manager = AuthManager::shared(
+            self.config.codex_home.clone(),
+            self.enable_codex_api_key_env,
+            self.config.cli_auth_credentials_store_mode,
+        );
+        let thread_manager = Arc::new(ThreadManager::new(
+            self.config.as_ref(),
+            auth_manager.clone(),
+            self.session_source.clone(),
+            CollaborationModesConfig {
+                default_mode_request_user_input: self
+                    .config
+                    .features
+                    .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+            },
+        ));
+
+        SharedCoreManagers {
+            auth_manager,
+            thread_manager,
+        }
+    }
+
     /// Builds initialize params from caller-provided metadata.
     pub fn initialize_params(&self) -> InitializeParams {
         let capabilities = InitializeCapabilities {
@@ -177,7 +214,7 @@ impl InProcessClientStartArgs {
         }
     }
 
-    fn into_runtime_start_args(self) -> InProcessStartArgs {
+    fn into_runtime_start_args(self, shared_core: &SharedCoreManagers) -> InProcessStartArgs {
         let initialize = self.initialize_params();
         InProcessStartArgs {
             arg0_paths: self.arg0_paths,
@@ -185,6 +222,8 @@ impl InProcessClientStartArgs {
             cli_overrides: self.cli_overrides,
             loader_overrides: self.loader_overrides,
             cloud_requirements: self.cloud_requirements,
+            auth_manager: Some(shared_core.auth_manager.clone()),
+            thread_manager: Some(shared_core.thread_manager.clone()),
             feedback: self.feedback,
             config_warnings: self.config_warnings,
             session_source: self.session_source,
@@ -238,6 +277,8 @@ pub struct InProcessAppServerClient {
     command_tx: mpsc::Sender<ClientCommand>,
     event_rx: mpsc::Receiver<InProcessServerEvent>,
     worker_handle: tokio::task::JoinHandle<()>,
+    auth_manager: Arc<AuthManager>,
+    thread_manager: Arc<ThreadManager>,
 }
 
 impl InProcessAppServerClient {
@@ -248,8 +289,9 @@ impl InProcessAppServerClient {
     /// with overload error instead of being silently dropped.
     pub async fn start(args: InProcessClientStartArgs) -> IoResult<Self> {
         let channel_capacity = args.channel_capacity.max(1);
+        let shared_core = args.shared_core_managers();
         let mut handle =
-            codex_app_server::in_process::start(args.into_runtime_start_args()).await?;
+            codex_app_server::in_process::start(args.into_runtime_start_args(&shared_core)).await?;
         let request_sender = handle.sender();
         let (command_tx, mut command_rx) = mpsc::channel::<ClientCommand>(channel_capacity);
         let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
@@ -400,7 +442,19 @@ impl InProcessAppServerClient {
             command_tx,
             event_rx,
             worker_handle,
+            auth_manager: shared_core.auth_manager,
+            thread_manager: shared_core.thread_manager,
         })
+    }
+
+    /// Temporary bootstrap escape hatch for embedders migrating toward RPC-only usage.
+    pub fn auth_manager(&self) -> Arc<AuthManager> {
+        self.auth_manager.clone()
+    }
+
+    /// Temporary bootstrap escape hatch for embedders migrating toward RPC-only usage.
+    pub fn thread_manager(&self) -> Arc<ThreadManager> {
+        self.thread_manager.clone()
     }
 
     /// Sends a typed client request and returns raw JSON-RPC result.
@@ -555,6 +609,8 @@ impl InProcessAppServerClient {
             command_tx,
             event_rx,
             worker_handle,
+            auth_manager: _,
+            thread_manager: _,
         } = self;
         let mut worker_handle = worker_handle;
         // Drop the caller-facing receiver before asking the worker to shut
@@ -606,6 +662,8 @@ mod tests {
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
+    use codex_core::AuthManager;
+    use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
     use tokio::time::Duration;
@@ -703,6 +761,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shared_thread_manager_tracks_threads_started_via_app_server() {
+        let client = start_test_client(SessionSource::Cli).await;
+
+        let response: ThreadStartResponse = client
+            .request_typed(ClientRequest::ThreadStart {
+                request_id: RequestId::Integer(3),
+                params: ThreadStartParams {
+                    ephemeral: Some(true),
+                    ..ThreadStartParams::default()
+                },
+            })
+            .await
+            .expect("thread/start should succeed");
+        let created_thread_id = codex_protocol::ThreadId::from_string(&response.thread.id)
+            .expect("thread id should parse");
+        timeout(
+            Duration::from_secs(2),
+            client.thread_manager().get_thread(created_thread_id),
+        )
+        .await
+        .expect("timed out waiting for retained thread manager to observe started thread")
+        .expect("started thread should be visible through the shared thread manager");
+        let thread_ids = client.thread_manager().list_thread_ids().await;
+        assert!(thread_ids.contains(&created_thread_id));
+
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
     async fn tiny_channel_capacity_still_supports_request_roundtrip() {
         let client = start_test_client_with_capacity(SessionSource::Exec, 1).await;
         let _response: ConfigRequirementsReadResponse = client
@@ -746,6 +833,22 @@ mod tests {
         let (command_tx, _command_rx) = mpsc::channel(1);
         let (event_tx, event_rx) = mpsc::channel(1);
         let worker_handle = tokio::spawn(async {});
+        let config = build_test_config().await;
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            false,
+            config.cli_auth_credentials_store_mode,
+        );
+        let thread_manager = Arc::new(ThreadManager::new(
+            &config,
+            auth_manager.clone(),
+            SessionSource::Exec,
+            CollaborationModesConfig {
+                default_mode_request_user_input: config
+                    .features
+                    .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+            },
+        ));
         event_tx
             .send(InProcessServerEvent::Lagged { skipped: 3 })
             .await
@@ -756,6 +859,8 @@ mod tests {
             command_tx,
             event_rx,
             worker_handle,
+            auth_manager,
+            thread_manager,
         };
 
         let event = timeout(Duration::from_secs(2), client.next_event())
@@ -797,5 +902,31 @@ mod tests {
         assert!(!event_requires_delivery(&InProcessServerEvent::Lagged {
             skipped: 1
         }));
+    }
+
+    #[tokio::test]
+    async fn accessors_expose_retained_shared_managers() {
+        let client = start_test_client(SessionSource::Cli).await;
+
+        assert!(
+            Arc::ptr_eq(&client.auth_manager(), &client.auth_manager()),
+            "auth_manager accessor should clone the retained shared manager"
+        );
+        assert!(
+            Arc::ptr_eq(&client.thread_manager(), &client.thread_manager()),
+            "thread_manager accessor should clone the retained shared manager"
+        );
+
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
+    async fn shutdown_completes_promptly_with_retained_shared_managers() {
+        let client = start_test_client(SessionSource::Cli).await;
+
+        timeout(Duration::from_secs(1), client.shutdown())
+            .await
+            .expect("shutdown should not wait for the 5s fallback timeout")
+            .expect("shutdown should complete");
     }
 }
