@@ -290,12 +290,16 @@ impl RealtimeWebsocketWriter {
     }
 
     pub async fn send_conversation_item_create(&self, text: String) -> Result<(), ApiError> {
+        let content_kind = match self.event_parser {
+            RealtimeEventParser::V1 => "text",
+            RealtimeEventParser::RealtimeV2 => "input_text",
+        };
         self.send_json(RealtimeOutboundMessage::ConversationItemCreate {
             item: ConversationItemPayload::Message(ConversationMessageItem {
                 kind: "message".to_string(),
                 role: "user".to_string(),
                 content: vec![ConversationItemContent {
-                    kind: "text".to_string(),
+                    kind: content_kind.to_string(),
                     text,
                 }],
             }),
@@ -533,6 +537,7 @@ impl RealtimeWebsocketClient {
             self.provider.base_url.as_str(),
             self.provider.query_params.as_ref(),
             config.model.as_deref(),
+            config.event_parser,
             config.session_mode,
         )?;
 
@@ -620,6 +625,7 @@ fn websocket_url_from_api_url(
     api_url: &str,
     query_params: Option<&HashMap<String, String>>,
     model: Option<&str>,
+    event_parser: RealtimeEventParser,
     session_mode: RealtimeSessionMode,
 ) -> Result<Url, ApiError> {
     let mut url = Url::parse(api_url)
@@ -640,13 +646,22 @@ fn websocket_url_from_api_url(
         }
     }
 
-    {
+    let intent = match (event_parser, session_mode) {
+        (RealtimeEventParser::V1, RealtimeSessionMode::Conversational) => Some("quicksilver"),
+        (RealtimeEventParser::V1, RealtimeSessionMode::Transcription) => Some("transcription"),
+        (RealtimeEventParser::RealtimeV2, RealtimeSessionMode::Conversational)
+        | (RealtimeEventParser::RealtimeV2, RealtimeSessionMode::Transcription) => None,
+    };
+    let has_extra_query_params = query_params.is_some_and(|query_params| {
+        query_params
+            .iter()
+            .any(|(key, _)| key != "intent" && !(key == "model" && model.is_some()))
+    });
+    if intent.is_some() || model.is_some() || has_extra_query_params {
         let mut query = url.query_pairs_mut();
-        let intent = match session_mode {
-            RealtimeSessionMode::Conversational => "quicksilver",
-            RealtimeSessionMode::Transcription => "transcription",
-        };
-        query.append_pair("intent", intent);
+        if let Some(intent) = intent {
+            query.append_pair("intent", intent);
+        }
         if let Some(model) = model {
             query.append_pair("model", model);
         }
@@ -931,6 +946,7 @@ mod tests {
             "http://127.0.0.1:8011",
             None,
             None,
+            RealtimeEventParser::V1,
             RealtimeSessionMode::Conversational,
         )
         .expect("build ws url");
@@ -946,6 +962,7 @@ mod tests {
             "wss://example.com",
             None,
             Some("realtime-test-model"),
+            RealtimeEventParser::V1,
             RealtimeSessionMode::Conversational,
         )
         .expect("build ws url");
@@ -961,6 +978,7 @@ mod tests {
             "https://api.openai.com/v1",
             None,
             Some("snapshot"),
+            RealtimeEventParser::V1,
             RealtimeSessionMode::Conversational,
         )
         .expect("build ws url");
@@ -976,6 +994,7 @@ mod tests {
             "https://example.com/openai/v1",
             None,
             Some("snapshot"),
+            RealtimeEventParser::V1,
             RealtimeSessionMode::Conversational,
         )
         .expect("build ws url");
@@ -994,6 +1013,7 @@ mod tests {
                 ("intent".to_string(), "ignored".to_string()),
             ])),
             Some("snapshot"),
+            RealtimeEventParser::V1,
             RealtimeSessionMode::Conversational,
         )
         .expect("build ws url");
@@ -1009,6 +1029,7 @@ mod tests {
             "https://example.com",
             None,
             None,
+            RealtimeEventParser::V1,
             RealtimeSessionMode::Transcription,
         )
         .expect("build ws url");
@@ -1016,6 +1037,38 @@ mod tests {
             url.as_str(),
             "wss://example.com/v1/realtime?intent=transcription"
         );
+    }
+
+    #[test]
+    fn websocket_url_omits_intent_for_realtime_v2_conversational_mode() {
+        let url = websocket_url_from_api_url(
+            "https://example.com/v1/realtime?foo=bar",
+            Some(&HashMap::from([
+                ("trace".to_string(), "1".to_string()),
+                ("intent".to_string(), "ignored".to_string()),
+            ])),
+            Some("snapshot"),
+            RealtimeEventParser::RealtimeV2,
+            RealtimeSessionMode::Conversational,
+        )
+        .expect("build ws url");
+        assert_eq!(
+            url.as_str(),
+            "wss://example.com/v1/realtime?foo=bar&model=snapshot&trace=1"
+        );
+    }
+
+    #[test]
+    fn websocket_url_omits_intent_for_realtime_v2_transcription_mode() {
+        let url = websocket_url_from_api_url(
+            "https://example.com",
+            None,
+            None,
+            RealtimeEventParser::RealtimeV2,
+            RealtimeSessionMode::Transcription,
+        )
+        .expect("build ws url");
+        assert_eq!(url.as_str(), "wss://example.com/v1/realtime");
     }
 
     #[tokio::test]
@@ -1361,14 +1414,36 @@ mod tests {
             assert_eq!(second_json["type"], "conversation.item.create");
             assert_eq!(
                 second_json["item"]["type"],
+                Value::String("message".to_string())
+            );
+            assert_eq!(
+                second_json["item"]["content"][0]["type"],
+                Value::String("input_text".to_string())
+            );
+            assert_eq!(
+                second_json["item"]["content"][0]["text"],
+                Value::String("delegate this".to_string())
+            );
+
+            let third = ws
+                .next()
+                .await
+                .expect("third msg")
+                .expect("third msg ok")
+                .into_text()
+                .expect("text");
+            let third_json: Value = serde_json::from_str(&third).expect("json");
+            assert_eq!(third_json["type"], "conversation.item.create");
+            assert_eq!(
+                third_json["item"]["type"],
                 Value::String("function_call_output".to_string())
             );
             assert_eq!(
-                second_json["item"]["call_id"],
+                third_json["item"]["call_id"],
                 Value::String("call_1".to_string())
             );
             assert_eq!(
-                second_json["item"]["output"],
+                third_json["item"]["output"],
                 Value::String("delegated result".to_string())
             );
         });
@@ -1416,6 +1491,10 @@ mod tests {
             }
         );
 
+        connection
+            .send_conversation_item_create("delegate this".to_string())
+            .await
+            .expect("send text item");
         connection
             .send_conversation_handoff_append("call_1".to_string(), "delegated result".to_string())
             .await
