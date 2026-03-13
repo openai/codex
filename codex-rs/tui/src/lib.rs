@@ -9,7 +9,6 @@ pub use app::AppExitInfo;
 pub use app::ExitReason;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
-use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
@@ -1103,7 +1102,10 @@ fn get_login_status(config: &Config) -> LoginStatus {
         // Reading the OpenAI API key is an async operation because it may need
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
-        match CodexAuth::from_auth_storage(&codex_home, config.cli_auth_credentials_store_mode) {
+        match codex_core::from_auth_storage_with_core_client(
+            &codex_home,
+            config.cli_auth_credentials_store_mode,
+        ) {
             Ok(Some(auth)) => LoginStatus::AuthMode(auth.auth_mode()),
             Ok(None) => LoginStatus::NotAuthenticated,
             Err(err) => {

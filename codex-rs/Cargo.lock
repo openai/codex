@@ -1591,6 +1591,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-auth"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "codex-app-server-protocol",
+ "codex-client",
+ "codex-keyring-store",
+ "codex-otel",
+ "codex-protocol",
+ "keyring",
+ "once_cell",
+ "pretty_assertions",
+ "reqwest",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "codex-backend-client"
 version = "0.0.0"
 dependencies = [
@@ -1833,6 +1861,7 @@ dependencies = [
  "codex-arg0",
  "codex-artifacts",
  "codex-async-utils",
+ "codex-auth",
  "codex-client",
  "codex-config",
  "codex-connectors",
@@ -1840,7 +1869,6 @@ dependencies = [
  "codex-file-search",
  "codex-git",
  "codex-hooks",
- "codex-keyring-store",
  "codex-network-proxy",
  "codex-otel",
  "codex-protocol",
@@ -1876,7 +1904,6 @@ dependencies = [
  "image",
  "indexmap 2.13.0",
  "insta",
- "keyring",
  "landlock",
  "libc",
  "maplit",
@@ -1899,7 +1926,6 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "sha1",
- "sha2",
  "shlex",
  "similar",
  "tempfile",

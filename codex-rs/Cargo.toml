@@ -68,6 +68,7 @@ members = [
     "test-macros",
     "package-manager",
     "artifacts",
+    "auth",
 ]
 resolver = "2"
 
@@ -84,6 +85,7 @@ license = "Apache-2.0"
 # Internal
 app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
+codex-auth = { path = "auth" }
 codex-api = { path = "codex-api" }
 codex-artifacts = { path = "artifacts" }
 codex-package-manager = { path = "package-manager" }
