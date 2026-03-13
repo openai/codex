@@ -432,17 +432,24 @@ async fn exec_windows_sandbox(
     })?;
     let command_path = command.first().cloned();
     let sandbox_level = windows_sandbox_level;
-    let use_elevated = matches!(sandbox_level, WindowsSandboxLevel::Elevated);
+    let proxy_enforced = network.is_some();
+    // Windows firewall enforcement is tied to the logon-user sandbox identities, so
+    // proxy-enforced sessions must use that backend even when the configured mode is
+    // the default restricted-token sandbox.
+    let use_elevated = proxy_enforced || matches!(sandbox_level, WindowsSandboxLevel::Elevated);
     let spawn_res = tokio::task::spawn_blocking(move || {
         if use_elevated {
             run_windows_sandbox_capture_elevated(
-                policy_str.as_str(),
-                &sandbox_cwd,
-                codex_home.as_ref(),
-                command,
-                &cwd,
-                env,
-                timeout_ms,
+                codex_windows_sandbox::ElevatedSandboxCaptureRequest {
+                    policy_json_or_preset: policy_str.as_str(),
+                    sandbox_policy_cwd: &sandbox_cwd,
+                    codex_home: codex_home.as_ref(),
+                    command,
+                    cwd: &cwd,
+                    env_map: env,
+                    timeout_ms,
+                    proxy_enforced,
+                },
             )
         } else {
             run_windows_sandbox_capture(

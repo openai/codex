@@ -51,6 +51,43 @@ impl ReservedListeners {
     }
 }
 
+struct ReservedListenerSet {
+    http_listener: StdTcpListener,
+    socks_listener: Option<StdTcpListener>,
+}
+
+impl ReservedListenerSet {
+    fn new(http_listener: StdTcpListener, socks_listener: Option<StdTcpListener>) -> Self {
+        Self {
+            http_listener,
+            socks_listener,
+        }
+    }
+
+    fn http_addr(&self) -> Result<SocketAddr> {
+        self.http_listener
+            .local_addr()
+            .context("failed to read reserved HTTP proxy address")
+    }
+
+    fn socks_addr(&self, default_addr: SocketAddr) -> Result<SocketAddr> {
+        self.socks_listener
+            .as_ref()
+            .map_or(Ok(default_addr), |listener| {
+                listener
+                    .local_addr()
+                    .context("failed to read reserved SOCKS5 proxy address")
+            })
+    }
+
+    fn into_reserved_listeners(self) -> Arc<ReservedListeners> {
+        Arc::new(ReservedListeners::new(
+            self.http_listener,
+            self.socks_listener,
+        ))
+    }
+}
+
 #[derive(Clone)]
 pub struct NetworkProxyBuilder {
     state: Option<Arc<NetworkProxyState>>,
@@ -134,38 +171,41 @@ impl NetworkProxyBuilder {
             .set_blocked_request_observer(self.blocked_request_observer.clone())
             .await;
         let current_cfg = state.current_cfg().await?;
-        let (requested_http_addr, requested_socks_addr, reserved_listeners) =
-            if self.managed_by_codex {
-                let runtime = config::resolve_runtime(&current_cfg)?;
-                let (http_listener, socks_listener) =
-                    reserve_loopback_ephemeral_listeners(current_cfg.network.enable_socks5)
-                        .context("reserve managed loopback proxy listeners")?;
-                let http_addr = http_listener
-                    .local_addr()
-                    .context("failed to read reserved HTTP proxy address")?;
-                let socks_addr = if let Some(socks_listener) = socks_listener.as_ref() {
-                    socks_listener
-                        .local_addr()
-                        .context("failed to read reserved SOCKS5 proxy address")?
-                } else {
-                    runtime.socks_addr
-                };
-                (
-                    http_addr,
-                    socks_addr,
-                    Some(Arc::new(ReservedListeners::new(
-                        http_listener,
-                        socks_listener,
-                    ))),
-                )
-            } else {
-                let runtime = config::resolve_runtime(&current_cfg)?;
-                (
-                    self.http_addr.unwrap_or(runtime.http_addr),
-                    self.socks_addr.unwrap_or(runtime.socks_addr),
-                    None,
-                )
-            };
+        let (requested_http_addr, requested_socks_addr, reserved_listeners) = if self
+            .managed_by_codex
+        {
+            let runtime = config::resolve_runtime(&current_cfg)?;
+            #[cfg(target_os = "windows")]
+            let (managed_http_addr, managed_socks_addr) = config::clamp_bind_addrs(
+                runtime.http_addr,
+                runtime.socks_addr,
+                &current_cfg.network,
+            );
+            #[cfg(target_os = "windows")]
+            let reserved = reserve_windows_managed_listeners(
+                managed_http_addr,
+                managed_socks_addr,
+                current_cfg.network.enable_socks5,
+            )
+            .context("reserve managed loopback proxy listeners")?;
+            #[cfg(not(target_os = "windows"))]
+            let reserved = reserve_loopback_ephemeral_listeners(current_cfg.network.enable_socks5)
+                .context("reserve managed loopback proxy listeners")?;
+            let http_addr = reserved.http_addr()?;
+            let socks_addr = reserved.socks_addr(runtime.socks_addr)?;
+            (
+                http_addr,
+                socks_addr,
+                Some(reserved.into_reserved_listeners()),
+            )
+        } else {
+            let runtime = config::resolve_runtime(&current_cfg)?;
+            (
+                self.http_addr.unwrap_or(runtime.http_addr),
+                self.socks_addr.unwrap_or(runtime.socks_addr),
+                None,
+            )
+        };
 
         // Reapply bind clamping for caller overrides so unix-socket proxying stays loopback-only.
         let (http_addr, socks_addr) = config::clamp_bind_addrs(
@@ -192,7 +232,7 @@ impl NetworkProxyBuilder {
 
 fn reserve_loopback_ephemeral_listeners(
     reserve_socks_listener: bool,
-) -> Result<(StdTcpListener, Option<StdTcpListener>)> {
+) -> Result<ReservedListenerSet> {
     let http_listener =
         reserve_loopback_ephemeral_listener().context("reserve HTTP proxy listener")?;
     let socks_listener = if reserve_socks_listener {
@@ -200,7 +240,53 @@ fn reserve_loopback_ephemeral_listeners(
     } else {
         None
     };
-    Ok((http_listener, socks_listener))
+    Ok(ReservedListenerSet::new(http_listener, socks_listener))
+}
+
+#[cfg(target_os = "windows")]
+fn reserve_windows_managed_listeners(
+    http_addr: SocketAddr,
+    socks_addr: SocketAddr,
+    reserve_socks_listener: bool,
+) -> Result<ReservedListenerSet> {
+    let http_addr = windows_managed_loopback_addr(http_addr);
+    let socks_addr = windows_managed_loopback_addr(socks_addr);
+
+    match try_reserve_windows_managed_listeners(http_addr, socks_addr, reserve_socks_listener) {
+        Ok(listeners) => Ok(listeners),
+        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
+            warn!("managed Windows proxy ports are busy; falling back to ephemeral loopback ports");
+            reserve_loopback_ephemeral_listeners(reserve_socks_listener)
+                .context("reserve fallback loopback proxy listeners")
+        }
+        Err(err) => Err(err).context("reserve Windows managed proxy listeners"),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn try_reserve_windows_managed_listeners(
+    http_addr: SocketAddr,
+    socks_addr: SocketAddr,
+    reserve_socks_listener: bool,
+) -> std::io::Result<ReservedListenerSet> {
+    let http_listener = StdTcpListener::bind(http_addr)?;
+    let socks_listener = if reserve_socks_listener {
+        Some(StdTcpListener::bind(socks_addr)?)
+    } else {
+        None
+    };
+    Ok(ReservedListenerSet::new(http_listener, socks_listener))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_managed_loopback_addr(addr: SocketAddr) -> SocketAddr {
+    if !addr.ip().is_loopback() {
+        warn!(
+            "managed Windows proxies must bind to loopback; clamping {addr} to 127.0.0.1:{}",
+            addr.port()
+        );
+    }
+    SocketAddr::from(([127, 0, 0, 1], addr.port()))
 }
 
 fn reserve_loopback_ephemeral_listener() -> Result<StdTcpListener> {
@@ -570,10 +656,12 @@ mod tests {
     use std::net::Ipv4Addr;
 
     #[tokio::test]
-    async fn managed_proxy_builder_uses_loopback_ephemeral_ports() {
-        let state = Arc::new(network_proxy_state_for_policy(
-            NetworkProxySettings::default(),
-        ));
+    async fn managed_proxy_builder_uses_loopback_ports() {
+        let state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
+            proxy_url: "http://127.0.0.1:43128".to_string(),
+            socks_url: "http://127.0.0.1:48081".to_string(),
+            ..NetworkProxySettings::default()
+        }));
         let proxy = match NetworkProxy::builder().state(state).build().await {
             Ok(proxy) => proxy,
             Err(err) => {
@@ -589,8 +677,22 @@ mod tests {
 
         assert!(proxy.http_addr.ip().is_loopback());
         assert!(proxy.socks_addr.ip().is_loopback());
-        assert_ne!(proxy.http_addr.port(), 0);
-        assert_ne!(proxy.socks_addr.port(), 0);
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(
+                proxy.http_addr,
+                "127.0.0.1:43128".parse::<SocketAddr>().unwrap()
+            );
+            assert_eq!(
+                proxy.socks_addr,
+                "127.0.0.1:48081".parse::<SocketAddr>().unwrap()
+            );
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert_ne!(proxy.http_addr.port(), 0);
+            assert_ne!(proxy.socks_addr.port(), 0);
+        }
     }
 
     #[tokio::test]
@@ -622,6 +724,7 @@ mod tests {
     async fn managed_proxy_builder_does_not_reserve_socks_listener_when_disabled() {
         let settings = NetworkProxySettings {
             enable_socks5: false,
+            proxy_url: "http://127.0.0.1:43128".to_string(),
             socks_url: "http://127.0.0.1:43129".to_string(),
             ..NetworkProxySettings::default()
         };
@@ -640,6 +743,11 @@ mod tests {
         };
 
         assert!(proxy.http_addr.ip().is_loopback());
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            proxy.http_addr,
+            "127.0.0.1:43128".parse::<SocketAddr>().unwrap()
+        );
         assert_eq!(
             proxy.socks_addr,
             "127.0.0.1:43129".parse::<SocketAddr>().unwrap()
@@ -651,6 +759,47 @@ mod tests {
                 .expect("managed builder should reserve listeners")
                 .take_socks()
                 .is_none()
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_managed_loopback_addr_clamps_non_loopback_inputs() {
+        assert_eq!(
+            windows_managed_loopback_addr("0.0.0.0:3128".parse::<SocketAddr>().unwrap()),
+            "127.0.0.1:3128".parse::<SocketAddr>().unwrap()
+        );
+        assert_eq!(
+            windows_managed_loopback_addr("[::]:8081".parse::<SocketAddr>().unwrap()),
+            "127.0.0.1:8081".parse::<SocketAddr>().unwrap()
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn reserve_windows_managed_listeners_falls_back_when_http_port_is_busy() {
+        let occupied = StdTcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+        let busy_port = occupied.local_addr().unwrap().port();
+
+        let reserved = reserve_windows_managed_listeners(
+            SocketAddr::from(([127, 0, 0, 1], busy_port)),
+            SocketAddr::from(([127, 0, 0, 1], 48081)),
+            false,
+        )
+        .unwrap();
+
+        assert!(reserved.socks_listener.is_none());
+        assert!(
+            reserved
+                .http_listener
+                .local_addr()
+                .unwrap()
+                .ip()
+                .is_loopback()
+        );
+        assert_ne!(
+            reserved.http_listener.local_addr().unwrap().port(),
+            busy_port
         );
     }
 
