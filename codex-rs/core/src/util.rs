@@ -54,6 +54,29 @@ pub(crate) struct FeedbackRequestTags<'a> {
     pub auth_recovery_followup_status: Option<u16>,
 }
 
+struct Auth401FeedbackSnapshot<'a> {
+    request_id: &'a str,
+    cf_ray: &'a str,
+    error: &'a str,
+    error_code: &'a str,
+}
+
+impl<'a> Auth401FeedbackSnapshot<'a> {
+    fn from_optional_fields(
+        request_id: Option<&'a str>,
+        cf_ray: Option<&'a str>,
+        error: Option<&'a str>,
+        error_code: Option<&'a str>,
+    ) -> Self {
+        Self {
+            request_id: request_id.unwrap_or(""),
+            cf_ray: cf_ray.unwrap_or(""),
+            error: error.unwrap_or(""),
+            error_code: error_code.unwrap_or(""),
+        }
+    }
+}
+
 pub(crate) fn emit_feedback_request_tags(tags: &FeedbackRequestTags<'_>) {
     let auth_header_name = tags.auth_header_name.unwrap_or("");
     let auth_mode = tags.auth_mode.unwrap_or("");
@@ -102,18 +125,20 @@ pub(crate) fn emit_feedback_auth_recovery_tags(
     auth_error: Option<&str>,
     auth_error_code: Option<&str>,
 ) {
-    let auth_401_request_id = auth_request_id.unwrap_or("");
-    let auth_401_cf_ray = auth_cf_ray.unwrap_or("");
-    let auth_401_error = auth_error.unwrap_or("");
-    let auth_401_error_code = auth_error_code.unwrap_or("");
+    let auth_401 = Auth401FeedbackSnapshot::from_optional_fields(
+        auth_request_id,
+        auth_cf_ray,
+        auth_error,
+        auth_error_code,
+    );
     feedback_tags!(
         auth_recovery_mode = auth_recovery_mode,
         auth_recovery_phase = auth_recovery_phase,
         auth_recovery_outcome = auth_recovery_outcome,
-        auth_401_request_id = auth_401_request_id,
-        auth_401_cf_ray = auth_401_cf_ray,
-        auth_401_error = auth_401_error,
-        auth_401_error_code = auth_401_error_code
+        auth_401_request_id = auth_401.request_id,
+        auth_401_cf_ray = auth_401.cf_ray,
+        auth_401_error = auth_401.error,
+        auth_401_error_code = auth_401.error_code
     );
 }
 
