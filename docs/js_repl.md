@@ -19,7 +19,17 @@ js_repl = true
 js_repl_tools_only = true
 ```
 
-When enabled, direct model tool calls are restricted to `js_repl` and `js_repl_reset`; other tools remain available via `await codex.tool(...)` inside js_repl.
+When enabled, direct model tool calls are restricted to `js_repl` and `js_repl_reset` (and `js_repl_poll` if polling is enabled). Other tools remain available via `await codex.tool(...)` inside `js_repl`.
+
+`js_repl_polling` can be enabled to allow async/polled execution:
+
+```toml
+[features]
+js_repl = true
+js_repl_polling = true
+```
+
+When enabled, `js_repl` accepts `poll=true` in the first-line pragma and returns both `exec_id` and `session_id`. Reuse polling state by passing `session_id=<id>` in later `js_repl` pragmas. Omit `session_id` to create a new polling session; unknown `session_id` values return an error. Use `js_repl_poll` with `exec_id` until `status` becomes `completed` or `error`.
 
 ## Node runtime
 
@@ -59,6 +69,9 @@ imported local file. They are not resolved relative to the imported file's locat
 - `js_repl` is a freeform tool: send raw JavaScript source text.
 - Optional first-line pragma:
   - `// codex-js-repl: timeout_ms=15000`
+  - `// codex-js-repl: poll=true`
+  - `// codex-js-repl: poll=true session_id=my-session`
+  - Use space-separated pragma arguments.
 - Top-level bindings persist across calls.
 - If a cell throws, prior bindings remain available, lexical bindings whose initialization completed before the throw stay available in later calls, and hoisted `var` / `function` bindings persist only when execution clearly reached their declaration or a supported write site.
 - Supported hoisted-`var` failed-cell cases are direct top-level identifier writes and updates before the declaration (for example `x = 1`, `x += 1`, `x++`, `x &&= 1`) and non-empty top-level `for...in` / `for...of` loops.
@@ -70,6 +83,17 @@ imported local file. They are not resolved relative to the imported file's locat
 - Local file modules reload between execs, so a later `await import("./file.js")` picks up edits and fixed failures. Top-level bindings you already created still persist until `js_repl_reset`.
 - Use `js_repl_reset` to clear the kernel state.
 
+### Polling flow
+
+1. Submit with `js_repl` and `poll=true` pragma.
+2. Read `exec_id` and `session_id` from the JSON response.
+3. Call `js_repl_poll` with `{"exec_id":"...","yield_time_ms":5000}`.
+4. Repeat until `status` is `completed` or `error`. If a poll returns `status: running`, keep polling the same `exec_id` even if the logs or `final_output` already look complete. Completed polls can also include nested multimodal tool output after the JSON status item.
+5. Optional: reuse session state by submitting another polled `js_repl` call with `session_id=<id>` (must already exist). Omit `session_id` to create a new polling session.
+6. Reset one session with `js_repl_reset({"session_id":"..."})`, or reset all kernels with `js_repl_reset({})`.
+
+`timeout_ms` is only supported for non-polling `js_repl` executions. With `poll=true`, use `js_repl_poll.yield_time_ms` to control how long each poll waits before returning. If omitted, or set below `5000`, `js_repl_poll` waits up to 5 seconds before returning if nothing new arrives.
+
 ## Helper APIs inside the kernel
 
 `js_repl` exposes these globals:
@@ -79,7 +103,7 @@ imported local file. They are not resolved relative to the imported file's locat
 - `codex.tmpDir`: per-session scratch directory path.
 - `codex.tool(name, args?)`: executes a normal Codex tool call from inside `js_repl` (including shell tools like `shell` / `shell_command` when available).
 - `codex.emitImage(imageLike)`: explicitly adds one image to the outer `js_repl` function output each time you call it.
-- `codex.tool(...)` and `codex.emitImage(...)` keep stable helper identities across cells. Saved references and persisted objects can reuse them in later cells, but async callbacks that fire after a cell finishes still fail because no exec is active.
+- `codex.tool(...)` and `codex.emitImage(...)` keep stable helper identities across cells. Saved references and persisted objects can reuse them in later cells. In non-polling mode, async callbacks that fire after a cell finishes still fail because no exec is active. In polling mode, async callbacks and timers scheduled during a polled exec keep that exec active until they settle or are cleared.
 - Imported local files run in the same VM context, so they can also access `codex.*`, the captured `console`, and Node-like `import.meta` helpers.
 - Each `codex.tool(...)` call emits a bounded summary at `info` level from the `codex_core::tools::js_repl` logger. At `trace` level, the same path also logs the exact raw response object or error string seen by JavaScript.
 - Nested `codex.tool(...)` outputs stay inside JavaScript unless you emit them explicitly.

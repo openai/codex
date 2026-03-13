@@ -71,7 +71,7 @@ fn platform_native_pty_system() -> Box<dyn portable_pty::PtySystem + Send> {
     }
 }
 
-/// Spawn a process attached to a PTY, returning handles for stdin, split output, and exit.
+/// Spawn a process attached to a PTY, returning handles for stdin, merged output, and exit.
 pub async fn spawn_process(
     program: &str,
     args: &[String],
@@ -98,6 +98,7 @@ pub async fn spawn_process(
     }
 
     let mut child = pair.slave.spawn_command(command_builder)?;
+    let pid = child.process_id();
     #[cfg(unix)]
     // portable-pty establishes the spawned PTY child as a new session leader on
     // Unix, so PID == PGID and we can reuse the pipe backend's process-group
@@ -106,8 +107,7 @@ pub async fn spawn_process(
     let killer = child.clone_killer();
 
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
-    let (stdout_tx, stdout_rx) = mpsc::channel::<Vec<u8>>(128);
-    let (_stderr_tx, stderr_rx) = mpsc::channel::<Vec<u8>>(1);
+    let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(256);
     let mut reader = pair.master.try_clone_reader()?;
     let reader_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 8_192];
@@ -115,7 +115,9 @@ pub async fn spawn_process(
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    let _ = stdout_tx.blocking_send(buf[..n].to_vec());
+                    if output_tx.blocking_send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
                 }
                 Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
@@ -169,6 +171,7 @@ pub async fn spawn_process(
 
     let handle = ProcessHandle::new(
         writer_tx,
+        pid,
         Box::new(PtyChildTerminator {
             killer,
             #[cfg(unix)]
@@ -185,8 +188,7 @@ pub async fn spawn_process(
 
     Ok(SpawnedProcess {
         session: handle,
-        stdout_rx,
-        stderr_rx,
+        output_rx,
         exit_rx,
     })
 }

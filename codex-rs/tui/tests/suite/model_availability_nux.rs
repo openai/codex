@@ -131,11 +131,10 @@ trust_level = "trusted"
     let mut output = Vec::new();
     let codex_utils_pty::SpawnedProcess {
         session,
-        stdout_rx,
-        stderr_rx,
+        output_rx,
         exit_rx,
     } = spawned;
-    let mut output_rx = codex_utils_pty::combine_output_receivers(stdout_rx, stderr_rx);
+    let mut output_rx = output_rx;
     let mut exit_rx = exit_rx;
     let writer_tx = session.writer_sender();
     let interrupt_writer = writer_tx.clone();
@@ -151,14 +150,13 @@ trust_level = "trusted"
         loop {
             select! {
                 result = output_rx.recv() => match result {
-                    Ok(chunk) => {
+                    Some(chunk) => {
                         if chunk.windows(4).any(|window| window == b"\x1b[6n") {
                             let _ = writer_tx.send(b"\x1b[1;1R".to_vec()).await;
                         }
                         output.extend_from_slice(&chunk);
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break exit_rx.await,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    None => break exit_rx.await,
                 },
                 result = &mut exit_rx => break result,
             }

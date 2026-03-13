@@ -3,9 +3,8 @@ use std::path::Path;
 
 use pretty_assertions::assert_eq;
 
-use crate::combine_output_receivers;
 use crate::spawn_pipe_process;
-use crate::spawn_pipe_process_no_stdin;
+use crate::spawn_pipe_process_split;
 use crate::spawn_pty_process;
 use crate::SpawnedProcess;
 use crate::TerminalSize;
@@ -65,6 +64,21 @@ fn split_stdout_stderr_command() -> String {
     }
 }
 
+fn combine_spawned_output(
+    spawned: SpawnedProcess,
+) -> (
+    crate::ProcessHandle,
+    tokio::sync::mpsc::Receiver<Vec<u8>>,
+    tokio::sync::oneshot::Receiver<i32>,
+) {
+    let SpawnedProcess {
+        session,
+        output_rx,
+        exit_rx,
+    } = spawned;
+    (session, output_rx, exit_rx)
+}
+
 async fn collect_split_output(mut output_rx: tokio::sync::mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
     let mut collected = Vec::new();
     while let Some(chunk) = output_rx.recv().await {
@@ -73,28 +87,8 @@ async fn collect_split_output(mut output_rx: tokio::sync::mpsc::Receiver<Vec<u8>
     collected
 }
 
-fn combine_spawned_output(
-    spawned: SpawnedProcess,
-) -> (
-    crate::ProcessHandle,
-    tokio::sync::broadcast::Receiver<Vec<u8>>,
-    tokio::sync::oneshot::Receiver<i32>,
-) {
-    let SpawnedProcess {
-        session,
-        stdout_rx,
-        stderr_rx,
-        exit_rx,
-    } = spawned;
-    (
-        session,
-        combine_output_receivers(stdout_rx, stderr_rx),
-        exit_rx,
-    )
-}
-
 async fn collect_output_until_exit(
-    mut output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
+    mut output_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     exit_rx: tokio::sync::oneshot::Receiver<i32>,
     timeout_ms: u64,
 ) -> (Vec<u8>, i32) {
@@ -105,7 +99,7 @@ async fn collect_output_until_exit(
     loop {
         tokio::select! {
             res = output_rx.recv() => {
-                if let Ok(chunk) = res {
+                if let Some(chunk) = res {
                     collected.extend_from_slice(&chunk);
                 }
             }
@@ -120,9 +114,8 @@ async fn collect_output_until_exit(
                     tokio::time::Instant::now() + tokio::time::Duration::from_millis(max_ms);
                 while tokio::time::Instant::now() < max_deadline {
                     match tokio::time::timeout(quiet, output_rx.recv()).await {
-                        Ok(Ok(chunk)) => collected.extend_from_slice(&chunk),
-                        Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-                        Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
+                        Ok(Some(chunk)) => collected.extend_from_slice(&chunk),
+                        Ok(None) => break,
                         Err(_) => break,
                     }
                 }
@@ -136,7 +129,7 @@ async fn collect_output_until_exit(
 }
 
 async fn wait_for_python_repl_ready(
-    output_rx: &mut tokio::sync::broadcast::Receiver<Vec<u8>>,
+    output_rx: &mut tokio::sync::mpsc::Receiver<Vec<u8>>,
     timeout_ms: u64,
     ready_marker: &str,
 ) -> anyhow::Result<Vec<u8>> {
@@ -147,14 +140,13 @@ async fn wait_for_python_repl_ready(
         let now = tokio::time::Instant::now();
         let remaining = deadline.saturating_duration_since(now);
         match tokio::time::timeout(remaining, output_rx.recv()).await {
-            Ok(Ok(chunk)) => {
+            Ok(Some(chunk)) => {
                 collected.extend_from_slice(&chunk);
                 if String::from_utf8_lossy(&collected).contains(ready_marker) {
                     return Ok(collected);
                 }
             }
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+            Ok(None) => {
                 anyhow::bail!(
                     "PTY output closed while waiting for Python REPL readiness: {:?}",
                     String::from_utf8_lossy(&collected)
@@ -187,7 +179,7 @@ fn process_exists(pid: i32) -> anyhow::Result<bool> {
 
 #[cfg(unix)]
 async fn wait_for_marker_pid(
-    output_rx: &mut tokio::sync::broadcast::Receiver<Vec<u8>>,
+    output_rx: &mut tokio::sync::mpsc::Receiver<Vec<u8>>,
     marker: &str,
     timeout_ms: u64,
 ) -> anyhow::Result<i32> {
@@ -205,7 +197,8 @@ async fn wait_for_marker_pid(
         let remaining = deadline.saturating_duration_since(now);
         let chunk = tokio::time::timeout(remaining, output_rx.recv())
             .await
-            .map_err(|_| anyhow::anyhow!("timeout waiting for PTY output"))??;
+            .map_err(|_| anyhow::anyhow!("timeout waiting for PTY output"))?
+            .ok_or_else(|| anyhow::anyhow!("PTY output closed while waiting for marker"))?;
         collected.extend_from_slice(&chunk);
 
         let text = String::from_utf8_lossy(&collected);
@@ -337,6 +330,112 @@ async fn pipe_process_round_trips_stdin() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipe_process_preserves_initial_output_for_quick_exit() -> anyhow::Result<()> {
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let script = if cfg!(windows) {
+        "echo stdout-line & echo stderr-line 1>&2"
+    } else {
+        "printf 'stdout-line\\n'; printf 'stderr-line\\n' >&2"
+    };
+    let (program, args) = shell_command(script);
+
+    for _ in 0..32 {
+        let spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None).await?;
+        let (output, code) =
+            collect_output_until_exit(spawned.output_rx, spawned.exit_rx, 2_000).await;
+        let text = String::from_utf8_lossy(&output);
+        assert_eq!(code, 0, "expected quick pipe process to exit cleanly");
+        assert!(
+            text.contains("stdout-line"),
+            "expected stdout in merged output: {text:?}"
+        );
+        assert!(
+            text.contains("stderr-line"),
+            "expected stderr in merged output: {text:?}"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipe_process_split_preserves_stdout_and_stderr() -> anyhow::Result<()> {
+    let Some(python) = find_python() else {
+        eprintln!("python not found; skipping pipe_process_split_preserves_stdout_and_stderr");
+        return Ok(());
+    };
+
+    let args = vec![
+        "-u".to_string(),
+        "-c".to_string(),
+        "import sys; print('stdout-line'); sys.stderr.write('stderr-line\\n'); sys.stderr.flush()"
+            .to_string(),
+    ];
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let spawned = spawn_pipe_process_split(&python, &args, Path::new("."), &env_map, &None).await?;
+    let crate::process::SpawnedProcessSplit {
+        output_rx,
+        stdout_rx,
+        stderr_rx,
+        exit_rx,
+        ..
+    } = spawned;
+    let stdout_task = tokio::spawn(async move { collect_split_output(stdout_rx).await });
+    let stderr_task = tokio::spawn(async move { collect_split_output(stderr_rx).await });
+    let merged_task =
+        tokio::spawn(async move { collect_output_until_exit(output_rx, exit_rx, 5_000).await });
+
+    let stdout = stdout_task.await?;
+    let stderr = stderr_task.await?;
+    let (merged, code) = merged_task.await?;
+
+    assert_eq!(code, 0, "expected python -c to exit cleanly");
+    assert_eq!(
+        String::from_utf8_lossy(&stdout).replace("\r\n", "\n"),
+        "stdout-line\n"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&stderr).replace("\r\n", "\n"),
+        "stderr-line\n"
+    );
+    let merged = String::from_utf8_lossy(&merged);
+    assert!(merged.contains("stdout-line"));
+    assert!(merged.contains("stderr-line"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipe_process_split_preserves_initial_merged_output_for_quick_exit() -> anyhow::Result<()> {
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let script = if cfg!(windows) {
+        "echo stdout-line & echo stderr-line 1>&2"
+    } else {
+        "printf 'stdout-line\\n'; printf 'stderr-line\\n' >&2"
+    };
+    let (program, args) = shell_command(script);
+
+    for _ in 0..32 {
+        let spawned =
+            spawn_pipe_process_split(&program, &args, Path::new("."), &env_map, &None).await?;
+        let (output, code) =
+            collect_output_until_exit(spawned.output_rx, spawned.exit_rx, 2_000).await;
+        let text = String::from_utf8_lossy(&output);
+        assert_eq!(code, 0, "expected quick split pipe process to exit cleanly");
+        assert!(
+            text.contains("stdout-line"),
+            "expected stdout in merged output: {text:?}"
+        );
+        assert!(
+            text.contains("stderr-line"),
+            "expected stderr in merged output: {text:?}"
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipe_process_detaches_from_parent_session() -> anyhow::Result<()> {
@@ -351,8 +450,9 @@ async fn pipe_process_detaches_from_parent_session() -> anyhow::Result<()> {
     let spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None).await?;
 
     let (_session, mut output_rx, exit_rx) = combine_spawned_output(spawned);
-    let pid_bytes =
-        tokio::time::timeout(tokio::time::Duration::from_millis(500), output_rx.recv()).await??;
+    let pid_bytes = tokio::time::timeout(tokio::time::Duration::from_millis(500), output_rx.recv())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("expected child pid output before pipe exit"))?;
     let pid_text = String::from_utf8_lossy(&pid_bytes);
     let child_pid: i32 = pid_text
         .split_whitespace()
@@ -447,13 +547,15 @@ async fn pipe_process_can_expose_split_stdout_and_stderr() -> anyhow::Result<()>
     let env_map: HashMap<String, String> = std::env::vars().collect();
     let (program, args) = shell_command(&split_stdout_stderr_command());
     let spawned =
-        spawn_pipe_process_no_stdin(&program, &args, Path::new("."), &env_map, &None).await?;
-    let SpawnedProcess {
-        session: _session,
+        spawn_pipe_process_split(&program, &args, Path::new("."), &env_map, &None).await?;
+    let crate::process::SpawnedProcessSplit {
+        session,
         stdout_rx,
         stderr_rx,
         exit_rx,
+        ..
     } = spawned;
+    session.close_stdin();
 
     let timeout_ms = if cfg!(windows) { 10_000 } else { 2_000 };
     let timeout = tokio::time::Duration::from_millis(timeout_ms);
@@ -497,28 +599,25 @@ async fn pipe_terminate_aborts_detached_readers() -> anyhow::Result<()> {
 
     let env_map: HashMap<String, String> = std::env::vars().collect();
     let script =
-        "setsid sh -c 'i=0; while [ $i -lt 200 ]; do echo tick; sleep 0.01; i=$((i+1)); done' &";
+        "setsid sh -c 'echo ready; sleep 0.3; i=0; while [ $i -lt 200 ]; do echo tick; sleep 0.01; i=$((i+1)); done' &";
     let (program, args) = shell_command(script);
     let spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None).await?;
     let (session, mut output_rx, _exit_rx) = combine_spawned_output(spawned);
 
-    let _ = tokio::time::timeout(tokio::time::Duration::from_millis(500), output_rx.recv())
-        .await
-        .map_err(|_| anyhow::anyhow!("expected detached output before terminate"))??;
+    let ready = tokio::time::timeout(tokio::time::Duration::from_millis(500), output_rx.recv())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("expected detached output before terminate"))?;
+    assert_eq!(ready, b"ready\n".to_vec());
 
     session.terminate();
-    let mut post_rx = output_rx.resubscribe();
 
     let post_terminate =
-        tokio::time::timeout(tokio::time::Duration::from_millis(200), post_rx.recv()).await;
+        tokio::time::timeout(tokio::time::Duration::from_millis(200), output_rx.recv()).await;
 
     match post_terminate {
         Err(_) => Ok(()),
-        Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => Ok(()),
-        Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
-            anyhow::bail!("unexpected output after terminate (lagged)")
-        }
-        Ok(Ok(chunk)) => anyhow::bail!(
+        Ok(None) => Ok(()),
+        Ok(Some(chunk)) => anyhow::bail!(
             "unexpected output after terminate: {:?}",
             String::from_utf8_lossy(&chunk)
         ),

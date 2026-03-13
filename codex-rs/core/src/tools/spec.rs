@@ -227,6 +227,7 @@ pub(crate) struct ToolsConfig {
     pub request_permissions_tool_enabled: bool,
     pub code_mode_enabled: bool,
     pub js_repl_enabled: bool,
+    pub js_repl_polling_enabled: bool,
     pub js_repl_tools_only: bool,
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
@@ -364,6 +365,7 @@ impl ToolsConfig {
             request_permissions_tool_enabled,
             code_mode_enabled: include_code_mode,
             js_repl_enabled: include_js_repl,
+            js_repl_polling_enabled: features.enabled(Feature::JsReplPolling),
             js_repl_tools_only: include_js_repl_tools_only,
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
@@ -2000,16 +2002,59 @@ JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
 }
 
 fn create_js_repl_reset_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "session_id".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional polling session identifier to reset. When omitted, resets the singleton kernel and all polling sessions."
+                    .to_string(),
+            ),
+        },
+    )]);
+
     ToolSpec::Function(ResponsesApiTool {
         name: "js_repl_reset".to_string(),
-        description:
-            "Restarts the js_repl kernel for this run and clears persisted top-level bindings."
-                .to_string(),
+        description: "Resets js_repl state. When `session_id` is omitted, restarts the singleton kernel and clears all polling sessions; when provided, resets only that polling session.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::Object {
-            properties: BTreeMap::new(),
+            properties,
             required: None,
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
+
+fn create_js_repl_poll_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "exec_id".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Identifier returned by a polling js_repl submit call.".to_string(),
+                ),
+            },
+        ),
+        (
+            "yield_time_ms".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "How long to wait for additional logs or completion before returning."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "js_repl_poll".to_string(),
+        description: "Polls a js_repl exec started with `poll=true`, returning incremental logs and terminal `final_output` / `error` once complete.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["exec_id".to_string()]),
             additional_properties: Some(false.into()),
         },
         output_schema: None,
@@ -2441,6 +2486,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
+    use crate::tools::handlers::JsReplPollHandler;
     use crate::tools::handlers::JsReplResetHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
@@ -2482,6 +2528,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let code_mode_handler = Arc::new(CodeModeExecuteHandler);
     let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
     let js_repl_handler = Arc::new(JsReplHandler);
+    let js_repl_poll_handler = Arc::new(JsReplPollHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
     let artifacts_handler = Arc::new(ArtifactsHandler);
     let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
@@ -2619,6 +2666,15 @@ pub(crate) fn build_specs_with_discoverable_tools(
             false,
             config.code_mode_enabled,
         );
+        if config.js_repl_polling_enabled {
+            push_tool_spec(
+                &mut builder,
+                create_js_repl_poll_tool(),
+                false,
+                config.code_mode_enabled,
+            );
+            builder.register_handler("js_repl_poll", js_repl_poll_handler);
+        }
         push_tool_spec(
             &mut builder,
             create_js_repl_reset_tool(),

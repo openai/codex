@@ -28,6 +28,7 @@ use codex_core::sandboxing::ExecRequest;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use codex_utils_pty::ProcessHandle;
 use codex_utils_pty::SpawnedProcess;
+use codex_utils_pty::SpawnedProcessSplit;
 use codex_utils_pty::TerminalSize;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -100,12 +101,17 @@ struct RunCommandParams {
     outgoing: Arc<OutgoingMessageSender>,
     request_id: ConnectionRequestId,
     process_id: Option<String>,
-    spawned: SpawnedProcess,
+    spawned: SpawnedCommand,
     control_rx: mpsc::Receiver<CommandControlRequest>,
     stream_stdin: bool,
     stream_stdout_stderr: bool,
     expiration: ExecExpiration,
     output_bytes_cap: Option<usize>,
+}
+
+enum SpawnedCommand {
+    Merged(SpawnedProcess),
+    Split(SpawnedProcessSplit),
 }
 
 struct SpawnProcessOutputParams {
@@ -270,11 +276,16 @@ impl CommandExecManager {
                 size.unwrap_or_default(),
             )
             .await
-        } else if stream_stdin {
-            codex_utils_pty::spawn_pipe_process(program, args, cwd.as_path(), &env, &arg0).await
+            .map(SpawnedCommand::Merged)
         } else {
-            codex_utils_pty::spawn_pipe_process_no_stdin(program, args, cwd.as_path(), &env, &arg0)
+            codex_utils_pty::spawn_pipe_process_split(program, args, cwd.as_path(), &env, &arg0)
                 .await
+                .map(|spawned| {
+                    if !stream_stdin {
+                        spawned.session.close_stdin();
+                    }
+                    SpawnedCommand::Split(spawned)
+                })
         };
         let spawned = match spawned {
             Ok(spawned) => spawned,
@@ -462,36 +473,58 @@ async fn run_command(params: RunCommandParams) {
         }
     };
     tokio::pin!(expiration);
-    let SpawnedProcess {
-        session,
-        stdout_rx,
-        stderr_rx,
-        exit_rx,
-    } = spawned;
-    tokio::pin!(exit_rx);
     let mut timed_out = false;
     let (stdio_timeout_tx, stdio_timeout_rx) = watch::channel(false);
-
-    let stdout_handle = spawn_process_output(SpawnProcessOutputParams {
-        connection_id: request_id.connection_id,
-        process_id: process_id.clone(),
-        output_rx: stdout_rx,
-        stdio_timeout_rx: stdio_timeout_rx.clone(),
-        outgoing: Arc::clone(&outgoing),
-        stream: CommandExecOutputStream::Stdout,
-        stream_output: stream_stdout_stderr,
-        output_bytes_cap,
-    });
-    let stderr_handle = spawn_process_output(SpawnProcessOutputParams {
-        connection_id: request_id.connection_id,
-        process_id,
-        output_rx: stderr_rx,
-        stdio_timeout_rx,
-        outgoing: Arc::clone(&outgoing),
-        stream: CommandExecOutputStream::Stderr,
-        stream_output: stream_stdout_stderr,
-        output_bytes_cap,
-    });
+    let (session, exit_rx, stdout_handle, stderr_handle) = match spawned {
+        SpawnedCommand::Merged(SpawnedProcess {
+            session,
+            output_rx,
+            exit_rx,
+        }) => {
+            let stdout_handle = spawn_process_output(SpawnProcessOutputParams {
+                connection_id: request_id.connection_id,
+                process_id: process_id.clone(),
+                output_rx,
+                stdio_timeout_rx: stdio_timeout_rx.clone(),
+                outgoing: Arc::clone(&outgoing),
+                stream: CommandExecOutputStream::Stdout,
+                stream_output: stream_stdout_stderr,
+                output_bytes_cap,
+            });
+            let stderr_handle = tokio::spawn(async { String::new() });
+            (session, exit_rx, stdout_handle, stderr_handle)
+        }
+        SpawnedCommand::Split(SpawnedProcessSplit {
+            session,
+            stdout_rx,
+            stderr_rx,
+            exit_rx,
+            ..
+        }) => {
+            let stdout_handle = spawn_process_output(SpawnProcessOutputParams {
+                connection_id: request_id.connection_id,
+                process_id: process_id.clone(),
+                output_rx: stdout_rx,
+                stdio_timeout_rx: stdio_timeout_rx.clone(),
+                outgoing: Arc::clone(&outgoing),
+                stream: CommandExecOutputStream::Stdout,
+                stream_output: stream_stdout_stderr,
+                output_bytes_cap,
+            });
+            let stderr_handle = spawn_process_output(SpawnProcessOutputParams {
+                connection_id: request_id.connection_id,
+                process_id,
+                output_rx: stderr_rx,
+                stdio_timeout_rx,
+                outgoing: Arc::clone(&outgoing),
+                stream: CommandExecOutputStream::Stderr,
+                stream_output: stream_stdout_stderr,
+                output_bytes_cap,
+            });
+            (session, exit_rx, stdout_handle, stderr_handle)
+        }
+    };
+    tokio::pin!(exit_rx);
 
     let exit_code = loop {
         tokio::select! {

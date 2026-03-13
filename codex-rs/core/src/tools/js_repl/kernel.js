@@ -7,6 +7,7 @@ const { AsyncLocalStorage } = require("node:async_hooks");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const { builtinModules, createRequire } = require("node:module");
+const { createInterface } = require("node:readline");
 const { performance } = require("node:perf_hooks");
 const path = require("node:path");
 const { URL, URLSearchParams, fileURLToPath, pathToFileURL } = require(
@@ -60,14 +61,14 @@ if (typeof performance !== "undefined") {
   context.performance = performance;
 }
 context.crypto = crypto.webcrypto ?? crypto;
-context.setTimeout = setTimeout;
-context.clearTimeout = clearTimeout;
-context.setInterval = setInterval;
-context.clearInterval = clearInterval;
+context.setTimeout = setTimeoutWithTracking;
+context.clearTimeout = clearTrackedTimeout;
+context.setInterval = setIntervalWithTracking;
+context.clearInterval = clearTrackedInterval;
 context.queueMicrotask = queueMicrotask;
 if (typeof setImmediate !== "undefined") {
-  context.setImmediate = setImmediate;
-  context.clearImmediate = clearImmediate;
+  context.setImmediate = setImmediateWithTracking;
+  context.clearImmediate = clearTrackedImmediate;
 }
 context.atob = (data) => Buffer.from(data, "base64").toString("binary");
 context.btoa = (data) => Buffer.from(data, "binary").toString("base64");
@@ -128,6 +129,9 @@ const pendingEmitImage = new Map();
 let toolCounter = 0;
 let emitImageCounter = 0;
 const execContextStorage = new AsyncLocalStorage();
+const trackedTimerCancels = new Map();
+const trackedImmediateCancels = new Map();
+const trackedIntervalCancels = new Map();
 const cwd = process.cwd();
 const tmpDir = process.env.CODEX_JS_TMP_DIR || cwd;
 const homeDir = process.env.HOME ?? null;
@@ -1126,10 +1130,163 @@ function sendFatalExecResultSync(kind, error) {
 
 function getCurrentExecState() {
   const execState = execContextStorage.getStore();
-  if (!execState || typeof execState.id !== "string" || !execState.id) {
+  if (
+    !execState ||
+    typeof execState.id !== "string" ||
+    !execState.id ||
+    execState.closed
+  ) {
     throw new Error("js_repl exec context not found");
   }
   return execState;
+}
+
+function trackExecBackgroundTask(
+  execState,
+  operation,
+  observation = { observed: false },
+) {
+  const trackedOperation = Promise.resolve(operation).then(
+    () => ({ ok: true, error: null, observation }),
+    (error) => ({ ok: false, error, observation }),
+  );
+  execState.pendingBackgroundTasks.add(trackedOperation);
+  return trackedOperation;
+}
+
+function clearTrackedHandle(handle, cleanupMap, fallbackClear) {
+  const cancel = cleanupMap.get(handle);
+  if (cancel) {
+    cleanupMap.delete(handle);
+    cancel();
+    return;
+  }
+  fallbackClear(handle);
+}
+
+function scheduleTrackedOneShot(
+  execState,
+  cleanupMap,
+  scheduler,
+  fallbackClear,
+  callback,
+  args,
+) {
+  let handle;
+  let settled = false;
+  const operation = new Promise((resolve, reject) => {
+    const settle = (fn, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanupMap.delete(handle);
+      fn(value);
+    };
+    const wrapped = () => {
+      Promise.resolve()
+        .then(() => callback(...args))
+        .then(
+          () => settle(resolve),
+          (error) => settle(reject, error),
+        );
+    };
+    handle = scheduler(wrapped);
+    cleanupMap.set(handle, () => {
+      fallbackClear(handle);
+      settle(resolve);
+    });
+  });
+  trackExecBackgroundTask(execState, operation);
+  return handle;
+}
+
+function setTimeoutWithTracking(callback, delay, ...args) {
+  const execState = execContextStorage.getStore();
+  if (typeof callback !== "function" || !execState?.trackAsyncCallbacks) {
+    return setTimeout(callback, delay, ...args);
+  }
+  return scheduleTrackedOneShot(
+    execState,
+    trackedTimerCancels,
+    (wrapped) => setTimeout(wrapped, delay),
+    clearTimeout,
+    callback,
+    args,
+  );
+}
+
+function clearTrackedTimeout(handle) {
+  clearTrackedHandle(handle, trackedTimerCancels, clearTimeout);
+}
+
+function setImmediateWithTracking(callback, ...args) {
+  if (typeof setImmediate === "undefined") {
+    throw new Error("setImmediate is not available in this runtime");
+  }
+  const execState = execContextStorage.getStore();
+  if (typeof callback !== "function" || !execState?.trackAsyncCallbacks) {
+    return setImmediate(callback, ...args);
+  }
+  return scheduleTrackedOneShot(
+    execState,
+    trackedImmediateCancels,
+    (wrapped) => setImmediate(wrapped),
+    clearImmediate,
+    callback,
+    args,
+  );
+}
+
+function clearTrackedImmediate(handle) {
+  if (typeof clearImmediate !== "undefined") {
+    clearTrackedHandle(handle, trackedImmediateCancels, clearImmediate);
+  }
+}
+
+function setIntervalWithTracking(callback, delay, ...args) {
+  const execState = execContextStorage.getStore();
+  if (typeof callback !== "function" || !execState?.trackAsyncCallbacks) {
+    return setInterval(callback, delay, ...args);
+  }
+
+  let handle;
+  let settled = false;
+  let rejectOperation;
+  let resolveOperation;
+  const operation = new Promise((resolve, reject) => {
+    resolveOperation = resolve;
+    rejectOperation = reject;
+  });
+  trackExecBackgroundTask(execState, operation);
+
+  const settle = (fn, value) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    trackedIntervalCancels.delete(handle);
+    fn(value);
+  };
+
+  handle = setInterval(() => {
+    Promise.resolve()
+      .then(() => callback(...args))
+      .catch((error) => {
+        clearInterval(handle);
+        settle(rejectOperation, error);
+      });
+  }, delay);
+
+  trackedIntervalCancels.set(handle, () => {
+    clearInterval(handle);
+    settle(resolveOperation);
+  });
+  return handle;
+}
+
+function clearTrackedInterval(handle) {
+  clearTrackedHandle(handle, trackedIntervalCancels, clearInterval);
 }
 
 function scheduleFatalExit(kind, error) {
@@ -1163,29 +1320,40 @@ function formatLog(args) {
     .join(" ");
 }
 
-function withCapturedConsole(ctx, fn) {
-  const logs = [];
+function withCapturedConsole(ctx, onLog, captureLogs, fn) {
+  const logs = captureLogs ? [] : null;
   const original = ctx.console ?? console;
+  function record(line) {
+    if (logs) {
+      logs.push(line);
+    }
+    if (onLog) onLog(line);
+  }
   const captured = {
     ...original,
     log: (...args) => {
-      logs.push(formatLog(args));
+      const line = formatLog(args);
+      record(line);
     },
     info: (...args) => {
-      logs.push(formatLog(args));
+      const line = formatLog(args);
+      record(line);
     },
     warn: (...args) => {
-      logs.push(formatLog(args));
+      const line = formatLog(args);
+      record(line);
     },
     error: (...args) => {
-      logs.push(formatLog(args));
+      const line = formatLog(args);
+      record(line);
     },
     debug: (...args) => {
-      logs.push(formatLog(args));
+      const line = formatLog(args);
+      record(line);
     },
   };
   ctx.console = captured;
-  return fn(logs).finally(() => {
+  return fn(logs ?? []).finally(() => {
     ctx.console = original;
   });
 }
@@ -1219,15 +1387,20 @@ function encodeByteImage(bytes, mimeType, detail) {
 }
 
 function parseImageDetail(detail) {
-  if (detail == null) {
+  if (typeof detail === "undefined") {
     return undefined;
   }
   if (typeof detail !== "string" || !detail) {
     throw new Error("codex.emitImage expected detail to be a non-empty string");
   }
-  if (detail !== "original") {
+  if (
+    detail !== "auto" &&
+    detail !== "low" &&
+    detail !== "high" &&
+    detail !== "original"
+  ) {
     throw new Error(
-      'codex.emitImage only supports detail "original"; omit detail for default behavior',
+      'codex.emitImage expected detail to be one of "auto", "low", "high", or "original"',
     );
   }
   return detail;
@@ -1459,7 +1632,7 @@ const codex = {
       argumentsJson = JSON.stringify(args);
     }
 
-    return new Promise((resolve, reject) => {
+    const operation = new Promise((resolve, reject) => {
       const payload = {
         type: "run_tool",
         id,
@@ -1476,6 +1649,23 @@ const codex = {
         resolve(res.response);
       });
     });
+
+    const observation = { observed: false };
+    trackExecBackgroundTask(execState, operation, observation);
+    return {
+      then(onFulfilled, onRejected) {
+        observation.observed = true;
+        return operation.then(onFulfilled, onRejected);
+      },
+      catch(onRejected) {
+        observation.observed = true;
+        return operation.catch(onRejected);
+      },
+      finally(onFinally) {
+        observation.observed = true;
+        return operation.finally(onFinally);
+      },
+    };
   },
   emitImage(imageLike) {
     let execState;
@@ -1517,11 +1707,7 @@ const codex = {
     })();
 
     const observation = { observed: false };
-    const trackedOperation = operation.then(
-      () => ({ ok: true, error: null, observation }),
-      (error) => ({ ok: false, error, observation }),
-    );
-    execState.pendingBackgroundTasks.add(trackedOperation);
+    trackExecBackgroundTask(execState, operation, observation);
     return {
       then(onFulfilled, onRejected) {
         observation.observed = true;
@@ -1544,6 +1730,8 @@ async function handleExec(message) {
   activeExecId = message.id;
   const execState = {
     id: message.id,
+    closed: false,
+    trackAsyncCallbacks: Boolean(message.stream_logs),
     pendingBackgroundTasks: new Set(),
   };
 
@@ -1568,6 +1756,7 @@ async function handleExec(message) {
 
   try {
     const code = typeof message.code === "string" ? message.code : "";
+    const streamLogs = Boolean(message.stream_logs);
     const builtSource = await buildModuleSource(code);
     const source = builtSource.source;
     currentBindings = builtSource.currentBindings;
@@ -1579,7 +1768,11 @@ async function handleExec(message) {
     context.tmpDir = tmpDir;
 
     await execContextStorage.run(execState, async () => {
-      await withCapturedConsole(context, async (logs) => {
+      await withCapturedConsole(
+        context,
+        streamLogs ? (line) => send({ type: "exec_log", id: message.id, text: line }) : null,
+        !streamLogs,
+        async (logs) => {
         const cellIdentifier = path.join(
           cwd,
           `.codex_js_repl_cell_${cellCounter++}.mjs`,
@@ -1623,10 +1816,14 @@ async function handleExec(message) {
         moduleLinked = true;
 
         await module.evaluate();
-        if (execState.pendingBackgroundTasks.size > 0) {
-          const backgroundResults = await Promise.all([
+        while (execState.pendingBackgroundTasks.size > 0) {
+          const pendingBackgroundTasks = [
             ...execState.pendingBackgroundTasks,
-          ]);
+          ];
+          const backgroundResults = await Promise.all(pendingBackgroundTasks);
+          for (const task of pendingBackgroundTasks) {
+            execState.pendingBackgroundTasks.delete(task);
+          }
           const firstUnhandledBackgroundError = backgroundResults.find(
             (result) => !result.ok && !result.observation.observed,
           );
@@ -1635,7 +1832,8 @@ async function handleExec(message) {
           }
         }
         output = logs.join("\n");
-      });
+        },
+      );
     });
 
     previousModule = module;
@@ -1680,6 +1878,7 @@ async function handleExec(message) {
       error: error && error.message ? error.message : String(error),
     });
   } finally {
+    execState.closed = true;
     if (activeExecId === message.id) {
       activeExecId = null;
     }
@@ -1703,7 +1902,6 @@ function handleEmitImageResult(message) {
 }
 
 let queue = Promise.resolve();
-let pendingInputSegments = [];
 
 process.on("uncaughtException", (error) => {
   scheduleFatalExit("uncaught exception", error);
@@ -1713,7 +1911,8 @@ process.on("unhandledRejection", (reason) => {
   scheduleFatalExit("unhandled rejection", reason);
 });
 
-function handleInputLine(line) {
+const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
+input.on("line", (line) => {
   if (!line.trim()) {
     return;
   }
@@ -1736,49 +1935,4 @@ function handleInputLine(line) {
   if (message.type === "emit_image_result") {
     handleEmitImageResult(message);
   }
-}
-
-function takePendingInputFrame() {
-  if (pendingInputSegments.length === 0) {
-    return null;
-  }
-
-  // Keep raw stdin chunks queued until a full JSONL frame is ready so we only
-  // assemble the frame bytes once.
-  const frame =
-    pendingInputSegments.length === 1
-      ? pendingInputSegments[0]
-      : Buffer.concat(pendingInputSegments);
-  pendingInputSegments = [];
-  return frame;
-}
-
-function handleInputFrame(frame) {
-  if (!frame) {
-    return;
-  }
-
-  if (frame[frame.length - 1] === 0x0d) {
-    frame = frame.subarray(0, frame.length - 1);
-  }
-  handleInputLine(frame.toString("utf8"));
-}
-
-process.stdin.on("data", (chunk) => {
-  const input = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-  let segmentStart = 0;
-  let frameEnd = input.indexOf(0x0a);
-  while (frameEnd !== -1) {
-    pendingInputSegments.push(input.subarray(segmentStart, frameEnd));
-    handleInputFrame(takePendingInputFrame());
-    segmentStart = frameEnd + 1;
-    frameEnd = input.indexOf(0x0a, segmentStart);
-  }
-  if (segmentStart < input.length) {
-    pendingInputSegments.push(input.subarray(segmentStart));
-  }
-});
-
-process.stdin.on("end", () => {
-  handleInputFrame(takePendingInputFrame());
 });

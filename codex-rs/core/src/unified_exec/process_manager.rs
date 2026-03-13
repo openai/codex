@@ -33,6 +33,7 @@ use crate::unified_exec::MAX_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::MAX_YIELD_TIME_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::unified_exec::MIN_YIELD_TIME_MS;
+use crate::unified_exec::ManagedSplitProcess;
 use crate::unified_exec::ProcessEntry;
 use crate::unified_exec::ProcessStore;
 use crate::unified_exec::UnifiedExecContext;
@@ -46,6 +47,7 @@ use crate::unified_exec::async_watcher::start_streaming_output;
 use crate::unified_exec::clamp_yield_time;
 use crate::unified_exec::generate_chunk_id;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
+use crate::unified_exec::process::NoopSpawnLifecycle;
 use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
@@ -100,6 +102,17 @@ struct PreparedProcessHandles {
     command: Vec<String>,
     process_id: i32,
     tty: bool,
+}
+
+#[derive(Clone, Copy)]
+enum ExecEnvSpawnMode {
+    Merged { tty: bool },
+    SplitPipe,
+}
+
+enum SpawnedExecEnvProcess {
+    Merged(codex_utils_pty::SpawnedPty),
+    Split(codex_utils_pty::SpawnedProcessSplit),
 }
 
 impl UnifiedExecProcessManager {
@@ -533,13 +546,63 @@ impl UnifiedExecProcessManager {
         tty: bool,
         mut spawn_lifecycle: SpawnLifecycleHandle,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
+        match Self::spawn_exec_env_process(env, ExecEnvSpawnMode::Merged { tty }).await? {
+            SpawnedExecEnvProcess::Merged(spawned) => {
+                spawn_lifecycle.after_spawn();
+                UnifiedExecProcess::from_spawned(spawned, env.sandbox, spawn_lifecycle).await
+            }
+            SpawnedExecEnvProcess::Split(_) => {
+                unreachable!("merged spawn mode returned split process")
+            }
+        }
+    }
+
+    pub(crate) async fn open_split_pipe_session_with_exec_env(
+        &self,
+        env: &ExecRequest,
+    ) -> Result<ManagedSplitProcess, UnifiedExecError> {
+        match Self::spawn_exec_env_process(env, ExecEnvSpawnMode::SplitPipe).await? {
+            SpawnedExecEnvProcess::Merged(_) => {
+                unreachable!("split pipe spawn mode returned merged process")
+            }
+            SpawnedExecEnvProcess::Split(spawned) => {
+                let codex_utils_pty::SpawnedProcessSplit {
+                    session: process_handle,
+                    output_rx,
+                    stdout_rx,
+                    stderr_rx,
+                    exit_rx,
+                } = spawned;
+                let stdin = process_handle.writer_sender();
+                let process = UnifiedExecProcess::from_process_parts(
+                    process_handle,
+                    output_rx,
+                    exit_rx,
+                    env.sandbox,
+                    Box::new(NoopSpawnLifecycle),
+                )
+                .await?;
+                Ok(ManagedSplitProcess {
+                    process,
+                    stdin,
+                    stdout_rx,
+                    stderr_rx,
+                })
+            }
+        }
+    }
+
+    async fn spawn_exec_env_process(
+        env: &ExecRequest,
+        mode: ExecEnvSpawnMode,
+    ) -> Result<SpawnedExecEnvProcess, UnifiedExecError> {
         let (program, args) = env
             .command
             .split_first()
             .ok_or(UnifiedExecError::MissingCommandLine)?;
 
-        let spawn_result = if tty {
-            codex_utils_pty::pty::spawn_process(
+        let spawn_result = match mode {
+            ExecEnvSpawnMode::Merged { tty: true } => codex_utils_pty::pty::spawn_process(
                 program,
                 args,
                 env.cwd.as_path(),
@@ -548,8 +611,19 @@ impl UnifiedExecProcessManager {
                 codex_utils_pty::TerminalSize::default(),
             )
             .await
-        } else {
-            codex_utils_pty::pipe::spawn_process_no_stdin(
+            .map(SpawnedExecEnvProcess::Merged),
+            ExecEnvSpawnMode::Merged { tty: false } => {
+                codex_utils_pty::pipe::spawn_process_no_stdin(
+                    program,
+                    args,
+                    env.cwd.as_path(),
+                    &env.env,
+                    &env.arg0,
+                )
+                .await
+                .map(SpawnedExecEnvProcess::Merged)
+            }
+            ExecEnvSpawnMode::SplitPipe => codex_utils_pty::pipe::spawn_process_split(
                 program,
                 args,
                 env.cwd.as_path(),
@@ -557,11 +631,10 @@ impl UnifiedExecProcessManager {
                 &env.arg0,
             )
             .await
+            .map(SpawnedExecEnvProcess::Split),
         };
-        let spawned =
-            spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-        spawn_lifecycle.after_spawn();
-        UnifiedExecProcess::from_spawned(spawned, env.sandbox, spawn_lifecycle).await
+
+        spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))
     }
 
     pub(super) async fn open_session_with_sandbox(

@@ -87,6 +87,8 @@ pub enum Feature {
     JsRepl,
     /// Enable a minimal JavaScript mode backed by Node's built-in vm runtime.
     CodeMode,
+    /// Enable js_repl polling helpers and tool.
+    JsReplPolling,
     /// Only expose js_repl tools directly to the model.
     JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
@@ -555,6 +557,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CodeMode,
         key: "code_mode",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::JsReplPolling,
+        key: "js_repl_polling",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

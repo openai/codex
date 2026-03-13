@@ -26,6 +26,7 @@ use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
+use crate::tools::sandboxing::has_managed_network_requirements;
 use codex_otel::ToolDecisionSource;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
@@ -166,38 +167,13 @@ impl ToolOrchestrator {
         }
 
         // 2) First attempt under the selected sandbox.
-        let has_managed_network_requirements = turn_ctx
-            .config
-            .config_layer_stack
-            .requirements_toml()
-            .network
-            .is_some();
-        let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
-            SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
-            SandboxOverride::NoOverride => self.sandbox.select_initial(
-                &turn_ctx.file_system_sandbox_policy,
-                turn_ctx.network_sandbox_policy,
-                tool.sandbox_preference(),
-                turn_ctx.windows_sandbox_level,
-                has_managed_network_requirements,
-            ),
-        };
-
-        // Platform-specific flag gating is handled by SandboxManager::select_initial
-        // via crate::safety::get_platform_sandbox(..).
-        let use_legacy_landlock = turn_ctx.features.use_legacy_landlock();
-        let initial_attempt = SandboxAttempt {
-            sandbox: initial_sandbox,
-            policy: &turn_ctx.sandbox_policy,
-            file_system_policy: &turn_ctx.file_system_sandbox_policy,
-            network_policy: turn_ctx.network_sandbox_policy,
-            enforce_managed_network: has_managed_network_requirements,
-            manager: &self.sandbox,
-            sandbox_cwd: &turn_ctx.cwd,
-            codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
-            use_legacy_landlock,
-            windows_sandbox_level: turn_ctx.windows_sandbox_level,
-        };
+        let has_managed_network_requirements = has_managed_network_requirements(turn_ctx);
+        let initial_attempt = SandboxAttempt::initial_for_turn(
+            &self.sandbox,
+            turn_ctx,
+            tool.sandbox_preference(),
+            tool.sandbox_mode_for_first_attempt(req),
+        );
 
         let (first_result, first_deferred_network_approval) = Self::run_attempt(
             tool,
@@ -308,18 +284,12 @@ impl ToolOrchestrator {
                     }
                 }
 
-                let escalated_attempt = SandboxAttempt {
-                    sandbox: crate::exec::SandboxType::None,
-                    policy: &turn_ctx.sandbox_policy,
-                    file_system_policy: &turn_ctx.file_system_sandbox_policy,
-                    network_policy: turn_ctx.network_sandbox_policy,
-                    enforce_managed_network: has_managed_network_requirements,
-                    manager: &self.sandbox,
-                    sandbox_cwd: &turn_ctx.cwd,
-                    codex_linux_sandbox_exe: None,
-                    use_legacy_landlock,
-                    windows_sandbox_level: turn_ctx.windows_sandbox_level,
-                };
+                let escalated_attempt = SandboxAttempt::initial_for_turn(
+                    &self.sandbox,
+                    turn_ctx,
+                    tool.sandbox_preference(),
+                    SandboxOverride::BypassSandboxFirstAttempt,
+                );
 
                 // Second attempt.
                 let (retry_result, retry_deferred_network_approval) = Self::run_attempt(

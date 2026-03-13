@@ -159,7 +159,6 @@ impl ExecApprovalRequirement {
     }
 }
 
-/// - Never, OnFailure: do not ask
 /// - OnRequest: ask unless filesystem access is unrestricted
 /// - Granular: ask unless filesystem access is unrestricted, but auto-reject
 ///   when granular sandbox approval is disabled.
@@ -234,7 +233,7 @@ pub(crate) trait Approvable<Req> {
 
     // In most cases (shell, unified_exec), a request will have a single approval key.
     //
-    // However, apply_patch needs session "Allow, don't ask again" semantics that
+    // However, apply_patch needs session "approve once, don't ask again" semantics that
     // apply to multiple atomic targets (e.g., apply_patch approves per file path). Returning
     // a list of keys lets the runtime treat the request as approved-for-session only if
     // *all* keys are already approved, while still caching approvals per-key so future
@@ -325,7 +324,7 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
 pub(crate) struct SandboxAttempt<'a> {
     pub sandbox: crate::exec::SandboxType,
     pub policy: &'a crate::protocol::SandboxPolicy,
-    pub file_system_policy: &'a FileSystemSandboxPolicy,
+    pub file_system_policy: FileSystemSandboxPolicy,
     pub network_policy: NetworkSandboxPolicy,
     pub enforce_managed_network: bool,
     pub(crate) manager: &'a SandboxManager,
@@ -335,8 +334,52 @@ pub(crate) struct SandboxAttempt<'a> {
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
 }
 
+pub(crate) fn has_managed_network_requirements(turn_ctx: &TurnContext) -> bool {
+    turn_ctx
+        .config
+        .config_layer_stack
+        .requirements_toml()
+        .network
+        .is_some()
+}
+
 impl<'a> SandboxAttempt<'a> {
-    pub fn env_for(
+    pub(crate) fn initial_for_turn(
+        manager: &'a SandboxManager,
+        turn_ctx: &'a TurnContext,
+        preference: SandboxablePreference,
+        sandbox_override: SandboxOverride,
+    ) -> Self {
+        let enforce_managed_network = has_managed_network_requirements(turn_ctx);
+        let policy = turn_ctx.sandbox_policy.get();
+        let file_system_policy = FileSystemSandboxPolicy::from(policy);
+        let network_policy = NetworkSandboxPolicy::from(policy);
+        let sandbox = match sandbox_override {
+            SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
+            SandboxOverride::NoOverride => manager.select_initial(
+                &file_system_policy,
+                network_policy,
+                preference,
+                turn_ctx.windows_sandbox_level,
+                enforce_managed_network,
+            ),
+        };
+
+        Self {
+            sandbox,
+            policy,
+            file_system_policy,
+            network_policy,
+            enforce_managed_network,
+            manager,
+            sandbox_cwd: &turn_ctx.cwd,
+            codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
+            use_legacy_landlock: false,
+            windows_sandbox_level: turn_ctx.windows_sandbox_level,
+        }
+    }
+
+    pub(crate) fn env_for(
         &self,
         spec: CommandSpec,
         network: Option<&NetworkProxy>,
@@ -345,7 +388,7 @@ impl<'a> SandboxAttempt<'a> {
             .transform(crate::sandboxing::SandboxTransformRequest {
                 spec,
                 policy: self.policy,
-                file_system_policy: self.file_system_policy,
+                file_system_policy: &self.file_system_policy,
                 network_policy: self.network_policy,
                 sandbox: self.sandbox,
                 enforce_managed_network: self.enforce_managed_network,
@@ -361,5 +404,116 @@ impl<'a> SandboxAttempt<'a> {
 }
 
 #[cfg(test)]
-#[path = "sandboxing_tests.rs"]
-mod tests;
+mod tests {
+    use super::*;
+    use crate::sandboxing::SandboxPermissions;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::protocol::GranularApprovalConfig;
+    use codex_protocol::protocol::NetworkAccess;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn external_sandbox_skips_exec_approval_on_request() {
+        assert_eq!(
+            default_exec_approval_requirement(
+                AskForApproval::OnRequest,
+                &FileSystemSandboxPolicy::from(&SandboxPolicy::ExternalSandbox {
+                    network_access: NetworkAccess::Restricted,
+                }),
+            ),
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[test]
+    fn restricted_sandbox_requires_exec_approval_on_request() {
+        assert_eq!(
+            default_exec_approval_requirement(
+                AskForApproval::OnRequest,
+                &FileSystemSandboxPolicy::from(&SandboxPolicy::new_read_only_policy())
+            ),
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[test]
+    fn default_exec_approval_requirement_rejects_sandbox_prompt_when_configured() {
+        let policy = AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: false,
+            rules: false,
+            skill_approval: true,
+            request_permissions: false,
+            mcp_elicitations: false,
+        });
+
+        let requirement = default_exec_approval_requirement(
+            policy,
+            &FileSystemSandboxPolicy::from(&SandboxPolicy::new_read_only_policy()),
+        );
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Forbidden {
+                reason: "approval policy disallowed sandbox approval prompt".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn default_exec_approval_requirement_keeps_prompt_when_sandbox_rejection_is_disabled() {
+        let policy = AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: false,
+            request_permissions: false,
+            mcp_elicitations: true,
+        });
+
+        let requirement = default_exec_approval_requirement(
+            policy,
+            &FileSystemSandboxPolicy::from(&SandboxPolicy::new_read_only_policy()),
+        );
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+    }
+
+    #[test]
+    fn additional_permissions_allow_bypass_sandbox_first_attempt_when_execpolicy_skips() {
+        assert_eq!(
+            sandbox_override_for_first_attempt(
+                SandboxPermissions::WithAdditionalPermissions,
+                &ExecApprovalRequirement::Skip {
+                    bypass_sandbox: true,
+                    proposed_execpolicy_amendment: None,
+                },
+            ),
+            SandboxOverride::BypassSandboxFirstAttempt
+        );
+    }
+
+    #[test]
+    fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
+        assert_eq!(
+            sandbox_override_for_first_attempt(
+                SandboxPermissions::RequireEscalated,
+                &ExecApprovalRequirement::Skip {
+                    bypass_sandbox: false,
+                    proposed_execpolicy_amendment: None,
+                },
+            ),
+            SandboxOverride::BypassSandboxFirstAttempt
+        );
+    }
+}
