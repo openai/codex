@@ -61,7 +61,6 @@ use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
-use codex_core::find_thread_name_by_id;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::git_info::local_git_branches;
@@ -310,6 +309,7 @@ const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const FAST_STATUS_MODEL: &str = "gpt-5.4";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] =
     ["model-with-reasoning", "context-remaining", "current-dir"];
+const BTW_RENAME_DISABLED_MESSAGE: &str = "BTW threads are ephemeral and cannot be renamed.";
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -471,6 +471,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) frame_requester: FrameRequester,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) initial_user_message: Option<UserMessage>,
+    pub(crate) forked_from_label_override: Option<String>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
@@ -619,7 +620,9 @@ pub(crate) struct ChatWidget {
     suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
+    thread_rename_enabled: bool,
     forked_from: Option<ThreadId>,
+    forked_from_label_override: Option<String>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -1319,48 +1322,28 @@ impl ChatWidget {
         }
     }
 
-    fn emit_forked_thread_event(&self, forked_from_id: ThreadId) {
-        let app_event_tx = self.app_event_tx.clone();
-        let codex_home = self.config.codex_home.clone();
-        tokio::spawn(async move {
-            let forked_from_id_text = forked_from_id.to_string();
-            let send_name_and_id = |name: String| {
-                let line: Line<'static> = vec![
-                    "• ".dim(),
-                    "Thread forked from ".into(),
-                    name.cyan(),
-                    " (".into(),
-                    forked_from_id_text.clone().cyan(),
-                    ")".into(),
-                ]
-                .into();
-                app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    PlainHistoryCell::new(vec![line]),
-                )));
-            };
-            let send_id_only = || {
-                let line: Line<'static> = vec![
-                    "• ".dim(),
-                    "Thread forked from ".into(),
-                    forked_from_id_text.clone().cyan(),
-                ]
-                .into();
-                app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    PlainHistoryCell::new(vec![line]),
-                )));
-            };
-
-            match find_thread_name_by_id(&codex_home, &forked_from_id).await {
-                Ok(Some(name)) if !name.trim().is_empty() => {
-                    send_name_and_id(name);
-                }
-                Ok(_) => send_id_only(),
-                Err(err) => {
-                    tracing::warn!("Failed to read forked thread name: {err}");
-                    send_id_only();
-                }
-            }
-        });
+    fn emit_forked_thread_event(&mut self, forked_from_id: ThreadId) {
+        let line: Line<'static> = if let Some(label) = self.forked_from_label_override.take() {
+            vec![
+                "• ".dim(),
+                "Thread forked from ".into(),
+                label.cyan(),
+                " (".into(),
+                forked_from_id.to_string().cyan(),
+                ")".into(),
+            ]
+            .into()
+        } else {
+            vec![
+                "• ".dim(),
+                "Thread forked from ".into(),
+                forked_from_id.to_string().cyan(),
+            ]
+            .into()
+        };
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            PlainHistoryCell::new(vec![line]),
+        )));
     }
 
     fn on_thread_name_updated(&mut self, event: codex_protocol::protocol::ThreadNameUpdatedEvent) {
@@ -3175,6 +3158,7 @@ impl ChatWidget {
             frame_requester,
             app_event_tx,
             initial_user_message,
+            forked_from_label_override,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -3279,7 +3263,9 @@ impl ChatWidget {
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
+            thread_rename_enabled: true,
             forked_from: None,
+            forked_from_label_override,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
@@ -3361,6 +3347,7 @@ impl ChatWidget {
             frame_requester,
             app_event_tx,
             initial_user_message,
+            forked_from_label_override,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -3464,7 +3451,9 @@ impl ChatWidget {
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
+            thread_rename_enabled: true,
             forked_from: None,
+            forked_from_label_override,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
             plan_delta_buffer: String::new(),
@@ -3538,6 +3527,7 @@ impl ChatWidget {
             frame_requester,
             app_event_tx,
             initial_user_message,
+            forked_from_label_override,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -3641,7 +3631,9 @@ impl ChatWidget {
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
+            thread_rename_enabled: true,
             forked_from: None,
+            forked_from_label_override,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
@@ -3923,6 +3915,10 @@ impl ChatWidget {
         self.bottom_pane.set_footer_hint_override(items);
     }
 
+    pub(crate) fn set_thread_rename_enabled(&mut self, enabled: bool) {
+        self.thread_rename_enabled = enabled;
+    }
+
     pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
         self.bottom_pane.show_selection_view(params);
         self.request_redraw();
@@ -4006,6 +4002,10 @@ impl ChatWidget {
                 self.open_review_popup();
             }
             SlashCommand::Rename => {
+                if !self.thread_rename_enabled {
+                    self.add_error_message(BTW_RENAME_DISABLED_MESSAGE.to_string());
+                    return;
+                }
                 self.session_telemetry
                     .counter("codex.thread.rename", 1, &[]);
                 self.show_rename_prompt();
@@ -4063,6 +4063,9 @@ impl ChatWidget {
                     return;
                 }
                 self.open_collaboration_modes_popup();
+            }
+            SlashCommand::Btw => {
+                self.add_error_message("Usage: /btw <question>".to_string());
             }
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
@@ -4323,6 +4326,10 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
+                if !self.thread_rename_enabled {
+                    self.add_error_message(BTW_RENAME_DISABLED_MESSAGE.to_string());
+                    return;
+                }
                 self.session_telemetry
                     .counter("codex.thread.rename", 1, &[]);
                 let Some((prepared_args, _prepared_elements)) =
@@ -4371,6 +4378,34 @@ impl ChatWidget {
                     self.queue_user_message(user_message);
                 }
             }
+            SlashCommand::Btw if !trimmed.is_empty() => {
+                let Some(parent_thread_id) = self.thread_id else {
+                    self.add_error_message(
+                        "BTW is unavailable before the session starts.".to_string(),
+                    );
+                    return;
+                };
+                let Some((prepared_args, prepared_elements)) =
+                    self.bottom_pane.prepare_inline_args_submission(true)
+                else {
+                    return;
+                };
+                let local_images = self
+                    .bottom_pane
+                    .take_recent_submission_images_with_placeholders();
+                let remote_image_urls = self.take_remote_image_urls();
+                let user_message = UserMessage {
+                    text: prepared_args,
+                    local_images,
+                    remote_image_urls,
+                    text_elements: prepared_elements,
+                    mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
+                };
+                self.app_event_tx.send(AppEvent::StartBtw {
+                    parent_thread_id,
+                    user_message,
+                });
+            }
             SlashCommand::Review if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) =
                     self.bottom_pane.prepare_inline_args_submission(false)
@@ -4404,6 +4439,10 @@ impl ChatWidget {
     }
 
     fn show_rename_prompt(&mut self) {
+        if !self.thread_rename_enabled {
+            self.add_error_message(BTW_RENAME_DISABLED_MESSAGE.to_string());
+            return;
+        }
         let tx = self.app_event_tx.clone();
         let has_name = self
             .thread_name
@@ -4498,16 +4537,41 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        let _ =
+            self.submit_user_message_for_current_thread_with_collaboration_mode(user_message, None);
+    }
+
+    pub(crate) fn submit_user_message_for_current_thread_with_developer_instructions(
+        &mut self,
+        user_message: UserMessage,
+        developer_instructions: String,
+    ) -> Option<Op> {
+        let collaboration_mode = Some(self.effective_collaboration_mode().with_updates(
+            None,
+            None,
+            Some(Some(developer_instructions)),
+        ));
+        self.submit_user_message_for_current_thread_with_collaboration_mode(
+            user_message,
+            collaboration_mode,
+        )
+    }
+
+    fn submit_user_message_for_current_thread_with_collaboration_mode(
+        &mut self,
+        user_message: UserMessage,
+        collaboration_mode_override: Option<CollaborationMode>,
+    ) -> Option<Op> {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
             self.refresh_pending_input_preview();
-            return;
+            return None;
         }
         if self.is_review_mode {
             self.queued_user_messages.push_back(user_message);
             self.refresh_pending_input_preview();
-            return;
+            return None;
         }
 
         let UserMessage {
@@ -4518,7 +4582,7 @@ impl ChatWidget {
             mention_bindings,
         } = user_message;
         if text.is_empty() && local_images.is_empty() && remote_image_urls.is_empty() {
-            return;
+            return None;
         }
         if (!local_images.is_empty() || !remote_image_urls.is_empty())
             && !self.current_model_supports_images()
@@ -4530,7 +4594,7 @@ impl ChatWidget {
                 mention_bindings,
                 remote_image_urls,
             );
-            return;
+            return None;
         }
 
         let render_in_history = !self.agent_turn_running;
@@ -4546,12 +4610,12 @@ impl ChatWidget {
                         Some(USER_SHELL_COMMAND_HELP_HINT.to_string()),
                     ),
                 )));
-                return;
+                return None;
             }
             self.submit_op(Op::RunUserShellCommand {
                 command: cmd.to_string(),
             });
-            return;
+            return None;
         }
 
         for image_url in &remote_image_urls {
@@ -4680,13 +4744,15 @@ impl ChatWidget {
         }
 
         let effective_mode = self.effective_collaboration_mode();
-        let collaboration_mode = if self.collaboration_modes_enabled() {
-            self.active_collaboration_mask
-                .as_ref()
-                .map(|_| effective_mode.clone())
-        } else {
-            None
-        };
+        let collaboration_mode = collaboration_mode_override.or_else(|| {
+            if self.collaboration_modes_enabled() {
+                self.active_collaboration_mask
+                    .as_ref()
+                    .map(|_| effective_mode.clone())
+            } else {
+                None
+            }
+        });
         let pending_steer = (!render_in_history).then(|| PendingSteer {
             user_message: UserMessage {
                 text: text.clone(),
@@ -4717,8 +4783,9 @@ impl ChatWidget {
             personality,
         };
 
+        let submitted_op = op.clone();
         if !self.submit_op(op) {
-            return;
+            return None;
         }
 
         // Persist the text to cross-session message history.
@@ -4780,6 +4847,7 @@ impl ChatWidget {
         }
 
         self.needs_final_message_separator = false;
+        Some(submitted_op)
     }
 
     /// Restore the blocked submission draft without losing mention resolution state.

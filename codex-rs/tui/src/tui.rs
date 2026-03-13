@@ -286,6 +286,36 @@ impl Tui {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_test() -> Self {
+        let terminal = CustomTerminal::with_test_options(
+            CrosstermBackend::new(stdout()),
+            ratatui::layout::Size {
+                width: 80,
+                height: 24,
+            },
+            ratatui::layout::Position { x: 0, y: 0 },
+        );
+        let (draw_tx, _) = broadcast::channel(1);
+        let frame_requester = FrameRequester::new(draw_tx.clone());
+
+        Self {
+            frame_requester,
+            draw_tx,
+            event_broker: Arc::new(EventBroker::new()),
+            terminal,
+            pending_history_lines: vec![],
+            alt_saved_viewport: None,
+            #[cfg(unix)]
+            suspend_context: SuspendContext::new(),
+            alt_screen_active: Arc::new(AtomicBool::new(false)),
+            terminal_focused: Arc::new(AtomicBool::new(true)),
+            enhanced_keys_supported: false,
+            notification_backend: None,
+            alt_screen_enabled: true,
+        }
+    }
+
     /// Set whether alternate screen is enabled. When false, enter_alt_screen() becomes a no-op.
     pub fn set_alt_screen_enabled(&mut self, enabled: bool) {
         self.alt_screen_enabled = enabled;
