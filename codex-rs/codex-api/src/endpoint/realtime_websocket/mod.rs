@@ -12,3 +12,4 @@ pub use methods::RealtimeWebsocketEvents;
 pub use methods::RealtimeWebsocketWriter;
 pub use protocol::RealtimeEventParser;
 pub use protocol::RealtimeSessionConfig;
+pub use protocol::RealtimeSessionMode;

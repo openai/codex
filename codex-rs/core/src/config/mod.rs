@@ -463,6 +463,9 @@ pub struct Config {
     /// Experimental / do not use. Selects the realtime websocket model/snapshot
     /// used for the `Op::RealtimeConversation` connection.
     pub experimental_realtime_ws_model: Option<String>,
+    /// Experimental / do not use. Selects the realtime websocket intent mode.
+    /// `dial_in` is conversational while `transcription` is transcript-only.
+    pub experimental_realtime_ws_mode: RealtimeWsMode,
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport instructions (the `Op::RealtimeConversation`
     /// `/ws` session.update instructions) without changing normal prompts.
@@ -1238,6 +1241,9 @@ pub struct ConfigToml {
     /// Experimental / do not use. Selects the realtime websocket model/snapshot
     /// used for the `Op::RealtimeConversation` connection.
     pub experimental_realtime_ws_model: Option<String>,
+    /// Experimental / do not use. Selects the realtime websocket intent mode.
+    /// `dial_in` is conversational while `transcription` is transcript-only.
+    pub experimental_realtime_ws_mode: Option<RealtimeWsMode>,
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport instructions (the `Op::RealtimeConversation`
     /// `/ws` session.update instructions) without changing normal prompts.
@@ -1381,6 +1387,14 @@ impl ProjectConfig {
 pub struct RealtimeAudioConfig {
     pub microphone: Option<String>,
     pub speaker: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RealtimeWsMode {
+    #[default]
+    DialIn,
+    Transcription,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -2462,6 +2476,7 @@ impl Config {
                 }),
             experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
             experimental_realtime_ws_model: cfg.experimental_realtime_ws_model,
+            experimental_realtime_ws_mode: cfg.experimental_realtime_ws_mode.unwrap_or_default(),
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
             experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,

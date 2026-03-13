@@ -1342,6 +1342,13 @@
       },
       "type": "object"
     },
+    "RealtimeWsMode": {
+      "enum": [
+        "dial_in",
+        "transcription"
+      ],
+      "type": "string"
+    },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
       "enum": [
@@ -1815,6 +1822,14 @@
     "experimental_realtime_ws_base_url": {
       "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport base URL (the `Op::RealtimeConversation` `/v1/realtime` connection) without changing normal provider HTTP requests.",
       "type": "string"
+    },
+    "experimental_realtime_ws_mode": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RealtimeWsMode"
+        }
+      ],
+      "description": "Experimental / do not use. Selects the realtime websocket intent mode. `dial_in` is conversational while `transcription` is transcript-only."
     },
     "experimental_realtime_ws_model": {
       "description": "Experimental / do not use. Selects the realtime websocket model/snapshot used for the `Op::RealtimeConversation` connection.",
