@@ -15,6 +15,7 @@ use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::Event;
+use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_approval_presets::ApprovalPreset;
 
@@ -135,6 +136,11 @@ pub(crate) enum AppEvent {
     ConnectorsLoaded {
         result: Result<ConnectorsSnapshot, String>,
         is_final: bool,
+    },
+
+    /// Result of an app-server-proxied `skills/list` request.
+    SkillsListLoaded {
+        result: Result<ListSkillsResponseEvent, String>,
     },
 
     /// Result of computing a `/diff` command.
