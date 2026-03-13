@@ -53,8 +53,8 @@ fn split_qualified_tool_name_returns_server_and_tool() {
 
 #[test]
 fn split_qualified_tool_name_rejects_invalid_names() {
-    assert_eq!(split_qualified_tool_name("other__alpha__do_thing"));
-    assert_eq!(split_qualified_tool_name("mcp__alpha__"));
+    assert_eq!(split_qualified_tool_name("other__alpha__do_thing"), None);
+    assert_eq!(split_qualified_tool_name("mcp__alpha__"), None);
 }
 
 #[test]
@@ -312,11 +312,8 @@ async fn effective_mcp_servers_include_plugins_without_overriding_user_config() 
         .set(configured_servers)
         .expect("test config should accept MCP servers");
 
-    let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(
-        config.codex_home.clone(),
-        None,
-    )));
-    let effective = mcp_manager.effective_servers(&config);
+    let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
+    let effective = mcp_manager.effective_servers(&config, None);
 
     let sample = effective.get("sample").expect("user server should exist");
     let docs = effective.get("docs").expect("plugin server should exist");

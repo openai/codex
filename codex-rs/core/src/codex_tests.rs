@@ -527,7 +527,7 @@ fn non_app_mcp_tools_remain_visible_without_search_selection() {
         ),
         (
             "mcp__rmcp__echo".to_string(),
-            make_mcp_tool("rmcp", "echo", None),
+            make_mcp_tool("rmcp", "echo", None, None),
         ),
     ]);
 
@@ -575,7 +575,7 @@ fn search_tool_selection_keeps_codex_apps_tools_without_mentions() {
         ),
         (
             "mcp__rmcp__echo".to_string(),
-            make_mcp_tool("rmcp", "echo", None),
+            make_mcp_tool("rmcp", "echo", None, None),
         ),
     ]);
 
@@ -625,7 +625,7 @@ fn apps_mentions_add_codex_apps_tools_to_search_selected_set() {
         ),
         (
             "mcp__rmcp__echo".to_string(),
-            make_mcp_tool("rmcp", "echo", None),
+            make_mcp_tool("rmcp", "echo", None, None),
         ),
     ]);
 
@@ -735,7 +735,7 @@ async fn record_initial_history_new_defers_initial_context_until_first_turn() {
     let history = session.clone_history().await;
     assert_eq!(history.raw_items().to_vec(), Vec::<ResponseItem>::new());
     assert!(session.reference_context_item().await.is_none());
-    assert_eq!(session.previous_turn_settings().await);
+    assert_eq!(session.previous_turn_settings().await, None);
 }
 
 #[tokio::test]
@@ -1041,7 +1041,7 @@ async fn thread_rollback_drops_last_turn_from_history() {
 
     let history = sess.clone_history().await;
     assert_eq!(expected, history.raw_items());
-    assert_eq!(sess.previous_turn_settings().await);
+    assert_eq!(sess.previous_turn_settings().await, None);
     assert!(sess.reference_context_item().await.is_none());
 
     let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
@@ -2227,7 +2227,7 @@ async fn notify_request_permissions_response_ignores_unmatched_call_id() {
         )
         .await;
 
-    assert_eq!(session.granted_turn_permissions().await);
+    assert_eq!(session.granted_turn_permissions().await, None);
 }
 
 #[tokio::test]
@@ -2949,7 +2949,7 @@ async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_task
     .await;
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
-    assert_eq!(sess.previous_turn_settings().await);
+    assert_eq!(sess.previous_turn_settings().await, None);
 }
 
 #[tokio::test]
@@ -3223,7 +3223,7 @@ async fn handle_output_item_done_records_image_save_message_after_successful_sav
         tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
         cancellation_token: CancellationToken::new(),
     };
-    handle_output_item_done(&mut ctx, item.clone())
+    handle_output_item_done(&mut ctx, item.clone(), None)
         .await
         .expect("image generation item should succeed");
 
@@ -3260,7 +3260,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
         tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
         cancellation_token: CancellationToken::new(),
     };
-    handle_output_item_done(&mut ctx, item.clone())
+    handle_output_item_done(&mut ctx, item.clone(), None)
         .await
         .expect("image generation item should still complete");
 
@@ -3355,7 +3355,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
         state.set_reference_context_item(None);
     }
     session
-        .replace_history(vec![compacted_summary.clone()])
+        .replace_history(vec![compacted_summary.clone()], None)
         .await;
 
     session
@@ -3708,7 +3708,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
     .await
     .expect("inject pending input into active turn");
 
-    sess.on_task_finished(Arc::clone(&tc)).await;
+    sess.on_task_finished(Arc::clone(&tc), None).await;
 
     let history = sess.clone_history().await;
     let expected = ResponseItem::Message {
@@ -3800,7 +3800,7 @@ async fn steer_input_requires_active_turn() {
     }];
 
     let err = sess
-        .steer_input(input)
+        .steer_input(input, None)
         .await
         .expect_err("steering without active turn should fail");
 

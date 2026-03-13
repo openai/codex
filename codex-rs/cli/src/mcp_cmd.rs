@@ -387,7 +387,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         .await
         .context("failed to load configuration")?;
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
-    let mcp_servers = mcp_manager.effective_servers(&config);
+    let mcp_servers = mcp_manager.effective_servers(&config, None);
 
     let LoginArgs { name, scopes } = login_args;
 
@@ -438,7 +438,7 @@ async fn run_logout(config_overrides: &CliConfigOverrides, logout_args: LogoutAr
         .await
         .context("failed to load configuration")?;
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
-    let mcp_servers = mcp_manager.effective_servers(&config);
+    let mcp_servers = mcp_manager.effective_servers(&config, None);
 
     let LogoutArgs { name } = logout_args;
 
@@ -468,7 +468,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         .await
         .context("failed to load configuration")?;
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
-    let mcp_servers = mcp_manager.effective_servers(&config);
+    let mcp_servers = mcp_manager.effective_servers(&config, None);
 
     let mut entries: Vec<_> = mcp_servers.iter().collect();
     entries.sort_by(|(a, _), (b, _)| a.cmp(b));
@@ -717,7 +717,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
         .await
         .context("failed to load configuration")?;
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
-    let mcp_servers = mcp_manager.effective_servers(&config);
+    let mcp_servers = mcp_manager.effective_servers(&config, None);
 
     let Some(server) = mcp_servers.get(&get_args.name) else {
         bail!("No MCP server named '{name}' found.", name = get_args.name);

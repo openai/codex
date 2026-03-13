@@ -1701,7 +1701,7 @@ impl ChatWidget {
                         collaboration_mode: mask.clone(),
                     });
                 })];
-                (actions)
+                (actions, None)
             }
             None => (Vec::new(), Some("Default mode unavailable".to_string())),
         };
@@ -1778,7 +1778,7 @@ impl ChatWidget {
         match info {
             Some(info) => self.apply_token_info(info),
             None => {
-                self.bottom_pane.set_context_window(None);
+                self.bottom_pane.set_context_window(None, None);
                 self.token_info = None;
             }
         }
@@ -1832,7 +1832,7 @@ impl ChatWidget {
             match saved {
                 Some(info) => self.apply_token_info(info),
                 None => {
-                    self.bottom_pane.set_context_window(None);
+                    self.bottom_pane.set_context_window(None, None);
                     self.token_info = None;
                 }
             }
@@ -2599,7 +2599,7 @@ impl ChatWidget {
             message.push_str(": ");
             message.push_str(&status_message);
         }
-        self.add_to_history(history_cell::new_info_event(message));
+        self.add_to_history(history_cell::new_info_event(message, None));
         self.request_redraw();
     }
 
@@ -2641,7 +2641,7 @@ impl ChatWidget {
             }
         });
         if success {
-            self.add_info_message(message);
+            self.add_info_message(message, None);
         } else {
             self.add_error_message(message);
         }
@@ -3992,7 +3992,7 @@ impl ChatWidget {
                     let message = format!(
                         "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
                     );
-                    self.add_info_message(message);
+                    self.add_info_message(message, None);
                     return;
                 }
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
@@ -4051,7 +4051,7 @@ impl ChatWidget {
                 if let Some(mask) = collaboration_modes::plan_mask(self.models_manager.as_ref()) {
                     self.set_collaboration_mask(mask);
                 } else {
-                    self.add_info_message("Plan mode unavailable right now.".to_string());
+                    self.add_info_message("Plan mode unavailable right now.".to_string(), None);
                 }
             }
             SlashCommand::Collab => {
@@ -4234,7 +4234,7 @@ impl ChatWidget {
                         None,
                     );
                 } else {
-                    self.add_info_message("Rollout path is not available yet.".to_string());
+                    self.add_info_message("Rollout path is not available yet.".to_string(), None);
                 }
             }
             SlashCommand::TestApproval => {
@@ -4315,7 +4315,7 @@ impl ChatWidget {
                         } else {
                             "off"
                         };
-                        self.add_info_message(format!("Fast mode is {status}."));
+                        self.add_info_message(format!("Fast mode is {status}."), None);
                     }
                     _ => {
                         self.add_error_message("Usage: /fast [on|off|status]".to_string());
@@ -4832,7 +4832,7 @@ impl ChatWidget {
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
-        self.dispatch_event_msg(Some(id), msg);
+        self.dispatch_event_msg(Some(id), msg, None);
     }
 
     pub(crate) fn handle_codex_event_replay(&mut self, event: Event) {
@@ -5436,7 +5436,7 @@ impl ChatWidget {
         self.status_line_project_root().map(|root| {
             root.file_name()
                 .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| format_directory_display(&root))
+                .unwrap_or_else(|| format_directory_display(&root, None))
         })
     }
 
@@ -5494,7 +5494,9 @@ impl ChatWidget {
                 };
                 Some(format!("{} {label}{fast_label}", self.model_display_name()))
             }
-            StatusLineItem::CurrentDir => Some(format_directory_display(self.status_line_cwd())),
+            StatusLineItem::CurrentDir => {
+                Some(format_directory_display(self.status_line_cwd(), None))
+            }
             StatusLineItem::ProjectRoot => self.status_line_project_root_name(),
             StatusLineItem::GitBranch => self.status_line_branch.clone(),
             StatusLineItem::UsedTokens => {
@@ -5628,7 +5630,7 @@ impl ChatWidget {
 
     fn clean_background_terminals(&mut self) {
         self.submit_op(Op::CleanBackgroundTerminals);
-        self.add_info_message("Stopping all background terminals.".to_string());
+        self.add_info_message("Stopping all background terminals.".to_string(), None);
     }
 
     fn stop_rate_limit_poller(&mut self) {
@@ -6849,7 +6851,7 @@ impl ChatWidget {
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
             tx.send(AppEvent::InsertHistoryCell(Box::new(
-                history_cell::new_info_event(format!("Permissions updated to {label}")),
+                history_cell::new_info_event(format!("Permissions updated to {label}"), None),
             )));
         })]
     }
@@ -6977,7 +6979,7 @@ impl ChatWidget {
     ) {
         let (approval, sandbox) = match &preset {
             Some(p) => (Some(p.approval), Some(p.sandbox.clone())),
-            None => (None),
+            None => (None, None),
         };
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
         let describe_policy = |policy: &SandboxPolicy| match policy {
@@ -7320,7 +7322,7 @@ impl ChatWidget {
 
     #[cfg(target_os = "windows")]
     pub(crate) fn clear_windows_sandbox_setup_status(&mut self) {
-        self.bottom_pane.set_composer_input_enabled(true);
+        self.bottom_pane.set_composer_input_enabled(true, None);
         self.bottom_pane.hide_status_indicator();
         self.request_redraw();
     }
@@ -7452,9 +7454,9 @@ impl ChatWidget {
 
     /// Set the reasoning effort in the stored collaboration mode.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        self.current_collaboration_mode = self
-            .current_collaboration_mode
-            .with_updates(None, Some(effort));
+        self.current_collaboration_mode =
+            self.current_collaboration_mode
+                .with_updates(None, Some(effort), None);
         if self.collaboration_modes_enabled()
             && let Some(mask) = self.active_collaboration_mask.as_mut()
             && mask.mode != Some(ModeKind::Plan)
@@ -7515,9 +7517,9 @@ impl ChatWidget {
 
     /// Set the model in the widget's config copy and stored collaboration mode.
     pub(crate) fn set_model(&mut self, model: &str) {
-        self.current_collaboration_mode = self
-            .current_collaboration_mode
-            .with_updates(Some(model.to_string()), None);
+        self.current_collaboration_mode =
+            self.current_collaboration_mode
+                .with_updates(Some(model.to_string()), None, None);
         if self.collaboration_modes_enabled()
             && let Some(mask) = self.active_collaboration_mask.as_mut()
         {
@@ -7800,7 +7802,7 @@ impl ChatWidget {
             message.push_str(" for ");
             message.push_str(next_mode.display_name());
             message.push_str(" mode.");
-            self.add_info_message(message);
+            self.add_info_message(message, None);
         }
         self.request_redraw();
     }
@@ -7908,7 +7910,7 @@ impl ChatWidget {
         let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(
             self.config.codex_home.clone(),
         )));
-        if mcp_manager.effective_servers(&self.config).is_empty() {
+        if mcp_manager.effective_servers(&self.config, None).is_empty() {
             self.add_to_history(history_cell::empty_mcp_output());
         } else {
             self.submit_op(Op::ListMcpTools);
@@ -7932,7 +7934,7 @@ impl ChatWidget {
         match connectors_cache {
             ConnectorsCacheState::Ready(snapshot) => {
                 if snapshot.connectors.is_empty() {
-                    self.add_info_message("No apps available.".to_string());
+                    self.add_info_message("No apps available.".to_string(), None);
                 } else {
                     self.open_connectors_popup(&snapshot.connectors);
                 }
@@ -7959,7 +7961,7 @@ impl ChatWidget {
 
     fn open_connectors_popup(&mut self, connectors: &[connectors::AppInfo]) {
         self.bottom_pane
-            .show_selection_view(self.connectors_popup_params(connectors));
+            .show_selection_view(self.connectors_popup_params(connectors, None));
     }
 
     fn connectors_loading_popup_params(&self) -> SelectionViewParams {
@@ -8054,7 +8056,7 @@ impl ChatWidget {
                 let missing_label_for_action = missing_label.clone();
                 item.actions = vec![Box::new(move |tx| {
                     tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_info_event(missing_label_for_action.clone()),
+                        history_cell::new_info_event(missing_label_for_action.clone(), None),
                     )));
                 })];
                 item.dismiss_on_select = true;
@@ -8841,7 +8843,7 @@ impl Notification {
                 summary,
             } => match (*question_count, summary.as_deref()) {
                 (1, Some(summary)) => format!("Question requested: {summary}"),
-                (1) => "Question requested".to_string(),
+                (1, None) => "Question requested".to_string(),
                 (count, _) => format!("Questions requested: {count}"),
             },
         }
