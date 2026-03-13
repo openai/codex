@@ -24,6 +24,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use walkdir::WalkDir;
 
 #[derive(Clone, Default)]
 pub(crate) struct FsApi;
@@ -192,25 +193,36 @@ impl FsApi {
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {
-    std::fs::create_dir_all(target)?;
-    for entry in std::fs::read_dir(source)? {
-        let entry = entry?;
-        let source_path = entry.path();
-        let target_path = target.join(entry.file_name());
-        let file_type = entry.file_type()?;
+    for entry in WalkDir::new(source) {
+        let entry = entry.map_err(|err| {
+            if let Some(io_err) = err.io_error() {
+                io::Error::new(io_err.kind(), io_err.to_string())
+            } else {
+                io::Error::other(err.to_string())
+            }
+        })?;
+        let relative_path = entry.path().strip_prefix(source).map_err(|err| {
+            io::Error::other(format!(
+                "failed to compute relative path for {} under {}: {err}",
+                entry.path().display(),
+                source.display()
+            ))
+        })?;
+        let target_path = target.join(relative_path);
+        let file_type = entry.file_type();
 
         if file_type.is_dir() {
-            copy_dir_recursive(&source_path, &target_path)?;
+            std::fs::create_dir_all(&target_path)?;
             continue;
         }
 
         if file_type.is_file() {
-            std::fs::copy(&source_path, &target_path)?;
+            std::fs::copy(entry.path(), &target_path)?;
             continue;
         }
 
         if file_type.is_symlink() {
-            copy_symlink(&source_path, &target_path)?;
+            copy_symlink(entry.path(), &target_path)?;
             continue;
         }
 
