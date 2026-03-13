@@ -55,7 +55,6 @@ pub(crate) struct FeedbackRequestTags<'a> {
 }
 
 pub(crate) fn emit_feedback_request_tags(tags: &FeedbackRequestTags<'_>) {
-    let preserve_401_context_only = tags.auth_retry_after_unauthorized == Some(true);
     let auth_header_name = tags.auth_header_name.unwrap_or("");
     let auth_mode = tags.auth_mode.unwrap_or("");
     let auth_retry_after_unauthorized = tags
@@ -66,18 +65,10 @@ pub(crate) fn emit_feedback_request_tags(tags: &FeedbackRequestTags<'_>) {
     let auth_connection_reused = tags
         .auth_connection_reused
         .map_or_else(String::new, |value| value.to_string());
-    let auth_request_id = (!preserve_401_context_only)
-        .then_some(tags.auth_request_id.unwrap_or(""))
-        .unwrap_or("");
-    let auth_cf_ray = (!preserve_401_context_only)
-        .then_some(tags.auth_cf_ray.unwrap_or(""))
-        .unwrap_or("");
-    let auth_error = (!preserve_401_context_only)
-        .then_some(tags.auth_error.unwrap_or(""))
-        .unwrap_or("");
-    let auth_error_code = (!preserve_401_context_only)
-        .then_some(tags.auth_error_code.unwrap_or(""))
-        .unwrap_or("");
+    let auth_request_id = tags.auth_request_id.unwrap_or("");
+    let auth_cf_ray = tags.auth_cf_ray.unwrap_or("");
+    let auth_error = tags.auth_error.unwrap_or("");
+    let auth_error_code = tags.auth_error_code.unwrap_or("");
     let auth_recovery_followup_success = tags
         .auth_recovery_followup_success
         .map_or_else(String::new, |value| value.to_string());

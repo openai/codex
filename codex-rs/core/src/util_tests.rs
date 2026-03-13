@@ -178,7 +178,7 @@ fn emit_feedback_auth_recovery_tags_preserves_401_specific_fields() {
 }
 
 #[test]
-fn emit_feedback_request_tags_skips_duplicate_latest_auth_fields_after_unauthorized() {
+fn emit_feedback_request_tags_preserves_latest_auth_fields_after_unauthorized() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
     let _guard = tracing_subscriber::registry()
         .with(TagCollectorLayer { tags: tags.clone() })
@@ -204,13 +204,19 @@ fn emit_feedback_request_tags_skips_duplicate_latest_auth_fields_after_unauthori
     let tags = tags.lock().unwrap().clone();
     assert_eq!(
         tags.get("auth_request_id").map(String::as_str),
-        Some("\"\"")
+        Some("\"req-123\"")
     );
-    assert_eq!(tags.get("auth_cf_ray").map(String::as_str), Some("\"\""));
-    assert_eq!(tags.get("auth_error").map(String::as_str), Some("\"\""));
+    assert_eq!(
+        tags.get("auth_cf_ray").map(String::as_str),
+        Some("\"ray-123\"")
+    );
+    assert_eq!(
+        tags.get("auth_error").map(String::as_str),
+        Some("\"missing_authorization_header\"")
+    );
     assert_eq!(
         tags.get("auth_error_code").map(String::as_str),
-        Some("\"\"")
+        Some("\"token_expired\"")
     );
     assert_eq!(
         tags.get("auth_recovery_followup_success")
