@@ -305,7 +305,7 @@ pub(crate) async fn handle_start(
     let event_parser = if config.features.enabled(Feature::RealtimeConversationV2) {
         RealtimeEventParser::RealtimeV2
     } else {
-        RealtimeEventParser::Legacy
+        RealtimeEventParser::V1
     };
 
     let requested_session_id = params

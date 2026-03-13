@@ -632,7 +632,7 @@ mod tests {
         .to_string();
 
         assert_eq!(
-            parse_realtime_event(payload.as_str(), RealtimeEventParser::Legacy),
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::V1),
             Some(RealtimeEvent::SessionUpdated {
                 session_id: "sess_123".to_string(),
                 instructions: Some("backend prompt".to_string()),
@@ -651,7 +651,7 @@ mod tests {
         })
         .to_string();
         assert_eq!(
-            parse_realtime_event(payload.as_str(), RealtimeEventParser::Legacy),
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::V1),
             Some(RealtimeEvent::AudioOut(RealtimeAudioFrame {
                 data: "AAA=".to_string(),
                 sample_rate: 48000,
@@ -669,7 +669,7 @@ mod tests {
         })
         .to_string();
         assert_eq!(
-            parse_realtime_event(payload.as_str(), RealtimeEventParser::Legacy),
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::V1),
             Some(RealtimeEvent::ConversationItemAdded(
                 json!({"type": "message", "seq": 7})
             ))
@@ -684,7 +684,7 @@ mod tests {
         })
         .to_string();
         assert_eq!(
-            parse_realtime_event(payload.as_str(), RealtimeEventParser::Legacy),
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::V1),
             Some(RealtimeEvent::ConversationItemDone {
                 item_id: "item_123".to_string(),
             })
@@ -702,7 +702,7 @@ mod tests {
         .to_string();
 
         assert_eq!(
-            parse_realtime_event(payload.as_str(), RealtimeEventParser::Legacy),
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::V1),
             Some(RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
                 handoff_id: "handoff_123".to_string(),
                 item_id: "item_123".to_string(),
@@ -721,7 +721,7 @@ mod tests {
         .to_string();
 
         assert_eq!(
-            parse_realtime_event(payload.as_str(), RealtimeEventParser::Legacy),
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::V1),
             Some(RealtimeEvent::InputTranscriptDelta(
                 RealtimeTranscriptDelta {
                     delta: "hello ".to_string(),
@@ -739,7 +739,7 @@ mod tests {
         .to_string();
 
         assert_eq!(
-            parse_realtime_event(payload.as_str(), RealtimeEventParser::Legacy),
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::V1),
             Some(RealtimeEvent::OutputTranscriptDelta(
                 RealtimeTranscriptDelta {
                     delta: "hi".to_string(),
@@ -1066,7 +1066,7 @@ mod tests {
                     instructions: "backend prompt".to_string(),
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
-                    event_parser: RealtimeEventParser::Legacy,
+                    event_parser: RealtimeEventParser::V1,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -1249,7 +1249,7 @@ mod tests {
                     instructions: "backend prompt".to_string(),
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
-                    event_parser: RealtimeEventParser::Legacy,
+                    event_parser: RealtimeEventParser::V1,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),

@@ -10,7 +10,7 @@ use tracing::debug;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RealtimeEventParser {
-    Legacy,
+    V1,
     RealtimeV2,
 }
 
@@ -89,12 +89,12 @@ pub(super) fn parse_realtime_event(
     event_parser: RealtimeEventParser,
 ) -> Option<RealtimeEvent> {
     match event_parser {
-        RealtimeEventParser::Legacy => parse_realtime_event_legacy(payload),
+        RealtimeEventParser::V1 => parse_realtime_event_v1(payload),
         RealtimeEventParser::RealtimeV2 => parse_realtime_event_v2(payload),
     }
 }
 
-fn parse_realtime_event_legacy(payload: &str) -> Option<RealtimeEvent> {
+fn parse_realtime_event_v1(payload: &str) -> Option<RealtimeEvent> {
     let parsed: Value = match serde_json::from_str(payload) {
         Ok(msg) => msg,
         Err(err) => {
