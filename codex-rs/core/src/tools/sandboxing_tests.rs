@@ -1,7 +1,7 @@
 use super::*;
 use crate::sandboxing::SandboxPermissions;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::NetworkAccess;
-use codex_protocol::protocol::RejectConfig;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -37,13 +37,13 @@ fn restricted_sandbox_requires_exec_approval_on_request() {
 }
 
 #[test]
-fn default_exec_approval_requirement_rejects_sandbox_prompt_when_configured() {
-    let policy = AskForApproval::Reject(RejectConfig {
-        sandbox_approval: true,
-        rules: false,
-        skill_approval: false,
-        request_permissions: false,
-        mcp_elicitations: false,
+fn default_exec_approval_requirement_rejects_sandbox_prompt_when_granular_disables_it() {
+    let policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: false,
+        rules: true,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: true,
     });
 
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
@@ -53,19 +53,19 @@ fn default_exec_approval_requirement_rejects_sandbox_prompt_when_configured() {
     assert_eq!(
         requirement,
         ExecApprovalRequirement::Forbidden {
-            reason: "approval policy rejected sandbox approval prompt".to_string(),
+            reason: "approval policy disallowed sandbox approval prompt".to_string(),
         }
     );
 }
 
 #[test]
-fn default_exec_approval_requirement_keeps_prompt_when_sandbox_rejection_is_disabled() {
-    let policy = AskForApproval::Reject(RejectConfig {
-        sandbox_approval: false,
-        rules: true,
-        skill_approval: false,
-        request_permissions: false,
-        mcp_elicitations: true,
+fn default_exec_approval_requirement_keeps_prompt_when_granular_allows_sandbox_approval() {
+    let policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: true,
+        rules: false,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: false,
     });
 
     let sandbox_policy = SandboxPolicy::new_read_only_policy();

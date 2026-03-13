@@ -159,7 +159,8 @@ async fn thread_start_without_dynamic_tools_allows_without_experimental_api_capa
 }
 
 #[tokio::test]
-async fn thread_start_reject_approval_policy_requires_experimental_api_capability() -> Result<()> {
+async fn thread_start_granular_approval_policy_requires_experimental_api_capability() -> Result<()>
+{
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -180,7 +181,7 @@ async fn thread_start_reject_approval_policy_requires_experimental_api_capabilit
 
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
-            approval_policy: Some(AskForApproval::Reject {
+            approval_policy: Some(AskForApproval::Granular {
                 sandbox_approval: true,
                 rules: false,
                 skill_approval: false,
@@ -196,7 +197,7 @@ async fn thread_start_reject_approval_policy_requires_experimental_api_capabilit
         mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
     )
     .await??;
-    assert_experimental_capability_error(error, "askForApproval.reject");
+    assert_experimental_capability_error(error, "askForApproval.granular");
     Ok(())
 }
 

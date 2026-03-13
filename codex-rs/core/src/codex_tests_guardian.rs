@@ -75,7 +75,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
         .expect("test setup should allow enabling guardian approvals");
     session
         .features
-        .enable(Feature::RequestPermissions)
+        .enable(Feature::ExecPermissionApprovals)
         .expect("test setup should allow enabling request permissions");
     turn_context_raw
         .sandbox_policy
@@ -191,7 +191,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
         .expect("test setup should allow enabling guardian approvals");
     session
         .features
-        .enable(Feature::RequestPermissions)
+        .enable(Feature::ExecPermissionApprovals)
         .expect("test setup should allow enabling request permissions");
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
