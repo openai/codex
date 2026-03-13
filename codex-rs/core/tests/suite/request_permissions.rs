@@ -101,10 +101,10 @@ fn shell_event_with_request_permissions<S: serde::Serialize>(
     Ok(ev_function_call(call_id, "shell_command", &args_str))
 }
 
-fn request_permissions_tool_event<S: serde::Serialize>(
+fn request_permissions_tool_event(
     call_id: &str,
     reason: &str,
-    permissions: &S,
+    permissions: &RequestPermissionProfile,
 ) -> Result<Value> {
     let args = json!({
         "reason": reason,
@@ -1025,14 +1025,14 @@ async fn request_permissions_grants_apply_to_later_exec_command_calls() -> Resul
         "printf {:?} > {:?} && cat {:?}",
         "sticky-grant-ok", outside_write, outside_write
     );
-    let requested_permissions = PermissionProfile {
+    let requested_permissions = RequestPermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
             write: Some(vec![absolute_path(outside_dir.path())]),
         }),
         ..Default::default()
     };
-    let normalized_requested_permissions = PermissionProfile {
+    let normalized_requested_permissions = RequestPermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
             write: Some(vec![AbsolutePathBuf::try_from(
@@ -1078,13 +1078,13 @@ async fn request_permissions_grants_apply_to_later_exec_command_calls() -> Resul
     let granted_permissions = expect_request_permissions_event(&test, "permissions-call").await;
     assert_eq!(
         granted_permissions,
-        normalized_requested_permissions.clone().into()
+        normalized_requested_permissions.clone()
     );
     test.codex
         .submit(Op::RequestPermissionsResponse {
             id: "permissions-call".to_string(),
             response: RequestPermissionsResponse {
-                permissions: normalized_requested_permissions.clone().into(),
+                permissions: normalized_requested_permissions.clone(),
                 scope: PermissionGrantScope::Turn,
             },
         })
@@ -1093,7 +1093,7 @@ async fn request_permissions_grants_apply_to_later_exec_command_calls() -> Resul
     if let Some(approval) = wait_for_exec_approval_or_completion(&test).await {
         assert_eq!(
             approval.additional_permissions,
-            Some(normalized_requested_permissions.clone())
+            Some(normalized_requested_permissions.clone().into())
         );
         test.codex
             .submit(Op::ExecApproval {
