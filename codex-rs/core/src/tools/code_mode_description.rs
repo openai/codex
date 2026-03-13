@@ -74,9 +74,12 @@ fn append_code_mode_sample(
     input_type: String,
     output_type: String,
 ) -> String {
+    let reference = code_mode_tool_reference(tool_name);
+    let import_name = normalize_code_mode_identifier(&reference.tool_key);
     let declaration = format!(
-        "declare const tools: {{\n  {}\n}};",
-        render_code_mode_tool_declaration(tool_name, input_name, input_type, output_type)
+        "import {{ {import_name} }} from \"{}\";\ndeclare function {}",
+        reference.module_path,
+        render_code_mode_tool_declaration(&reference.tool_key, input_name, input_type, output_type)
     );
     format!("{description}\n\nCode mode declaration:\n```ts\n{declaration}\n```")
 }
