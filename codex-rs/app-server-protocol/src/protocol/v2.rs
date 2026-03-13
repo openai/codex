@@ -552,8 +552,10 @@ pub struct ProfileV2 {
     pub model_provider: Option<String>,
     #[experimental(nested)]
     pub approval_policy: Option<AskForApproval>,
-    /// Optional profile-level override for where approval requests are routed
-    /// for review. If omitted, the enclosing config default is used.
+    /// [UNSTABLE] Optional profile-level override for where approval requests
+    /// are routed for review. If omitted, the enclosing config default is
+    /// used.
+    #[experimental("config/read.approvalsReviewer")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub service_tier: Option<ServiceTier>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
@@ -654,7 +656,9 @@ pub struct Config {
     pub model_provider: Option<String>,
     #[experimental(nested)]
     pub approval_policy: Option<AskForApproval>,
-    /// Optional default for where approval requests are routed for review.
+    /// [UNSTABLE] Optional default for where approval requests are routed for
+    /// review.
+    #[experimental("config/read.approvalsReviewer")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
@@ -6795,6 +6799,39 @@ mod tests {
     }
 
     #[test]
+    fn config_approvals_reviewer_is_marked_experimental() {
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
+            model: None,
+            review_model: None,
+            model_context_window: None,
+            model_auto_compact_token_limit: None,
+            model_provider: None,
+            approval_policy: None,
+            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+            sandbox_mode: None,
+            sandbox_workspace_write: None,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
+            web_search: None,
+            tools: None,
+            profile: None,
+            profiles: HashMap::new(),
+            instructions: None,
+            developer_instructions: None,
+            compact_prompt: None,
+            model_reasoning_effort: None,
+            model_reasoning_summary: None,
+            model_verbosity: None,
+            service_tier: None,
+            analytics: None,
+            apps: None,
+            additional: HashMap::new(),
+        });
+
+        assert_eq!(reason, Some("config/read.approvalsReviewer"));
+    }
+
+    #[test]
     fn config_nested_profile_granular_approval_policy_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
             model: None,
@@ -6847,6 +6884,55 @@ mod tests {
         });
 
         assert_eq!(reason, Some("askForApproval.granular"));
+    }
+
+    #[test]
+    fn config_nested_profile_approvals_reviewer_is_marked_experimental() {
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
+            model: None,
+            review_model: None,
+            model_context_window: None,
+            model_auto_compact_token_limit: None,
+            model_provider: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox_mode: None,
+            sandbox_workspace_write: None,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
+            web_search: None,
+            tools: None,
+            profile: None,
+            profiles: HashMap::from([(
+                "default".to_string(),
+                ProfileV2 {
+                    model: None,
+                    model_provider: None,
+                    approval_policy: None,
+                    approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+                    service_tier: None,
+                    model_reasoning_effort: None,
+                    model_reasoning_summary: None,
+                    model_verbosity: None,
+                    web_search: None,
+                    tools: None,
+                    chatgpt_base_url: None,
+                    additional: HashMap::new(),
+                },
+            )]),
+            instructions: None,
+            developer_instructions: None,
+            compact_prompt: None,
+            model_reasoning_effort: None,
+            model_reasoning_summary: None,
+            model_verbosity: None,
+            service_tier: None,
+            analytics: None,
+            apps: None,
+            additional: HashMap::new(),
+        });
+
+        assert_eq!(reason, Some("config/read.approvalsReviewer"));
     }
 
     #[test]
