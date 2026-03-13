@@ -123,14 +123,7 @@ impl ActionKind {
                 let (path, _) = target.resolve_for_patch(test);
                 let _ = fs::remove_file(&path);
                 let command = format!("printf {content:?} > {path:?} && cat {path:?}");
-                // This path is known to be flaky on loaded Linux CI when the write
-                // command runs under approval flow + read-only policy; keep the timeout
-                // tight, but allow a small buffer for process/sandbox startup jitter.
-                let timeout_ms = match target {
-                    TargetPath::Workspace(name) if name.starts_with("ro_unless_trusted") => 5_000,
-                    _ => 1_000,
-                };
-                let event = shell_event(call_id, &command, timeout_ms, sandbox_permissions)?;
+                let event = shell_event(call_id, &command, 5_000, sandbox_permissions)?;
                 Ok((event, Some(command)))
             }
             ActionKind::FetchUrl {
