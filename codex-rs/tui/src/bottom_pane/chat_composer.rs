@@ -6407,7 +6407,13 @@ mod tests {
             .draw(|f| composer.render(f.area(), f.buffer_mut()))
             .unwrap_or_else(|e| panic!("Failed to draw composer: {e}"));
 
-        insta::assert_snapshot!("slash_popup_root", terminal.backend());
+        if cfg!(target_os = "windows") {
+            insta::with_settings!({ snapshot_suffix => "windows" }, {
+                insta::assert_snapshot!("slash_popup_root", terminal.backend());
+            });
+        } else {
+            insta::assert_snapshot!("slash_popup_root", terminal.backend());
+        }
     }
 
     #[test]

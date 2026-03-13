@@ -6004,7 +6004,13 @@ async fn slash_help_opens_reference_popup() {
 
     assert!(chat.bottom_pane.has_active_view());
     let popup = render_bottom_popup(&chat, 100);
-    assert_snapshot!("slash_help_output", popup);
+    if cfg!(target_os = "windows") {
+        insta::with_settings!({ snapshot_suffix => "windows" }, {
+            assert_snapshot!("slash_help_output", popup);
+        });
+    } else {
+        assert_snapshot!("slash_help_output", popup);
+    }
     assert!(popup.contains("/help"));
     assert!(popup.contains("/model <model>"));
 
@@ -6031,7 +6037,13 @@ async fn slash_help_search_jumps_to_lower_match() {
         chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
     }
     let searching = render_bottom_popup(&chat, 100);
-    assert_snapshot!("slash_help_search_output", searching);
+    if cfg!(target_os = "windows") {
+        insta::with_settings!({ snapshot_suffix => "windows" }, {
+            assert_snapshot!("slash_help_search_output", searching);
+        });
+    } else {
+        assert_snapshot!("slash_help_search_output", searching);
+    }
     assert!(searching.contains("Search: /maintainers"));
     assert!(searching.contains("1 match"));
 
