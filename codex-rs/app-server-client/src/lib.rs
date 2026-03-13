@@ -782,6 +782,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generated_id_typed_request_roundtrip_works() {
+        let client = start_test_client(SessionSource::Exec).await;
+        let requester = client.requester();
+        let _response: ConfigRequirementsReadResponse = requester
+            .request_typed_with_generated_id(|request_id| ClientRequest::ConfigRequirementsRead {
+                request_id,
+                params: None,
+            })
+            .await
+            .expect("typed request with generated ID should succeed");
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
     async fn typed_request_reports_json_rpc_errors() {
         let client = start_test_client(SessionSource::Exec).await;
         let err = client
