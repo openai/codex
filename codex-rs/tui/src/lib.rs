@@ -1301,9 +1301,7 @@ mod tests {
             .await
     }
 
-    async fn start_test_app_server(
-        config: Config,
-    ) -> color_eyre::Result<InProcessAppServerClient> {
+    async fn start_test_app_server(config: Config) -> color_eyre::Result<InProcessAppServerClient> {
         start_app_server(
             Arg0DispatchPaths::default(),
             config,
@@ -1370,8 +1368,7 @@ mod tests {
         };
 
         assert!(
-            err.to_string()
-                .contains("failed to start app server"),
+            err.to_string().contains("failed to start app server"),
             "error should preserve the app server startup context"
         );
         Ok(())
