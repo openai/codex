@@ -461,7 +461,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         expected.insert(tool_name(&spec).to_string(), spec);
     }
 
-    if config.request_permission_enabled {
+    if config.exec_permission_approvals_enabled {
         let spec = create_request_permissions_tool();
         expected.insert(tool_name(&spec).to_string(), spec);
     }
@@ -744,7 +744,7 @@ fn request_permissions_tool_is_independent_from_additional_permissions() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     let mut features = Features::with_defaults();
-    features.enable(Feature::RequestPermissions);
+    features.enable(Feature::ExecPermissionApprovals);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -2205,7 +2205,7 @@ fn shell_tool_with_request_permission_includes_additional_permissions() {
         panic!("expected sandbox_permissions description");
     };
     assert!(description.contains("with_additional_permissions"));
-    assert!(description.contains("macOS permissions"));
+    assert!(description.contains("filesystem or network permissions"));
 
     let Some(JsonSchema::Object {
         properties: additional_properties,
@@ -2216,7 +2216,7 @@ fn shell_tool_with_request_permission_includes_additional_permissions() {
     };
     assert!(additional_properties.contains_key("network"));
     assert!(additional_properties.contains_key("file_system"));
-    assert!(additional_properties.contains_key("macos"));
+    assert!(!additional_properties.contains_key("macos"));
 }
 
 #[test]
@@ -2240,7 +2240,7 @@ fn request_permissions_tool_includes_full_permission_schema() {
     assert_eq!(additional_properties, &Some(false.into()));
     assert!(permission_properties.contains_key("network"));
     assert!(permission_properties.contains_key("file_system"));
-    assert!(permission_properties.contains_key("macos"));
+    assert!(!permission_properties.contains_key("macos"));
 
     let Some(JsonSchema::Object {
         properties: network_properties,
@@ -2264,20 +2264,6 @@ fn request_permissions_tool_includes_full_permission_schema() {
     assert_eq!(additional_properties, &Some(false.into()));
     assert!(file_system_properties.contains_key("read"));
     assert!(file_system_properties.contains_key("write"));
-
-    let Some(JsonSchema::Object {
-        properties: macos_properties,
-        additional_properties,
-        ..
-    }) = permission_properties.get("macos")
-    else {
-        panic!("expected macos object");
-    };
-    assert_eq!(additional_properties, &Some(false.into()));
-    assert!(macos_properties.contains_key("preferences"));
-    assert!(macos_properties.contains_key("automations"));
-    assert!(macos_properties.contains_key("accessibility"));
-    assert!(macos_properties.contains_key("calendar"));
 }
 
 #[test]

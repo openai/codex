@@ -3,6 +3,7 @@ use crate::config::Config;
 use crate::default_client::create_client;
 use crate::git_info::collect_git_info;
 use crate::git_info::get_git_repo_root;
+use crate::plugins::PluginTelemetryMetadata;
 use codex_protocol::protocol::SkillScope;
 use serde::Serialize;
 use sha1::Digest;
@@ -59,9 +60,11 @@ pub(crate) struct AppInvocation {
 pub(crate) struct AnalyticsEventsQueue {
     sender: mpsc::Sender<TrackEventsJob>,
     app_used_emitted_keys: Arc<Mutex<HashSet<(String, String)>>>,
+    plugin_used_emitted_keys: Arc<Mutex<HashSet<(String, String)>>>,
 }
 
-pub(crate) struct AnalyticsEventsClient {
+#[derive(Clone)]
+pub struct AnalyticsEventsClient {
     queue: AnalyticsEventsQueue,
     config: Arc<Config>,
 }
@@ -81,12 +84,28 @@ impl AnalyticsEventsQueue {
                     TrackEventsJob::AppUsed(job) => {
                         send_track_app_used(&auth_manager, job).await;
                     }
+                    TrackEventsJob::PluginUsed(job) => {
+                        send_track_plugin_used(&auth_manager, job).await;
+                    }
+                    TrackEventsJob::PluginInstalled(job) => {
+                        send_track_plugin_installed(&auth_manager, job).await;
+                    }
+                    TrackEventsJob::PluginUninstalled(job) => {
+                        send_track_plugin_uninstalled(&auth_manager, job).await;
+                    }
+                    TrackEventsJob::PluginEnabled(job) => {
+                        send_track_plugin_enabled(&auth_manager, job).await;
+                    }
+                    TrackEventsJob::PluginDisabled(job) => {
+                        send_track_plugin_disabled(&auth_manager, job).await;
+                    }
                 }
             }
         });
         Self {
             sender,
             app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
+            plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -105,15 +124,30 @@ impl AnalyticsEventsQueue {
             .app_used_emitted_keys
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if emitted.len() >= ANALYTICS_APP_USED_DEDUPE_MAX_KEYS {
+        if emitted.len() >= ANALYTICS_EVENT_DEDUPE_MAX_KEYS {
             emitted.clear();
         }
         emitted.insert((tracking.turn_id.clone(), connector_id.clone()))
     }
+
+    fn should_enqueue_plugin_used(
+        &self,
+        tracking: &TrackEventsContext,
+        plugin: &PluginTelemetryMetadata,
+    ) -> bool {
+        let mut emitted = self
+            .plugin_used_emitted_keys
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if emitted.len() >= ANALYTICS_EVENT_DEDUPE_MAX_KEYS {
+            emitted.clear();
+        }
+        emitted.insert((tracking.turn_id.clone(), plugin.plugin_id.as_key()))
+    }
 }
 
 impl AnalyticsEventsClient {
-    pub(crate) fn new(config: Arc<Config>, auth_manager: Arc<AuthManager>) -> Self {
+    pub fn new(config: Arc<Config>, auth_manager: Arc<AuthManager>) -> Self {
         Self {
             queue: AnalyticsEventsQueue::new(Arc::clone(&auth_manager)),
             config,
@@ -149,12 +183,66 @@ impl AnalyticsEventsClient {
     pub(crate) fn track_app_used(&self, tracking: TrackEventsContext, app: AppInvocation) {
         track_app_used(&self.queue, Arc::clone(&self.config), Some(tracking), app);
     }
+
+    pub(crate) fn track_plugin_used(
+        &self,
+        tracking: TrackEventsContext,
+        plugin: PluginTelemetryMetadata,
+    ) {
+        track_plugin_used(
+            &self.queue,
+            Arc::clone(&self.config),
+            Some(tracking),
+            plugin,
+        );
+    }
+
+    pub fn track_plugin_installed(&self, plugin: PluginTelemetryMetadata) {
+        track_plugin_management(
+            &self.queue,
+            Arc::clone(&self.config),
+            PluginManagementEventType::Installed,
+            plugin,
+        );
+    }
+
+    pub fn track_plugin_uninstalled(&self, plugin: PluginTelemetryMetadata) {
+        track_plugin_management(
+            &self.queue,
+            Arc::clone(&self.config),
+            PluginManagementEventType::Uninstalled,
+            plugin,
+        );
+    }
+
+    pub fn track_plugin_enabled(&self, plugin: PluginTelemetryMetadata) {
+        track_plugin_management(
+            &self.queue,
+            Arc::clone(&self.config),
+            PluginManagementEventType::Enabled,
+            plugin,
+        );
+    }
+
+    pub fn track_plugin_disabled(&self, plugin: PluginTelemetryMetadata) {
+        track_plugin_management(
+            &self.queue,
+            Arc::clone(&self.config),
+            PluginManagementEventType::Disabled,
+            plugin,
+        );
+    }
 }
 
 enum TrackEventsJob {
     SkillInvocations(TrackSkillInvocationsJob),
     AppMentioned(TrackAppMentionedJob),
     AppUsed(TrackAppUsedJob),
+    PluginUsed(TrackPluginUsedJob),
+    PluginInstalled(TrackPluginManagementJob),
+    PluginUninstalled(TrackPluginManagementJob),
+    PluginEnabled(TrackPluginManagementJob),
+    PluginDisabled(TrackPluginManagementJob),
 }
 
 struct TrackSkillInvocationsJob {
@@ -175,9 +263,28 @@ struct TrackAppUsedJob {
     app: AppInvocation,
 }
 
+struct TrackPluginUsedJob {
+    config: Arc<Config>,
+    tracking: TrackEventsContext,
+    plugin: PluginTelemetryMetadata,
+}
+
+struct TrackPluginManagementJob {
+    config: Arc<Config>,
+    plugin: PluginTelemetryMetadata,
+}
+
+#[derive(Clone, Copy)]
+enum PluginManagementEventType {
+    Installed,
+    Uninstalled,
+    Enabled,
+    Disabled,
+}
+
 const ANALYTICS_EVENTS_QUEUE_SIZE: usize = 256;
 const ANALYTICS_EVENTS_TIMEOUT: Duration = Duration::from_secs(10);
-const ANALYTICS_APP_USED_DEDUPE_MAX_KEYS: usize = 4096;
+const ANALYTICS_EVENT_DEDUPE_MAX_KEYS: usize = 4096;
 
 #[derive(Serialize)]
 struct TrackEventsRequest {
@@ -190,6 +297,11 @@ enum TrackEventRequest {
     SkillInvocation(SkillInvocationEventRequest),
     AppMentioned(CodexAppMentionedEventRequest),
     AppUsed(CodexAppUsedEventRequest),
+    PluginUsed(CodexPluginUsedEventRequest),
+    PluginInstalled(CodexPluginEventRequest),
+    PluginUninstalled(CodexPluginEventRequest),
+    PluginEnabled(CodexPluginEventRequest),
+    PluginDisabled(CodexPluginEventRequest),
 }
 
 #[derive(Serialize)]
@@ -231,6 +343,38 @@ struct CodexAppMentionedEventRequest {
 struct CodexAppUsedEventRequest {
     event_type: &'static str,
     event_params: CodexAppMetadata,
+}
+
+#[derive(Serialize)]
+struct CodexPluginMetadata {
+    plugin_id: Option<String>,
+    plugin_name: Option<String>,
+    marketplace_name: Option<String>,
+    has_skills: Option<bool>,
+    mcp_server_count: Option<usize>,
+    connector_ids: Option<Vec<String>>,
+    product_client_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CodexPluginUsedMetadata {
+    #[serde(flatten)]
+    plugin: CodexPluginMetadata,
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+    model_slug: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CodexPluginEventRequest {
+    event_type: &'static str,
+    event_params: CodexPluginMetadata,
+}
+
+#[derive(Serialize)]
+struct CodexPluginUsedEventRequest {
+    event_type: &'static str,
+    event_params: CodexPluginUsedMetadata,
 }
 
 pub(crate) fn track_skill_invocations(
@@ -299,6 +443,48 @@ pub(crate) fn track_app_used(
         tracking,
         app,
     });
+    queue.try_send(job);
+}
+
+pub(crate) fn track_plugin_used(
+    queue: &AnalyticsEventsQueue,
+    config: Arc<Config>,
+    tracking: Option<TrackEventsContext>,
+    plugin: PluginTelemetryMetadata,
+) {
+    if config.analytics_enabled == Some(false) {
+        return;
+    }
+    let Some(tracking) = tracking else {
+        return;
+    };
+    if !queue.should_enqueue_plugin_used(&tracking, &plugin) {
+        return;
+    }
+    let job = TrackEventsJob::PluginUsed(TrackPluginUsedJob {
+        config,
+        tracking,
+        plugin,
+    });
+    queue.try_send(job);
+}
+
+fn track_plugin_management(
+    queue: &AnalyticsEventsQueue,
+    config: Arc<Config>,
+    event_type: PluginManagementEventType,
+    plugin: PluginTelemetryMetadata,
+) {
+    if config.analytics_enabled == Some(false) {
+        return;
+    }
+    let job = TrackPluginManagementJob { config, plugin };
+    let job = match event_type {
+        PluginManagementEventType::Installed => TrackEventsJob::PluginInstalled(job),
+        PluginManagementEventType::Uninstalled => TrackEventsJob::PluginUninstalled(job),
+        PluginManagementEventType::Enabled => TrackEventsJob::PluginEnabled(job),
+        PluginManagementEventType::Disabled => TrackEventsJob::PluginDisabled(job),
+    };
     queue.try_send(job);
 }
 
@@ -385,6 +571,58 @@ async fn send_track_app_used(auth_manager: &AuthManager, job: TrackAppUsedJob) {
     send_track_events(auth_manager, config, events).await;
 }
 
+async fn send_track_plugin_used(auth_manager: &AuthManager, job: TrackPluginUsedJob) {
+    let TrackPluginUsedJob {
+        config,
+        tracking,
+        plugin,
+    } = job;
+    let events = vec![TrackEventRequest::PluginUsed(CodexPluginUsedEventRequest {
+        event_type: "codex_plugin_used",
+        event_params: codex_plugin_used_metadata(&tracking, plugin),
+    })];
+
+    send_track_events(auth_manager, config, events).await;
+}
+
+async fn send_track_plugin_installed(auth_manager: &AuthManager, job: TrackPluginManagementJob) {
+    send_track_plugin_management_event(auth_manager, job, "codex_plugin_installed").await;
+}
+
+async fn send_track_plugin_uninstalled(auth_manager: &AuthManager, job: TrackPluginManagementJob) {
+    send_track_plugin_management_event(auth_manager, job, "codex_plugin_uninstalled").await;
+}
+
+async fn send_track_plugin_enabled(auth_manager: &AuthManager, job: TrackPluginManagementJob) {
+    send_track_plugin_management_event(auth_manager, job, "codex_plugin_enabled").await;
+}
+
+async fn send_track_plugin_disabled(auth_manager: &AuthManager, job: TrackPluginManagementJob) {
+    send_track_plugin_management_event(auth_manager, job, "codex_plugin_disabled").await;
+}
+
+async fn send_track_plugin_management_event(
+    auth_manager: &AuthManager,
+    job: TrackPluginManagementJob,
+    event_type: &'static str,
+) {
+    let TrackPluginManagementJob { config, plugin } = job;
+    let event_params = codex_plugin_metadata(plugin);
+    let event = CodexPluginEventRequest {
+        event_type,
+        event_params,
+    };
+    let events = vec![match event_type {
+        "codex_plugin_installed" => TrackEventRequest::PluginInstalled(event),
+        "codex_plugin_uninstalled" => TrackEventRequest::PluginUninstalled(event),
+        "codex_plugin_enabled" => TrackEventRequest::PluginEnabled(event),
+        "codex_plugin_disabled" => TrackEventRequest::PluginDisabled(event),
+        _ => unreachable!("unknown plugin management event type"),
+    }];
+
+    send_track_events(auth_manager, config, events).await;
+}
+
 fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> CodexAppMetadata {
     CodexAppMetadata {
         connector_id: app.connector_id,
@@ -393,6 +631,41 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
         app_name: app.app_name,
         product_client_id: Some(crate::default_client::originator().value),
         invoke_type: app.invocation_type,
+        model_slug: Some(tracking.model_slug.clone()),
+    }
+}
+
+fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPluginMetadata {
+    let capability_summary = plugin.capability_summary;
+    CodexPluginMetadata {
+        plugin_id: Some(plugin.plugin_id.as_key()),
+        plugin_name: Some(plugin.plugin_id.plugin_name),
+        marketplace_name: Some(plugin.plugin_id.marketplace_name),
+        has_skills: capability_summary
+            .as_ref()
+            .map(|summary| summary.has_skills),
+        mcp_server_count: capability_summary
+            .as_ref()
+            .map(|summary| summary.mcp_server_names.len()),
+        connector_ids: capability_summary.map(|summary| {
+            summary
+                .app_connector_ids
+                .into_iter()
+                .map(|connector_id| connector_id.0)
+                .collect()
+        }),
+        product_client_id: Some(crate::default_client::originator().value),
+    }
+}
+
+fn codex_plugin_used_metadata(
+    tracking: &TrackEventsContext,
+    plugin: PluginTelemetryMetadata,
+) -> CodexPluginUsedMetadata {
+    CodexPluginUsedMetadata {
+        plugin: codex_plugin_metadata(plugin),
+        thread_id: Some(tracking.thread_id.clone()),
+        turn_id: Some(tracking.turn_id.clone()),
         model_slug: Some(tracking.model_slug.clone()),
     }
 }

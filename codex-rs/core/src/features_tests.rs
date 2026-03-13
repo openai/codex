@@ -80,8 +80,11 @@ fn guardian_approval_is_experimental_and_user_toggleable() {
 
 #[test]
 fn request_permissions_is_under_development() {
-    assert_eq!(Feature::RequestPermissions.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::RequestPermissions.default_enabled(), false);
+    assert_eq!(
+        Feature::ExecPermissionApprovals.stage(),
+        Stage::UnderDevelopment
+    );
+    assert_eq!(Feature::ExecPermissionApprovals.default_enabled(), false);
 }
 
 #[test]

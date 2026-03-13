@@ -28,11 +28,13 @@ use std::time::Instant;
 use wiremock::MockServer;
 
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
-    req.custom_tool_call_output(call_id)
-        .get("output")
-        .and_then(Value::as_array)
-        .expect("custom tool output should be serialized as content items")
-        .clone()
+    match req.custom_tool_call_output(call_id).get("output") {
+        Some(Value::Array(items)) => items.clone(),
+        Some(Value::String(text)) => {
+            vec![serde_json::json!({ "type": "input_text", "text": text })]
+        }
+        _ => panic!("custom tool output should be serialized as text or content items"),
+    }
 }
 
 fn function_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
@@ -332,9 +334,7 @@ async fn code_mode_can_truncate_final_result_with_configured_budget() -> Result<
     let (_test, second_mock) = run_code_mode_turn(
         &server,
         "use exec to truncate the final result",
-        r#"
-set_max_output_tokens_per_exec_call(6);
-
+        r#"// @exec: {"max_output_tokens": 6}
 text(JSON.stringify(await tools.exec_command({
   cmd: "printf 'token one token two token three token four token five token six token seven'",
   max_output_tokens: 100
@@ -427,7 +427,7 @@ async fn code_mode_can_yield_and_resume_with_exec_wait() -> Result<()> {
     let code = format!(
         r#"
 text("phase 1");
-set_yield_time(10);
+yield_control();
 {phase_2_wait}
 text("phase 2");
 {phase_3_wait}
@@ -566,9 +566,8 @@ async fn code_mode_yield_timeout_works_for_busy_loop() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let code = r#"
+    let code = r#"// @exec: {"yield_time_ms": 100}
 text("phase 1");
-set_yield_time(10);
 while (true) {}
 "#;
 
@@ -668,7 +667,7 @@ async fn code_mode_can_run_multiple_yielded_sessions() -> Result<()> {
     let session_a_code = format!(
         r#"
 text("session a start");
-set_yield_time(10);
+yield_control();
 {session_a_wait}
 text("session a done");
 "#
@@ -676,7 +675,7 @@ text("session a done");
     let session_b_code = format!(
         r#"
 text("session b start");
-set_yield_time(10);
+yield_control();
 {session_b_wait}
 text("session b done");
 "#
@@ -834,7 +833,7 @@ async fn code_mode_exec_wait_can_terminate_and_continue() -> Result<()> {
     let code = format!(
         r#"
 text("phase 1");
-set_yield_time(10);
+yield_control();
 {termination_wait}
 text("phase 2");
 "#
@@ -1028,7 +1027,7 @@ async fn code_mode_exec_wait_terminate_returns_completed_session_if_it_finished_
     let session_a_code = format!(
         r#"
 text("session a start");
-set_yield_time(10);
+yield_control();
 {session_a_wait}
 text("session a done");
 await tools.exec_command({{ cmd: {session_a_done_command:?} }});
@@ -1037,7 +1036,7 @@ await tools.exec_command({{ cmd: {session_a_done_command:?} }});
     let session_b_code = format!(
         r#"
 text("session b start");
-set_yield_time(10);
+yield_control();
 {session_b_wait}
 text("session b done");
 "#
@@ -1308,10 +1307,9 @@ async fn code_mode_exec_wait_uses_its_own_max_tokens_budget() -> Result<()> {
     let completion_wait = wait_for_file_source(&completion_gate)?;
 
     let code = format!(
-        r#"
+        r#"// @exec: {{"max_output_tokens": 100}}
 text("phase 1");
-set_max_output_tokens_per_exec_call(100);
-set_yield_time(10);
+yield_control();
 {completion_wait}
 text("token one token two token three token four token five token six token seven");
 "#
@@ -1631,6 +1629,42 @@ contentLength=0"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exposes_namespaced_mcp_tools_on_global_tools_object() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let code = r#"
+text(JSON.stringify({
+  hasExecCommand: typeof tools.exec_command === "function",
+  hasNamespacedEcho: typeof tools.mcp__rmcp__echo === "function",
+}));
+"#;
+
+    let (_test, second_mock) =
+        run_code_mode_turn_with_rmcp(&server, "use exec to inspect the global tools object", code)
+            .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec global tools inspection failed unexpectedly: {output}"
+    );
+
+    let parsed: Value = serde_json::from_str(&output)?;
+    assert_eq!(
+        parsed,
+        serde_json::json!({
+            "hasExecCommand": !cfg!(windows),
+            "hasNamespacedEcho": true,
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_exposes_normalized_illegal_mcp_tool_names() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1736,6 +1770,7 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "WeakSet",
         "WebAssembly",
         "__codexContentItems",
+        "add_content",
         "console",
         "decodeURI",
         "decodeURIComponent",
@@ -1750,8 +1785,6 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "load",
         "parseFloat",
         "parseInt",
-        "set_max_output_tokens_per_exec_call",
-        "set_yield_time",
         "store",
         "text",
         "tools",
@@ -1918,6 +1951,7 @@ structuredContent=null"
 
     Ok(())
 }
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_store_and_load_values_across_turns() -> Result<()> {
     skip_if_no_network!(Ok(()));
