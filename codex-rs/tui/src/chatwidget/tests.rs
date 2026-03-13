@@ -2468,7 +2468,7 @@ async fn submit_user_message_for_current_thread_with_developer_instructions_over
     let developer_instructions = "<btw_context>Answer a side question.</btw_context>".to_string();
 
     chat.submit_user_message_for_current_thread_with_developer_instructions(
-        UserMessage::plain("Explore the codebase".to_string()),
+        "Explore the codebase".into(),
         developer_instructions.clone(),
     );
 

@@ -749,18 +749,7 @@ pub(crate) struct UserMessage {
     mention_bindings: Vec<MentionBinding>,
 }
 
-impl UserMessage {
-    #[cfg(test)]
-    pub(crate) fn plain(text: String) -> Self {
-        Self {
-            text,
-            local_images: Vec::new(),
-            remote_image_urls: Vec::new(),
-            text_elements: Vec::new(),
-            mention_bindings: Vec::new(),
-        }
-    }
-}
+impl UserMessage {}
 
 #[derive(Debug, Clone, PartialEq, Default)]
 struct ThreadComposerState {
