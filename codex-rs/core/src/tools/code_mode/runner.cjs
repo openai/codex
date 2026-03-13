@@ -262,7 +262,7 @@ function codeModeWorkerMain() {
       image,
       load,
       output_image: image,
-      output_text: outputText,
+      output_text: text,
       store,
       text,
       yield_control: yieldControl,
