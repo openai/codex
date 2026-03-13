@@ -21,6 +21,8 @@ use std::io::Error as IoError;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::sync::Arc;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 pub use codex_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
@@ -59,6 +61,8 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// the same JSON-RPC result envelope used by socket/stdio transports because
 /// `MessageProcessor` continues to produce that shape internally.
 pub type RequestResult = std::result::Result<JsonRpcResult, JSONRPCErrorError>;
+
+static NEXT_GENERATED_REQUEST_ID: AtomicI64 = AtomicI64::new(1);
 
 fn event_requires_delivery(event: &InProcessServerEvent) -> bool {
     // These terminal events drive surface shutdown/completion state. Dropping
@@ -635,6 +639,20 @@ impl InProcessAppServerRequester {
         T: DeserializeOwned,
     {
         request_typed(&self.command_tx, request).await
+    }
+
+    /// Sends a typed client request using a generated request ID.
+    pub async fn request_typed_with_generated_id<T, F>(
+        &self,
+        build: F,
+    ) -> Result<T, TypedRequestError>
+    where
+        T: DeserializeOwned,
+        F: FnOnce(RequestId) -> ClientRequest,
+    {
+        let request_id =
+            RequestId::Integer(NEXT_GENERATED_REQUEST_ID.fetch_add(1, Ordering::Relaxed));
+        request_typed(&self.command_tx, build(request_id)).await
     }
 }
 
