@@ -2,6 +2,7 @@ use crate::endpoint::realtime_websocket::protocol::ConversationItem;
 use crate::endpoint::realtime_websocket::protocol::ConversationItemContent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeAudioFrame;
 use crate::endpoint::realtime_websocket::protocol::RealtimeEvent;
+use crate::endpoint::realtime_websocket::protocol::RealtimeEventParser;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptDelta;
@@ -201,6 +202,7 @@ pub struct RealtimeWebsocketWriter {
 pub struct RealtimeWebsocketEvents {
     rx_message: Arc<Mutex<mpsc::UnboundedReceiver<Result<Message, WsError>>>>,
     active_transcript: Arc<Mutex<ActiveTranscriptState>>,
+    event_parser: RealtimeEventParser,
     is_closed: Arc<AtomicBool>,
 }
 
@@ -247,6 +249,7 @@ impl RealtimeWebsocketConnection {
     fn new(
         stream: WsStream,
         rx_message: mpsc::UnboundedReceiver<Result<Message, WsError>>,
+        event_parser: RealtimeEventParser,
     ) -> Self {
         let stream = Arc::new(stream);
         let is_closed = Arc::new(AtomicBool::new(false));
@@ -258,6 +261,7 @@ impl RealtimeWebsocketConnection {
             events: RealtimeWebsocketEvents {
                 rx_message: Arc::new(Mutex::new(rx_message)),
                 active_transcript: Arc::new(Mutex::new(ActiveTranscriptState::default())),
+                event_parser,
                 is_closed,
             },
         }
@@ -375,7 +379,7 @@ impl RealtimeWebsocketEvents {
 
             match msg {
                 Message::Text(text) => {
-                    if let Some(mut event) = parse_realtime_event(&text) {
+                    if let Some(mut event) = parse_realtime_event(&text, self.event_parser) {
                         self.update_active_transcript(&mut event).await;
                         debug!(?event, "realtime websocket parsed event");
                         return Ok(Some(event));
@@ -487,7 +491,7 @@ impl RealtimeWebsocketClient {
         );
 
         let (stream, rx_message) = WsStream::new(stream);
-        let connection = RealtimeWebsocketConnection::new(stream, rx_message);
+        let connection = RealtimeWebsocketConnection::new(stream, rx_message, config.event_parser);
         debug!(
             session_id = config.session_id.as_deref().unwrap_or("<none>"),
             "realtime websocket sending session.update"
@@ -628,7 +632,7 @@ mod tests {
         .to_string();
 
         assert_eq!(
-            parse_realtime_event(payload.as_str()),
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::Legacy),
             Some(RealtimeEvent::SessionUpdated {
                 session_id: "sess_123".to_string(),
                 instructions: Some("backend prompt".to_string()),
@@ -647,7 +651,7 @@ mod tests {
         })
         .to_string();
         assert_eq!(
-            parse_realtime_event(payload.as_str()),
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::Legacy),
             Some(RealtimeEvent::AudioOut(RealtimeAudioFrame {
                 data: "AAA=".to_string(),
                 sample_rate: 48000,
@@ -665,7 +669,7 @@ mod tests {
         })
         .to_string();
         assert_eq!(
-            parse_realtime_event(payload.as_str()),
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::Legacy),
             Some(RealtimeEvent::ConversationItemAdded(
                 json!({"type": "message", "seq": 7})
             ))
@@ -680,7 +684,7 @@ mod tests {
         })
         .to_string();
         assert_eq!(
-            parse_realtime_event(payload.as_str()),
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::Legacy),
             Some(RealtimeEvent::ConversationItemDone {
                 item_id: "item_123".to_string(),
             })
@@ -698,7 +702,7 @@ mod tests {
         .to_string();
 
         assert_eq!(
-            parse_realtime_event(payload.as_str()),
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::Legacy),
             Some(RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
                 handoff_id: "handoff_123".to_string(),
                 item_id: "item_123".to_string(),
@@ -717,7 +721,7 @@ mod tests {
         .to_string();
 
         assert_eq!(
-            parse_realtime_event(payload.as_str()),
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::Legacy),
             Some(RealtimeEvent::InputTranscriptDelta(
                 RealtimeTranscriptDelta {
                     delta: "hello ".to_string(),
@@ -735,12 +739,74 @@ mod tests {
         .to_string();
 
         assert_eq!(
-            parse_realtime_event(payload.as_str()),
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::Legacy),
             Some(RealtimeEvent::OutputTranscriptDelta(
                 RealtimeTranscriptDelta {
                     delta: "hi".to_string(),
                 }
             ))
+        );
+    }
+
+    #[test]
+    fn parse_realtime_v2_handoff_tool_call_event() {
+        let payload = json!({
+            "type": "conversation.item.done",
+            "item": {
+                "id": "item_123",
+                "type": "function_call",
+                "name": "codex",
+                "call_id": "call_123",
+                "arguments": "{\"prompt\":\"delegate this\"}"
+            }
+        })
+        .to_string();
+
+        assert_eq!(
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::RealtimeV2),
+            Some(RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
+                handoff_id: "call_123".to_string(),
+                item_id: "item_123".to_string(),
+                input_transcript: "delegate this".to_string(),
+                active_transcript: Vec::new(),
+            }))
+        );
+    }
+
+    #[test]
+    fn parse_realtime_v2_input_audio_transcription_delta_event() {
+        let payload = json!({
+            "type": "conversation.item.input_audio_transcription.delta",
+            "delta": "hello"
+        })
+        .to_string();
+
+        assert_eq!(
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::RealtimeV2),
+            Some(RealtimeEvent::InputTranscriptDelta(
+                RealtimeTranscriptDelta {
+                    delta: "hello".to_string(),
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_realtime_v2_output_audio_delta_defaults_audio_shape() {
+        let payload = json!({
+            "type": "response.output_audio.delta",
+            "delta": "AQID"
+        })
+        .to_string();
+
+        assert_eq!(
+            parse_realtime_event(payload.as_str(), RealtimeEventParser::RealtimeV2),
+            Some(RealtimeEvent::AudioOut(RealtimeAudioFrame {
+                data: "AQID".to_string(),
+                sample_rate: 24_000,
+                num_channels: 1,
+                samples_per_channel: None,
+            }))
         );
     }
 
@@ -1000,6 +1066,7 @@ mod tests {
                     instructions: "backend prompt".to_string(),
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
+                    event_parser: RealtimeEventParser::Legacy,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -1182,6 +1249,7 @@ mod tests {
                     instructions: "backend prompt".to_string(),
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
+                    event_parser: RealtimeEventParser::Legacy,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),

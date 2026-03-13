@@ -1,3 +1,4 @@
+use crate::endpoint::realtime_websocket::protocol_v2::parse_realtime_event_v2;
 pub use codex_protocol::protocol::RealtimeAudioFrame;
 pub use codex_protocol::protocol::RealtimeEvent;
 pub use codex_protocol::protocol::RealtimeHandoffRequested;
@@ -7,11 +8,18 @@ use serde::Serialize;
 use serde_json::Value;
 use tracing::debug;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RealtimeEventParser {
+    Legacy,
+    RealtimeV2,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RealtimeSessionConfig {
     pub instructions: String,
     pub model: Option<String>,
     pub session_id: Option<String>,
+    pub event_parser: RealtimeEventParser,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -76,7 +84,17 @@ pub(super) struct ConversationItemContent {
     pub(super) text: String,
 }
 
-pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
+pub(super) fn parse_realtime_event(
+    payload: &str,
+    event_parser: RealtimeEventParser,
+) -> Option<RealtimeEvent> {
+    match event_parser {
+        RealtimeEventParser::Legacy => parse_realtime_event_legacy(payload),
+        RealtimeEventParser::RealtimeV2 => parse_realtime_event_v2(payload),
+    }
+}
+
+fn parse_realtime_event_legacy(payload: &str) -> Option<RealtimeEvent> {
     let parsed: Value = match serde_json::from_str(payload) {
         Ok(msg) => msg,
         Err(err) => {

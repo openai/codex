@@ -4,10 +4,12 @@ use std::time::Duration;
 
 use codex_api::RealtimeAudioFrame;
 use codex_api::RealtimeEvent;
+use codex_api::RealtimeEventParser;
 use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeWebsocketClient;
 use codex_api::provider::Provider;
 use codex_api::provider::RetryConfig;
+use codex_protocol::protocol::RealtimeHandoffRequested;
 use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
@@ -139,6 +141,7 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
                 instructions: "backend prompt".to_string(),
                 model: Some("realtime-test-model".to_string()),
                 session_id: Some("conv_123".to_string()),
+                event_parser: RealtimeEventParser::Legacy,
             },
             HeaderMap::new(),
             HeaderMap::new(),
@@ -231,6 +234,7 @@ async fn realtime_ws_e2e_send_while_next_event_waits() {
                 instructions: "backend prompt".to_string(),
                 model: Some("realtime-test-model".to_string()),
                 session_id: Some("conv_123".to_string()),
+                event_parser: RealtimeEventParser::Legacy,
             },
             HeaderMap::new(),
             HeaderMap::new(),
@@ -294,6 +298,7 @@ async fn realtime_ws_e2e_disconnected_emitted_once() {
                 instructions: "backend prompt".to_string(),
                 model: Some("realtime-test-model".to_string()),
                 session_id: Some("conv_123".to_string()),
+                event_parser: RealtimeEventParser::Legacy,
             },
             HeaderMap::new(),
             HeaderMap::new(),
@@ -354,6 +359,7 @@ async fn realtime_ws_e2e_ignores_unknown_text_events() {
                 instructions: "backend prompt".to_string(),
                 model: Some("realtime-test-model".to_string()),
                 session_id: Some("conv_123".to_string()),
+                event_parser: RealtimeEventParser::Legacy,
             },
             HeaderMap::new(),
             HeaderMap::new(),
@@ -372,6 +378,72 @@ async fn realtime_ws_e2e_ignores_unknown_text_events() {
             session_id: "sess_after_unknown".to_string(),
             instructions: Some("backend prompt".to_string()),
         }
+    );
+
+    connection.close().await.expect("close");
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn realtime_ws_e2e_realtime_v2_parser_emits_handoff_requested() {
+    let (addr, server) = spawn_realtime_ws_server(|mut ws: RealtimeWsStream| async move {
+        let first = ws
+            .next()
+            .await
+            .expect("first msg")
+            .expect("first msg ok")
+            .into_text()
+            .expect("text");
+        let first_json: Value = serde_json::from_str(&first).expect("json");
+        assert_eq!(first_json["type"], "session.update");
+
+        ws.send(Message::Text(
+            json!({
+                "type": "conversation.item.done",
+                "item": {
+                    "id": "item_123",
+                    "type": "function_call",
+                    "name": "codex",
+                    "call_id": "call_123",
+                    "arguments": "{\"prompt\":\"delegate now\"}"
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send function call");
+    })
+    .await;
+
+    let client = RealtimeWebsocketClient::new(test_provider(format!("http://{addr}")));
+    let connection = client
+        .connect(
+            RealtimeSessionConfig {
+                instructions: "backend prompt".to_string(),
+                model: Some("realtime-test-model".to_string()),
+                session_id: Some("conv_123".to_string()),
+                event_parser: RealtimeEventParser::RealtimeV2,
+            },
+            HeaderMap::new(),
+            HeaderMap::new(),
+        )
+        .await
+        .expect("connect");
+
+    let event = connection
+        .next_event()
+        .await
+        .expect("next event")
+        .expect("event");
+    assert_eq!(
+        event,
+        RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
+            handoff_id: "call_123".to_string(),
+            item_id: "item_123".to_string(),
+            input_transcript: "delegate now".to_string(),
+            active_transcript: Vec::new(),
+        })
     );
 
     connection.close().await.expect("close");
