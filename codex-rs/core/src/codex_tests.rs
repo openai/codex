@@ -341,7 +341,7 @@ async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyho
     )?;
     let mut exec_policy = Policy::empty();
     exec_policy.add_network_rule(
-        "api.incident.io",
+        "example.com",
         NetworkRuleProtocol::Https,
         Decision::Allow,
         None,
@@ -361,7 +361,7 @@ async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyho
     let current_cfg = started_proxy.proxy().current_cfg().await?;
     assert_eq!(
         current_cfg.network.allowed_domains,
-        vec!["api.incident.io".to_string()]
+        vec!["example.com".to_string()]
     );
     Ok(())
 }
