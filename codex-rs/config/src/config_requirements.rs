@@ -262,6 +262,32 @@ impl AppsRequirementsToml {
     }
 }
 
+/// Merge lower-precedence enabled settings into `base` using descending-precedence evaluation.
+///
+/// This function assumes `base` represents higher-precedence settings and `incoming`
+/// represents lower-precedence settings.
+///
+/// For each entry:
+/// - if either side sets `enabled = false`, the merged value is `false`;
+/// - otherwise, keep the higher-precedence value when present;
+/// - otherwise, use the lower-precedence value.
+pub(crate) fn merge_enablement_settings_descending(
+    base: &mut AppsRequirementsToml,
+    incoming: AppsRequirementsToml,
+) {
+    for (app_id, incoming_requirement) in incoming.apps {
+        let base_requirement = base.apps.entry(app_id).or_default();
+        let higher_precedence = base_requirement.enabled;
+        let lower_precedence = incoming_requirement.enabled;
+        base_requirement.enabled =
+            if higher_precedence == Some(false) || lower_precedence == Some(false) {
+                Some(false)
+            } else {
+                higher_precedence.or(lower_precedence)
+            };
+    }
+}
+
 /// Base config deserialized from system `requirements.toml` or MDM.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
@@ -319,10 +345,6 @@ impl ConfigRequirementsWithSources {
         // in `self` is `None`, copy the value from `other` into `self`.
         macro_rules! fill_missing_take {
             ($base:expr, $other:expr, $source:expr, { $($field:ident),+ $(,)? }) => {
-                // Destructure without `..` so adding fields to `ConfigRequirementsToml`
-                // forces this merge logic to be updated.
-                let ConfigRequirementsToml { $($field: _,)+ } = &$other;
-
                 $(
                     if $base.$field.is_none()
                         && let Some(value) = $other.$field.take()
@@ -332,6 +354,20 @@ impl ConfigRequirementsWithSources {
                 )+
             };
         }
+
+        // Destructure without `..` so adding fields to `ConfigRequirementsToml`
+        // forces this merge logic to be updated.
+        let ConfigRequirementsToml {
+            allowed_approval_policies: _,
+            allowed_sandbox_modes: _,
+            allowed_web_search_modes: _,
+            feature_requirements: _,
+            mcp_servers: _,
+            apps: _,
+            rules: _,
+            enforce_residency: _,
+            network: _,
+        } = &other;
 
         let mut other = other;
         fill_missing_take!(
@@ -344,12 +380,19 @@ impl ConfigRequirementsWithSources {
                 allowed_web_search_modes,
                 feature_requirements,
                 mcp_servers,
-                apps,
                 rules,
                 enforce_residency,
                 network,
             }
         );
+
+        if let Some(incoming_apps) = other.apps.take() {
+            if let Some(existing_apps) = self.apps.as_mut() {
+                merge_enablement_settings_descending(&mut existing_apps.value, incoming_apps);
+            } else {
+                self.apps = Some(Sourced::new(incoming_apps, source));
+            }
+        }
     }
 
     pub fn into_toml(self) -> ConfigRequirementsToml {
@@ -672,6 +715,88 @@ mod tests {
         }
     }
 
+    fn apps_requirements(entries: &[(&str, Option<bool>)]) -> AppsRequirementsToml {
+        AppsRequirementsToml {
+            apps: entries
+                .iter()
+                .map(|(app_id, enabled)| {
+                    (
+                        (*app_id).to_string(),
+                        AppRequirementToml { enabled: *enabled },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn merge_enablement_settings_descending_unions_distinct_apps() {
+        let mut merged = apps_requirements(&[("connector_high", Some(false))]);
+        let lower = apps_requirements(&[("connector_low", Some(true))]);
+
+        merge_enablement_settings_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            apps_requirements(&[
+                ("connector_high", Some(false)),
+                ("connector_low", Some(true))
+            ]),
+        );
+    }
+
+    #[test]
+    fn merge_enablement_settings_descending_prefers_false_from_lower_precedence() {
+        let mut merged = apps_requirements(&[("connector_123123", Some(true))]);
+        let lower = apps_requirements(&[("connector_123123", Some(false))]);
+
+        merge_enablement_settings_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            apps_requirements(&[("connector_123123", Some(false))]),
+        );
+    }
+
+    #[test]
+    fn merge_enablement_settings_descending_keeps_higher_true_when_lower_is_unset() {
+        let mut merged = apps_requirements(&[("connector_123123", Some(true))]);
+        let lower = apps_requirements(&[("connector_123123", None)]);
+
+        merge_enablement_settings_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            apps_requirements(&[("connector_123123", Some(true))]),
+        );
+    }
+
+    #[test]
+    fn merge_enablement_settings_descending_uses_lower_value_when_higher_missing() {
+        let mut merged = apps_requirements(&[]);
+        let lower = apps_requirements(&[("connector_123123", Some(true))]);
+
+        merge_enablement_settings_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            apps_requirements(&[("connector_123123", Some(true))]),
+        );
+    }
+
+    #[test]
+    fn merge_enablement_settings_descending_preserves_higher_false_when_lower_missing_app() {
+        let mut merged = apps_requirements(&[("connector_123123", Some(false))]);
+        let lower = apps_requirements(&[]);
+
+        merge_enablement_settings_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            apps_requirements(&[("connector_123123", Some(false))]),
+        );
+    }
+
     #[test]
     fn merge_unset_fields_copies_every_field_and_sets_sources() {
         let mut target = ConfigRequirementsWithSources::default();
@@ -808,6 +933,70 @@ mod tests {
             }
         );
         Ok(())
+    }
+
+    #[test]
+    fn merge_unset_fields_merges_apps_across_sources_with_enabled_evaluation() {
+        let higher_source = RequirementSource::CloudRequirements;
+        let lower_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+        let mut target = ConfigRequirementsWithSources::default();
+
+        target.merge_unset_fields(
+            higher_source.clone(),
+            ConfigRequirementsToml {
+                apps: Some(apps_requirements(&[
+                    ("connector_high", Some(true)),
+                    ("connector_shared", Some(true)),
+                ])),
+                ..Default::default()
+            },
+        );
+        target.merge_unset_fields(
+            lower_source,
+            ConfigRequirementsToml {
+                apps: Some(apps_requirements(&[
+                    ("connector_low", Some(false)),
+                    ("connector_shared", Some(false)),
+                ])),
+                ..Default::default()
+            },
+        );
+
+        let apps = target.apps.expect("apps should be present");
+        assert_eq!(
+            apps.value,
+            apps_requirements(&[
+                ("connector_high", Some(true)),
+                ("connector_low", Some(false)),
+                ("connector_shared", Some(false)),
+            ])
+        );
+        assert_eq!(apps.source, higher_source);
+    }
+
+    #[test]
+    fn merge_unset_fields_apps_empty_higher_source_does_not_block_lower_disables() {
+        let mut target = ConfigRequirementsWithSources::default();
+
+        target.merge_unset_fields(
+            RequirementSource::CloudRequirements,
+            ConfigRequirementsToml {
+                apps: Some(apps_requirements(&[])),
+                ..Default::default()
+            },
+        );
+        target.merge_unset_fields(
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
+            ConfigRequirementsToml {
+                apps: Some(apps_requirements(&[("connector_123123", Some(false))])),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            target.apps.map(|apps| apps.value),
+            Some(apps_requirements(&[("connector_123123", Some(false))])),
+        );
     }
 
     #[test]
