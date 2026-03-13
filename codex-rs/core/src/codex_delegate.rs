@@ -621,6 +621,9 @@ async fn maybe_auto_review_mcp_request_user_input(
     event: &RequestUserInputEvent,
     cancel_token: &CancellationToken,
 ) -> Option<RequestUserInputResponse> {
+    // TODO(ccunningham): Support delegated MCP approval elicitations here too after
+    // coordinating with @fouad. Today guardian only auto-reviews the RequestUserInput
+    // compatibility path for delegated MCP approvals.
     let question = event
         .questions
         .iter()

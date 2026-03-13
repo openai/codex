@@ -15,7 +15,6 @@ use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
 use crate::history_cell::UserHistoryCell;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
-use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
@@ -1890,7 +1889,6 @@ async fn make_chatwidget_manual(
         full_reasoning_buffer: String::new(),
         current_status_header: String::from("Working"),
         current_status_details: None,
-        current_status_details_capitalization: StatusDetailsCapitalization::CapitalizeFirst,
         current_status_details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
         retry_status_header: None,
         pending_status_indicator_restore: false,

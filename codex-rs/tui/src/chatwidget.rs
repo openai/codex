@@ -615,9 +615,8 @@ pub(crate) struct ChatWidget {
     full_reasoning_buffer: String,
     // Current status header shown in the status indicator.
     current_status_header: String,
-    // Current status details shown beneath the header, if any.
+    // Current status details shown beneath the header, if any, after formatting.
     current_status_details: Option<String>,
-    current_status_details_capitalization: StatusDetailsCapitalization,
     current_status_details_max_lines: usize,
     active_guardian_reviews: Vec<(String, String)>,
     // Previous status header to restore after a transient stream retry.
@@ -1060,7 +1059,7 @@ impl ChatWidget {
         self.set_status(
             self.current_status_header.clone(),
             self.current_status_details.clone(),
-            self.current_status_details_capitalization,
+            StatusDetailsCapitalization::Preserve,
             self.current_status_details_max_lines,
         );
         self.pending_status_indicator_restore = false;
@@ -1076,12 +1075,26 @@ impl ChatWidget {
         details_capitalization: StatusDetailsCapitalization,
         details_max_lines: usize,
     ) {
+        let details = details
+            .filter(|details| !details.is_empty())
+            .map(|details| {
+                let trimmed = details.trim_start();
+                match details_capitalization {
+                    StatusDetailsCapitalization::CapitalizeFirst => {
+                        crate::text_formatting::capitalize_first(trimmed)
+                    }
+                    StatusDetailsCapitalization::Preserve => trimmed.to_string(),
+                }
+            });
         self.current_status_header = header.clone();
         self.current_status_details = details.clone();
-        self.current_status_details_capitalization = details_capitalization;
         self.current_status_details_max_lines = details_max_lines;
-        self.bottom_pane
-            .update_status(header, details, details_capitalization, details_max_lines);
+        self.bottom_pane.update_status(
+            header,
+            details,
+            StatusDetailsCapitalization::Preserve,
+            details_max_lines,
+        );
     }
 
     /// Convenience wrapper around [`Self::set_status`];
@@ -3556,7 +3569,6 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
             current_status_details: None,
-            current_status_details_capitalization: StatusDetailsCapitalization::CapitalizeFirst,
             current_status_details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
             active_guardian_reviews: Vec::new(),
             retry_status_header: None,
@@ -3745,7 +3757,6 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
             current_status_details: None,
-            current_status_details_capitalization: StatusDetailsCapitalization::CapitalizeFirst,
             current_status_details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
             active_guardian_reviews: Vec::new(),
             retry_status_header: None,
@@ -3926,7 +3937,6 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
             current_status_details: None,
-            current_status_details_capitalization: StatusDetailsCapitalization::CapitalizeFirst,
             current_status_details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
             active_guardian_reviews: Vec::new(),
             retry_status_header: None,
