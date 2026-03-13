@@ -51,7 +51,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         vec![],
         vec![
             json!({
-                "type": "conversation.output_audio.delta",
+                "type": "response.output_audio.delta",
                 "delta": "AQID",
                 "sample_rate": 24_000,
                 "channels": 1,
