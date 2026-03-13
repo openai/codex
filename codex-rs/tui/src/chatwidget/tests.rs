@@ -8393,22 +8393,26 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
         .expect("set sandbox policy");
 
     chat.open_permissions_popup();
+    let popup = render_bottom_popup(&chat, 120);
     chat.handle_key_event(KeyEvent::from(KeyCode::Up));
-    #[cfg(not(target_os = "windows"))]
-    chat.handle_key_event(KeyEvent::from(KeyCode::Up));
+    if popup.contains("Smart Approvals") {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Up));
+    }
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one mode-switch history cell");
-    let rendered = lines_to_single_string(&cells[0]);
     #[cfg(target_os = "windows")]
     insta::with_settings!({ snapshot_suffix => "windows" }, {
-        assert_snapshot!("permissions_selection_history_full_access_to_default", rendered);
+        assert_snapshot!(
+            "permissions_selection_history_full_access_to_default",
+            lines_to_single_string(&cells[0])
+        );
     });
     #[cfg(not(target_os = "windows"))]
     assert_snapshot!(
         "permissions_selection_history_full_access_to_default",
-        rendered
+        lines_to_single_string(&cells[0])
     );
 }
 
