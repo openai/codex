@@ -2446,7 +2446,7 @@ fn code_mode_augments_builtin_tool_descriptions_with_typed_sample() {
 
     assert_eq!(
         description,
-        "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nCode mode declaration:\n```ts\nimport { view_image } from \"tools.js\";\ndeclare function view_image(args: {\n    path: string;\n  }): Promise<unknown>;\n```"
+        "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nCode mode declaration:\n```ts\ndeclare const tools: {\n  view_image(args: {\n    path: string;\n  }): Promise<unknown>;\n};\n```"
     );
 }
 
@@ -2498,7 +2498,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
 
     assert_eq!(
         description,
-        "Echo text\n\nCode mode declaration:\n```ts\nimport { echo } from \"tools/mcp/sample.js\";\ndeclare function echo(args: {\n    message: string;\n  }): Promise<{\n    _meta?: unknown;\n    content: Array<unknown>;\n    isError?: boolean;\n    structuredContent?: unknown;\n  }>;\n```"
+        "Echo text\n\nCode mode declaration:\n```ts\ndeclare const tools: {\n  mcp__sample__echo(args: {\n    message: string;\n  }): Promise<{\n    _meta?: unknown;\n    content: Array<unknown>;\n    isError?: boolean;\n    structuredContent?: unknown;\n  }>;\n};\n```"
     );
 }
 

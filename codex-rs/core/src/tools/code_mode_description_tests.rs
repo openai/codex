@@ -76,7 +76,7 @@ fn render_json_schema_to_typescript_sorts_object_properties() {
 }
 
 #[test]
-fn append_code_mode_sample_uses_module_imports_for_valid_identifiers() {
+fn append_code_mode_sample_uses_global_tools_for_valid_identifiers() {
     assert_eq!(
         append_code_mode_sample(
             "desc",
@@ -85,7 +85,7 @@ fn append_code_mode_sample_uses_module_imports_for_valid_identifiers() {
             "{ foo: string }".to_string(),
             "unknown".to_string(),
         ),
-        "desc\n\nCode mode declaration:\n```ts\nimport { get_profile } from \"tools/mcp/ologs.js\";\ndeclare function get_profile(args: { foo: string }): Promise<unknown>;\n```"
+        "desc\n\nCode mode declaration:\n```ts\ndeclare const tools: {\n  mcp__ologs__get_profile(args: { foo: string }): Promise<unknown>;\n};\n```"
     );
 }
 
@@ -99,6 +99,6 @@ fn append_code_mode_sample_normalizes_invalid_identifiers() {
             "{ foo: string }".to_string(),
             "unknown".to_string(),
         ),
-        "desc\n\nCode mode declaration:\n```ts\nimport { echo_tool } from \"tools/mcp/rmcp.js\";\ndeclare function echo_tool(args: { foo: string }): Promise<unknown>;\n```"
+        "desc\n\nCode mode declaration:\n```ts\ndeclare const tools: {\n  mcp__rmcp__echo_tool(args: { foo: string }): Promise<unknown>;\n};\n```"
     );
 }

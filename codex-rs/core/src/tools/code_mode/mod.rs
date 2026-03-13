@@ -223,6 +223,7 @@ fn enabled_tool_from_spec(spec: ToolSpec) -> Option<protocol::EnabledTool> {
     }
 
     let reference = code_mode_tool_reference(&tool_name);
+    let global_name = normalize_code_mode_identifier(&tool_name);
     let (description, kind) = match spec {
         ToolSpec::Function(tool) => (tool.description, protocol::CodeModeToolKind::Function),
         ToolSpec::Freeform(tool) => (tool.description, protocol::CodeModeToolKind::Freeform),
@@ -236,6 +237,7 @@ fn enabled_tool_from_spec(spec: ToolSpec) -> Option<protocol::EnabledTool> {
 
     Some(protocol::EnabledTool {
         tool_name,
+        global_name,
         module_path: reference.module_path,
         namespace: reference.namespace,
         name: normalize_code_mode_identifier(&reference.tool_key),
