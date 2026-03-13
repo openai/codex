@@ -102,6 +102,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
@@ -126,6 +127,8 @@ use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
+
+static NEXT_APP_SERVER_REQUEST_ID: AtomicI64 = AtomicI64::new(1);
 
 enum ThreadInteractiveRequest {
     Approval(ApprovalRequest),
@@ -221,9 +224,11 @@ fn request_app_server_skills_list(
     force_reload: bool,
 ) {
     tokio::spawn(async move {
+        let request_id =
+            RequestId::Integer(NEXT_APP_SERVER_REQUEST_ID.fetch_add(1, Ordering::Relaxed));
         let result = client
             .request_typed(ClientRequest::SkillsList {
-                request_id: RequestId::Integer(1),
+                request_id,
                 params: SkillsListParams {
                     cwds,
                     force_reload,
