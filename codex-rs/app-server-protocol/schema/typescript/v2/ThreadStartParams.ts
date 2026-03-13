@@ -7,12 +7,4 @@ import type { JsonValue } from "../serde_json/JsonValue";
 import type { AskForApproval } from "./AskForApproval";
 import type { SandboxMode } from "./SandboxMode";
 
-export type ThreadStartParams = {model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier | null | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, serviceName?: string | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, ephemeral?: boolean | null, /**
- * If true, opt into emitting raw Responses API items on the event stream.
- * This is for internal use only (e.g. Codex Cloud).
- */
-experimentalRawEvents: boolean, /**
- * If true, persist additional rollout EventMsg variants required to
- * reconstruct a richer thread history on resume/fork/read.
- */
-persistExtendedHistory: boolean};
+export type ThreadStartParams = {model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier | null | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, serviceName?: string | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, ephemeral?: boolean | null};

@@ -5,4 +5,7 @@ import type { McpElicitationLegacyTitledEnumSchema } from "./McpElicitationLegac
 import type { McpElicitationMultiSelectEnumSchema } from "./McpElicitationMultiSelectEnumSchema";
 import type { McpElicitationSingleSelectEnumSchema } from "./McpElicitationSingleSelectEnumSchema";
 
-export type McpElicitationEnumSchema = McpElicitationSingleSelectEnumSchema | McpElicitationMultiSelectEnumSchema | McpElicitationLegacyTitledEnumSchema;
+export type McpElicitationEnumSchema =
+  | McpElicitationSingleSelectEnumSchema
+  | McpElicitationMultiSelectEnumSchema
+  | McpElicitationLegacyTitledEnumSchema;

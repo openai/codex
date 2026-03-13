@@ -5,4 +5,7 @@
 /**
  * Authentication mode for OpenAI-backed providers.
  */
-export type AuthMode = "apikey" | "chatgpt" | "chatgptAuthTokens";
+export type AuthMode =
+  | "apikey"
+  | "chatgpt"
+  | "chatgptAuthTokens";

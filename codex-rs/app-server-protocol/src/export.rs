@@ -122,6 +122,8 @@ pub fn generate_ts_with_options(
         filter_experimental_ts(out_dir)?;
     }
 
+    normalize_generated_ts(out_dir)?;
+
     if options.generate_indices {
         generate_index_ts(out_dir)?;
         generate_index_ts(&v2_out_dir)?;
@@ -281,7 +283,30 @@ pub(crate) fn filter_experimental_ts_tree(tree: &mut BTreeMap<PathBuf, String>) 
     }
 
     remove_generated_type_entries(tree, &experimental_method_types, "ts");
+    normalize_generated_ts_tree(tree);
     Ok(())
+}
+
+fn normalize_generated_ts(out_dir: &Path) -> Result<()> {
+    for path in ts_files_in_recursive(out_dir)? {
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read {}", path.display()))?;
+        let normalized = normalize_union_type_alias_contents(&content);
+        if normalized != content {
+            fs::write(&path, normalized)
+                .with_context(|| format!("Failed to write {}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn normalize_generated_ts_tree(tree: &mut BTreeMap<PathBuf, String>) {
+    for (path, content) in tree.iter_mut() {
+        if path.extension().is_some_and(|ext| ext == "ts") {
+            let normalized = normalize_union_type_alias_contents(content);
+            *content = normalized;
+        }
+    }
 }
 
 /// Removes union arms from `ClientRequest.ts` for methods marked experimental.
@@ -321,6 +346,38 @@ fn filter_client_request_ts_contents(mut content: String, experimental_methods: 
         .map(|(_, filtered_body, _)| filtered_body)
         .unwrap_or_else(|| new_body.clone());
     prune_unused_type_imports(content, &import_usage_scope)
+}
+
+fn normalize_union_type_alias_contents(content: &str) -> String {
+    let Some((prefix, body, suffix)) = split_type_alias(content) else {
+        return content.to_string();
+    };
+    let arms = split_top_level(&body, '|');
+    if arms.len() <= 1 {
+        return content.to_string();
+    }
+
+    let formatted_body = arms
+        .iter()
+        .map(|arm| format_union_arm(arm))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{prefix}\n{formatted_body}{suffix}")
+}
+
+fn format_union_arm(arm: &str) -> String {
+    let mut lines = arm.trim().lines();
+    let Some(first) = lines.next() else {
+        return "  |".to_string();
+    };
+
+    let mut formatted = format!("  | {}", first.trim());
+    for line in lines {
+        formatted.push('\n');
+        formatted.push_str("    ");
+        formatted.push_str(line.trim_end());
+    }
+    formatted
 }
 
 /// Removes experimental properties from generated TypeScript type files.
@@ -732,11 +789,12 @@ fn find_top_level_brace_span(input: &str) -> Option<(usize, usize)> {
     let mut state = ScanState::default();
     let mut open_index = None;
     for (index, ch) in input.char_indices() {
-        if !state.in_string() && ch == '{' && state.depth.is_top_level() {
+        if !state.in_string() && !state.in_comment() && ch == '{' && state.depth.is_top_level() {
             open_index = Some(index);
         }
         state.observe(ch);
         if !state.in_string()
+            && !state.in_comment()
             && ch == '}'
             && state.depth.is_top_level()
             && let Some(open) = open_index
@@ -756,7 +814,11 @@ fn split_top_level_multi(input: &str, delimiters: &[char]) -> Vec<String> {
     let mut start = 0usize;
     let mut parts = Vec::new();
     for (index, ch) in input.char_indices() {
-        if !state.in_string() && state.depth.is_top_level() && delimiters.contains(&ch) {
+        if !state.in_string()
+            && !state.in_comment()
+            && state.depth.is_top_level()
+            && delimiters.contains(&ch)
+        {
             let part = input[start..index].trim();
             if !part.is_empty() {
                 parts.push(part.to_string());
@@ -878,10 +940,30 @@ struct ScanState {
     depth: Depth,
     string_delim: Option<char>,
     escape: bool,
+    pending_slash: bool,
+    comment: CommentState,
+    pending_block_comment_star: bool,
 }
 
 impl ScanState {
     fn observe(&mut self, ch: char) {
+        if self.comment == CommentState::Line {
+            if ch == '\n' {
+                self.comment = CommentState::None;
+            }
+            return;
+        }
+
+        if self.comment == CommentState::Block {
+            if self.pending_block_comment_star && ch == '/' {
+                self.comment = CommentState::None;
+                self.pending_block_comment_star = false;
+                return;
+            }
+            self.pending_block_comment_star = ch == '*';
+            return;
+        }
+
         if let Some(delim) = self.string_delim {
             if self.escape {
                 self.escape = false;
@@ -897,7 +979,29 @@ impl ScanState {
             return;
         }
 
+        if self.pending_slash {
+            match ch {
+                '/' => {
+                    self.comment = CommentState::Line;
+                    self.pending_slash = false;
+                    return;
+                }
+                '*' => {
+                    self.comment = CommentState::Block;
+                    self.pending_block_comment_star = false;
+                    self.pending_slash = false;
+                    return;
+                }
+                _ => {
+                    self.pending_slash = false;
+                }
+            }
+        }
+
         match ch {
+            '/' => {
+                self.pending_slash = true;
+            }
             '"' | '\'' => {
                 self.string_delim = Some(ch);
             }
@@ -920,6 +1024,18 @@ impl ScanState {
     fn in_string(&self) -> bool {
         self.string_delim.is_some()
     }
+
+    fn in_comment(&self) -> bool {
+        self.comment != CommentState::None
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum CommentState {
+    #[default]
+    None,
+    Line,
+    Block,
 }
 
 #[derive(Default)]
@@ -2297,6 +2413,57 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn normalize_union_type_alias_contents_rewrites_tagged_union_onto_separate_lines() {
+        let input = r#"export type ClientRequest = { "method": "initialize", id: RequestId, params: InitializeParams, } | { "method": "thread/start", id: RequestId, params: ThreadStartParams, };
+"#
+        .to_string();
+
+        let expected = r#"export type ClientRequest =
+  | { "method": "initialize", id: RequestId, params: InitializeParams, }
+  | { "method": "thread/start", id: RequestId, params: ThreadStartParams, };
+"#;
+
+        assert_eq!(normalize_union_type_alias_contents(&input), expected);
+    }
+
+    #[test]
+    fn normalize_union_type_alias_contents_rewrites_literal_unions_onto_separate_lines() {
+        let input = r#"export type AuthMode = "apikey" | "chatgpt" | "chatgptAuthTokens";
+"#
+        .to_string();
+
+        let expected = r#"export type AuthMode =
+  | "apikey"
+  | "chatgpt"
+  | "chatgptAuthTokens";
+"#;
+
+        assert_eq!(normalize_union_type_alias_contents(&input), expected);
+    }
+
+    #[test]
+    fn normalize_union_type_alias_contents_keeps_commented_multiline_object_arms_split() {
+        let input = r#"export type ThreadItem = { "type": "commandExecution",
+/**
+ * Example with Array<string> and { braces } inside docs.
+ */
+command: string, } | { "type": "fileChange", status: string, };
+"#
+        .to_string();
+
+        let expected = r#"export type ThreadItem =
+  | { "type": "commandExecution",
+    /**
+     * Example with Array<string> and { braces } inside docs.
+     */
+    command: string, }
+  | { "type": "fileChange", status: string, };
+"#;
+
+        assert_eq!(normalize_union_type_alias_contents(&input), expected);
     }
 
     #[test]
