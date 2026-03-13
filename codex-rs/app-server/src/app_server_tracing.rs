@@ -13,6 +13,7 @@ use crate::transport::AppServerTransport;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCRequest;
+use codex_app_server_protocol::RequestId;
 use codex_otel::set_parent_from_context;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_otel::traceparent_context_from_env;
@@ -92,9 +93,11 @@ fn transport_name(transport: AppServerTransport) -> &'static str {
 fn app_server_request_span_template(
     method: &str,
     transport: &'static str,
-    request_id: &impl std::fmt::Debug,
+    request_id: &RequestId,
     connection_id: ConnectionId,
 ) -> Span {
+    let request_id = request_id_string(request_id);
+    let connection_id = connection_id.0.to_string();
     info_span!(
         "app_server.request",
         otel.kind = "server",
@@ -102,8 +105,8 @@ fn app_server_request_span_template(
         rpc.system = "jsonrpc",
         rpc.method = method,
         rpc.transport = transport,
-        rpc.request_id = ?request_id,
-        app_server.connection_id = ?connection_id,
+        rpc.request_id = request_id,
+        app_server.connection_id = connection_id,
         app_server.api_version = "v2",
         app_server.client_name = field::Empty,
         app_server.client_version = field::Empty,
@@ -122,14 +125,14 @@ fn record_client_info(span: &Span, client_name: Option<&str>, client_version: Op
 fn attach_parent_context(
     span: &Span,
     method: &str,
-    request_id: &impl std::fmt::Debug,
+    request_id: &RequestId,
     parent_trace: Option<&W3cTraceContext>,
 ) {
     if let Some(trace) = parent_trace {
         if !set_parent_from_w3c_trace_context(span, trace) {
             tracing::warn!(
                 rpc_method = method,
-                rpc_request_id = ?request_id,
+                rpc_request_id = request_id_string(request_id),
                 "ignoring invalid inbound request trace carrier"
             );
         }
@@ -173,5 +176,12 @@ fn initialize_client_info_from_typed_request(request: &ClientRequest) -> Option<
             params.client_info.version.as_str(),
         )),
         _ => None,
+    }
+}
+
+fn request_id_string(request_id: &RequestId) -> String {
+    match request_id {
+        RequestId::String(request_id) => request_id.clone(),
+        RequestId::Integer(request_id) => request_id.to_string(),
     }
 }
