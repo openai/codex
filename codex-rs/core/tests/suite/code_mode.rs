@@ -105,17 +105,34 @@ fn custom_tool_output_body_and_success(
         .custom_tool_call_output_content_and_success(call_id)
         .expect("custom tool output should be present");
     let items = custom_tool_output_items(req, call_id);
-    let output = items
+    let text_items = items
         .iter()
-        .skip(1)
         .filter_map(|item| item.get("text").and_then(Value::as_str))
-        .collect::<String>();
-    let output = if output.is_empty() {
-        content.unwrap_or_default()
-    } else {
-        output
+        .collect::<Vec<_>>();
+    let output = match text_items.as_slice() {
+        [] => content.unwrap_or_default(),
+        [only] => (*only).to_string(),
+        [_, rest @ ..] => rest.concat(),
     };
     (output, success)
+}
+
+fn custom_tool_output_last_non_empty_text(req: &ResponsesRequest, call_id: &str) -> Option<String> {
+    match req.custom_tool_call_output(call_id).get("output") {
+        Some(Value::String(text)) if !text.trim().is_empty() => Some(text.clone()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| item.get("text").and_then(Value::as_str))
+            .filter(|text| !text.trim().is_empty())
+            .next_back()
+            .map(str::to_string),
+        Some(Value::String(_))
+        | Some(Value::Object(_))
+        | Some(Value::Number(_))
+        | Some(Value::Bool(_))
+        | Some(Value::Null)
+        | None => None,
+    }
 }
 
 async fn run_code_mode_turn(
@@ -1935,7 +1952,10 @@ text(JSON.stringify(tool));
         "exec ALL_TOOLS lookup failed unexpectedly: {output}"
     );
 
-    let parsed: Value = serde_json::from_str(&output)?;
+    let parsed: Value = serde_json::from_str(
+        &custom_tool_output_last_non_empty_text(&req, "call-1")
+            .expect("exec ALL_TOOLS lookup should emit JSON"),
+    )?;
     assert_eq!(
         parsed,
         serde_json::json!({
@@ -1970,7 +1990,10 @@ text(JSON.stringify(tool));
         "exec ALL_TOOLS MCP lookup failed unexpectedly: {output}"
     );
 
-    let parsed: Value = serde_json::from_str(&output)?;
+    let parsed: Value = serde_json::from_str(
+        &custom_tool_output_last_non_empty_text(&req, "call-1")
+            .expect("exec ALL_TOOLS MCP lookup should emit JSON"),
+    )?;
     assert_eq!(
         parsed,
         serde_json::json!({
@@ -2112,7 +2135,10 @@ add_content(
         "exec hidden dynamic tool call failed unexpectedly: {output}"
     );
 
-    let parsed: Value = serde_json::from_str(&output)?;
+    let parsed: Value = serde_json::from_str(
+        &custom_tool_output_last_non_empty_text(&req, "call-1")
+            .expect("exec hidden dynamic tool lookup should emit JSON"),
+    )?;
     assert_eq!(
         parsed.get("module"),
         Some(&Value::String("tools.js".to_string()))
@@ -2302,7 +2328,10 @@ text(JSON.stringify(load("nb")));
         Some(false),
         "exec load call failed unexpectedly: {second_output}"
     );
-    let loaded: Value = serde_json::from_str(&second_output)?;
+    let loaded: Value = serde_json::from_str(
+        &custom_tool_output_last_non_empty_text(&second_request, "call-2")
+            .expect("exec load call should emit JSON"),
+    )?;
     assert_eq!(
         loaded,
         serde_json::json!({ "title": "Notebook", "items": [1, true, null] })
