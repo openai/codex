@@ -1153,10 +1153,10 @@ impl App {
             return;
         };
         let label = if self.primary_thread_id == Some(parent_thread_id) {
-            "from main thread  Esc/Ctrl+C to return".to_string()
+            "from main thread  Esc to return".to_string()
         } else {
             let parent_label = self.thread_label(parent_thread_id);
-            format!("from parent thread ({parent_label})  Esc/Ctrl+C to return")
+            format!("from parent thread ({parent_label})  Esc to return")
         };
         self.chat_widget
             .set_footer_hint_override(Some(vec![("BTW".to_string(), label)]));

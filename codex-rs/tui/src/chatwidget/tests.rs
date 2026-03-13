@@ -9864,7 +9864,7 @@ async fn btw_footer_override_snapshot() {
     chat.show_welcome_banner = false;
     chat.set_footer_hint_override(Some(vec![(
         "BTW".to_string(),
-        "from main thread  Esc/Ctrl+C to return".to_string(),
+        "from main thread  Esc to return".to_string(),
     )]));
 
     let width = 80;
