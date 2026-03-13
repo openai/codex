@@ -1160,11 +1160,16 @@ impl Session {
         managed_network_requirements_enabled: bool,
         audit_metadata: NetworkProxyAuditMetadata,
     ) -> anyhow::Result<(StartedNetworkProxy, SessionNetworkProxyRuntime)> {
+        let spec = match spec.with_exec_policy_network_rules(exec_policy) {
+            Ok(spec) => spec,
+            Err(err) => {
+                tracing::warn!(
+                    "failed to apply execpolicy network rules to managed proxy; continuing with configured network policy: {err}"
+                );
+                spec.clone()
+            }
+        };
         let network_proxy = spec
-            .with_exec_policy_network_rules(exec_policy)
-            .map_err(|err| {
-                anyhow::anyhow!("failed to apply execpolicy network rules to managed proxy: {err}")
-            })?
             .start_proxy(
                 sandbox_policy,
                 network_policy_decider,
