@@ -7429,7 +7429,7 @@ async fn multi_agent_enable_prompt_updates_feature_and_emits_notice() {
         other => panic!("expected InsertHistoryCell event, got {other:?}"),
     };
     let rendered = lines_to_single_string(&cell.display_lines(120));
-    assert!(rendered.contains("Multi-agent will be enabled in the next session."));
+    assert!(rendered.contains("Subagents will be enabled in the next session."));
 }
 
 #[tokio::test]
