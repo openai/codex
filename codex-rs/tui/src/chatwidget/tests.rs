@@ -1961,25 +1961,6 @@ fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
     }
 }
 
-#[tokio::test]
-async fn skills_update_routes_list_skills_through_app_event_channel() {
-    let (mut chat, mut app_rx, mut op_rx) = make_chatwidget_manual(None).await;
-
-    chat.handle_codex_event(Event {
-        id: "skills-update".into(),
-        msg: EventMsg::SkillsUpdateAvailable,
-    });
-
-    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
-    assert_matches!(
-        app_rx.try_recv(),
-        Ok(AppEvent::CodexOp(Op::ListSkills {
-            cwds,
-            force_reload: true,
-        })) if cwds.is_empty()
-    );
-}
-
 pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),

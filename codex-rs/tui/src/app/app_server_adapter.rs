@@ -11,10 +11,13 @@ As more TUI flows move onto the app-server surface directly, this adapter
 should shrink and eventually disappear.
 */
 
+use crate::app_event::AppEvent;
+
 use super::App;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessServerEvent;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::ServerNotification;
 
 impl App {
     pub(super) async fn handle_app_server_event(
@@ -29,7 +32,12 @@ impl App {
                     "app-server event consumer lagged; dropping ignored events"
                 );
             }
-            InProcessServerEvent::ServerNotification(_) => {}
+            InProcessServerEvent::ServerNotification(notification) => match notification {
+                ServerNotification::SkillsChanged(_) => {
+                    self.app_event_tx.send(AppEvent::RefreshSkillsList);
+                }
+                _ => {}
+            },
             InProcessServerEvent::LegacyNotification(_) => {}
             InProcessServerEvent::ServerRequest(request) => {
                 let request_id = request.id().clone();
