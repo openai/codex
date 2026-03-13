@@ -645,6 +645,11 @@ pub(crate) struct App {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     pub(crate) auth_manager: Arc<AuthManager>,
+    embedded_app_server_client: Option<codex_app_server_client::InProcessAppServerClient>,
+    pending_embedded_app_server_requests: HashMap<
+        app_server_adapter::PendingEmbeddedAppServerRequestKey,
+        app_server_adapter::PendingEmbeddedAppServerRequest,
+    >,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) active_profile: Option<String>,
@@ -1216,6 +1221,7 @@ impl App {
     async fn submit_op_to_thread(&mut self, thread_id: ThreadId, op: Op) {
         let replay_state_op =
             ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
+        let embedded_app_server_response_op = op.clone();
         let submitted = if self.active_thread_id == Some(thread_id) {
             self.chat_widget.submit_op(op)
         } else {
@@ -1238,9 +1244,20 @@ impl App {
                 }
             }
         };
-        if submitted && let Some(op) = replay_state_op.as_ref() {
-            self.note_thread_outbound_op(thread_id, op).await;
-            self.refresh_pending_thread_approvals().await;
+        if submitted {
+            if let Err(err) = self
+                .resolve_embedded_app_server_request_for_submitted_op(
+                    thread_id,
+                    &embedded_app_server_response_op,
+                )
+                .await
+            {
+                tracing::warn!("{err}");
+            }
+            if let Some(op) = replay_state_op.as_ref() {
+                self.note_thread_outbound_op(thread_id, op).await;
+                self.refresh_pending_thread_approvals().await;
+            }
         }
     }
 
@@ -1712,7 +1729,7 @@ impl App {
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
-        mut embedded_app_server: EmbeddedAppServer,
+        embedded_app_server: EmbeddedAppServer,
         mut config: Config,
         cli_kv_overrides: Vec<(String, TomlValue)>,
         harness_overrides: ConfigOverrides,
@@ -1922,6 +1939,8 @@ impl App {
             app_event_tx,
             chat_widget,
             auth_manager: auth_manager.clone(),
+            embedded_app_server_client: Some(embedded_app_server.client),
+            pending_embedded_app_server_requests: HashMap::new(),
             config,
             active_profile,
             cli_kv_overrides,
@@ -2046,9 +2065,14 @@ impl App {
                             Err(err) => break Err(err),
                         }
                     }
-                    app_server_event = embedded_app_server.client.next_event(), if listen_for_app_server_events => {
+                    app_server_event = async {
+                        match app.embedded_app_server_client.as_mut() {
+                            Some(client) => client.next_event().await,
+                            None => None,
+                        }
+                    }, if listen_for_app_server_events => {
                         match app_server_event {
-                            Some(event) => app.handle_embedded_app_server_event(&embedded_app_server.client, event).await,
+                            Some(event) => app.handle_embedded_app_server_event(event).await,
                             None => {
                                 listen_for_app_server_events = false;
                                 tracing::warn!("embedded app-server event stream closed");
@@ -2086,7 +2110,9 @@ impl App {
                 }
             }
         };
-        if let Err(err) = embedded_app_server.client.shutdown().await {
+        if let Some(client) = app.embedded_app_server_client.take()
+            && let Err(err) = client.shutdown().await
+        {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }
         let clear_result = tui.terminal.clear();
@@ -5626,6 +5652,8 @@ mod tests {
             app_event_tx,
             chat_widget,
             auth_manager,
+            embedded_app_server_client: None,
+            pending_embedded_app_server_requests: HashMap::new(),
             config,
             active_profile: None,
             cli_kv_overrides: Vec::new(),
@@ -5686,6 +5714,8 @@ mod tests {
                 app_event_tx,
                 chat_widget,
                 auth_manager,
+                embedded_app_server_client: None,
+                pending_embedded_app_server_requests: HashMap::new(),
                 config,
                 active_profile: None,
                 cli_kv_overrides: Vec::new(),
