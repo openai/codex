@@ -123,8 +123,7 @@ fn custom_tool_output_last_non_empty_text(req: &ResponsesRequest, call_id: &str)
         Some(Value::Array(items)) => items
             .iter()
             .filter_map(|item| item.get("text").and_then(Value::as_str))
-            .filter(|text| !text.trim().is_empty())
-            .next_back()
+            .rfind(|text| !text.trim().is_empty())
             .map(str::to_string),
         Some(Value::String(_))
         | Some(Value::Object(_))
@@ -1538,6 +1537,10 @@ text({ json: true });
 
     let req = second_mock.single_request();
     let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    eprintln!(
+        "hidden dynamic tool raw output: {}",
+        req.custom_tool_call_output("call-1")
+    );
     assert_ne!(
         success,
         Some(false),
@@ -2046,13 +2049,10 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
     let code = r#"
 import { ALL_TOOLS, hidden_dynamic_tool } from "tools.js";
 
-const tool = ALL_TOOLS.find(
-  ({ module, name }) => module === "tools.js" && name === "hidden_dynamic_tool"
-);
+const tool = ALL_TOOLS.find(({ name }) => name === "hidden_dynamic_tool");
 const out = await hidden_dynamic_tool({ city: "Paris" });
-add_content(
+text(
   JSON.stringify({
-    module: tool?.module ?? null,
     name: tool?.name ?? null,
     description: tool?.description ?? null,
     out,
@@ -2140,10 +2140,6 @@ add_content(
             .expect("exec hidden dynamic tool lookup should emit JSON"),
     )?;
     assert_eq!(
-        parsed.get("module"),
-        Some(&Value::String("tools.js".to_string()))
-    );
-    assert_eq!(
         parsed.get("name"),
         Some(&Value::String("hidden_dynamic_tool".to_string()))
     );
@@ -2157,8 +2153,8 @@ add_content(
             .and_then(Value::as_str)
             .is_some_and(|description| {
                 description.contains("A hidden dynamic tool.")
-                    && description.contains("import { hidden_dynamic_tool } from \"tools.js\";")
-                    && description.contains("declare function hidden_dynamic_tool")
+                    && description.contains("declare const tools:")
+                    && description.contains("hidden_dynamic_tool(args:")
             })
     );
 
