@@ -48,6 +48,7 @@ use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::bottom_pane::find_builtin_command;
+use crate::slash_command::SlashCommandExecutionKind;
 use crate::slash_command_invocation::SlashCommandInvocation;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
@@ -4344,7 +4345,7 @@ impl ChatWidget {
     /// should not open that UI during replay.
     fn dispatch_command(&mut self, cmd: SlashCommand) -> QueueReplayControl {
         if self.bottom_pane.is_task_running()
-            && !cmd.available_during_task()
+            && !matches!(cmd.execution_kind(), SlashCommandExecutionKind::Immediate)
             && !cmd.requires_interaction()
         {
             self.queue_user_message(SlashCommandInvocation::bare(cmd).into_user_message());
@@ -4725,7 +4726,8 @@ impl ChatWidget {
         text_elements: Vec<TextElement>,
     ) {
         let trimmed = args.trim();
-        let should_queue = self.bottom_pane.is_task_running() && !cmd.available_during_task();
+        let should_queue = self.bottom_pane.is_task_running()
+            && !matches!(cmd.execution_kind(), SlashCommandExecutionKind::Immediate);
         if trimmed.is_empty() {
             if should_queue && !cmd.requires_interaction() {
                 self.queue_current_inline_bare_slash_command(cmd);
@@ -5750,7 +5752,9 @@ impl ChatWidget {
             self.restore_user_message_to_composer(draft);
             return;
         };
-        if self.bottom_pane.is_task_running() && !cmd.available_during_task() {
+        if self.bottom_pane.is_task_running()
+            && !matches!(cmd.execution_kind(), SlashCommandExecutionKind::Immediate)
+        {
             self.queue_user_message(draft);
             return;
         }

@@ -229,52 +229,53 @@ impl SlashCommand {
         }
     }
 
-    /// Whether this command can be run while a task is in progress.
-    pub fn available_during_task(self) -> bool {
+    /// How this command should behave when dispatched while another turn is running.
+    pub fn execution_kind(self) -> SlashCommandExecutionKind {
         match self {
-            SlashCommand::Help => true,
-            SlashCommand::New
-            | SlashCommand::Resume
-            | SlashCommand::Fork
-            | SlashCommand::Init
-            | SlashCommand::Compact
-            // | SlashCommand::Undo
-            | SlashCommand::Model
+            SlashCommand::Plan | SlashCommand::Init => {
+                SlashCommandExecutionKind::JustLikeUserMessage
+            }
+            SlashCommand::Model
             | SlashCommand::Fast
-            | SlashCommand::Personality
             | SlashCommand::Approvals
             | SlashCommand::Permissions
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
             | SlashCommand::Review
-            | SlashCommand::Plan
+            | SlashCommand::New
+            | SlashCommand::Resume
+            | SlashCommand::Fork
+            | SlashCommand::Compact
             | SlashCommand::Clear
             | SlashCommand::Logout
+            | SlashCommand::Personality
+            | SlashCommand::Statusline
+            | SlashCommand::Theme
             | SlashCommand::MemoryDrop
-            | SlashCommand::MemoryUpdate => false,
-            SlashCommand::Diff
-            | SlashCommand::Copy
-            | SlashCommand::Rename
-            | SlashCommand::Mention
+            | SlashCommand::MemoryUpdate => SlashCommandExecutionKind::ChangesTurnContext,
+            SlashCommand::Help
             | SlashCommand::Skills
+            | SlashCommand::Rename
+            | SlashCommand::Collab
+            | SlashCommand::Agent
+            | SlashCommand::MultiAgents
+            | SlashCommand::Diff
+            | SlashCommand::Copy
+            | SlashCommand::Mention
             | SlashCommand::Status
             | SlashCommand::DebugConfig
-            | SlashCommand::Ps
-            | SlashCommand::Clean
             | SlashCommand::Mcp
             | SlashCommand::Apps
-            | SlashCommand::Feedback
             | SlashCommand::Quit
-            | SlashCommand::Exit => true,
-            SlashCommand::Rollout => true,
-            SlashCommand::TestApproval => true,
-            SlashCommand::Realtime => true,
-            SlashCommand::Settings => true,
-            SlashCommand::Collab => true,
-            SlashCommand::Agent | SlashCommand::MultiAgents => true,
-            SlashCommand::Statusline => false,
-            SlashCommand::Theme => false,
+            | SlashCommand::Exit
+            | SlashCommand::Feedback
+            | SlashCommand::Rollout
+            | SlashCommand::Ps
+            | SlashCommand::Clean
+            | SlashCommand::Realtime
+            | SlashCommand::Settings
+            | SlashCommand::TestApproval => SlashCommandExecutionKind::Immediate,
         }
     }
 
@@ -286,6 +287,25 @@ impl SlashCommand {
             _ => true,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlashCommandExecutionKind {
+    /// Behaves like a normal user message.
+    ///
+    /// Enter should submit immediately when idle, and queue while a turn is running.
+    /// Use this for commands whose effect is "ask the model to do work now".
+    JustLikeUserMessage,
+
+    /// Does not become a user message, but changes state that affects future turns.
+    ///
+    /// While a turn is running, it must queue and apply later in order.
+    ChangesTurnContext,
+
+    /// Does not submit model work and does not need to wait for the current turn.
+    ///
+    /// Run it immediately, even while a turn is in progress.
+    Immediate,
 }
 
 /// Return all built-in commands in a Vec paired with their command string.
