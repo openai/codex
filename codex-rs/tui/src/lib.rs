@@ -29,6 +29,8 @@ use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 use codex_core::format_exec_policy_error_with_source;
+use codex_core::git_info::current_branch_name;
+use codex_core::git_info::get_git_repo_root;
 use codex_core::path_utils;
 use codex_core::read_session_meta_line;
 use codex_core::state_db::get_state_db;
@@ -48,9 +50,14 @@ use codex_utils_oss::get_default_model_for_oss_provider;
 use cwd_prompt::CwdPromptAction;
 use cwd_prompt::CwdPromptOutcome;
 use cwd_prompt::CwdSelection;
+use git_branch_prompt::GitBranchPromptOutcome;
+use git_branch_prompt::GitBranchSelection;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
+use tokio::process::Command;
+use tokio::time::Duration as TokioDuration;
+use tokio::time::timeout;
 use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
@@ -82,6 +89,7 @@ mod external_editor;
 mod file_search;
 mod frames;
 mod get_git_diff;
+mod git_branch_prompt;
 mod history_cell;
 pub mod insert_history;
 mod key_hint;
@@ -1016,10 +1024,35 @@ pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
     }
 }
 
+#[cfg(test)]
+fn repo_roots_match(a: &Path, b: &Path) -> bool {
+    repo_root_matches(get_git_repo_root(a), get_git_repo_root(b))
+}
+
+fn repo_root_matches(
+    selected_repo_root: Option<PathBuf>,
+    session_repo_root: Option<PathBuf>,
+) -> bool {
+    match (selected_repo_root, session_repo_root) {
+        (Some(selected_repo_root), Some(session_repo_root)) => match (
+            path_utils::normalize_for_path_comparison(&selected_repo_root),
+            path_utils::normalize_for_path_comparison(&session_repo_root),
+        ) {
+            (Ok(selected_repo_root), Ok(session_repo_root)) => {
+                selected_repo_root == session_repo_root
+            }
+            _ => selected_repo_root == session_repo_root,
+        },
+        _ => false,
+    }
+}
+
 pub(crate) enum ResolveCwdOutcome {
     Continue(Option<PathBuf>),
     Exit,
 }
+
+const RESUME_GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
 
 pub(crate) async fn resolve_cwd_for_resume_or_fork(
     tui: &mut Tui,
@@ -1033,20 +1066,73 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
     let Some(history_cwd) = read_session_cwd(config, thread_id, path).await else {
         return Ok(ResolveCwdOutcome::Continue(None));
     };
-    if allow_prompt && cwds_differ(current_cwd, &history_cwd) {
+    let session_repo_root = get_git_repo_root(&history_cwd);
+    let selected_cwd = if allow_prompt && cwds_differ(current_cwd, &history_cwd) {
         let selection_outcome =
             cwd_prompt::run_cwd_selection_prompt(tui, action, current_cwd, &history_cwd).await?;
-        return Ok(match selection_outcome {
-            CwdPromptOutcome::Selection(CwdSelection::Current) => {
-                ResolveCwdOutcome::Continue(Some(current_cwd.to_path_buf()))
+        match selection_outcome {
+            CwdPromptOutcome::Selection(CwdSelection::Current) => current_cwd.to_path_buf(),
+            CwdPromptOutcome::Selection(CwdSelection::Session) => history_cwd,
+            CwdPromptOutcome::Exit => return Ok(ResolveCwdOutcome::Exit),
+        }
+    } else {
+        history_cwd
+    };
+    let selected_cwd_matches_session_repo =
+        repo_root_matches(get_git_repo_root(&selected_cwd), session_repo_root);
+
+    let session_branch = read_session_meta_line(path)
+        .await
+        .ok()
+        .and_then(|meta| meta.git.and_then(|git| git.branch))
+        .filter(|branch| !branch.is_empty());
+    if allow_prompt
+        && let Some(session_branch) = session_branch
+        && selected_cwd_matches_session_repo
+    {
+        let current_branch = current_branch_name(&selected_cwd).await;
+        if current_branch.as_deref() != Some(session_branch.as_str()) {
+            let current_branch_label = current_branch
+                .clone()
+                .unwrap_or_else(|| "(detached HEAD)".to_string());
+            let selection_outcome = git_branch_prompt::run_git_branch_selection_prompt(
+                tui,
+                action,
+                &current_branch_label,
+                &session_branch,
+            )
+            .await?;
+            match selection_outcome {
+                GitBranchPromptOutcome::Selection(GitBranchSelection::Current) => {}
+                GitBranchPromptOutcome::Selection(GitBranchSelection::Session) => {
+                    let mut command = Command::new("git");
+                    command
+                        .env("GIT_OPTIONAL_LOCKS", "0")
+                        .args(["checkout", session_branch.as_str()])
+                        .current_dir(&selected_cwd)
+                        .kill_on_drop(true);
+                    let output = timeout(RESUME_GIT_COMMAND_TIMEOUT, command.output()).await??;
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        let details = if !stderr.is_empty() {
+                            stderr
+                        } else if !stdout.is_empty() {
+                            stdout
+                        } else {
+                            "git checkout failed".to_string()
+                        };
+                        return Err(color_eyre::eyre::eyre!(
+                            "Failed to switch to git branch {session_branch}: {details}"
+                        ));
+                    }
+                }
+                GitBranchPromptOutcome::Exit => return Ok(ResolveCwdOutcome::Exit),
             }
-            CwdPromptOutcome::Selection(CwdSelection::Session) => {
-                ResolveCwdOutcome::Continue(Some(history_cwd))
-            }
-            CwdPromptOutcome::Exit => ResolveCwdOutcome::Exit,
-        });
+        }
     }
-    Ok(ResolveCwdOutcome::Continue(Some(history_cwd)))
+
+    Ok(ResolveCwdOutcome::Continue(Some(selected_cwd)))
 }
 
 #[expect(
@@ -1357,6 +1443,24 @@ mod tests {
             .expect("expected cwd");
         assert_eq!(session_cwd, latest);
         assert!(cwds_differ(&current, &session_cwd));
+        Ok(())
+    }
+
+    #[test]
+    fn repo_roots_match_only_for_same_repo() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let repo_a = temp_dir.path().join("repo-a");
+        let repo_b = temp_dir.path().join("repo-b");
+        let repo_a_nested = repo_a.join("nested");
+        let repo_b_nested = repo_b.join("nested");
+        std::fs::create_dir_all(repo_a.join(".git"))?;
+        std::fs::create_dir_all(repo_b.join(".git"))?;
+        std::fs::create_dir_all(&repo_a_nested)?;
+        std::fs::create_dir_all(&repo_b_nested)?;
+
+        assert!(repo_roots_match(&repo_a, &repo_a_nested));
+        assert!(!repo_roots_match(&repo_a_nested, &repo_b_nested));
+        assert!(!repo_roots_match(&repo_a, temp_dir.path()));
         Ok(())
     }
 

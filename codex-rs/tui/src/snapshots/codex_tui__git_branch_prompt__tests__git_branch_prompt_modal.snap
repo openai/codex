@@ -1,0 +1,14 @@
+---
+source: tui/src/git_branch_prompt.rs
+expression: terminal.backend()
+---
+
+Choose git branch to resume this session
+
+  Session = git branch recorded in the resumed session                          
+  Current = branch checked out in the selected working directory
+
+› 1. Switch to session branch (feature/resume)                                  
+  2. Continue on current branch (main)
+
+  Press enter to continue
