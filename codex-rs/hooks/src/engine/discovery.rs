@@ -80,6 +80,18 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
             );
         }
 
+        for group in parsed.hooks.user_prompt_submit {
+            append_group_handlers(
+                &mut handlers,
+                &mut warnings,
+                &mut display_order,
+                source_path.as_path(),
+                codex_protocol::protocol::HookEventName::UserPromptSubmit,
+                group.matcher.as_deref(),
+                group.hooks,
+            );
+        }
+
         for group in parsed.hooks.stop {
             append_group_handlers(
                 &mut handlers,

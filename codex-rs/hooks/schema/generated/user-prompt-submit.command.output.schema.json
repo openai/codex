@@ -10,7 +10,7 @@
       ],
       "type": "string"
     },
-    "SessionStartHookSpecificOutputWire": {
+    "UserPromptSubmitHookSpecificOutputWire": {
       "additionalProperties": false,
       "properties": {
         "additionalContext": {
@@ -35,7 +35,7 @@
     "hookSpecificOutput": {
       "allOf": [
         {
-          "$ref": "#/definitions/SessionStartHookSpecificOutputWire"
+          "$ref": "#/definitions/UserPromptSubmitHookSpecificOutputWire"
         }
       ],
       "default": null
@@ -53,6 +53,6 @@
       "type": "string"
     }
   },
-  "title": "session-start.command.output",
+  "title": "user-prompt-submit.command.output",
   "type": "object"
 }

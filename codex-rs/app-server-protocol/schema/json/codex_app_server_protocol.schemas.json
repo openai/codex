@@ -7996,6 +7996,7 @@
       "HookEventName": {
         "enum": [
           "sessionStart",
+          "userPromptSubmit",
           "stop"
         ],
         "type": "string"

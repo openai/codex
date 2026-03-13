@@ -24,19 +24,21 @@ pub(crate) struct ParsedHandler<T> {
 pub(crate) fn select_handlers(
     handlers: &[ConfiguredHandler],
     event_name: HookEventName,
-    session_start_source: Option<&str>,
+    matcher_input: Option<&str>,
 ) -> Vec<ConfiguredHandler> {
     handlers
         .iter()
         .filter(|handler| handler.event_name == event_name)
         .filter(|handler| match event_name {
-            HookEventName::SessionStart => match (&handler.matcher, session_start_source) {
-                (Some(matcher), Some(source)) => regex::Regex::new(matcher)
-                    .map(|regex| regex.is_match(source))
-                    .unwrap_or(false),
-                (None, _) => true,
-                _ => false,
-            },
+            HookEventName::SessionStart | HookEventName::UserPromptSubmit => {
+                match (&handler.matcher, matcher_input) {
+                    (Some(matcher), Some(input)) => regex::Regex::new(matcher)
+                        .map(|regex| regex.is_match(input))
+                        .unwrap_or(false),
+                    (None, _) => true,
+                    _ => false,
+                }
+            }
             HookEventName::Stop => true,
         })
         .cloned()
@@ -109,7 +111,7 @@ pub(crate) fn completed_summary(
 fn scope_for_event(event_name: HookEventName) -> HookScope {
     match event_name {
         HookEventName::SessionStart => HookScope::Thread,
-        HookEventName::Stop => HookScope::Turn,
+        HookEventName::UserPromptSubmit | HookEventName::Stop => HookScope::Turn,
     }
 }
 
@@ -166,6 +168,34 @@ mod tests {
         ];
 
         let selected = select_handlers(&handlers, HookEventName::SessionStart, Some("startup"));
+
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].display_order, 0);
+        assert_eq!(selected[1].display_order, 1);
+    }
+
+    #[test]
+    fn user_prompt_submit_matcher_uses_prompt_text() {
+        let handlers = vec![
+            make_handler(
+                HookEventName::UserPromptSubmit,
+                Some("^hello"),
+                "echo first",
+                0,
+            ),
+            make_handler(
+                HookEventName::UserPromptSubmit,
+                Some("world$"),
+                "echo second",
+                1,
+            ),
+        ];
+
+        let selected = select_handlers(
+            &handlers,
+            HookEventName::UserPromptSubmit,
+            Some("hello world"),
+        );
 
         assert_eq!(selected.len(), 2);
         assert_eq!(selected[0].display_order, 0);
