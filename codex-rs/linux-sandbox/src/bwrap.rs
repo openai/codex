@@ -468,18 +468,26 @@ fn append_unreadable_root_args(
     }
 
     if unreadable_root.is_dir() {
-        args.push("--perms".to_string());
-        args.push("000".to_string());
-        args.push("--tmpfs".to_string());
-        args.push(path_to_string(unreadable_root));
-        // Recreate any writable descendants inside the tmpfs before remounting
-        // the denied parent read-only. Otherwise bubblewrap cannot mkdir the
-        // nested mount targets after the parent has been frozen.
         let mut writable_descendants: Vec<&Path> = allowed_write_paths
             .iter()
             .map(PathBuf::as_path)
             .filter(|path| *path != unreadable_root && path.starts_with(unreadable_root))
             .collect();
+        args.push("--perms".to_string());
+        // Execute-only perms let the process traverse into explicitly
+        // re-opened writable descendants while still hiding the denied
+        // directory contents. Plain denied directories with no writable child
+        // mounts stay at `000`.
+        args.push(if writable_descendants.is_empty() {
+            "000".to_string()
+        } else {
+            "111".to_string()
+        });
+        args.push("--tmpfs".to_string());
+        args.push(path_to_string(unreadable_root));
+        // Recreate any writable descendants inside the tmpfs before remounting
+        // the denied parent read-only. Otherwise bubblewrap cannot mkdir the
+        // nested mount targets after the parent has been frozen.
         writable_descendants.sort_by_key(|path| path_depth(path));
         for writable_descendant in writable_descendants {
             append_mount_target_parent_dir_args(args, writable_descendant, unreadable_root);
@@ -898,7 +906,7 @@ mod tests {
         let blocked_none_index = args
             .args
             .windows(4)
-            .position(|window| window == ["--perms", "000", "--tmpfs", blocked_str.as_str()])
+            .position(|window| window == ["--perms", "111", "--tmpfs", blocked_str.as_str()])
             .expect("blocked should be masked first");
         let allowed_dir_index = args
             .args
@@ -982,7 +990,7 @@ mod tests {
         let blocked_none_index = args
             .args
             .windows(4)
-            .position(|window| window == ["--perms", "000", "--tmpfs", blocked_str.as_str()])
+            .position(|window| window == ["--perms", "111", "--tmpfs", blocked_str.as_str()])
             .expect("blocked should be masked first");
         let allowed_bind_index = args
             .args
