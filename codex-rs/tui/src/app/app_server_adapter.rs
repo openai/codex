@@ -30,41 +30,28 @@ impl App {
                     "app-server event consumer lagged; dropping ignored events"
                 );
             }
-            InProcessServerEvent::ServerNotification(notification) => {
-                self.handle_ignored_app_server_notification(notification);
-            }
-            InProcessServerEvent::LegacyNotification(notification) => {
-                self.handle_ignored_app_server_legacy_notification(notification);
-            }
+            InProcessServerEvent::ServerNotification(_) => {}
+            InProcessServerEvent::LegacyNotification(_) => {}
             InProcessServerEvent::ServerRequest(request) => {
-                self.handle_app_server_request(app_server_client, request)
-                    .await;
+                let method = Self::server_request_method_name(&request);
+                let request_id = request.id().clone();
+                tracing::warn!(
+                    ?request_id,
+                    method,
+                    "rejecting app-server request while TUI still uses direct core APIs"
+                );
+                if let Err(err) = self
+                    .reject_app_server_request(
+                        app_server_client,
+                        request_id,
+                        &method,
+                        "TUI client does not yet handle this app-server server request".to_string(),
+                    )
+                    .await
+                {
+                    tracing::warn!("{err}");
+                }
             }
-        }
-    }
-
-    async fn handle_app_server_request(
-        &mut self,
-        app_server_client: &InProcessAppServerClient,
-        request: ServerRequest,
-    ) {
-        let method = Self::server_request_method_name(&request);
-        let request_id = request.id().clone();
-        tracing::warn!(
-            ?request_id,
-            method,
-            "rejecting app-server request while TUI still uses direct core APIs"
-        );
-        if let Err(err) = self
-            .reject_app_server_request(
-                app_server_client,
-                request_id,
-                &method,
-                "TUI client does not yet handle this app-server server request".to_string(),
-            )
-            .await
-        {
-            tracing::warn!("{err}");
         }
     }
 
@@ -86,18 +73,6 @@ impl App {
             )
             .await
             .map_err(|err| format!("failed to reject `{method}` server request: {err}"))
-    }
-
-    fn handle_ignored_app_server_notification(
-        &mut self,
-        _notification: codex_app_server_protocol::ServerNotification,
-    ) {
-    }
-
-    fn handle_ignored_app_server_legacy_notification(
-        &mut self,
-        _notification: codex_app_server_protocol::JSONRPCNotification,
-    ) {
     }
 
     fn server_request_method_name(request: &ServerRequest) -> String {
