@@ -59,6 +59,7 @@ use codex_app_server_protocol::AppInfo;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
@@ -152,15 +153,6 @@ fn developer_input_texts(items: &[ResponseItem]) -> Vec<&str> {
             _ => None,
         })
         .collect()
-}
-
-fn default_image_save_developer_message_text() -> String {
-    let image_output_dir = crate::stream_events_utils::default_image_generation_output_dir();
-    format!(
-        "Generated images are saved to {} as {} by default.",
-        image_output_dir.display(),
-        image_output_dir.join("<image_id>.png").display(),
-    )
 }
 
 fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
@@ -3203,13 +3195,12 @@ async fn build_initial_context_omits_default_image_save_location_without_image_h
 }
 
 #[tokio::test]
-async fn handle_output_item_done_records_image_save_message_after_successful_save() {
+async fn handle_output_item_done_records_image_save_history_message() {
     let (session, turn_context) = make_session_and_context().await;
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_records_message";
-    let expected_saved_path = crate::stream_events_utils::default_image_generation_output_dir()
-        .join(format!("{call_id}.png"));
+    let expected_saved_path = std::env::temp_dir().join(format!("{call_id}.png"));
     let _ = std::fs::remove_file(&expected_saved_path);
     let item = ResponseItem::ImageGenerationCall {
         id: call_id.to_string(),
@@ -3229,9 +3220,13 @@ async fn handle_output_item_done_records_image_save_message_after_successful_sav
         .expect("image generation item should succeed");
 
     let history = session.clone_history().await;
-    let expected_message: ResponseItem =
-        DeveloperInstructions::new(default_image_save_developer_message_text()).into();
-    assert_eq!(history.raw_items(), &[expected_message, item]);
+    let save_message: ResponseItem = DeveloperInstructions::new(format!(
+        "Generated images are saved to {} as {} by default.",
+        std::env::temp_dir().display(),
+        std::env::temp_dir().join("<image_id>.png").display(),
+    ))
+    .into();
+    assert_eq!(history.raw_items(), &[save_message, item]);
     assert_eq!(
         std::fs::read(&expected_saved_path).expect("saved file"),
         b"foo"
@@ -3245,8 +3240,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_no_message";
-    let expected_saved_path = crate::stream_events_utils::default_image_generation_output_dir()
-        .join(format!("{call_id}.png"));
+    let expected_saved_path = std::env::temp_dir().join(format!("{call_id}.png"));
     let _ = std::fs::remove_file(&expected_saved_path);
     let item = ResponseItem::ImageGenerationCall {
         id: call_id.to_string(),

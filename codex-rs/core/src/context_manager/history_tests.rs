@@ -398,7 +398,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
 }
 
 #[test]
-fn for_prompt_rewrites_image_generation_calls_when_images_are_supported() {
+fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
     let history = create_history_with_items(vec![
         ResponseItem::ImageGenerationCall {
             id: "ig_123".to_string(),
@@ -420,25 +420,11 @@ fn for_prompt_rewrites_image_generation_calls_when_images_are_supported() {
     assert_eq!(
         history.for_prompt(&default_input_modalities()),
         vec![
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![
-                    ContentItem::InputText {
-                        text: "Image Generation Call".to_string(),
-                    },
-                    ContentItem::InputText {
-                        text: "Image ID: ig_123".to_string(),
-                    },
-                    ContentItem::InputText {
-                        text: "Prompt: lobster".to_string(),
-                    },
-                    ContentItem::InputImage {
-                        image_url: "data:image/png;base64,Zm9v".to_string(),
-                    },
-                ],
-                end_turn: None,
-                phase: None,
+            ResponseItem::ImageGenerationCall {
+                id: "ig_123".to_string(),
+                status: "generating".to_string(),
+                revised_prompt: Some("lobster".to_string()),
+                result: "Zm9v".to_string(),
             },
             ResponseItem::Message {
                 id: None,
@@ -454,7 +440,7 @@ fn for_prompt_rewrites_image_generation_calls_when_images_are_supported() {
 }
 
 #[test]
-fn for_prompt_rewrites_image_generation_calls_when_images_are_unsupported() {
+fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
     let history = create_history_with_items(vec![
         ResponseItem::Message {
             id: None,
@@ -485,26 +471,11 @@ fn for_prompt_rewrites_image_generation_calls_when_images_are_unsupported() {
                 end_turn: None,
                 phase: None,
             },
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![
-                    ContentItem::InputText {
-                        text: "Image Generation Call".to_string(),
-                    },
-                    ContentItem::InputText {
-                        text: "Image ID: ig_123".to_string(),
-                    },
-                    ContentItem::InputText {
-                        text: "Prompt: lobster".to_string(),
-                    },
-                    ContentItem::InputText {
-                        text: "image content omitted because you do not support image input"
-                            .to_string(),
-                    },
-                ],
-                end_turn: None,
-                phase: None,
+            ResponseItem::ImageGenerationCall {
+                id: "ig_123".to_string(),
+                status: "completed".to_string(),
+                revised_prompt: Some("lobster".to_string()),
+                result: String::new(),
             },
         ]
     );
