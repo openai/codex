@@ -40,6 +40,7 @@ use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::InProcessAppServerClient;
+use codex_app_server_client::InProcessAppServerRequester;
 use codex_app_server_client::InProcessServerEvent;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -195,6 +196,48 @@ fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillEr
         .find(|entry| entry.cwd.as_path() == cwd)
         .map(|entry| entry.errors.clone())
         .unwrap_or_default()
+}
+
+fn effective_skills_list_cwds(cwds: Vec<PathBuf>, current_cwd: &Path) -> Vec<PathBuf> {
+    if cwds.is_empty() {
+        vec![current_cwd.to_path_buf()]
+    } else {
+        cwds
+    }
+}
+
+fn into_core_skills_list_response_event(response: SkillsListResponse) -> ListSkillsResponseEvent {
+    ListSkillsResponseEvent {
+        skills: response
+            .data
+            .into_iter()
+            .map(into_core_skills_list_entry)
+            .collect(),
+    }
+}
+
+fn request_app_server_skills_list(
+    app_event_tx: AppEventSender,
+    client: InProcessAppServerRequester,
+    cwds: Vec<PathBuf>,
+    force_reload: bool,
+) {
+    tokio::spawn(async move {
+        let result = client
+            .request_typed(ClientRequest::SkillsList {
+                request_id: RequestId::Integer(1),
+                params: SkillsListParams {
+                    cwds,
+                    force_reload,
+                    per_cwd_extra_user_roots: None,
+                },
+            })
+            .await
+            .map(into_core_skills_list_response_event)
+            .map_err(|err| format!("skills/list failed: {err}"));
+
+        app_event_tx.send(AppEvent::SkillsListLoaded { result });
+    });
 }
 
 /// Convert an app-server protocol skills entry into the core protocol
@@ -2126,52 +2169,28 @@ impl App {
             loop {
                 let control = select! {
                     Some(event) = app_event_rx.recv() => {
-                        let control = match event {
+                        match event {
                             AppEvent::CodexOp(Op::ListSkills { cwds, force_reload })
                                 if app.chat_widget.use_app_server() =>
                             {
-                                let response: SkillsListResponse = app_server
-                                    .request_typed(ClientRequest::SkillsList {
-                                        request_id: RequestId::Integer(1),
-                                        params: SkillsListParams {
-                                            cwds,
-                                            force_reload,
-                                            per_cwd_extra_user_roots: None,
-                                        },
-                                    })
-                                    .await
-                                    .map_err(|err| {
-                                        color_eyre::eyre::eyre!("skills/list failed: {err}")
-                                    });
+                                let cwds = effective_skills_list_cwds(
+                                    cwds,
+                                    &app.chat_widget.config_ref().cwd,
+                                );
+                                request_app_server_skills_list(
+                                    app.app_event_tx.clone(),
+                                    app_server.requester(),
+                                    cwds,
+                                    force_reload,
+                                );
 
-                                match response {
-                                    Ok(response) => {
-                                        let event = ListSkillsResponseEvent {
-                                            skills: response
-                                                .data
-                                                .into_iter()
-                                                .map(into_core_skills_list_entry)
-                                                .collect(),
-                                        };
-
-                                        emit_skill_load_warnings(
-                                            &app.app_event_tx,
-                                            &errors_for_cwd(&app.config.cwd, &event),
-                                        );
-                                        app.chat_widget.set_skills_from_response(&event);
-                                        app.chat_widget.refresh_plugin_mentions();
-
-                                        AppRunControl::Continue
-                                    }
-                                    Err(err) => break Err(err),
-                                }
+                                AppRunControl::Continue
                             }
                             event => match app.handle_event(tui, event).await {
                                 Ok(control) => control,
                                 Err(err) => break Err(err),
                             },
-                        };
-                        control
+                        }
                     }
                     active = async {
                         if let Some(rx) = app.active_thread_rx.as_mut() {
@@ -2632,6 +2651,13 @@ impl App {
             }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
+            }
+            AppEvent::SkillsListLoaded { result } => {
+                let event = result.map_err(|err| color_eyre::eyre::eyre!(err))?;
+                let cwd = self.chat_widget.config_ref().cwd.clone();
+                emit_skill_load_warnings(&self.app_event_tx, &errors_for_cwd(&cwd, &event));
+                self.chat_widget.set_skills_from_response(&event);
+                self.chat_widget.refresh_plugin_mentions();
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
@@ -6328,6 +6354,54 @@ mod tests {
 
         assert_eq!(app.config.cwd, app.chat_widget.config_ref().cwd);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn effective_skills_list_cwds_uses_active_chat_widget_cwd_when_request_empty()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let launch_cwd = app.config.cwd.clone();
+        let active_cwd_tmp = tempdir()?;
+        let active_cwd = active_cwd_tmp.path().to_path_buf();
+
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: active_cwd.clone(),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        assert_eq!(app.config.cwd, launch_cwd);
+        assert_eq!(app.chat_widget.config_ref().cwd, active_cwd);
+        assert_eq!(
+            effective_skills_list_cwds(Vec::new(), &app.chat_widget.config_ref().cwd),
+            vec![active_cwd]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn effective_skills_list_cwds_preserves_explicit_cwds() {
+        let requested = vec![PathBuf::from("/tmp/one"), PathBuf::from("/tmp/two")];
+
+        assert_eq!(
+            effective_skills_list_cwds(requested.clone(), Path::new("/tmp/current")),
+            requested
+        );
     }
 
     #[tokio::test]
