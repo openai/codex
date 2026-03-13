@@ -172,6 +172,21 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
             });
             LOGGER.write_json_line(value);
         }
+        AppEvent::SkillsListLoaded {
+            requested_cwds,
+            result,
+            ..
+        } => {
+            let value = json!({
+                "ts": now_ts(),
+                "dir": "to_tui",
+                "kind": "skills_list_loaded",
+                "requested_cwds": requested_cwds,
+                "success": result.is_ok(),
+                "skills_count": result.as_ref().map(|r| r.data.iter().map(|e| e.skills.len()).sum::<usize>()).unwrap_or(0),
+            });
+            LOGGER.write_json_line(value);
+        }
         // Noise or control flow – record variant only
         other => {
             let value = json!({
