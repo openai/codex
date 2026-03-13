@@ -839,7 +839,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         target_session: SessionTarget,
-    ) -> Result<()> {
+    ) -> Result<AppRunControl> {
         let current_cwd = self.config.cwd.clone();
         let resume_cwd = match crate::resolve_cwd_for_resume_or_fork(
             tui,
@@ -854,7 +854,9 @@ impl App {
         {
             crate::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
             crate::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
-            crate::ResolveCwdOutcome::Exit => return Ok(()),
+            crate::ResolveCwdOutcome::Exit => {
+                return Ok(self.handle_exit_mode(ExitMode::ShutdownFirst));
+            }
         };
         let mut resume_config = match self
             .rebuild_config_for_resume_or_fallback(&current_cwd, resume_cwd)
@@ -865,7 +867,7 @@ impl App {
                 self.chat_widget.add_error_message(format!(
                     "Failed to rebuild configuration for resume: {err}"
                 ));
-                return Ok(());
+                return Ok(AppRunControl::Continue);
             }
         };
         self.apply_runtime_policy_overrides(&mut resume_config);
@@ -910,20 +912,20 @@ impl App {
                 ));
             }
         }
-        Ok(())
+        Ok(AppRunControl::Continue)
     }
 
     async fn resume_session_by_thread_id(
         &mut self,
         tui: &mut tui::Tui,
         thread_id: ThreadId,
-    ) -> Result<()> {
+    ) -> Result<AppRunControl> {
         let Some(path) =
             find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await?
         else {
             self.chat_widget
                 .add_error_message(format!("No saved session found for thread {thread_id}."));
-            return Ok(());
+            return Ok(AppRunControl::Continue);
         };
         self.resume_session_target(tui, SessionTarget { path, thread_id })
             .await
@@ -2532,10 +2534,10 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::ResumeSession(thread_id) => {
-                self.resume_session_by_thread_id(tui, thread_id).await?;
+                return self.resume_session_by_thread_id(tui, thread_id).await;
             }
             AppEvent::ResumeSessionTarget(target_session) => {
-                self.resume_session_target(tui, target_session).await?;
+                return self.resume_session_target(tui, target_session).await;
             }
             AppEvent::ForkCurrentSession => {
                 self.session_telemetry.counter(
