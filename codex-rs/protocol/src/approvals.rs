@@ -284,3 +284,66 @@ pub struct ApplyPatchApprovalRequestEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grant_root: Option<PathBuf>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn command_prompts_advertise_override_decision() {
+        let command = vec!["echo".to_string(), "hi".to_string()];
+
+        let decisions =
+            ExecApprovalRequestEvent::default_available_decisions(&command, None, None, None, None);
+
+        assert_eq!(
+            decisions,
+            vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedOverrideCommand {
+                    command: command.clone(),
+                },
+                ReviewDecision::Abort,
+            ]
+        );
+    }
+
+    #[test]
+    fn network_only_prompts_do_not_advertise_override_decision() {
+        let decisions = ExecApprovalRequestEvent::default_available_decisions(
+            &["echo".to_string(), "hi".to_string()],
+            Some(&NetworkApprovalContext {
+                host: "example.com".to_string(),
+                protocol: NetworkApprovalProtocol::Https,
+            }),
+            None,
+            Some(&[
+                NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: NetworkPolicyRuleAction::Allow,
+                },
+                NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: NetworkPolicyRuleAction::Deny,
+                },
+            ]),
+            None,
+        );
+
+        assert_eq!(
+            decisions,
+            vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::NetworkPolicyAmendment {
+                    network_policy_amendment: NetworkPolicyAmendment {
+                        host: "example.com".to_string(),
+                        action: NetworkPolicyRuleAction::Allow,
+                    },
+                },
+                ReviewDecision::Abort,
+            ]
+        );
+    }
+}

@@ -34,6 +34,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
 use core_test_support::zsh_fork::build_zsh_fork_test;
 use core_test_support::zsh_fork::restrictive_workspace_write_policy;
@@ -1811,6 +1812,102 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
 
     assert!(fs::read_to_string(&path)?.contains("after"));
     let _ = fs::remove_file(path);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
+async fn approved_override_command_updates_exec_events() -> Result<()> {
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+    });
+    let test = builder.build(&server).await?;
+
+    let call_id = "override-command-events";
+    let original_command = r#"cat < "hello" > /var/test.txt"#;
+    let override_payload = "printf 'override-output'";
+    let (event, expected_command) = ActionKind::RunCommand {
+        command: original_command,
+    }
+    .prepare(
+        &test,
+        &server,
+        call_id,
+        SandboxPermissions::RequireEscalated,
+    )
+    .await?;
+    let expected_command =
+        expected_command.expect("override command scenario should produce a shell command");
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-override-command-1"),
+            event,
+            ev_completed("resp-override-command-1"),
+        ]),
+    )
+    .await;
+    let results_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-override-command-1", "done"),
+            ev_completed("resp-override-command-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "override-command-events",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    let approval = expect_exec_approval(&test, expected_command.as_str()).await;
+    let mut override_command = approval.command.clone();
+    *override_command
+        .last_mut()
+        .expect("shell approval command should include the shell payload") =
+        override_payload.to_string();
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::ApprovedOverrideCommand {
+                command: override_command.clone(),
+            },
+        })
+        .await?;
+
+    let begin_event = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ExecCommandBegin(ev) if ev.call_id == call_id => Some(ev.clone()),
+        _ => None,
+    })
+    .await;
+    let end_event = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ExecCommandEnd(ev) if ev.call_id == call_id => Some(ev.clone()),
+        _ => None,
+    })
+    .await;
+
+    wait_for_completion(&test).await;
+
+    assert_eq!(begin_event.command, override_command);
+    assert_eq!(end_event.command, override_command);
+    assert_eq!(end_event.stdout, "override-output");
+
+    let output_item = results_mock.single_request().function_call_output(call_id);
+    let result = parse_result(&output_item);
+    assert_eq!(result.stdout, "override-output");
 
     Ok(())
 }
