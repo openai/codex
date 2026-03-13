@@ -155,11 +155,7 @@ fn denied_blocked_request(host: &str) -> BlockedRequest {
 async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
     let service = NetworkApprovalService::default();
     service
-        .register_call(
-            "registration-1".to_string(),
-            "turn-1".to_string(),
-            "call-1".to_string(),
-        )
+        .register_call("registration-1".to_string(), "turn-1".to_string())
         .await;
 
     service
@@ -178,11 +174,7 @@ async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
 async fn blocked_request_policy_does_not_override_user_denial_outcome() {
     let service = NetworkApprovalService::default();
     service
-        .register_call(
-            "registration-1".to_string(),
-            "turn-1".to_string(),
-            "call-1".to_string(),
-        )
+        .register_call("registration-1".to_string(), "turn-1".to_string())
         .await;
 
     service
@@ -202,18 +194,10 @@ async fn blocked_request_policy_does_not_override_user_denial_outcome() {
 async fn record_blocked_request_ignores_ambiguous_unattributed_blocked_requests() {
     let service = NetworkApprovalService::default();
     service
-        .register_call(
-            "registration-1".to_string(),
-            "turn-1".to_string(),
-            "call-1".to_string(),
-        )
+        .register_call("registration-1".to_string(), "turn-1".to_string())
         .await;
     service
-        .register_call(
-            "registration-2".to_string(),
-            "turn-1".to_string(),
-            "call-2".to_string(),
-        )
+        .register_call("registration-2".to_string(), "turn-1".to_string())
         .await;
 
     service

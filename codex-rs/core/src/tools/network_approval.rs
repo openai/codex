@@ -162,7 +162,6 @@ impl PendingHostApproval {
 struct ActiveNetworkApprovalCall {
     registration_id: String,
     turn_id: String,
-    call_id: String,
 }
 
 pub(crate) struct NetworkApprovalService {
@@ -192,7 +191,7 @@ impl NetworkApprovalService {
         other_approved_hosts.extend(approved_hosts.iter().cloned());
     }
 
-    async fn register_call(&self, registration_id: String, turn_id: String, call_id: String) {
+    async fn register_call(&self, registration_id: String, turn_id: String) {
         let mut active_calls = self.active_calls.lock().await;
         let key = registration_id.clone();
         active_calls.insert(
@@ -200,7 +199,6 @@ impl NetworkApprovalService {
             Arc::new(ActiveNetworkApprovalCall {
                 registration_id,
                 turn_id,
-                call_id,
             }),
         );
     }
@@ -350,14 +348,13 @@ impl NetworkApprovalService {
         };
         let owner_call = self.resolve_single_active_call().await;
         let approval_decision = if routes_approval_to_guardian(&turn_context) {
+            // TODO(ccunningham): Attach guardian network reviews to the reviewed tool item
+            // lifecycle instead of this temporary standalone network approval id.
             review_approval_request(
                 &session,
                 &turn_context,
                 GuardianApprovalRequest::NetworkAccess {
-                    id: owner_call.as_ref().map_or_else(
-                        || Self::approval_id_for_key(&key),
-                        |call| call.call_id.clone(),
-                    ),
+                    id: Self::approval_id_for_key(&key),
                     turn_id: owner_call
                         .as_ref()
                         .map_or_else(|| turn_context.sub_id.clone(), |call| call.turn_id.clone()),
@@ -561,11 +558,7 @@ pub(crate) async fn begin_network_approval(
     session
         .services
         .network_approval
-        .register_call(
-            registration_id.clone(),
-            turn_id.to_string(),
-            call_id.to_string(),
-        )
+        .register_call(registration_id.clone(), turn_id.to_string())
         .await;
 
     Some(ActiveNetworkApproval {
