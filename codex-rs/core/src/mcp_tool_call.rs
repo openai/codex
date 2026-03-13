@@ -116,6 +116,7 @@ pub(crate) async fn handle_mcp_tool_call(
             .counter("codex.mcp.call", 1, &[("status", status)]);
         return CallToolResult::from_result(result);
     }
+    let request_meta = build_mcp_tool_call_request_meta(&server, metadata.as_ref());
 
     if let Some(decision) = maybe_request_mcp_tool_approval(
         &sess,
@@ -145,7 +146,12 @@ pub(crate) async fn handle_mcp_tool_call(
 
                 let start = Instant::now();
                 let result = sess
-                    .call_tool(&server, &tool_name, arguments_value.clone())
+                    .call_tool(
+                        &server,
+                        &tool_name,
+                        arguments_value.clone(),
+                        request_meta.clone(),
+                    )
                     .await
                     .map_err(|e| format!("tool call error: {e:?}"));
                 let result = sanitize_mcp_tool_result_for_model(
@@ -231,7 +237,7 @@ pub(crate) async fn handle_mcp_tool_call(
     let start = Instant::now();
     // Perform the tool call.
     let result = sess
-        .call_tool(&server, &tool_name, arguments_value.clone())
+        .call_tool(&server, &tool_name, arguments_value.clone(), request_meta)
         .await
         .map_err(|e| format!("tool call error: {e:?}"));
     let result = sanitize_mcp_tool_result_for_model(
@@ -379,6 +385,27 @@ struct McpToolApprovalMetadata {
     connector_description: Option<String>,
     tool_title: Option<String>,
     tool_description: Option<String>,
+    resource_uri: Option<String>,
+}
+
+const MCP_TOOL_RESOURCE_URI_META_KEY: &str = "resource_uri";
+
+fn build_mcp_tool_call_request_meta(
+    server: &str,
+    metadata: Option<&McpToolApprovalMetadata>,
+) -> Option<serde_json::Value> {
+    let resource_uri = if server == CODEX_APPS_MCP_SERVER_NAME {
+        metadata
+            .and_then(|metadata| metadata.resource_uri.as_deref())
+            .map(str::trim)
+            .filter(|resource_uri| !resource_uri.is_empty())
+    } else {
+        None
+    }?;
+
+    Some(serde_json::json!({
+        MCP_TOOL_RESOURCE_URI_META_KEY: resource_uri,
+    }))
 }
 
 #[derive(Clone, Copy)]
@@ -742,6 +769,15 @@ async fn lookup_mcp_tool_metadata(
         connector_description,
         tool_title: tool_info.tool.title,
         tool_description: tool_info.tool.description.map(std::borrow::Cow::into_owned),
+        resource_uri: tool_info
+            .tool
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get(MCP_TOOL_RESOURCE_URI_META_KEY))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|resource_uri| !resource_uri.is_empty())
+            .map(str::to_string),
     })
 }
 

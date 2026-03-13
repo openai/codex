@@ -18,6 +18,9 @@ const CONNECTOR_DESCRIPTION: &str = "Plan events and manage your calendar.";
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const SERVER_NAME: &str = "codex-apps-test";
 const SERVER_VERSION: &str = "1.0.0";
+pub const CALENDAR_CREATE_EVENT_RESOURCE_URI: &str =
+    "connector://calendar/tools/calendar_create_event";
+const CALENDAR_LIST_EVENTS_RESOURCE_URI: &str = "connector://calendar/tools/calendar_list_events";
 
 #[derive(Clone)]
 pub struct AppsTestServer {
@@ -175,7 +178,8 @@ impl Respond for CodexAppsJsonRpcResponder {
                                 "_meta": {
                                     "connector_id": CONNECTOR_ID,
                                     "connector_name": self.connector_name.clone(),
-                                    "connector_description": self.connector_description.clone()
+                                    "connector_description": self.connector_description.clone(),
+                                    "resource_uri": CALENDAR_CREATE_EVENT_RESOURCE_URI
                                 }
                             },
                             {
@@ -192,7 +196,8 @@ impl Respond for CodexAppsJsonRpcResponder {
                                 "_meta": {
                                     "connector_id": CONNECTOR_ID,
                                     "connector_name": self.connector_name.clone(),
-                                    "connector_description": self.connector_description.clone()
+                                    "connector_description": self.connector_description.clone(),
+                                    "resource_uri": CALENDAR_LIST_EVENTS_RESOURCE_URI
                                 }
                             }
                         ],
@@ -214,6 +219,9 @@ impl Respond for CodexAppsJsonRpcResponder {
                     .pointer("/params/arguments/starts_at")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
+                let resource_uri = body
+                    .pointer("/params/_meta/resource_uri")
+                    .and_then(Value::as_str);
 
                 ResponseTemplate::new(200).set_body_json(json!({
                     "jsonrpc": "2.0",
@@ -223,6 +231,9 @@ impl Respond for CodexAppsJsonRpcResponder {
                             "type": "text",
                             "text": format!("called {tool_name} for {title} at {starts_at}")
                         }],
+                        "structuredContent": {
+                            "resource_uri": resource_uri,
+                        },
                         "isError": false
                     }
                 }))

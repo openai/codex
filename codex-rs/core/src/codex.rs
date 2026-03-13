@@ -3894,12 +3894,13 @@ impl Session {
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
+        meta: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
         self.services
             .mcp_connection_manager
             .read()
             .await
-            .call_tool(server, tool, arguments)
+            .call_tool(server, tool, arguments, meta)
             .await
     }
 

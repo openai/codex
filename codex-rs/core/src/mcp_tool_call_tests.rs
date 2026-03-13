@@ -40,6 +40,7 @@ fn approval_metadata(
         connector_description: connector_description.map(str::to_string),
         tool_title: tool_title.map(str::to_string),
         tool_description: tool_description.map(str::to_string),
+        resource_uri: None,
     }
 }
 
@@ -409,6 +410,26 @@ fn sanitize_mcp_tool_result_for_model_preserves_image_when_supported() {
 }
 
 #[test]
+fn codex_apps_tool_call_request_meta_includes_resource_uri() {
+    let metadata = McpToolApprovalMetadata {
+        annotations: None,
+        connector_id: Some("calendar".to_string()),
+        connector_name: Some("Calendar".to_string()),
+        connector_description: Some("Manage events".to_string()),
+        tool_title: Some("Create Event".to_string()),
+        tool_description: Some("Create a calendar event.".to_string()),
+        resource_uri: Some("connector://calendar/tools/calendar_create_event".to_string()),
+    };
+
+    assert_eq!(
+        build_mcp_tool_call_request_meta(CODEX_APPS_MCP_SERVER_NAME, Some(&metadata)),
+        Some(serde_json::json!({
+            MCP_TOOL_RESOURCE_URI_META_KEY: "connector://calendar/tools/calendar_create_event",
+        }))
+    );
+}
+
+#[test]
 fn accepted_elicitation_content_converts_to_request_user_input_response() {
     let response = request_user_input_response_from_elicitation_content(Some(serde_json::json!(
         {
@@ -526,6 +547,7 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
         connector_description: None,
         tool_title: None,
         tool_description: None,
+        resource_uri: None,
     };
 
     let request = build_guardian_mcp_tool_review_request(&invocation, Some(&metadata));
@@ -829,6 +851,7 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         connector_description: None,
         tool_title: Some("Read Only Tool".to_string()),
         tool_description: None,
+        resource_uri: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -892,6 +915,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         connector_description: Some("Manage events".to_string()),
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
+        resource_uri: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
