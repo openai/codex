@@ -2369,6 +2369,13 @@ impl ChatWidget {
         );
     }
 
+    /// Handle guardian review lifecycle events for the current thread.
+    ///
+    /// In-progress assessments temporarily own the live status footer so the
+    /// user can see what is being reviewed, including parallel review
+    /// aggregation. Terminal assessments clear or update that footer state and
+    /// render the final approved/denied history cell when guardian returns a
+    /// decision.
     fn on_guardian_assessment(&mut self, ev: GuardianAssessmentEvent) {
         // Guardian emits a compact JSON action payload; map the stable fields we
         // care about into a short footer/history summary without depending on
