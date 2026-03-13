@@ -60,6 +60,26 @@ only when the split filesystem policy round-trips through the legacy
 cases like `/repo = write`, `/repo/a = none`, `/repo/a/b = write`, where the
 more specific writable child must reopen under a denied parent.
 
+### Windows
+
+Legacy `SandboxPolicy` / `sandbox_mode` configs are still the supported Windows
+baseline.
+
+The unelevated restricted-token sandbox supports:
+
+- legacy `ReadOnly` and `WorkspaceWrite` behavior
+- full-read split filesystem policies whose writable roots still match the
+  legacy `WorkspaceWrite` root set, but need extra read-only carveouts under
+  those writable roots
+
+The elevated Windows sandbox still supports only the legacy
+`SandboxPolicy`-equivalent path.
+
+Windows still rejects split-only filesystem policies that would require direct
+read restriction, explicit unreadable carveouts, reopened writable descendants
+under read-only carveouts, or elevated setup/runner support, instead of running
+with a weaker sandbox.
+
 ### All Platforms
 
 Expects the binary containing `codex-core` to simulate the virtual `apply_patch` CLI when `arg1` is `--codex-run-as-apply-patch`. See the `codex-arg0` crate for details.
