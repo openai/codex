@@ -55,6 +55,10 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::AppInfo;
+use codex_execpolicy::Decision;
+use codex_execpolicy::NetworkRuleProtocol;
+use codex_execpolicy::Policy;
+use codex_network_proxy::NetworkProxyConfig;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -326,6 +330,40 @@ fn validated_network_policy_amendment_host_rejects_mismatch() {
 
     let message = err.to_string();
     assert!(message.contains("does not match approved host"));
+}
+
+#[tokio::test]
+async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyhow::Result<()> {
+    let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
+        NetworkProxyConfig::default(),
+        None,
+        &SandboxPolicy::new_workspace_write_policy(),
+    )?;
+    let mut exec_policy = Policy::empty();
+    exec_policy.add_network_rule(
+        "api.incident.io",
+        NetworkRuleProtocol::Https,
+        Decision::Allow,
+        None,
+    )?;
+
+    let (started_proxy, _) = Session::start_managed_network_proxy(
+        &spec,
+        &exec_policy,
+        &SandboxPolicy::new_workspace_write_policy(),
+        None,
+        None,
+        false,
+        crate::config::NetworkProxyAuditMetadata::default(),
+    )
+    .await?;
+
+    let current_cfg = started_proxy.proxy().current_cfg().await?;
+    assert_eq!(
+        current_cfg.network.allowed_domains,
+        vec!["api.incident.io".to_string()]
+    );
+    Ok(())
 }
 
 #[tokio::test]

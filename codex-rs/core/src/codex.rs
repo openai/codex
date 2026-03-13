@@ -1153,6 +1153,7 @@ impl Session {
 
     async fn start_managed_network_proxy(
         spec: &crate::config::NetworkProxySpec,
+        exec_policy: &codex_execpolicy::Policy,
         sandbox_policy: &SandboxPolicy,
         network_policy_decider: Option<Arc<dyn codex_network_proxy::NetworkPolicyDecider>>,
         blocked_request_observer: Option<Arc<dyn codex_network_proxy::BlockedRequestObserver>>,
@@ -1160,6 +1161,10 @@ impl Session {
         audit_metadata: NetworkProxyAuditMetadata,
     ) -> anyhow::Result<(StartedNetworkProxy, SessionNetworkProxyRuntime)> {
         let network_proxy = spec
+            .with_exec_policy_network_rules(exec_policy)
+            .map_err(|err| {
+                anyhow::anyhow!("failed to apply execpolicy network rules to managed proxy: {err}")
+            })?
             .start_proxy(
                 sandbox_policy,
                 network_policy_decider,
@@ -1650,8 +1655,10 @@ impl Session {
                 });
         let (network_proxy, session_network_proxy) =
             if let Some(spec) = config.permissions.network.as_ref() {
+                let current_exec_policy = exec_policy.current();
                 let (network_proxy, session_network_proxy) = Self::start_managed_network_proxy(
                     spec,
+                    current_exec_policy.as_ref(),
                     config.permissions.sandbox_policy.get(),
                     network_policy_decider.as_ref().map(Arc::clone),
                     blocked_request_observer.as_ref().map(Arc::clone),
