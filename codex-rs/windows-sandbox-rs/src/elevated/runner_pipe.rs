@@ -8,7 +8,7 @@
 
 use crate::helper_materialization::HelperExecutable;
 use crate::helper_materialization::resolve_helper_for_launch;
-use crate::sandbox_users::resolve_sid;
+use crate::winutil::resolve_sid;
 use crate::winutil::string_from_sid_bytes;
 use crate::winutil::to_wide;
 use rand::Rng;
