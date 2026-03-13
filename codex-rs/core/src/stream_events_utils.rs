@@ -19,7 +19,7 @@ use crate::parse_turn_item;
 use crate::state_db;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
-use codex_protocol::models::ContentItem;
+use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
@@ -306,19 +306,12 @@ pub(crate) async fn handle_non_tool_response_item(
                     Ok(path) => {
                         image_item.saved_path = Some(path.to_string_lossy().into_owned());
                         let image_output_dir = std::env::temp_dir();
-                        let message = ResponseItem::Message {
-                            id: None,
-                            role: "user".to_string(),
-                            content: vec![ContentItem::InputText {
-                                text: format!(
-                                    "Generated images are saved to {} as {} by default.",
-                                    image_output_dir.display(),
-                                    image_output_dir.join("<image_id>.png").display(),
-                                ),
-                            }],
-                            end_turn: None,
-                            phase: None,
-                        };
+                        let message: ResponseItem = DeveloperInstructions::new(format!(
+                            "Generated images are saved to {} as {} by default.",
+                            image_output_dir.display(),
+                            image_output_dir.join("<image_id>.png").display(),
+                        ))
+                        .into();
                         sess.record_conversation_items(
                             turn_context,
                             std::slice::from_ref(&message),

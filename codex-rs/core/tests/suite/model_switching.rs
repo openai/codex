@@ -548,7 +548,7 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
     );
     assert!(
         second_request
-            .message_input_texts("user")
+            .message_input_texts("developer")
             .iter()
             .any(|text| text.contains("Generated images are saved to")),
         "second request should include the saved-path note in model-visible history"
@@ -680,7 +680,7 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
     );
     assert!(
         second_request
-            .message_input_texts("user")
+            .message_input_texts("developer")
             .iter()
             .any(|text| text.contains("Generated images are saved to")),
         "second request should include the saved-path note in model-visible history"

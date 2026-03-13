@@ -58,6 +58,7 @@ use codex_app_server_protocol::AppInfo;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
@@ -3218,19 +3219,12 @@ async fn handle_output_item_done_records_image_save_history_message() {
         .expect("image generation item should succeed");
 
     let history = session.clone_history().await;
-    let save_message = ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: format!(
-                "Generated images are saved to {} as {} by default.",
-                std::env::temp_dir().display(),
-                std::env::temp_dir().join("<image_id>.png").display(),
-            ),
-        }],
-        end_turn: None,
-        phase: None,
-    };
+    let save_message: ResponseItem = DeveloperInstructions::new(format!(
+        "Generated images are saved to {} as {} by default.",
+        std::env::temp_dir().display(),
+        std::env::temp_dir().join("<image_id>.png").display(),
+    ))
+    .into();
     assert_eq!(history.raw_items(), &[save_message, item]);
     assert_eq!(
         std::fs::read(&expected_saved_path).expect("saved file"),
