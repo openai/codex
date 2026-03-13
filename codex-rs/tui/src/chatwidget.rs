@@ -29,6 +29,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -37,6 +38,16 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
+
+use base64::Engine;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStringExt;
 
 use self::realtime::PendingSteerCompareKey;
 use crate::app_event::RealtimeAudioDeviceKind;
@@ -5338,7 +5349,9 @@ impl ChatWidget {
                         );
                     }
                 };
-                if !(args.len() == 1 || (args.len() == 3 && args[1] == "--path")) {
+                if !(args.len() == 1
+                    || (args.len() == 3 && matches!(args[1].as_str(), "--path" | "--path-base64")))
+                {
                     return self.restore_invalid_inline_slash_command(
                         cmd,
                         args_message,
@@ -5348,11 +5361,44 @@ impl ChatWidget {
                 match ThreadId::from_string(&args[0]) {
                     Ok(thread_id) => {
                         if let Some(path) = args.get(2) {
+                            let path = match args[1].as_str() {
+                                "--path" => PathBuf::from(path),
+                                "--path-base64" => {
+                                    let Ok(bytes) =
+                                        base64::engine::general_purpose::URL_SAFE_NO_PAD
+                                            .decode(path)
+                                    else {
+                                        return self.restore_invalid_inline_slash_command(
+                                            cmd,
+                                            args_message,
+                                            "Invalid encoded rollout path for /resume.".to_string(),
+                                        );
+                                    };
+                                    #[cfg(unix)]
+                                    let path = PathBuf::from(OsString::from_vec(bytes));
+                                    #[cfg(windows)]
+                                    let path = {
+                                        let mut chunks = bytes.chunks_exact(2);
+                                        if !chunks.remainder().is_empty() {
+                                            return self.restore_invalid_inline_slash_command(
+                                                cmd,
+                                                args_message,
+                                                "Invalid encoded rollout path for /resume."
+                                                    .to_string(),
+                                            );
+                                        }
+                                        let wide = chunks
+                                            .by_ref()
+                                            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                                            .collect::<Vec<_>>();
+                                        PathBuf::from(OsString::from_wide(&wide))
+                                    };
+                                    path
+                                }
+                                _ => unreachable!("validated resume path flag"),
+                            };
                             self.app_event_tx.send(AppEvent::ResumeSessionTarget(
-                                crate::resume_picker::SessionTarget {
-                                    path: PathBuf::from(path),
-                                    thread_id,
-                                },
+                                crate::resume_picker::SessionTarget { path, thread_id },
                             ));
                         } else {
                             self.app_event_tx.send(AppEvent::ResumeSession(thread_id));
@@ -5731,13 +5777,27 @@ impl ChatWidget {
     pub(crate) fn resume_selection_draft(
         target_session: &crate::resume_picker::SessionTarget,
     ) -> UserMessage {
+        let (path_flag, path_value) = if let Some(path) = target_session.path.to_str() {
+            ("--path".to_string(), path.to_string())
+        } else {
+            #[cfg(unix)]
+            let bytes = target_session.path.as_os_str().as_bytes().to_vec();
+            #[cfg(windows)]
+            let bytes = target_session
+                .path
+                .as_os_str()
+                .encode_wide()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>();
+
+            (
+                "--path-base64".to_string(),
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
+            )
+        };
         SlashCommandInvocation::with_args(
             SlashCommand::Resume,
-            [
-                target_session.thread_id.to_string(),
-                "--path".to_string(),
-                target_session.path.display().to_string(),
-            ],
+            [target_session.thread_id.to_string(), path_flag, path_value],
         )
         .into_user_message()
     }

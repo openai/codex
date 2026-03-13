@@ -129,6 +129,10 @@ use pretty_assertions::assert_eq;
 use serial_test::serial;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+#[cfg(unix)]
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use tempfile::tempdir;
@@ -5730,6 +5734,27 @@ async fn queued_resume_picker_selection_replays_exact_targets_in_order() {
 
     chat.drain_queued_inputs_until_blocked();
     assert_matches!(rx.try_recv(), Ok(AppEvent::ResumeSessionTarget(target)) if target == second);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn queued_resume_picker_selection_preserves_non_utf8_path() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_task_running(true);
+
+    let target = crate::resume_picker::SessionTarget {
+        path: PathBuf::from(OsString::from_vec(b"/tmp/non-utf8-\xff.rollout".to_vec())),
+        thread_id: ThreadId::new(),
+    };
+
+    let draft = ChatWidget::resume_selection_draft(&target);
+    assert!(draft.text.contains("--path-base64"));
+
+    chat.handle_serialized_slash_command(draft);
+    chat.bottom_pane.set_task_running(false);
+    chat.drain_queued_inputs_until_blocked();
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ResumeSessionTarget(replayed)) if replayed == target);
 }
 
 #[tokio::test]
