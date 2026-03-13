@@ -973,7 +973,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .collect();
             let item = ThreadItem::CollabAgentToolCall {
                 id: begin_event.call_id,
-                tool: CollabAgentTool::WaitAgent,
+                tool: CollabAgentTool::Wait,
                 status: V2CollabToolCallStatus::InProgress,
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_ids,
@@ -1011,7 +1011,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .collect();
             let item = ThreadItem::CollabAgentToolCall {
                 id: end_event.call_id,
-                tool: CollabAgentTool::WaitAgent,
+                tool: CollabAgentTool::Wait,
                 status,
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_ids,

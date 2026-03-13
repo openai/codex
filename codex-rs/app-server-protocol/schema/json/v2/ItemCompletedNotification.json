@@ -53,7 +53,7 @@
         "spawnAgent",
         "sendInput",
         "resumeAgent",
-        "waitAgent",
+        "wait",
         "closeAgent"
       ],
       "type": "string"

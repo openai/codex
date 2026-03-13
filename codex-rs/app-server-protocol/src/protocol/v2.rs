@@ -4161,7 +4161,7 @@ pub enum CollabAgentTool {
     SpawnAgent,
     SendInput,
     ResumeAgent,
-    WaitAgent,
+    Wait,
     CloseAgent,
 }
 

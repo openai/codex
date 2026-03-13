@@ -642,7 +642,7 @@ impl ThreadHistoryBuilder {
     ) {
         let item = ThreadItem::CollabAgentToolCall {
             id: payload.call_id.clone(),
-            tool: CollabAgentTool::WaitAgent,
+            tool: CollabAgentTool::Wait,
             status: CollabAgentToolCallStatus::InProgress,
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: payload
@@ -681,7 +681,7 @@ impl ThreadHistoryBuilder {
             .collect();
         self.upsert_item_in_current_turn(ThreadItem::CollabAgentToolCall {
             id: payload.call_id.clone(),
-            tool: CollabAgentTool::WaitAgent,
+            tool: CollabAgentTool::Wait,
             status,
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids,

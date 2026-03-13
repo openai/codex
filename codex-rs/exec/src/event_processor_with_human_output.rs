@@ -777,7 +777,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self,
                     "{} {}",
                     "collab".style(self.magenta),
-                    format_collab_invocation("wait_agent", &call_id, None).style(self.bold)
+                    format_collab_invocation("wait", &call_id, None).style(self.bold)
                 );
                 eprintln!(
                     "  receivers: {}",
@@ -794,7 +794,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_msg!(
                         self,
                         "{} {}:",
-                        format_collab_invocation("wait_agent", &call_id, None),
+                        format_collab_invocation("wait", &call_id, None),
                         "timed out".style(self.yellow)
                     );
                     return CodexStatus::Running;
@@ -803,7 +803,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 let title_style = if success { self.green } else { self.red };
                 let title = format!(
                     "{} {} agents complete:",
-                    format_collab_invocation("wait_agent", &call_id, None),
+                    format_collab_invocation("wait", &call_id, None),
                     statuses.len()
                 );
                 ts_msg!(self, "{}", title.style(title_style));
