@@ -132,12 +132,12 @@ fn emit_feedback_request_tags_records_sentry_feedback_fields() {
     assert_eq!(
         tags.get("auth_recovery_followup_success")
             .map(String::as_str),
-        Some("true")
+        Some("\"true\"")
     );
     assert_eq!(
         tags.get("auth_recovery_followup_status")
             .map(String::as_str),
-        Some("200")
+        Some("\"200\"")
     );
 }
 
@@ -202,14 +202,88 @@ fn emit_feedback_request_tags_skips_duplicate_latest_auth_fields_after_unauthori
     });
 
     let tags = tags.lock().unwrap().clone();
-    assert_eq!(tags.get("auth_request_id"), None);
-    assert_eq!(tags.get("auth_cf_ray"), None);
-    assert_eq!(tags.get("auth_error"), None);
-    assert_eq!(tags.get("auth_error_code"), None);
+    assert_eq!(
+        tags.get("auth_request_id").map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(tags.get("auth_cf_ray").map(String::as_str), Some("\"\""));
+    assert_eq!(tags.get("auth_error").map(String::as_str), Some("\"\""));
+    assert_eq!(
+        tags.get("auth_error_code").map(String::as_str),
+        Some("\"\"")
+    );
     assert_eq!(
         tags.get("auth_recovery_followup_success")
             .map(String::as_str),
-        Some("false")
+        Some("\"false\"")
+    );
+}
+
+#[test]
+fn emit_feedback_request_tags_clears_stale_latest_auth_fields() {
+    let tags = Arc::new(Mutex::new(BTreeMap::new()));
+    let _guard = tracing_subscriber::registry()
+        .with(TagCollectorLayer { tags: tags.clone() })
+        .set_default();
+
+    emit_feedback_request_tags(&FeedbackRequestTags {
+        endpoint: "/responses",
+        auth_header_attached: true,
+        auth_header_name: Some("authorization"),
+        auth_mode: Some("chatgpt"),
+        auth_retry_after_unauthorized: Some(false),
+        auth_recovery_mode: Some("managed"),
+        auth_recovery_phase: Some("refresh_token"),
+        auth_connection_reused: Some(true),
+        auth_request_id: Some("req-123"),
+        auth_cf_ray: Some("ray-123"),
+        auth_error: Some("missing_authorization_header"),
+        auth_error_code: Some("token_expired"),
+        auth_recovery_followup_success: Some(true),
+        auth_recovery_followup_status: Some(200),
+    });
+    emit_feedback_request_tags(&FeedbackRequestTags {
+        endpoint: "/responses",
+        auth_header_attached: true,
+        auth_header_name: None,
+        auth_mode: None,
+        auth_retry_after_unauthorized: None,
+        auth_recovery_mode: None,
+        auth_recovery_phase: None,
+        auth_connection_reused: None,
+        auth_request_id: None,
+        auth_cf_ray: None,
+        auth_error: None,
+        auth_error_code: None,
+        auth_recovery_followup_success: None,
+        auth_recovery_followup_status: None,
+    });
+
+    let tags = tags.lock().unwrap().clone();
+    assert_eq!(
+        tags.get("auth_header_name").map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(tags.get("auth_mode").map(String::as_str), Some("\"\""));
+    assert_eq!(
+        tags.get("auth_request_id").map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(tags.get("auth_cf_ray").map(String::as_str), Some("\"\""));
+    assert_eq!(tags.get("auth_error").map(String::as_str), Some("\"\""));
+    assert_eq!(
+        tags.get("auth_error_code").map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(
+        tags.get("auth_recovery_followup_success")
+            .map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(
+        tags.get("auth_recovery_followup_status")
+            .map(String::as_str),
+        Some("\"\"")
     );
 }
 

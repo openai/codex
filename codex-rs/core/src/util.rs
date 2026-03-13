@@ -56,47 +56,50 @@ pub(crate) struct FeedbackRequestTags<'a> {
 
 pub(crate) fn emit_feedback_request_tags(tags: &FeedbackRequestTags<'_>) {
     let preserve_401_context_only = tags.auth_retry_after_unauthorized == Some(true);
+    let auth_header_name = tags.auth_header_name.unwrap_or("");
+    let auth_mode = tags.auth_mode.unwrap_or("");
+    let auth_retry_after_unauthorized = tags
+        .auth_retry_after_unauthorized
+        .map_or_else(String::new, |value| value.to_string());
+    let auth_recovery_mode = tags.auth_recovery_mode.unwrap_or("");
+    let auth_recovery_phase = tags.auth_recovery_phase.unwrap_or("");
+    let auth_connection_reused = tags
+        .auth_connection_reused
+        .map_or_else(String::new, |value| value.to_string());
+    let auth_request_id = (!preserve_401_context_only)
+        .then_some(tags.auth_request_id.unwrap_or(""))
+        .unwrap_or("");
+    let auth_cf_ray = (!preserve_401_context_only)
+        .then_some(tags.auth_cf_ray.unwrap_or(""))
+        .unwrap_or("");
+    let auth_error = (!preserve_401_context_only)
+        .then_some(tags.auth_error.unwrap_or(""))
+        .unwrap_or("");
+    let auth_error_code = (!preserve_401_context_only)
+        .then_some(tags.auth_error_code.unwrap_or(""))
+        .unwrap_or("");
+    let auth_recovery_followup_success = tags
+        .auth_recovery_followup_success
+        .map_or_else(String::new, |value| value.to_string());
+    let auth_recovery_followup_status = tags
+        .auth_recovery_followup_status
+        .map_or_else(String::new, |value| value.to_string());
     feedback_tags!(
         endpoint = tags.endpoint,
-        auth_header_attached = tags.auth_header_attached
+        auth_header_attached = tags.auth_header_attached,
+        auth_header_name = auth_header_name,
+        auth_mode = auth_mode,
+        auth_retry_after_unauthorized = auth_retry_after_unauthorized,
+        auth_recovery_mode = auth_recovery_mode,
+        auth_recovery_phase = auth_recovery_phase,
+        auth_connection_reused = auth_connection_reused,
+        auth_request_id = auth_request_id,
+        auth_cf_ray = auth_cf_ray,
+        auth_error = auth_error,
+        auth_error_code = auth_error_code,
+        auth_recovery_followup_success = auth_recovery_followup_success,
+        auth_recovery_followup_status = auth_recovery_followup_status
     );
-
-    if let Some(auth_header_name) = tags.auth_header_name {
-        feedback_tags!(auth_header_name = auth_header_name);
-    }
-    if let Some(auth_mode) = tags.auth_mode {
-        feedback_tags!(auth_mode = auth_mode);
-    }
-    if let Some(auth_retry_after_unauthorized) = tags.auth_retry_after_unauthorized {
-        feedback_tags!(auth_retry_after_unauthorized = auth_retry_after_unauthorized);
-    }
-    if let Some(auth_recovery_mode) = tags.auth_recovery_mode {
-        feedback_tags!(auth_recovery_mode = auth_recovery_mode);
-    }
-    if let Some(auth_recovery_phase) = tags.auth_recovery_phase {
-        feedback_tags!(auth_recovery_phase = auth_recovery_phase);
-    }
-    if let Some(auth_connection_reused) = tags.auth_connection_reused {
-        feedback_tags!(auth_connection_reused = auth_connection_reused);
-    }
-    if !preserve_401_context_only && let Some(auth_request_id) = tags.auth_request_id {
-        feedback_tags!(auth_request_id = auth_request_id);
-    }
-    if !preserve_401_context_only && let Some(auth_cf_ray) = tags.auth_cf_ray {
-        feedback_tags!(auth_cf_ray = auth_cf_ray);
-    }
-    if !preserve_401_context_only && let Some(auth_error) = tags.auth_error {
-        feedback_tags!(auth_error = auth_error);
-    }
-    if !preserve_401_context_only && let Some(auth_error_code) = tags.auth_error_code {
-        feedback_tags!(auth_error_code = auth_error_code);
-    }
-    if let Some(auth_recovery_followup_success) = tags.auth_recovery_followup_success {
-        feedback_tags!(auth_recovery_followup_success = auth_recovery_followup_success);
-    }
-    if let Some(auth_recovery_followup_status) = tags.auth_recovery_followup_status {
-        feedback_tags!(auth_recovery_followup_status = auth_recovery_followup_status);
-    }
 }
 
 pub(crate) fn emit_feedback_auth_recovery_tags(
