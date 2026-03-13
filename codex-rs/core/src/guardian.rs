@@ -307,7 +307,7 @@ async fn run_guardian_review(
         .notify_background_event(turn.as_ref(), guardian_review_status_message(&request))
         .await;
     session
-        .send_event(
+        .send_guardian_review_event(
             turn.as_ref(),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: assessment_id.clone(),
@@ -386,7 +386,7 @@ async fn run_guardian_review(
         assessment.rationale
     );
     session
-        .send_event(
+        .send_guardian_review_event(
             turn.as_ref(),
             EventMsg::Warning(WarningEvent { message: warning }),
         )
@@ -398,7 +398,7 @@ async fn run_guardian_review(
     };
     let action = (!approved).then_some(denied_action);
     session
-        .send_event(
+        .send_guardian_review_event(
             turn.as_ref(),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: assessment_id,

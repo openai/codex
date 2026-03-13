@@ -14,14 +14,19 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ErrorEvent;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GuardianAssessmentEvent;
+use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::protocol::WarningEvent;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::sleep;
@@ -141,6 +146,19 @@ async fn wait_for_subagent_notification(parent_thread: &Arc<CodexThread>) -> boo
         }
     };
     timeout(Duration::from_secs(2), wait).await.is_ok()
+}
+
+async fn wait_for_event(thread: &Arc<CodexThread>, predicate: impl Fn(&Event) -> bool) -> Event {
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let event = thread.next_event().await.expect("thread event");
+            if predicate(&event) {
+                return event;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for thread event")
 }
 
 #[tokio::test]
@@ -374,6 +392,200 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
         .into_iter()
         .find(|entry| *entry == expected);
     assert_eq!(captured, Some(expected));
+}
+
+#[tokio::test]
+async fn guardian_review_events_mirror_to_all_thread_spawn_ancestors() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let state = harness.control.upgrade().expect("thread manager state");
+    let child = state
+        .spawn_new_thread_with_source(
+            harness.config.clone(),
+            harness.control.clone(),
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_nickname: Some("Euler".to_string()),
+                agent_role: Some("worker".to_string()),
+            }),
+            false,
+            None,
+            None,
+        )
+        .await
+        .expect("spawn child thread");
+    let grandchild = state
+        .spawn_new_thread_with_source(
+            harness.config.clone(),
+            harness.control.clone(),
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: child.thread_id,
+                depth: 2,
+                agent_nickname: Some("Gauss".to_string()),
+                agent_role: Some("worker".to_string()),
+            }),
+            false,
+            None,
+            None,
+        )
+        .await
+        .expect("spawn grandchild thread");
+    let grandchild_thread_id = grandchild.thread_id;
+    let grandchild_assessment_id = format!("thread:{grandchild_thread_id}:approval-1");
+
+    let grandchild_turn = grandchild.thread.codex.session.new_default_turn().await;
+    let action = json!({
+        "tool": "shell",
+        "command": "rm -rf /tmp/example.sqlite",
+    });
+    let local_assessment = EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+        id: "approval-1".to_string(),
+        turn_id: grandchild_turn.sub_id.clone(),
+        status: GuardianAssessmentStatus::InProgress,
+        risk_score: None,
+        risk_level: None,
+        rationale: None,
+        action: Some(action.clone()),
+    });
+    let mirrored_assessment = EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+        id: grandchild_assessment_id.clone(),
+        turn_id: grandchild_turn.sub_id.clone(),
+        status: GuardianAssessmentStatus::InProgress,
+        risk_score: None,
+        risk_level: None,
+        rationale: None,
+        action: Some(action),
+    });
+    let warning = EventMsg::Warning(WarningEvent {
+        message: "Automatic approval review approved (risk: low): safe enough.".to_string(),
+    });
+
+    grandchild
+        .thread
+        .codex
+        .session
+        .send_guardian_review_event(grandchild_turn.as_ref(), local_assessment.clone())
+        .await;
+    grandchild
+        .thread
+        .codex
+        .session
+        .send_guardian_review_event(grandchild_turn.as_ref(), warning.clone())
+        .await;
+
+    let local_grandchild_assessment = wait_for_event(&grandchild.thread, |event| {
+        matches!(
+            &event.msg,
+            EventMsg::GuardianAssessment(GuardianAssessmentEvent { id, .. }) if id == "approval-1"
+        )
+    })
+    .await;
+    assert!(
+        matches!(
+            (&local_grandchild_assessment.msg, &local_assessment),
+            (
+                EventMsg::GuardianAssessment(actual),
+                EventMsg::GuardianAssessment(expected)
+            ) if actual == expected
+        ),
+        "unexpected local grandchild assessment: {:?}",
+        local_grandchild_assessment.msg
+    );
+
+    let mirrored_child_assessment = wait_for_event(&child.thread, |event| {
+        matches!(
+            &event.msg,
+            EventMsg::GuardianAssessment(GuardianAssessmentEvent { id, .. })
+                if id == &grandchild_assessment_id
+        )
+    })
+    .await;
+    assert!(
+        matches!(
+            (&mirrored_child_assessment.msg, &mirrored_assessment),
+            (
+                EventMsg::GuardianAssessment(actual),
+                EventMsg::GuardianAssessment(expected)
+            ) if actual == expected
+        ),
+        "unexpected mirrored child assessment: {:?}",
+        mirrored_child_assessment.msg
+    );
+
+    let mirrored_parent_assessment = wait_for_event(&parent_thread, |event| {
+        matches!(
+            &event.msg,
+            EventMsg::GuardianAssessment(GuardianAssessmentEvent { id, .. })
+                if id == &grandchild_assessment_id
+        )
+    })
+    .await;
+    assert!(
+        matches!(
+            (&mirrored_parent_assessment.msg, &mirrored_assessment),
+            (
+                EventMsg::GuardianAssessment(actual),
+                EventMsg::GuardianAssessment(expected)
+            ) if actual == expected
+        ),
+        "unexpected mirrored parent assessment: {:?}",
+        mirrored_parent_assessment.msg
+    );
+
+    let local_grandchild_warning = wait_for_event(&grandchild.thread, |event| {
+        matches!(
+            &event.msg,
+            EventMsg::Warning(WarningEvent { message })
+                if message == "Automatic approval review approved (risk: low): safe enough."
+        )
+    })
+    .await;
+    assert!(
+        matches!(
+            (&local_grandchild_warning.msg, &warning),
+            (EventMsg::Warning(actual), EventMsg::Warning(expected))
+                if actual.message == expected.message
+        ),
+        "unexpected local grandchild warning: {:?}",
+        local_grandchild_warning.msg
+    );
+
+    let mirrored_child_warning = wait_for_event(&child.thread, |event| {
+        matches!(
+            &event.msg,
+            EventMsg::Warning(WarningEvent { message })
+                if message == "Automatic approval review approved (risk: low): safe enough."
+        )
+    })
+    .await;
+    assert!(
+        matches!(
+            (&mirrored_child_warning.msg, &warning),
+            (EventMsg::Warning(actual), EventMsg::Warning(expected))
+                if actual.message == expected.message
+        ),
+        "unexpected mirrored child warning: {:?}",
+        mirrored_child_warning.msg
+    );
+
+    let mirrored_parent_warning = wait_for_event(&parent_thread, |event| {
+        matches!(
+            &event.msg,
+            EventMsg::Warning(WarningEvent { message })
+                if message == "Automatic approval review approved (risk: low): safe enough."
+        )
+    })
+    .await;
+    assert!(
+        matches!(
+            (&mirrored_parent_warning.msg, &warning),
+            (EventMsg::Warning(actual), EventMsg::Warning(expected))
+                if actual.message == expected.message
+        ),
+        "unexpected mirrored parent warning: {:?}",
+        mirrored_parent_warning.msg
+    );
 }
 
 #[tokio::test]

@@ -1,3 +1,4 @@
+use crate::CodexThread;
 use crate::agent::AgentStatus;
 use crate::agent::guards::Guards;
 use crate::agent::role::DEFAULT_ROLE_NAME;
@@ -341,6 +342,13 @@ impl AgentControl {
             return AgentStatus::NotFound;
         };
         thread.agent_status().await
+    }
+
+    pub(crate) async fn get_thread_handle(&self, agent_id: ThreadId) -> Option<Arc<CodexThread>> {
+        let Ok(state) = self.upgrade() else {
+            return None;
+        };
+        state.get_thread(agent_id).await.ok()
     }
 
     pub(crate) async fn get_agent_nickname_and_role(
