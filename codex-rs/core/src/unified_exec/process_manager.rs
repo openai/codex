@@ -165,10 +165,12 @@ impl UnifiedExecProcessManager {
             .open_session_with_sandbox(&request, cwd.clone(), context)
             .await;
 
-        let (process, mut deferred_network_approval) = match process {
-            Ok((process, deferred_network_approval)) => {
-                (Arc::new(process), deferred_network_approval)
-            }
+        let (process, mut deferred_network_approval, effective_command) = match process {
+            Ok((process, deferred_network_approval, effective_command)) => (
+                Arc::new(process),
+                deferred_network_approval,
+                effective_command,
+            ),
             Err(err) => {
                 self.release_process_id(request.process_id).await;
                 return Err(err);
@@ -183,7 +185,7 @@ impl UnifiedExecProcessManager {
             None,
         );
         let emitter = ToolEmitter::unified_exec(
-            &request.command,
+            &effective_command,
             cwd.clone(),
             ExecCommandSource::UnifiedExecStartup,
             Some(request.process_id.to_string()),
@@ -236,7 +238,7 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&context.session),
                 Arc::clone(&context.turn),
                 context.call_id.clone(),
-                request.command.clone(),
+                effective_command.clone(),
                 cwd.clone(),
                 Some(process_id.to_string()),
                 Arc::clone(&transcript),
@@ -264,7 +266,7 @@ impl UnifiedExecProcessManager {
             self.store_process(
                 Arc::clone(&process),
                 context,
-                &request.command,
+                &effective_command,
                 cwd.clone(),
                 start,
                 process_id,
@@ -289,7 +291,7 @@ impl UnifiedExecProcessManager {
             },
             exit_code,
             original_token_count: Some(original_token_count),
-            session_command: Some(request.command.clone()),
+            session_command: Some(effective_command.clone()),
         };
 
         Ok(response)
@@ -572,7 +574,14 @@ impl UnifiedExecProcessManager {
         request: &ExecCommandRequest,
         cwd: PathBuf,
         context: &UnifiedExecContext,
-    ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
+    ) -> Result<
+        (
+            UnifiedExecProcess,
+            Option<DeferredNetworkApproval>,
+            Vec<String>,
+        ),
+        UnifiedExecError,
+    > {
         let env = apply_unified_exec_env(create_env(
             &context.turn.shell_environment_policy,
             Some(context.session.conversation_id),
@@ -611,13 +620,17 @@ impl UnifiedExecProcessManager {
             justification: request.justification.clone(),
             exec_approval_requirement,
         };
+        let effective_command =
+            std::sync::Arc::new(tokio::sync::Mutex::new(request.command.clone()));
         let tool_ctx = ToolCtx {
             session: context.session.clone(),
             turn: context.turn.clone(),
             call_id: context.call_id.clone(),
             tool_name: "exec_command".to_string(),
+            command_override: None,
+            effective_command: Some(std::sync::Arc::clone(&effective_command)),
         };
-        orchestrator
+        let result = orchestrator
             .run(
                 &mut runtime,
                 &req,
@@ -626,8 +639,13 @@ impl UnifiedExecProcessManager {
                 context.turn.approval_policy.value(),
             )
             .await
-            .map(|result| (result.output, result.deferred_network_approval))
-            .map_err(|e| UnifiedExecError::create_process(format!("{e:?}")))
+            .map_err(|e| UnifiedExecError::create_process(format!("{e:?}")))?;
+        let effective_command = effective_command.lock().await.clone();
+        Ok((
+            result.output,
+            result.deferred_network_approval,
+            effective_command,
+        ))
     }
 
     pub(super) async fn collect_output_until_deadline(

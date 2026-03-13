@@ -208,6 +208,7 @@ impl ExecApprovalRequestEvent {
         match &self.available_decisions {
             Some(decisions) => decisions.clone(),
             None => Self::default_available_decisions(
+                &self.command,
                 self.network_approval_context.as_ref(),
                 self.proposed_execpolicy_amendment.as_ref(),
                 self.proposed_network_policy_amendments.as_deref(),
@@ -217,6 +218,7 @@ impl ExecApprovalRequestEvent {
     }
 
     pub fn default_available_decisions(
+        command: &[String],
         network_approval_context: Option<&NetworkApprovalContext>,
         proposed_execpolicy_amendment: Option<&ExecPolicyAmendment>,
         proposed_network_policy_amendments: Option<&[NetworkPolicyAmendment]>,
@@ -238,10 +240,21 @@ impl ExecApprovalRequestEvent {
         }
 
         if additional_permissions.is_some() {
-            return vec![ReviewDecision::Approved, ReviewDecision::Abort];
+            return vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedOverrideCommand {
+                    command: command.to_vec(),
+                },
+                ReviewDecision::Abort,
+            ];
         }
 
-        let mut decisions = vec![ReviewDecision::Approved];
+        let mut decisions = vec![
+            ReviewDecision::Approved,
+            ReviewDecision::ApprovedOverrideCommand {
+                command: command.to_vec(),
+            },
+        ];
         if let Some(prefix) = proposed_execpolicy_amendment {
             decisions.push(ReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment: prefix.clone(),
@@ -316,4 +329,67 @@ pub struct ApplyPatchApprovalRequestEvent {
     /// When set, the agent is asking the user to allow writes under this root for the remainder of the session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grant_root: Option<PathBuf>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn command_prompts_advertise_override_decision() {
+        let command = vec!["echo".to_string(), "hi".to_string()];
+
+        let decisions =
+            ExecApprovalRequestEvent::default_available_decisions(&command, None, None, None, None);
+
+        assert_eq!(
+            decisions,
+            vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedOverrideCommand {
+                    command: command.clone(),
+                },
+                ReviewDecision::Abort,
+            ]
+        );
+    }
+
+    #[test]
+    fn network_only_prompts_do_not_advertise_override_decision() {
+        let decisions = ExecApprovalRequestEvent::default_available_decisions(
+            &["echo".to_string(), "hi".to_string()],
+            Some(&NetworkApprovalContext {
+                host: "example.com".to_string(),
+                protocol: NetworkApprovalProtocol::Https,
+            }),
+            None,
+            Some(&[
+                NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: NetworkPolicyRuleAction::Allow,
+                },
+                NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: NetworkPolicyRuleAction::Deny,
+                },
+            ]),
+            None,
+        );
+
+        assert_eq!(
+            decisions,
+            vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::NetworkPolicyAmendment {
+                    network_policy_amendment: NetworkPolicyAmendment {
+                        host: "example.com".to_string(),
+                        action: NetworkPolicyRuleAction::Allow,
+                    },
+                },
+                ReviewDecision::Abort,
+            ]
+        );
+    }
 }

@@ -11,6 +11,31 @@
           "type": "string"
         },
         {
+          "additionalProperties": false,
+          "description": "User approved the command, but wants to execute a different argv vector.",
+          "properties": {
+            "acceptWithOverrideCommand": {
+              "properties": {
+                "command": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "acceptWithOverrideCommand"
+          ],
+          "title": "AcceptWithOverrideCommandCommandExecutionApprovalDecision",
+          "type": "object"
+        },
+        {
           "description": "User approved the command and future prompts in the same session-scoped approval cache should run without prompting.",
           "enum": [
             "acceptForSession"

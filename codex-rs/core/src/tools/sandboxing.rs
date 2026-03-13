@@ -118,6 +118,7 @@ pub(crate) struct ApprovalCtx<'a> {
     pub call_id: &'a str,
     pub retry_reason: Option<String>,
     pub network_approval_context: Option<NetworkApprovalContext>,
+    pub command_override: Option<Vec<String>>,
 }
 
 // Specifies what tool orchestrator should do with a given tool call.
@@ -301,6 +302,8 @@ pub(crate) struct ToolCtx {
     pub turn: Arc<TurnContext>,
     pub call_id: String,
     pub tool_name: String,
+    pub command_override: Option<Vec<String>>,
+    pub effective_command: Option<Arc<tokio::sync::Mutex<Vec<String>>>>,
 }
 
 #[derive(Debug)]

@@ -2408,6 +2408,69 @@ fn map_file_change_approval_decision(
     }
 }
 
+fn map_command_execution_approval_decision(
+    decision: CommandExecutionApprovalDecision,
+    allow_override_command: bool,
+) -> (ReviewDecision, Option<CommandExecutionStatus>) {
+    match decision {
+        CommandExecutionApprovalDecision::Accept => (ReviewDecision::Approved, None),
+        CommandExecutionApprovalDecision::AcceptWithOverrideCommand { command } => {
+            if !allow_override_command {
+                error!(
+                    "failed to deserialize CommandExecutionRequestApprovalResponse: override command is not allowed for network-only approvals"
+                );
+                (
+                    ReviewDecision::Denied,
+                    Some(CommandExecutionStatus::Declined),
+                )
+            } else if command.is_empty() {
+                error!(
+                    "failed to deserialize CommandExecutionRequestApprovalResponse: override command cannot be empty"
+                );
+                (
+                    ReviewDecision::Denied,
+                    Some(CommandExecutionStatus::Declined),
+                )
+            } else {
+                (ReviewDecision::ApprovedOverrideCommand { command }, None)
+            }
+        }
+        CommandExecutionApprovalDecision::AcceptForSession => {
+            (ReviewDecision::ApprovedForSession, None)
+        }
+        CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+            execpolicy_amendment,
+        } => (
+            ReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment: execpolicy_amendment.into_core(),
+            },
+            None,
+        ),
+        CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
+            network_policy_amendment,
+        } => {
+            let completion_status = match network_policy_amendment.action {
+                V2NetworkPolicyRuleAction::Allow => None,
+                V2NetworkPolicyRuleAction::Deny => Some(CommandExecutionStatus::Declined),
+            };
+            (
+                ReviewDecision::NetworkPolicyAmendment {
+                    network_policy_amendment: network_policy_amendment.into_core(),
+                },
+                completion_status,
+            )
+        }
+        CommandExecutionApprovalDecision::Decline => (
+            ReviewDecision::Denied,
+            Some(CommandExecutionStatus::Declined),
+        ),
+        CommandExecutionApprovalDecision::Cancel => (
+            ReviewDecision::Abort,
+            Some(CommandExecutionStatus::Declined),
+        ),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn on_file_change_request_approval_response(
     event_turn_id: String,
@@ -2502,44 +2565,12 @@ async fn on_command_execution_request_approval_response(
                     }
                 });
 
-            let decision = response.decision;
-
-            let (decision, completion_status) = match decision {
-                CommandExecutionApprovalDecision::Accept => (ReviewDecision::Approved, None),
-                CommandExecutionApprovalDecision::AcceptForSession => {
-                    (ReviewDecision::ApprovedForSession, None)
-                }
-                CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
-                    execpolicy_amendment,
-                } => (
-                    ReviewDecision::ApprovedExecpolicyAmendment {
-                        proposed_execpolicy_amendment: execpolicy_amendment.into_core(),
-                    },
-                    None,
-                ),
-                CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
-                    network_policy_amendment,
-                } => {
-                    let completion_status = match network_policy_amendment.action {
-                        V2NetworkPolicyRuleAction::Allow => None,
-                        V2NetworkPolicyRuleAction::Deny => Some(CommandExecutionStatus::Declined),
-                    };
-                    (
-                        ReviewDecision::NetworkPolicyAmendment {
-                            network_policy_amendment: network_policy_amendment.into_core(),
-                        },
-                        completion_status,
-                    )
-                }
-                CommandExecutionApprovalDecision::Decline => (
-                    ReviewDecision::Denied,
-                    Some(CommandExecutionStatus::Declined),
-                ),
-                CommandExecutionApprovalDecision::Cancel => (
-                    ReviewDecision::Abort,
-                    Some(CommandExecutionStatus::Declined),
-                ),
-            };
+            let (decision, completion_status) = map_command_execution_approval_decision(
+                response.decision,
+                // Network-only prompts omit the completion item, and they
+                // must not allow command override responses.
+                completion_item.is_some(),
+            );
             (decision, completion_status)
         }
         Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return,
@@ -2882,6 +2913,19 @@ mod tests {
             map_file_change_approval_decision(FileChangeApprovalDecision::AcceptForSession);
         assert_eq!(decision, ReviewDecision::ApprovedForSession);
         assert_eq!(completion_status, None);
+    }
+
+    #[test]
+    fn command_execution_override_is_rejected_for_network_only_prompts() {
+        let (decision, completion_status) = map_command_execution_approval_decision(
+            CommandExecutionApprovalDecision::AcceptWithOverrideCommand {
+                command: vec!["echo".to_string(), "hi".to_string()],
+            },
+            false,
+        );
+
+        assert_eq!(decision, ReviewDecision::Denied);
+        assert_eq!(completion_status, Some(CommandExecutionStatus::Declined));
     }
 
     #[test]

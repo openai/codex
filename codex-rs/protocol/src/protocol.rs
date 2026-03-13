@@ -3099,6 +3099,10 @@ pub enum ReviewDecision {
     /// User has approved this command and the agent should execute it.
     Approved,
 
+    /// User has approved this command and wants to execute a different argv
+    /// vector instead of the original one-time request.
+    ApprovedOverrideCommand { command: Vec<String> },
+
     /// User has approved this command and wants to apply the proposed execpolicy
     /// amendment so future matching commands are permitted.
     ApprovedExecpolicyAmendment {
@@ -3127,11 +3131,19 @@ pub enum ReviewDecision {
 }
 
 impl ReviewDecision {
+    pub fn override_command(&self) -> Option<&[String]> {
+        match self {
+            ReviewDecision::ApprovedOverrideCommand { command } => Some(command.as_slice()),
+            _ => None,
+        }
+    }
+
     /// Returns an opaque version of the decision without PII. We can't use an ignored flag
     /// on `serde` because the serialization is required by some surfaces.
     pub fn to_opaque_string(&self) -> &'static str {
         match self {
             ReviewDecision::Approved => "approved",
+            ReviewDecision::ApprovedOverrideCommand { .. } => "approved_with_command_override",
             ReviewDecision::ApprovedExecpolicyAmendment { .. } => "approved_with_amendment",
             ReviewDecision::ApprovedForSession => "approved_for_session",
             ReviewDecision::NetworkPolicyAmendment {

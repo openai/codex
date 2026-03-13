@@ -2887,6 +2887,7 @@ impl Session {
         });
         let available_decisions = available_decisions.unwrap_or_else(|| {
             ExecApprovalRequestEvent::default_available_decisions(
+                &command,
                 network_approval_context.as_ref(),
                 proposed_execpolicy_amendment.as_ref(),
                 proposed_network_policy_amendments.as_deref(),

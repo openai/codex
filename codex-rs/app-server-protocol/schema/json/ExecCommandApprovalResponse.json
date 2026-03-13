@@ -35,6 +35,31 @@
         },
         {
           "additionalProperties": false,
+          "description": "User has approved this command and wants to execute a different argv vector instead of the original one-time request.",
+          "properties": {
+            "approved_override_command": {
+              "properties": {
+                "command": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "approved_override_command"
+          ],
+          "title": "ApprovedOverrideCommandReviewDecision",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "User has approved this command and wants to apply the proposed execpolicy amendment so future matching commands are permitted.",
           "properties": {
             "approved_execpolicy_amendment": {

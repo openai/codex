@@ -65,13 +65,7 @@ impl ToolOrchestrator {
         )
         .await;
 
-        let attempt_tool_ctx = ToolCtx {
-            session: tool_ctx.session.clone(),
-            turn: tool_ctx.turn.clone(),
-            call_id: tool_ctx.call_id.clone(),
-            tool_name: tool_ctx.tool_name.clone(),
-        };
-        let run_result = tool.run(req, attempt, &attempt_tool_ctx).await;
+        let run_result = tool.run(req, attempt, tool_ctx).await;
 
         let Some(network_approval) = network_approval else {
             return (run_result, None);
@@ -113,6 +107,14 @@ impl ToolOrchestrator {
         let otel_ci = &tool_ctx.call_id;
         let otel_user = ToolDecisionSource::User;
         let otel_cfg = ToolDecisionSource::Config;
+        let mut effective_tool_ctx = ToolCtx {
+            session: tool_ctx.session.clone(),
+            turn: tool_ctx.turn.clone(),
+            call_id: tool_ctx.call_id.clone(),
+            tool_name: tool_ctx.tool_name.clone(),
+            command_override: tool_ctx.command_override.clone(),
+            effective_command: tool_ctx.effective_command.clone(),
+        };
 
         // 1) Approval
         let mut already_approved = false;
@@ -129,15 +131,22 @@ impl ToolOrchestrator {
             }
             ExecApprovalRequirement::NeedsApproval { reason, .. } => {
                 let approval_ctx = ApprovalCtx {
-                    session: &tool_ctx.session,
-                    turn: &tool_ctx.turn,
-                    call_id: &tool_ctx.call_id,
+                    session: &effective_tool_ctx.session,
+                    turn: &effective_tool_ctx.turn,
+                    call_id: &effective_tool_ctx.call_id,
                     retry_reason: reason,
                     network_approval_context: None,
+                    command_override: effective_tool_ctx.command_override.clone(),
                 };
                 let decision = tool.start_approval_async(req, approval_ctx).await;
 
                 otel.tool_decision(otel_tn, otel_ci, &decision, otel_user.clone());
+                if let Some(command) = decision.override_command() {
+                    effective_tool_ctx.command_override = Some(command.to_vec());
+                    if let Some(effective_command) = &effective_tool_ctx.effective_command {
+                        *effective_command.lock().await = command.to_vec();
+                    }
+                }
 
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
@@ -149,6 +158,7 @@ impl ToolOrchestrator {
                         return Err(ToolError::Rejected(reason));
                     }
                     ReviewDecision::Approved
+                    | ReviewDecision::ApprovedOverrideCommand { .. }
                     | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                     | ReviewDecision::ApprovedForSession => {}
                     ReviewDecision::NetworkPolicyAmendment {
@@ -205,7 +215,7 @@ impl ToolOrchestrator {
         let (first_result, first_deferred_network_approval) = Self::run_attempt(
             tool,
             req,
-            tool_ctx,
+            &effective_tool_ctx,
             &initial_attempt,
             has_managed_network_requirements,
         )
@@ -278,15 +288,22 @@ impl ToolOrchestrator {
                     && network_approval_context.is_none();
                 if !bypass_retry_approval {
                     let approval_ctx = ApprovalCtx {
-                        session: &tool_ctx.session,
-                        turn: &tool_ctx.turn,
-                        call_id: &tool_ctx.call_id,
+                        session: &effective_tool_ctx.session,
+                        turn: &effective_tool_ctx.turn,
+                        call_id: &effective_tool_ctx.call_id,
                         retry_reason: Some(retry_reason),
                         network_approval_context: network_approval_context.clone(),
+                        command_override: effective_tool_ctx.command_override.clone(),
                     };
 
                     let decision = tool.start_approval_async(req, approval_ctx).await;
                     otel.tool_decision(otel_tn, otel_ci, &decision, otel_user);
+                    if let Some(command) = decision.override_command() {
+                        effective_tool_ctx.command_override = Some(command.to_vec());
+                        if let Some(effective_command) = &effective_tool_ctx.effective_command {
+                            *effective_command.lock().await = command.to_vec();
+                        }
+                    }
 
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
@@ -298,6 +315,7 @@ impl ToolOrchestrator {
                             return Err(ToolError::Rejected(reason));
                         }
                         ReviewDecision::Approved
+                        | ReviewDecision::ApprovedOverrideCommand { .. }
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                         | ReviewDecision::ApprovedForSession => {}
                         ReviewDecision::NetworkPolicyAmendment {
@@ -332,7 +350,7 @@ impl ToolOrchestrator {
                 let (retry_result, retry_deferred_network_approval) = Self::run_attempt(
                     tool,
                     req,
-                    tool_ctx,
+                    &effective_tool_ctx,
                     &escalated_attempt,
                     has_managed_network_requirements,
                 )

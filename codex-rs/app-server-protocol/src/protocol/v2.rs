@@ -924,6 +924,8 @@ pub struct ConfigEdit {
 pub enum CommandExecutionApprovalDecision {
     /// User approved the command.
     Accept,
+    /// User approved the command, but wants to execute a different argv vector.
+    AcceptWithOverrideCommand { command: Vec<String> },
     /// User approved the command and future prompts in the same session-scoped
     /// approval cache should run without prompting.
     AcceptForSession,
@@ -946,6 +948,9 @@ impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
     fn from(value: CoreReviewDecision) -> Self {
         match value {
             CoreReviewDecision::Approved => Self::Accept,
+            CoreReviewDecision::ApprovedOverrideCommand { command } => {
+                Self::AcceptWithOverrideCommand { command }
+            }
             CoreReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment,
             } => Self::AcceptWithExecpolicyAmendment {
@@ -5993,6 +5998,27 @@ mod tests {
             Some(CommandExecutionRequestApprovalSkillMetadata {
                 path_to_skills_md: PathBuf::from("/tmp/SKILLS.md"),
             })
+        );
+    }
+
+    #[test]
+    fn command_execution_request_approval_response_accepts_override_command() {
+        let response = serde_json::from_value::<CommandExecutionRequestApprovalResponse>(json!({
+            "decision": {
+                "acceptWithOverrideCommand": {
+                    "command": ["echo", "hi"]
+                }
+            }
+        }))
+        .expect("override command response should deserialize");
+
+        assert_eq!(
+            response,
+            CommandExecutionRequestApprovalResponse {
+                decision: CommandExecutionApprovalDecision::AcceptWithOverrideCommand {
+                    command: vec!["echo".to_string(), "hi".to_string()],
+                },
+            }
         );
     }
 

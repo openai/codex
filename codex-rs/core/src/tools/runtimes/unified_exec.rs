@@ -112,7 +112,10 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
-        let command = req.command.clone();
+        let command = ctx
+            .command_override
+            .clone()
+            .unwrap_or_else(|| req.command.clone());
         let cwd = req.cwd.clone();
         let retry_reason = ctx.retry_reason.clone();
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
@@ -189,7 +192,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<UnifiedExecProcess, ToolError> {
-        let base_command = &req.command;
+        let base_command = ctx.command_override.as_ref().unwrap_or(&req.command);
         let session_shell = ctx.session.user_shell();
         let command = maybe_wrap_shell_lc_with_snapshot(
             base_command,

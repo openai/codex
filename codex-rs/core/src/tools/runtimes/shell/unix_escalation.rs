@@ -568,6 +568,12 @@ impl CoreShellActionProvider {
                                 EscalationDecision::run()
                             }
                         }
+                        ReviewDecision::ApprovedOverrideCommand { .. } => {
+                            EscalationDecision::deny(Some(
+                                "command override is not supported for execve approvals"
+                                    .to_string(),
+                            ))
+                        }
                         ReviewDecision::ApprovedForSession => {
                             // Currently, we only add session approvals for
                             // skill scripts because we are storing only the
