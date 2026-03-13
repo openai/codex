@@ -3795,7 +3795,7 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
 }
 
 #[tokio::test]
-async fn streaming_final_answer_keeps_task_running_state() {
+async fn streaming_final_answer_ctrl_c_interrupt_preserves_background_shells() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
 
@@ -3818,12 +3818,16 @@ async fn streaming_final_answer_keeps_task_running_state() {
     );
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 
+    begin_unified_exec_startup(&mut chat, "call-1", "process-1", "npm run dev");
+    assert_eq!(chat.unified_exec_processes.len(), 1);
+
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     match op_rx.try_recv() {
         Ok(Op::Interrupt) => {}
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+    assert_eq!(chat.unified_exec_processes.len(), 1);
 }
 
 #[tokio::test]
@@ -5998,10 +6002,10 @@ async fn slash_exit_requests_exit() {
 }
 
 #[tokio::test]
-async fn slash_clean_submits_background_terminal_cleanup() {
+async fn slash_stop_submits_background_terminal_cleanup() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
-    chat.dispatch_command(SlashCommand::Clean);
+    chat.dispatch_command(SlashCommand::Stop);
 
     assert_matches!(op_rx.try_recv(), Ok(Op::CleanBackgroundTerminals));
     let cells = drain_insert_history(&mut rx);
@@ -8634,7 +8638,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
 }
 
 #[tokio::test]
-async fn interrupt_clears_unified_exec_processes() {
+async fn interrupt_keeps_unified_exec_processes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
@@ -8649,7 +8653,7 @@ async fn interrupt_clears_unified_exec_processes() {
         }),
     });
 
-    assert!(chat.unified_exec_processes.is_empty());
+    assert_eq!(chat.unified_exec_processes.len(), 2);
 
     let _ = drain_insert_history(&mut rx);
 }
@@ -8692,7 +8696,7 @@ async fn review_ended_keeps_unified_exec_processes() {
 }
 
 #[tokio::test]
-async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
+async fn interrupt_preserves_unified_exec_wait_streak_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_codex_event(Event {
@@ -8723,7 +8727,7 @@ async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
         .collect::<Vec<_>>()
         .join("\n");
     let snapshot = format!("cells={}\n{combined}", cells.len());
-    assert_snapshot!("interrupt_clears_unified_exec_wait_streak", snapshot);
+    assert_snapshot!("interrupt_preserves_unified_exec_wait_streak", snapshot);
 }
 
 #[tokio::test]

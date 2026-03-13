@@ -83,6 +83,22 @@ mod tests {
     }
 
     #[test]
+    fn stop_command_resolves_for_dispatch() {
+        assert_eq!(
+            find_builtin_command("stop", all_enabled_flags()),
+            Some(SlashCommand::Stop)
+        );
+    }
+
+    #[test]
+    fn clean_command_alias_resolves_for_dispatch() {
+        assert_eq!(
+            find_builtin_command("clean", all_enabled_flags()),
+            Some(SlashCommand::Stop)
+        );
+    }
+
+    #[test]
     fn fast_command_is_hidden_when_disabled() {
         let mut flags = all_enabled_flags();
         flags.fast_command_enabled = false;
