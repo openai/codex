@@ -167,7 +167,7 @@
         "spawnAgent",
         "sendInput",
         "resumeAgent",
-        "wait",
+        "waitAgent",
         "closeAgent"
       ],
       "type": "string"

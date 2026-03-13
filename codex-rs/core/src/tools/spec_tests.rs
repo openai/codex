@@ -500,7 +500,7 @@ fn test_build_specs_collab_tools_enabled() {
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     assert_contains_tool_names(
         &tools,
-        &["spawn_agent", "send_input", "wait", "close_agent"],
+        &["spawn_agent", "send_input", "wait_agent", "close_agent"],
     );
     assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
 }
@@ -528,7 +528,7 @@ fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
         &[
             "spawn_agent",
             "send_input",
-            "wait",
+            "wait_agent",
             "close_agent",
             "spawn_agents_on_csv",
         ],
@@ -649,7 +649,7 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
             "spawn_agent",
             "send_input",
             "resume_agent",
-            "wait",
+            "wait_agent",
             "close_agent",
             "spawn_agents_on_csv",
             "report_agent_job_result",

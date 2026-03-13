@@ -737,18 +737,18 @@ async fn resume_agent_rejects_when_depth_limit_exceeded() {
 }
 
 #[tokio::test]
-async fn wait_rejects_non_positive_timeout() {
+async fn wait_agent_rejects_non_positive_timeout() {
     let (session, turn) = make_session_and_context().await;
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait",
+        "wait_agent",
         function_payload(json!({
             "ids": [ThreadId::new().to_string()],
             "timeout_ms": 0
         })),
     );
-    let Err(err) = WaitHandler.handle(invocation).await else {
+    let Err(err) = WaitAgentHandler.handle(invocation).await else {
         panic!("non-positive timeout should be rejected");
     };
     assert_eq!(
@@ -758,15 +758,15 @@ async fn wait_rejects_non_positive_timeout() {
 }
 
 #[tokio::test]
-async fn wait_rejects_invalid_id() {
+async fn wait_agent_rejects_invalid_id() {
     let (session, turn) = make_session_and_context().await;
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait",
+        "wait_agent",
         function_payload(json!({"ids": ["invalid"]})),
     );
-    let Err(err) = WaitHandler.handle(invocation).await else {
+    let Err(err) = WaitAgentHandler.handle(invocation).await else {
         panic!("invalid id should be rejected");
     };
     let FunctionCallError::RespondToModel(msg) = err else {
@@ -776,15 +776,15 @@ async fn wait_rejects_invalid_id() {
 }
 
 #[tokio::test]
-async fn wait_rejects_empty_ids() {
+async fn wait_agent_rejects_empty_ids() {
     let (session, turn) = make_session_and_context().await;
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait",
+        "wait_agent",
         function_payload(json!({"ids": []})),
     );
-    let Err(err) = WaitHandler.handle(invocation).await else {
+    let Err(err) = WaitAgentHandler.handle(invocation).await else {
         panic!("empty ids should be rejected");
     };
     assert_eq!(
@@ -794,7 +794,7 @@ async fn wait_rejects_empty_ids() {
 }
 
 #[tokio::test]
-async fn wait_returns_not_found_for_missing_agents() {
+async fn wait_agent_returns_not_found_for_missing_agents() {
     let (mut session, turn) = make_session_and_context().await;
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
@@ -803,22 +803,22 @@ async fn wait_returns_not_found_for_missing_agents() {
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait",
+        "wait_agent",
         function_payload(json!({
             "ids": [id_a.to_string(), id_b.to_string()],
             "timeout_ms": 1000
         })),
     );
-    let output = WaitHandler
+    let output = WaitAgentHandler
         .handle(invocation)
         .await
-        .expect("wait should succeed");
+        .expect("wait_agent should succeed");
     let (content, success) = expect_text_output(output);
-    let result: wait::WaitResult =
-        serde_json::from_str(&content).expect("wait result should be json");
+    let result: wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
     assert_eq!(
         result,
-        wait::WaitResult {
+        wait::WaitAgentResult {
             status: HashMap::from([(id_a, AgentStatus::NotFound), (id_b, AgentStatus::NotFound),]),
             timed_out: false
         }
@@ -827,7 +827,7 @@ async fn wait_returns_not_found_for_missing_agents() {
 }
 
 #[tokio::test]
-async fn wait_times_out_when_status_is_not_final() {
+async fn wait_agent_times_out_when_status_is_not_final() {
     let (mut session, turn) = make_session_and_context().await;
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
@@ -837,22 +837,22 @@ async fn wait_times_out_when_status_is_not_final() {
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait",
+        "wait_agent",
         function_payload(json!({
             "ids": [agent_id.to_string()],
             "timeout_ms": MIN_WAIT_TIMEOUT_MS
         })),
     );
-    let output = WaitHandler
+    let output = WaitAgentHandler
         .handle(invocation)
         .await
-        .expect("wait should succeed");
+        .expect("wait_agent should succeed");
     let (content, success) = expect_text_output(output);
-    let result: wait::WaitResult =
-        serde_json::from_str(&content).expect("wait result should be json");
+    let result: wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
     assert_eq!(
         result,
-        wait::WaitResult {
+        wait::WaitAgentResult {
             status: HashMap::new(),
             timed_out: true
         }
@@ -867,7 +867,7 @@ async fn wait_times_out_when_status_is_not_final() {
 }
 
 #[tokio::test]
-async fn wait_clamps_short_timeouts_to_minimum() {
+async fn wait_agent_clamps_short_timeouts_to_minimum() {
     let (mut session, turn) = make_session_and_context().await;
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
@@ -877,17 +877,21 @@ async fn wait_clamps_short_timeouts_to_minimum() {
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait",
+        "wait_agent",
         function_payload(json!({
             "ids": [agent_id.to_string()],
             "timeout_ms": 10
         })),
     );
 
-    let early = timeout(Duration::from_millis(50), WaitHandler.handle(invocation)).await;
+    let early = timeout(
+        Duration::from_millis(50),
+        WaitAgentHandler.handle(invocation),
+    )
+    .await;
     assert!(
         early.is_err(),
-        "wait should not return before the minimum timeout clamp"
+        "wait_agent should not return before the minimum timeout clamp"
     );
 
     let _ = thread
@@ -898,7 +902,7 @@ async fn wait_clamps_short_timeouts_to_minimum() {
 }
 
 #[tokio::test]
-async fn wait_returns_final_status_without_timeout() {
+async fn wait_agent_returns_final_status_without_timeout() {
     let (mut session, turn) = make_session_and_context().await;
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
@@ -923,22 +927,22 @@ async fn wait_returns_final_status_without_timeout() {
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait",
+        "wait_agent",
         function_payload(json!({
             "ids": [agent_id.to_string()],
             "timeout_ms": 1000
         })),
     );
-    let output = WaitHandler
+    let output = WaitAgentHandler
         .handle(invocation)
         .await
-        .expect("wait should succeed");
+        .expect("wait_agent should succeed");
     let (content, success) = expect_text_output(output);
-    let result: wait::WaitResult =
-        serde_json::from_str(&content).expect("wait result should be json");
+    let result: wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
     assert_eq!(
         result,
-        wait::WaitResult {
+        wait::WaitAgentResult {
             status: HashMap::from([(agent_id, AgentStatus::Shutdown)]),
             timed_out: false
         }
