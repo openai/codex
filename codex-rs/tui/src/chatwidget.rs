@@ -485,9 +485,6 @@ pub(crate) struct ChatWidgetInit {
     // Shared latch so we only warn once about invalid status-line item IDs.
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
     pub(crate) session_telemetry: SessionTelemetry,
-    /// When true, route operations that have migrated to the embedded
-    /// app-server RPC instead of codex-core's op channel.
-    pub(crate) use_app_server: bool,
 }
 
 #[derive(Default)]
@@ -808,7 +805,6 @@ pub(crate) struct ChatWidget {
     external_editor_state: ExternalEditorState,
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
-    use_app_server: bool,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -3528,7 +3524,6 @@ impl ChatWidget {
             startup_tooltip_override,
             status_line_invalid_items_warned,
             session_telemetry,
-            use_app_server,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -3659,7 +3654,6 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
-            use_app_server,
         };
 
         widget.prefetch_rate_limits();
@@ -3717,7 +3711,6 @@ impl ChatWidget {
             startup_tooltip_override,
             status_line_invalid_items_warned,
             session_telemetry,
-            use_app_server,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -3847,7 +3840,6 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
-            use_app_server,
         };
 
         widget.prefetch_rate_limits();
@@ -3897,7 +3889,6 @@ impl ChatWidget {
             startup_tooltip_override: _,
             status_line_invalid_items_warned,
             session_telemetry,
-            use_app_server,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
@@ -4027,7 +4018,6 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
-            use_app_server,
         };
 
         widget.prefetch_rate_limits();
@@ -8821,19 +8811,9 @@ impl ChatWidget {
         true
     }
 
-    /// Send a skills-list request through the correct channel.
-    ///
-    /// When `use_app_server` is true the op is wrapped in an `AppEvent` and
-    /// sent to the `App` event loop, which intercepts it and issues an RPC
-    /// to the embedded app-server. Otherwise the op goes directly to
-    /// codex-core over the op channel (the legacy path).
     fn request_skills_list(&mut self, cwds: Vec<PathBuf>, force_reload: bool) {
         let op = Op::ListSkills { cwds, force_reload };
-        if self.use_app_server {
-            self.app_event_tx.send(AppEvent::CodexOp(op));
-        } else {
-            self.submit_op(op);
-        }
+        self.app_event_tx.send(AppEvent::CodexOp(op));
     }
 
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
@@ -9183,13 +9163,6 @@ impl ChatWidget {
     /// runtime overrides applied via TUI, e.g., model or approval policy).
     pub(crate) fn config_ref(&self) -> &Config {
         &self.config
-    }
-
-    /// Whether the TUI was launched with `--app-server`, meaning eligible
-    /// operations should be routed through the embedded app-server RPC
-    /// rather than directly to codex-core.
-    pub(crate) fn use_app_server(&self) -> bool {
-        self.use_app_server
     }
 
     #[cfg(test)]
