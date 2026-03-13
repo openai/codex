@@ -137,6 +137,8 @@ pub(crate) enum AppEvent {
         is_final: bool,
     },
 
+    RefreshSkillsList,
+
     /// Result of an app-server-proxied `skills/list` request.
     SkillsListLoaded {
         requested_cwds: Vec<PathBuf>,
