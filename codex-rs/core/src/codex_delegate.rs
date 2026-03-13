@@ -455,16 +455,16 @@ async fn handle_exec_approval(
             reason,
             review_cancel.clone(),
         );
-        await_guardian_approval_with_cancel(
-            review_rx,
+        await_approval_with_cancel(
+            async move { review_rx.await.unwrap_or_default() },
             parent_session,
             &approval_id_for_op,
             cancel_token,
-            review_cancel,
+            Some(&review_cancel),
         )
         .await
     } else {
-        await_parent_approval_with_cancel(
+        await_approval_with_cancel(
             parent_session.request_command_approval(
                 parent_ctx,
                 call_id,
@@ -481,6 +481,7 @@ async fn handle_exec_approval(
             parent_session,
             &approval_id_for_op,
             cancel_token,
+            None,
         )
         .await
     };
@@ -560,12 +561,12 @@ async fn handle_patch_approval(
                 review_cancel.clone(),
             );
             Some(
-                await_guardian_approval_with_cancel(
-                    review_rx,
+                await_approval_with_cancel(
+                    async move { review_rx.await.unwrap_or_default() },
                     parent_session,
                     &approval_id,
                     cancel_token,
-                    review_cancel,
+                    Some(&review_cancel),
                 )
                 .await,
             )
@@ -581,11 +582,12 @@ async fn handle_patch_approval(
         let decision_rx = parent_session
             .request_patch_approval(parent_ctx, call_id, changes, reason, grant_root)
             .await;
-        await_parent_approval_with_cancel(
+        await_approval_with_cancel(
             async move { decision_rx.await.unwrap_or_default() },
             parent_session,
             &approval_id,
             cancel_token,
+            None,
         )
         .await
     };
@@ -676,12 +678,12 @@ async fn maybe_auto_review_mcp_request_user_input(
         None,
         review_cancel.clone(),
     );
-    let decision = await_guardian_approval_with_cancel(
-        review_rx,
+    let decision = await_approval_with_cancel(
+        async move { review_rx.await.unwrap_or_default() },
         parent_session,
         &event.call_id,
         cancel_token,
-        review_cancel,
+        Some(&review_cancel),
     )
     .await;
     let selected_label = match decision {
@@ -816,35 +818,6 @@ where
             scope: PermissionGrantScope::Turn,
         }),
     }
-}
-
-async fn await_guardian_approval_with_cancel(
-    review_rx: oneshot::Receiver<ReviewDecision>,
-    parent_session: &Session,
-    approval_id: &str,
-    cancel_token: &CancellationToken,
-    review_cancel_token: CancellationToken,
-) -> ReviewDecision {
-    await_approval_with_cancel(
-        async move { review_rx.await.unwrap_or_default() },
-        parent_session,
-        approval_id,
-        cancel_token,
-        Some(&review_cancel_token),
-    )
-    .await
-}
-
-async fn await_parent_approval_with_cancel<F>(
-    fut: F,
-    parent_session: &Session,
-    approval_id: &str,
-    cancel_token: &CancellationToken,
-) -> ReviewDecision
-where
-    F: core::future::Future<Output = ReviewDecision>,
-{
-    await_approval_with_cancel(fut, parent_session, approval_id, cancel_token, None).await
 }
 
 /// Await an approval decision, aborting on cancellation.
