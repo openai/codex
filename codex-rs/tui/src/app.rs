@@ -135,9 +135,10 @@ struct SmartApprovalsMode {
     sandbox_policy: SandboxPolicy,
 }
 
-/// Enabling the Smart Approvals experiment should immediately route eligible
-/// approval requests through guardian, without requiring the user to also visit
-/// `/approvals` to pick a matching permissions preset.
+/// Enabling the Smart Approvals experiment in the TUI should also switch the
+/// current `/approvals` settings to the matching Smart Approvals mode. Users
+/// can still change `/approvals` afterward; this just assumes that opting into
+/// the experiment means they want guardian review enabled immediately.
 fn smart_approvals_mode() -> SmartApprovalsMode {
     SmartApprovalsMode {
         approval_policy: AskForApproval::OnRequest,
