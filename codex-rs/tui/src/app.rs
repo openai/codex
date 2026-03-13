@@ -217,6 +217,12 @@ fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillEr
         .unwrap_or_default()
 }
 
+/// Convert an app-server protocol skills entry into the core protocol
+/// equivalent so the existing `ChatWidget` skills UI can consume it
+/// unchanged. Each nested type has a corresponding `into_core_*` helper
+/// below; these are intentionally field-by-field rather than derived to
+/// keep the two protocol crates decoupled and make field divergence a
+/// compile error.
 fn into_core_skills_list_entry(
     entry: codex_app_server_protocol::SkillsListEntry,
 ) -> codex_protocol::protocol::SkillsListEntry {

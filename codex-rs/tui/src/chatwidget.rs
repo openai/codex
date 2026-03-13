@@ -485,6 +485,8 @@ pub(crate) struct ChatWidgetInit {
     // Shared latch so we only warn once about invalid status-line item IDs.
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
     pub(crate) session_telemetry: SessionTelemetry,
+    /// When true, route eligible operations (currently `ListSkills`) through
+    /// the embedded app-server RPC instead of codex-core's op channel.
     pub(crate) use_app_server: bool,
 }
 
@@ -8819,6 +8821,12 @@ impl ChatWidget {
         true
     }
 
+    /// Send a skills-list request through the correct channel.
+    ///
+    /// When `use_app_server` is true the op is wrapped in an `AppEvent` and
+    /// sent to the `App` event loop, which intercepts it and issues an RPC
+    /// to the embedded app-server. Otherwise the op goes directly to
+    /// codex-core over the op channel (the legacy path).
     fn request_skills_list(&mut self, cwds: Vec<PathBuf>, force_reload: bool) {
         let op = Op::ListSkills { cwds, force_reload };
         if self.use_app_server {
@@ -9177,6 +9185,9 @@ impl ChatWidget {
         &self.config
     }
 
+    /// Whether the TUI was launched with `--app-server`, meaning eligible
+    /// operations should be routed through the embedded app-server RPC
+    /// rather than directly to codex-core.
     pub(crate) fn use_app_server(&self) -> bool {
         self.use_app_server
     }
