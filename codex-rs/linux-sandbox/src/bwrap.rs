@@ -1046,7 +1046,7 @@ mod tests {
         let blocked_none_index = args
             .args
             .windows(4)
-            .position(|window| window == ["--perms", "000", "--tmpfs", blocked_str.as_str()])
+            .position(|window| window == ["--perms", "111", "--tmpfs", blocked_str.as_str()])
             .expect("blocked should be masked first");
         let allowed_dir_index = args
             .args
