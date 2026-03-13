@@ -12127,6 +12127,86 @@ async fn queued_theme_selection_resumes_followup_after_idle_resume() {
 }
 
 #[tokio::test]
+async fn queued_personality_selection_resumes_followup_after_idle_resume() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.set_feature_enabled(Feature::Personality, true);
+    chat.handle_codex_event(Event {
+        id: "configured".into(),
+        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: "gpt-5.2-codex".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: PathBuf::from("/home/user/project"),
+            reasoning_effort: Some(ReasoningEffortConfig::default()),
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: None,
+        }),
+    });
+    chat.on_task_started();
+
+    chat.handle_serialized_slash_command(UserMessage::from("/personality pragmatic".to_string()));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("followup".to_string()));
+
+    chat.on_task_complete(None, false);
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["followup".to_string()]
+    );
+    assert!(chat.resume_queued_inputs_when_idle);
+    assert_no_submit_op(&mut op_rx);
+
+    loop {
+        match rx.try_recv() {
+            Ok(AppEvent::CodexOp(Op::OverrideTurnContext {
+                personality: Some(Personality::Pragmatic),
+                ..
+            })) => continue,
+            Ok(AppEvent::UpdatePersonality(Personality::Pragmatic)) => {
+                chat.set_personality(Personality::Pragmatic);
+                break;
+            }
+            Ok(AppEvent::PersistPersonalitySelection {
+                personality: Personality::Pragmatic,
+            }) => continue,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected personality update events"),
+            Err(TryRecvError::Disconnected) => panic!("expected personality update events"),
+        }
+    }
+
+    assert_no_submit_op(&mut op_rx);
+
+    chat.maybe_resume_queued_inputs_when_idle();
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            items,
+            personality: Some(Personality::Pragmatic),
+            ..
+        } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "followup".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn with pragmatic personality, got {other:?}"),
+    }
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(!chat.resume_queued_inputs_when_idle);
+}
+
+#[tokio::test]
 async fn queued_followup_waits_for_popup_dismissal_before_idle_resume() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.handle_codex_event(Event {
