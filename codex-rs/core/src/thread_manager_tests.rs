@@ -166,13 +166,15 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
     config.codex_home = temp_dir.path().join("codex-home");
     config.cwd = config.codex_home.clone();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+    config.model_catalog = None;
     config
         .model_providers
         .get_mut("openai")
         .expect("openai provider should exist")
         .base_url = Some(server.uri());
 
-    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let manager = ThreadManager::new(
         &config,
         auth_manager,
@@ -180,6 +182,6 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
         CollaborationModesConfig::default(),
     );
 
-    let _ = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
+    let _ = manager.list_models(RefreshStrategy::Online).await;
     assert_eq!(models_mock.requests().len(), 1);
 }
