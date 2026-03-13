@@ -46,6 +46,8 @@ pub(super) enum HostToNodeMessage {
         enabled_tools: Vec<EnabledTool>,
         stored_values: HashMap<String, JsonValue>,
         source: String,
+        yield_time_ms: Option<u64>,
+        max_output_tokens: Option<usize>,
     },
     Poll {
         request_id: String,

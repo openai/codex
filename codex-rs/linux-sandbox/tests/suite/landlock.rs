@@ -515,6 +515,12 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
     let blocked = tmpdir.path().join("blocked");
     std::fs::create_dir_all(&blocked).expect("create blocked dir");
     let blocked_target = blocked.join("secret.txt");
+    // These tests bypass the usual legacy-policy bridge, so explicitly keep
+    // the sandbox helper binary and minimal runtime paths readable.
+    let sandbox_helper_dir = PathBuf::from(env!("CARGO_BIN_EXE_codex-linux-sandbox"))
+        .parent()
+        .expect("sandbox helper should have a parent")
+        .to_path_buf();
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![AbsolutePathBuf::try_from(tmpdir.path()).expect("absolute tempdir")],
@@ -524,6 +530,19 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
         exclude_slash_tmp: true,
     };
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Minimal,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(sandbox_helper_dir.as_path())
+                    .expect("absolute helper dir"),
+            },
+            access: FileSystemAccessMode::Read,
+        },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
                 path: AbsolutePathBuf::try_from(tmpdir.path()).expect("absolute tempdir"),
@@ -555,6 +574,88 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
     );
 
     assert_ne!(output.exit_code, 0);
+}
+
+#[tokio::test]
+async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let tmpdir = tempfile::tempdir().expect("tempdir");
+    let blocked = tmpdir.path().join("blocked");
+    let allowed = blocked.join("allowed");
+    std::fs::create_dir_all(&allowed).expect("create blocked/allowed dir");
+    let allowed_target = allowed.join("note.txt");
+    // These tests bypass the usual legacy-policy bridge, so explicitly keep
+    // the sandbox helper binary and minimal runtime paths readable.
+    let sandbox_helper_dir = PathBuf::from(env!("CARGO_BIN_EXE_codex-linux-sandbox"))
+        .parent()
+        .expect("sandbox helper should have a parent")
+        .to_path_buf();
+
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![AbsolutePathBuf::try_from(tmpdir.path()).expect("absolute tempdir")],
+        read_only_access: Default::default(),
+        network_access: true,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Minimal,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(sandbox_helper_dir.as_path())
+                    .expect("absolute helper dir"),
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(tmpdir.path()).expect("absolute tempdir"),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(blocked.as_path()).expect("absolute blocked dir"),
+            },
+            access: FileSystemAccessMode::None,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(allowed.as_path()).expect("absolute allowed dir"),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+    ]);
+    let output = run_cmd_result_with_policies(
+        &[
+            "bash",
+            "-lc",
+            &format!(
+                "printf allowed > {} && cat {}",
+                allowed_target.to_string_lossy(),
+                allowed_target.to_string_lossy()
+            ),
+        ],
+        sandbox_policy,
+        file_system_sandbox_policy,
+        NetworkSandboxPolicy::Enabled,
+        LONG_TIMEOUT_MS,
+        false,
+    )
+    .await
+    .expect("nested writable carveout should execute under bubblewrap");
+
+    assert_eq!(output.exit_code, 0);
+    assert_eq!(output.stdout.text.trim(), "allowed");
 }
 
 #[tokio::test]

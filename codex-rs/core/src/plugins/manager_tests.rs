@@ -227,6 +227,50 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
 }
 
 #[test]
+fn plugin_telemetry_metadata_uses_default_mcp_config_path() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "sample"
+}"#,
+    );
+    write_file(
+        &plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "sample": {
+      "type": "http",
+      "url": "https://sample.example/mcp"
+    }
+  }
+}"#,
+    );
+
+    let metadata = plugin_telemetry_metadata_from_root(
+        &PluginId::parse("sample@test").expect("plugin id should parse"),
+        &plugin_root,
+    );
+
+    assert_eq!(
+        metadata.capability_summary,
+        Some(PluginCapabilitySummary {
+            config_name: "sample@test".to_string(),
+            display_name: "sample".to_string(),
+            description: None,
+            has_skills: false,
+            mcp_server_names: vec!["sample".to_string()],
+            app_connector_ids: Vec::new(),
+        })
+    );
+}
+
+#[test]
 fn load_plugins_uses_manifest_configured_component_paths() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home

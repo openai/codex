@@ -650,6 +650,30 @@
             },
             "method": {
               "enum": [
+                "plugin/read"
+              ],
+              "title": "Plugin/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PluginReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Plugin/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "skills/remote/list"
               ],
               "title": "Skills/remote/listRequestMethod",
@@ -5027,7 +5051,7 @@
         "type": "object"
       },
       "AppSummary": {
-        "description": "EXPERIMENTAL - app metadata summary for plugin-install responses.",
+        "description": "EXPERIMENTAL - app metadata summary for plugin responses.",
         "properties": {
           "description": {
             "type": [
@@ -5192,7 +5216,7 @@
           {
             "additionalProperties": false,
             "properties": {
-              "reject": {
+              "granular": {
                 "properties": {
                   "mcp_elicitations": {
                     "type": "boolean"
@@ -5221,9 +5245,9 @@
               }
             },
             "required": [
-              "reject"
+              "granular"
             ],
-            "title": "RejectAskForApproval",
+            "title": "GranularAskForApproval",
             "type": "object"
           }
         ]
@@ -8516,6 +8540,52 @@
         ],
         "type": "string"
       },
+      "PluginDetail": {
+        "properties": {
+          "apps": {
+            "items": {
+              "$ref": "#/definitions/v2/AppSummary"
+            },
+            "type": "array"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "marketplaceName": {
+            "type": "string"
+          },
+          "marketplacePath": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "mcpServers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/definitions/v2/SkillSummary"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "$ref": "#/definitions/v2/PluginSummary"
+          }
+        },
+        "required": [
+          "apps",
+          "marketplaceName",
+          "marketplacePath",
+          "mcpServers",
+          "skills",
+          "summary"
+        ],
+        "type": "object"
+      },
       "PluginInstallParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -8725,6 +8795,36 @@
           "path",
           "plugins"
         ],
+        "type": "object"
+      },
+      "PluginReadParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "marketplacePath": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "pluginName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "marketplacePath",
+          "pluginName"
+        ],
+        "title": "PluginReadParams",
+        "type": "object"
+      },
+      "PluginReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "plugin": {
+            "$ref": "#/definitions/v2/PluginDetail"
+          }
+        },
+        "required": [
+          "plugin"
+        ],
+        "title": "PluginReadResponse",
         "type": "object"
       },
       "PluginSource": {
@@ -10470,6 +10570,41 @@
           "admin"
         ],
         "type": "string"
+      },
+      "SkillSummary": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "interface": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SkillInterface"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "shortDescription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "description",
+          "name",
+          "path"
+        ],
+        "type": "object"
       },
       "SkillToolDependency": {
         "properties": {

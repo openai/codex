@@ -1,7 +1,9 @@
 use crate::config_loader::ResidencyRequirement;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
+use codex_client::BuildCustomCaTransportError;
 use codex_client::CodexHttpClient;
 pub use codex_client::CodexRequestBuilder;
+use codex_client::build_reqwest_client_with_custom_ca;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
 use std::sync::LazyLock;
@@ -182,7 +184,24 @@ pub fn create_client() -> CodexHttpClient {
     CodexHttpClient::new(inner)
 }
 
+/// Builds the default reqwest client used for ordinary Codex HTTP traffic.
+///
+/// This starts from the standard Codex user agent, default headers, and sandbox-specific proxy
+/// policy, then layers in shared custom CA handling from `CODEX_CA_CERTIFICATE` /
+/// `SSL_CERT_FILE`. The function remains infallible for compatibility with existing call sites, so
+/// a custom-CA or builder failure is logged and falls back to `reqwest::Client::new()`.
 pub fn build_reqwest_client() -> reqwest::Client {
+    try_build_reqwest_client().unwrap_or_else(|error| {
+        tracing::warn!(error = %error, "failed to build default reqwest client");
+        reqwest::Client::new()
+    })
+}
+
+/// Tries to build the default reqwest client used for ordinary Codex HTTP traffic.
+///
+/// Callers that need a structured CA-loading failure instead of the legacy logged fallback can use
+/// this method directly.
+pub fn try_build_reqwest_client() -> Result<reqwest::Client, BuildCustomCaTransportError> {
     let ua = get_codex_user_agent();
 
     let mut builder = reqwest::Client::builder()
@@ -193,7 +212,7 @@ pub fn build_reqwest_client() -> reqwest::Client {
         builder = builder.no_proxy();
     }
 
-    builder.build().unwrap_or_else(|_| reqwest::Client::new())
+    build_reqwest_client_with_custom_ca(builder)
 }
 
 pub fn default_headers() -> HeaderMap {

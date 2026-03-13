@@ -44,7 +44,6 @@ pub use js_repl::JsReplResetHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;
-pub use multi_agents::MultiAgentHandler;
 pub use plan::PlanHandler;
 pub use read_file::ReadFileHandler;
 pub use request_permissions::RequestPermissionsHandler;
@@ -118,7 +117,7 @@ pub(crate) fn normalize_and_validate_additional_permissions(
         && (uses_additional_permissions || additional_permissions.is_some())
     {
         return Err(
-            "additional permissions are disabled; enable `features.request_permissions` before using `with_additional_permissions`"
+            "additional permissions are disabled; enable `features.exec_permission_approvals` before using `with_additional_permissions`"
                 .to_string(),
         );
     }
@@ -239,7 +238,7 @@ mod tests {
     use codex_protocol::models::NetworkPermissions;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::protocol::AskForApproval;
-    use codex_protocol::protocol::RejectConfig;
+    use codex_protocol::protocol::GranularApprovalConfig;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
@@ -266,18 +265,18 @@ mod tests {
     }
 
     #[test]
-    fn preapproved_permissions_work_when_request_permissions_tool_is_enabled_without_inline_feature()
+    fn preapproved_permissions_work_when_request_permissions_tool_is_enabled_without_exec_permission_approvals_feature()
      {
         let cwd = tempdir().expect("tempdir");
 
         let normalized = normalize_and_validate_additional_permissions(
             false,
-            AskForApproval::Reject(RejectConfig {
-                sandbox_approval: false,
-                rules: false,
-                skill_approval: false,
-                request_permissions: true,
-                mcp_elicitations: false,
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: true,
+                request_permissions: false,
+                mcp_elicitations: true,
             }),
             SandboxPermissions::WithAdditionalPermissions,
             Some(network_permissions()),
@@ -290,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_additional_permissions_still_require_request_permissions_feature() {
+    fn fresh_additional_permissions_still_require_exec_permission_approvals_feature() {
         let cwd = tempdir().expect("tempdir");
 
         let err = normalize_and_validate_additional_permissions(
@@ -305,7 +304,7 @@ mod tests {
 
         assert_eq!(
             err,
-            "additional permissions are disabled; enable `features.request_permissions` before using `with_additional_permissions`"
+            "additional permissions are disabled; enable `features.exec_permission_approvals` before using `with_additional_permissions`"
         );
     }
 

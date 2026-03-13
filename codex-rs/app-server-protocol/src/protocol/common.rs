@@ -296,6 +296,10 @@ client_request_definitions! {
         params: v2::PluginListParams,
         response: v2::PluginListResponse,
     },
+    PluginRead => "plugin/read" {
+        params: v2::PluginReadParams,
+        response: v2::PluginReadResponse,
+    },
     SkillsRemoteList => "skills/remote/list" {
         params: v2::SkillsRemoteReadParams,
         response: v2::SkillsRemoteReadResponse,

@@ -91,6 +91,111 @@ fn unified_exec_output_schema() -> JsonValue {
         "additionalProperties": false
     })
 }
+
+fn agent_status_output_schema() -> JsonValue {
+    json!({
+        "oneOf": [
+            {
+                "type": "string",
+                "enum": ["pending_init", "running", "shutdown", "not_found"]
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "completed": {
+                        "type": ["string", "null"]
+                    }
+                },
+                "required": ["completed"],
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "errored": {
+                        "type": "string"
+                    }
+                },
+                "required": ["errored"],
+                "additionalProperties": false
+            }
+        ]
+    })
+}
+
+fn spawn_agent_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "agent_id": {
+                "type": "string",
+                "description": "Thread identifier for the spawned agent."
+            },
+            "nickname": {
+                "type": ["string", "null"],
+                "description": "User-facing nickname for the spawned agent when available."
+            }
+        },
+        "required": ["agent_id", "nickname"],
+        "additionalProperties": false
+    })
+}
+
+fn send_input_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "submission_id": {
+                "type": "string",
+                "description": "Identifier for the queued input submission."
+            }
+        },
+        "required": ["submission_id"],
+        "additionalProperties": false
+    })
+}
+
+fn resume_agent_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "status": agent_status_output_schema()
+        },
+        "required": ["status"],
+        "additionalProperties": false
+    })
+}
+
+fn wait_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "object",
+                "description": "Final statuses keyed by agent id for agents that finished before the timeout.",
+                "additionalProperties": agent_status_output_schema()
+            },
+            "timed_out": {
+                "type": "boolean",
+                "description": "Whether the wait call returned due to timeout before any agent reached a final status."
+            }
+        },
+        "required": ["status", "timed_out"],
+        "additionalProperties": false
+    })
+}
+
+fn close_agent_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "status": agent_status_output_schema()
+        },
+        "required": ["status"],
+        "additionalProperties": false
+    })
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ShellCommandBackendConfig {
     Classic,
@@ -118,7 +223,7 @@ pub(crate) struct ToolsConfig {
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
     pub tool_suggest: bool,
-    pub request_permission_enabled: bool,
+    pub exec_permission_approvals_enabled: bool,
     pub request_permissions_tool_enabled: bool,
     pub code_mode_enabled: bool,
     pub js_repl_enabled: bool,
@@ -177,14 +282,14 @@ impl ToolsConfig {
         let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
-        let include_search_tool = features.enabled(Feature::Apps);
+        let include_search_tool = model_info.supports_search_tool;
         let include_tool_suggest = include_search_tool && features.enabled(Feature::ToolSuggest);
         let include_original_image_detail = can_request_original_image_detail(features, model_info);
         let include_artifact_tools =
             features.enabled(Feature::Artifact) && codex_artifacts::can_manage_artifact_runtime();
         let include_image_gen_tool =
             features.enabled(Feature::ImageGeneration) && supports_image_generation(model_info);
-        let request_permission_enabled = features.enabled(Feature::RequestPermissions);
+        let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
         let request_permissions_tool_enabled = features.enabled(Feature::RequestPermissionsTool);
         let shell_command_backend =
             if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
@@ -255,7 +360,7 @@ impl ToolsConfig {
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
             tool_suggest: include_tool_suggest,
-            request_permission_enabled,
+            exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
             code_mode_enabled: include_code_mode,
             js_repl_enabled: include_js_repl,
@@ -389,44 +494,7 @@ fn create_file_system_permissions_schema() -> JsonSchema {
     }
 }
 
-fn create_macos_permissions_schema() -> JsonSchema {
-    JsonSchema::Object {
-        properties: BTreeMap::from([
-            (
-                "preferences".to_string(),
-                JsonSchema::String {
-                    description: Some(
-                        "macOS preferences access. Supported values: `none`, `read_only`, or `read_write`."
-                            .to_string(),
-                    ),
-                },
-            ),
-            (
-                "automations".to_string(),
-                JsonSchema::Array {
-                    items: Box::new(JsonSchema::String { description: None }),
-                    description: Some("macOS automation access as app bundle identifiers.".to_string()),
-                },
-            ),
-            (
-                "accessibility".to_string(),
-                JsonSchema::Boolean {
-                    description: Some("Whether to request macOS accessibility access.".to_string()),
-                },
-            ),
-            (
-                "calendar".to_string(),
-                JsonSchema::Boolean {
-                    description: Some("Whether to request macOS calendar access.".to_string()),
-                },
-            ),
-        ]),
-        required: None,
-        additional_properties: Some(false.into()),
-    }
-}
-
-fn create_permissions_schema() -> JsonSchema {
+fn create_additional_permissions_schema() -> JsonSchema {
     JsonSchema::Object {
         properties: BTreeMap::from([
             ("network".to_string(), create_network_permissions_schema()),
@@ -434,21 +502,36 @@ fn create_permissions_schema() -> JsonSchema {
                 "file_system".to_string(),
                 create_file_system_permissions_schema(),
             ),
-            ("macos".to_string(), create_macos_permissions_schema()),
         ]),
         required: None,
         additional_properties: Some(false.into()),
     }
 }
 
-fn create_approval_parameters(request_permission_enabled: bool) -> BTreeMap<String, JsonSchema> {
+fn create_request_permissions_schema() -> JsonSchema {
+    JsonSchema::Object {
+        properties: BTreeMap::from([
+            ("network".to_string(), create_network_permissions_schema()),
+            (
+                "file_system".to_string(),
+                create_file_system_permissions_schema(),
+            ),
+        ]),
+        required: None,
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn create_approval_parameters(
+    exec_permission_approvals_enabled: bool,
+) -> BTreeMap<String, JsonSchema> {
     let mut properties = BTreeMap::from([
         (
             "sandbox_permissions".to_string(),
             JsonSchema::String {
                 description: Some(
-                    if request_permission_enabled {
-                        "Sandbox permissions for the command. Use \"with_additional_permissions\" to request additional sandboxed filesystem, network, or macOS permissions (preferred), or \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
+                    if exec_permission_approvals_enabled {
+                        "Sandbox permissions for the command. Use \"with_additional_permissions\" to request additional sandboxed filesystem or network permissions (preferred), or \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
                     } else {
                         "Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
                     }
@@ -482,17 +565,20 @@ fn create_approval_parameters(request_permission_enabled: bool) -> BTreeMap<Stri
         )
     ]);
 
-    if request_permission_enabled {
+    if exec_permission_approvals_enabled {
         properties.insert(
             "additional_permissions".to_string(),
-            create_permissions_schema(),
+            create_additional_permissions_schema(),
         );
     }
 
     properties
 }
 
-fn create_exec_command_tool(allow_login_shell: bool, request_permission_enabled: bool) -> ToolSpec {
+fn create_exec_command_tool(
+    allow_login_shell: bool,
+    exec_permission_approvals_enabled: bool,
+) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "cmd".to_string(),
@@ -552,7 +638,9 @@ fn create_exec_command_tool(allow_login_shell: bool, request_permission_enabled:
             },
         );
     }
-    properties.extend(create_approval_parameters(request_permission_enabled));
+    properties.extend(create_approval_parameters(
+        exec_permission_approvals_enabled,
+    ));
 
     ToolSpec::Function(ResponsesApiTool {
         name: "exec_command".to_string(),
@@ -669,7 +757,7 @@ fn create_exec_wait_tool() -> ToolSpec {
     })
 }
 
-fn create_shell_tool(request_permission_enabled: bool) -> ToolSpec {
+fn create_shell_tool(exec_permission_approvals_enabled: bool) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "command".to_string(),
@@ -691,7 +779,9 @@ fn create_shell_tool(request_permission_enabled: bool) -> ToolSpec {
             },
         ),
     ]);
-    properties.extend(create_approval_parameters(request_permission_enabled));
+    properties.extend(create_approval_parameters(
+        exec_permission_approvals_enabled,
+    ));
 
     let description  = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
@@ -726,7 +816,7 @@ Examples of valid command strings:
 
 fn create_shell_command_tool(
     allow_login_shell: bool,
-    request_permission_enabled: bool,
+    exec_permission_approvals_enabled: bool,
 ) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
@@ -761,7 +851,9 @@ fn create_shell_command_tool(
             },
         );
     }
-    properties.extend(create_approval_parameters(request_permission_enabled));
+    properties.extend(create_approval_parameters(
+        exec_permission_approvals_enabled,
+    ));
 
     let description = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output.
@@ -975,7 +1067,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             required: None,
             additional_properties: Some(false.into()),
         },
-        output_schema: None,
+        output_schema: Some(spawn_agent_output_schema()),
     })
 }
 
@@ -1177,7 +1269,7 @@ fn create_send_input_tool() -> ToolSpec {
             required: Some(vec!["id".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: None,
+        output_schema: Some(send_input_output_schema()),
     })
 }
 
@@ -1202,7 +1294,7 @@ fn create_resume_agent_tool() -> ToolSpec {
             required: Some(vec!["id".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: None,
+        output_schema: Some(resume_agent_output_schema()),
     })
 }
 
@@ -1238,7 +1330,7 @@ fn create_wait_tool() -> ToolSpec {
             required: Some(vec!["ids".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: None,
+        output_schema: Some(wait_output_schema()),
     })
 }
 
@@ -1339,7 +1431,10 @@ fn create_request_permissions_tool() -> ToolSpec {
             ),
         },
     );
-    properties.insert("permissions".to_string(), create_permissions_schema());
+    properties.insert(
+        "permissions".to_string(),
+        create_request_permissions_schema(),
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "request_permissions".to_string(),
@@ -1374,7 +1469,7 @@ fn create_close_agent_tool() -> ToolSpec {
             required: Some(vec!["id".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: None,
+        output_schema: Some(close_agent_output_schema()),
     })
 }
 
@@ -1902,8 +1997,13 @@ fn create_js_repl_reset_tool() -> ToolSpec {
 
 fn create_code_mode_tool(enabled_tool_names: &[String]) -> ToolSpec {
     const CODE_MODE_FREEFORM_GRAMMAR: &str = r#"
-start: source
-source: /[\s\S]+/
+start: pragma_source | plain_source
+pragma_source: PRAGMA_LINE NEWLINE SOURCE
+plain_source: SOURCE
+
+PRAGMA_LINE: /[ \t]*\/\/ @exec:[^\r\n]*/
+NEWLINE: /\r?\n/
+SOURCE: /[\s\S]+/
 "#;
 
     ToolSpec::Freeform(FreeformTool {
@@ -2324,7 +2424,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
-    use crate::tools::handlers::MultiAgentHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
@@ -2336,6 +2435,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ToolSuggestHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
+    use crate::tools::handlers::multi_agents::CloseAgentHandler;
+    use crate::tools::handlers::multi_agents::ResumeAgentHandler;
+    use crate::tools::handlers::multi_agents::SendInputHandler;
+    use crate::tools::handlers::multi_agents::SpawnAgentHandler;
+    use crate::tools::handlers::multi_agents::WaitHandler;
     use std::sync::Arc;
 
     let mut builder = ToolRegistryBuilder::new();
@@ -2359,7 +2463,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
     let artifacts_handler = Arc::new(ArtifactsHandler);
-    let request_permission_enabled = config.request_permission_enabled;
+    let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
 
     if config.code_mode_enabled {
         let nested_config = config.for_code_mode_nested_tools();
@@ -2399,7 +2503,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         ConfigShellToolType::Default => {
             push_tool_spec(
                 &mut builder,
-                create_shell_tool(request_permission_enabled),
+                create_shell_tool(exec_permission_approvals_enabled),
                 true,
                 config.code_mode_enabled,
             );
@@ -2415,7 +2519,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
         ConfigShellToolType::UnifiedExec => {
             push_tool_spec(
                 &mut builder,
-                create_exec_command_tool(config.allow_login_shell, request_permission_enabled),
+                create_exec_command_tool(
+                    config.allow_login_shell,
+                    exec_permission_approvals_enabled,
+                ),
                 true,
                 config.code_mode_enabled,
             );
@@ -2434,7 +2541,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
         ConfigShellToolType::ShellCommand => {
             push_tool_spec(
                 &mut builder,
-                create_shell_command_tool(config.allow_login_shell, request_permission_enabled),
+                create_shell_command_tool(
+                    config.allow_login_shell,
+                    exec_permission_approvals_enabled,
+                ),
                 true,
                 config.code_mode_enabled,
             );
@@ -2698,7 +2808,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     }
 
     if config.collab_tools {
-        let multi_agent_handler = Arc::new(MultiAgentHandler);
         push_tool_spec(
             &mut builder,
             create_spawn_agent_tool(config),
@@ -2729,11 +2838,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
             false,
             config.code_mode_enabled,
         );
-        builder.register_handler("spawn_agent", multi_agent_handler.clone());
-        builder.register_handler("send_input", multi_agent_handler.clone());
-        builder.register_handler("resume_agent", multi_agent_handler.clone());
-        builder.register_handler("wait", multi_agent_handler.clone());
-        builder.register_handler("close_agent", multi_agent_handler);
+        builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
+        builder.register_handler("send_input", Arc::new(SendInputHandler));
+        builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
+        builder.register_handler("wait", Arc::new(WaitHandler));
+        builder.register_handler("close_agent", Arc::new(CloseAgentHandler));
     }
 
     if config.agent_jobs_tools {

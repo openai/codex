@@ -1,28 +1,28 @@
 use super::*;
-use codex_protocol::protocol::RejectConfig;
+use codex_protocol::protocol::GranularApprovalConfig;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 
 #[test]
-fn wants_no_sandbox_approval_reject_respects_sandbox_flag() {
+fn wants_no_sandbox_approval_granular_respects_sandbox_flag() {
     let runtime = ApplyPatchRuntime::new();
     assert!(runtime.wants_no_sandbox_approval(AskForApproval::OnRequest));
     assert!(
-        !runtime.wants_no_sandbox_approval(AskForApproval::Reject(RejectConfig {
-            sandbox_approval: true,
-            rules: false,
-            skill_approval: false,
-            request_permissions: false,
-            mcp_elicitations: false,
+        !runtime.wants_no_sandbox_approval(AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: false,
+            rules: true,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: true,
         }))
     );
     assert!(
-        runtime.wants_no_sandbox_approval(AskForApproval::Reject(RejectConfig {
-            sandbox_approval: false,
-            rules: false,
-            skill_approval: false,
-            request_permissions: false,
-            mcp_elicitations: false,
+        runtime.wants_no_sandbox_approval(AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: true,
+            rules: true,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: true,
         }))
     );
 }
