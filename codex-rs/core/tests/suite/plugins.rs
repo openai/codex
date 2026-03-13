@@ -115,6 +115,7 @@ async fn build_analytics_plugin_test_codex(
     let mut builder = test_codex()
         .with_home(codex_home)
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model("gpt-5")
         .with_config(move |config| {
             config.chatgpt_base_url = chatgpt_base_url;
         });
