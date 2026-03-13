@@ -58,6 +58,7 @@ use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_api::requests::responses::Compression;
 use codex_otel::SessionTelemetry;
+use codex_otel::current_span_w3c_trace_context;
 
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -926,6 +927,7 @@ impl ModelClientSession {
             )?;
             let mut ws_payload = ResponseCreateWsRequest {
                 client_metadata: build_ws_client_metadata(turn_metadata_header),
+                trace: current_span_w3c_trace_context(),
                 ..ResponseCreateWsRequest::from(&request)
             };
             if warmup {
