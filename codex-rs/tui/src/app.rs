@@ -852,14 +852,20 @@ impl App {
         }
     }
 
+    fn set_approvals_reviewer_in_app_and_widget(&mut self, reviewer: ApprovalsReviewer) {
+        self.config.approvals_reviewer = reviewer;
+        self.chat_widget.set_approvals_reviewer(reviewer);
+    }
+
     async fn update_feature_flags(&mut self, updates: Vec<(Feature, bool)>) {
         if updates.is_empty() {
             return;
         }
 
         let smart_approvals_mode = smart_approvals_mode();
+        let active_profile = self.active_profile.clone();
         let scoped_segments = |key: &str| {
-            if let Some(profile) = self.active_profile.as_deref() {
+            if let Some(profile) = active_profile.as_deref() {
                 vec!["profiles".to_string(), profile.to_string(), key.to_string()]
             } else {
                 vec![key.to_string()]
@@ -874,12 +880,15 @@ impl App {
         let mut approval_policy_override = None;
         let mut approvals_reviewer_override = None;
         let mut sandbox_policy_override = None;
-        let approvals_reviewer_config_scope = || {
+        // Smart Approvals owns `approvals_reviewer`, but disabling the feature
+        // from inside a profile should not silently clear a value configured at
+        // the root scope.
+        let (root_approvals_reviewer_configured, profile_approvals_reviewer_configured) = {
             let effective_config = self.config.config_layer_stack.effective_config();
             let root_configured = effective_config
                 .as_table()
                 .is_some_and(|table| table.contains_key("approvals_reviewer"));
-            let profile_configured = self.active_profile.as_deref().is_some_and(|profile| {
+            let profile_configured = active_profile.as_deref().is_some_and(|profile| {
                 effective_config
                     .as_table()
                     .and_then(|table| table.get("profiles"))
@@ -897,6 +906,10 @@ impl App {
         for (feature, enabled) in updates {
             let feature_key = feature.key();
             if feature == Feature::GuardianApproval && enabled {
+                // Enabling Smart Approvals should behave like selecting the
+                // matching `/approvals` preset, so validate those coupled
+                // approval/sandbox settings before we persist or patch runtime
+                // state.
                 if let Err(err) = self
                     .config
                     .permissions
@@ -926,14 +939,15 @@ impl App {
                     continue;
                 }
             }
-            if feature == Feature::GuardianApproval && !enabled {
-                let (root_approvals_reviewer_configured, _) = approvals_reviewer_config_scope();
-                if self.active_profile.is_some() && root_approvals_reviewer_configured {
-                    self.chat_widget.add_error_message(
+            if feature == Feature::GuardianApproval
+                && !enabled
+                && self.active_profile.is_some()
+                && root_approvals_reviewer_configured
+            {
+                self.chat_widget.add_error_message(
                         "Cannot disable Smart Approvals in this profile because `approvals_reviewer` is configured outside the active profile.".to_string(),
                     );
-                    continue;
-                }
+                continue;
             }
             if let Err(err) = self.config.features.set_enabled(feature, enabled) {
                 tracing::error!(
@@ -952,9 +966,12 @@ impl App {
             if feature == Feature::GuardianApproval {
                 let previous_approvals_reviewer = self.config.approvals_reviewer;
                 if effective_enabled {
-                    self.config.approvals_reviewer = smart_approvals_mode.approvals_reviewer;
-                    self.chat_widget
-                        .set_approvals_reviewer(smart_approvals_mode.approvals_reviewer);
+                    // Persist the reviewer setting so future sessions keep the
+                    // experiment's matching `/approvals` mode until the user
+                    // changes it explicitly.
+                    self.set_approvals_reviewer_in_app_and_widget(
+                        smart_approvals_mode.approvals_reviewer,
+                    );
                     builder = builder.with_edits([ConfigEdit::SetPath {
                         segments: scoped_segments("approvals_reviewer"),
                         value: smart_approvals_mode.approvals_reviewer.to_string().into(),
@@ -963,18 +980,12 @@ impl App {
                         permissions_history_label = Some("Smart Approvals");
                     }
                 } else if !effective_enabled {
-                    let (
-                        _root_approvals_reviewer_configured,
-                        profile_approvals_reviewer_configured,
-                    ) = approvals_reviewer_config_scope();
                     if profile_approvals_reviewer_configured || self.active_profile.is_none() {
                         builder = builder.with_edits([ConfigEdit::ClearPath {
                             segments: scoped_segments("approvals_reviewer"),
                         }]);
                     }
-                    self.config.approvals_reviewer = ApprovalsReviewer::User;
-                    self.chat_widget
-                        .set_approvals_reviewer(ApprovalsReviewer::User);
+                    self.set_approvals_reviewer_in_app_and_widget(ApprovalsReviewer::User);
                     if previous_approvals_reviewer != ApprovalsReviewer::User {
                         permissions_history_label = Some("Default");
                     }
@@ -982,6 +993,10 @@ impl App {
                 approvals_reviewer_override = Some(self.config.approvals_reviewer);
             }
             if feature == Feature::GuardianApproval && effective_enabled {
+                // The feature flag alone is not enough for the live session.
+                // We also align approval policy + sandbox to the Smart
+                // Approvals preset so enabling the experiment immediately makes
+                // guardian review observable in the current thread.
                 if let Err(err) = self
                     .config
                     .permissions
@@ -1044,6 +1059,11 @@ impl App {
             || approvals_reviewer_override.is_some()
             || sandbox_policy_override.is_some()
         {
+            // This uses `OverrideTurnContext` intentionally: toggling the
+            // experiment should update the active thread's effective approval
+            // settings immediately, just like a `/approvals` selection. Without
+            // this runtime patch, the config edit would only affect future
+            // sessions or turns recreated from disk.
             let op = Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: approval_policy_override,
