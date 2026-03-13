@@ -52,7 +52,7 @@
         {
           "additionalProperties": false,
           "properties": {
-            "reject": {
+            "granular": {
               "properties": {
                 "mcp_elicitations": {
                   "type": "boolean"
@@ -81,9 +81,9 @@
             }
           },
           "required": [
-            "reject"
+            "granular"
           ],
-          "title": "RejectAskForApproval",
+          "title": "GranularAskForApproval",
           "type": "object"
         }
       ]
@@ -1141,6 +1141,21 @@
           "type": "boolean"
         }
       },
+      "type": "object"
+    },
+    "PluginReadParams": {
+      "properties": {
+        "marketplacePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "pluginName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "marketplacePath",
+        "pluginName"
+      ],
       "type": "object"
     },
     "PluginUninstallParams": {
@@ -3557,6 +3572,30 @@
         "params"
       ],
       "title": "Plugin/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/read"
+          ],
+          "title": "Plugin/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/readRequest",
       "type": "object"
     },
     {

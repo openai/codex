@@ -2912,8 +2912,8 @@ impl Session {
                     scope: PermissionGrantScope::Turn,
                 });
             }
-            AskForApproval::Reject(reject_config)
-                if reject_config.rejects_request_permissions() =>
+            AskForApproval::Granular(granular_config)
+                if !granular_config.allows_request_permissions() =>
             {
                 return Some(RequestPermissionsResponse {
                     permissions: PermissionProfile::default(),
@@ -2923,7 +2923,7 @@ impl Session {
             AskForApproval::OnFailure
             | AskForApproval::OnRequest
             | AskForApproval::UnlessTrusted
-            | AskForApproval::Reject(_) => {}
+            | AskForApproval::Granular(_) => {}
         }
 
         let (tx_response, rx_response) = oneshot::channel();
@@ -3381,7 +3381,9 @@ impl Session {
                 turn_context.approval_policy.value(),
                 self.services.exec_policy.current().as_ref(),
                 &turn_context.cwd,
-                turn_context.features.enabled(Feature::RequestPermissions),
+                turn_context
+                    .features
+                    .enabled(Feature::ExecPermissionApprovals),
             )
             .into_text(),
         );
@@ -5480,6 +5482,10 @@ pub(crate) async fn run_turn(
 
     let plugin_items =
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
+    let mentioned_plugin_metadata = mentioned_plugins
+        .iter()
+        .filter_map(crate::plugins::PluginCapabilitySummary::telemetry_metadata)
+        .collect::<Vec<_>>();
 
     let mut explicitly_enabled_connectors = collect_explicit_app_ids(&input);
     explicitly_enabled_connectors.extend(collect_explicit_app_ids_from_skill_items(
@@ -5518,6 +5524,11 @@ pub(crate) async fn run_turn(
     sess.services
         .analytics_events_client
         .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
+    for plugin in mentioned_plugin_metadata {
+        sess.services
+            .analytics_events_client
+            .track_plugin_used(tracking.clone(), plugin);
+    }
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
 
@@ -5565,7 +5576,7 @@ pub(crate) async fn run_turn(
                 AskForApproval::UnlessTrusted
                 | AskForApproval::OnFailure
                 | AskForApproval::OnRequest
-                | AskForApproval::Reject(_) => "default",
+                | AskForApproval::Granular(_) => "default",
             }
             .to_string();
             let session_start_request = codex_hooks::SessionStartRequest {
@@ -5714,7 +5725,7 @@ pub(crate) async fn run_turn(
                         AskForApproval::UnlessTrusted
                         | AskForApproval::OnFailure
                         | AskForApproval::OnRequest
-                        | AskForApproval::Reject(_) => "default",
+                        | AskForApproval::Granular(_) => "default",
                     }
                     .to_string();
                     let stop_request = codex_hooks::StopRequest {

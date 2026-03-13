@@ -336,7 +336,8 @@ impl ShellHandler {
             }
         }
 
-        let request_permission_enabled = session.features().enabled(Feature::RequestPermissions);
+        let exec_permission_approvals_enabled =
+            session.features().enabled(Feature::ExecPermissionApprovals);
         let requested_additional_permissions = additional_permissions.clone();
         let effective_additional_permissions = apply_granted_turn_permissions(
             session.as_ref(),
@@ -344,7 +345,7 @@ impl ShellHandler {
             additional_permissions,
         )
         .await;
-        let additional_permissions_allowed = request_permission_enabled
+        let additional_permissions_allowed = exec_permission_approvals_enabled
             || (session.features().enabled(Feature::RequestPermissionsTool)
                 && effective_additional_permissions.permissions_preapproved);
         let normalized_additional_permissions = implicit_granted_permissions(

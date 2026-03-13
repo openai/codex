@@ -281,6 +281,8 @@ impl ModelClient {
         &self,
         prompt: &Prompt,
         model_info: &ModelInfo,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
         session_telemetry: &SessionTelemetry,
     ) -> Result<Vec<ResponseItem>> {
         if prompt.input.is_empty() {
@@ -294,10 +296,29 @@ impl ModelClient {
                 .with_telemetry(Some(request_telemetry));
 
         let instructions = prompt.base_instructions.text.clone();
+        let input = prompt.get_formatted_input();
+        let tools = create_tools_json_for_responses_api(&prompt.tools)?;
+        let reasoning = Self::build_reasoning(model_info, effort, summary);
+        let verbosity = if model_info.support_verbosity {
+            self.state.model_verbosity.or(model_info.default_verbosity)
+        } else {
+            if self.state.model_verbosity.is_some() {
+                warn!(
+                    "model_verbosity is set but ignored as the model does not support verbosity: {}",
+                    model_info.slug
+                );
+            }
+            None
+        };
+        let text = create_text_param_for_request(verbosity, &prompt.output_schema);
         let payload = ApiCompactionInput {
             model: &model_info.slug,
-            input: &prompt.input,
+            input: &input,
             instructions: &instructions,
+            tools,
+            parallel_tool_calls: prompt.parallel_tool_calls,
+            reasoning,
+            text,
         };
 
         let mut extra_headers = self.build_subagent_headers();
@@ -373,6 +394,25 @@ impl ModelClient {
         let telemetry = Arc::new(ApiTelemetry::new(session_telemetry.clone()));
         let request_telemetry: Arc<dyn RequestTelemetry> = telemetry;
         request_telemetry
+    }
+
+    fn build_reasoning(
+        model_info: &ModelInfo,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+    ) -> Option<Reasoning> {
+        if model_info.supports_reasoning_summaries {
+            Some(Reasoning {
+                effort: effort.or(model_info.default_reasoning_level),
+                summary: if summary == ReasoningSummaryConfig::None {
+                    None
+                } else {
+                    Some(summary)
+                },
+            })
+        } else {
+            None
+        }
     }
 
     /// Returns whether the Responses-over-WebSocket transport is active for this session.

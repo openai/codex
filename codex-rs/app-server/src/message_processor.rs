@@ -39,6 +39,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
+use codex_core::AnalyticsEventsClient;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::auth::ExternalAuthRefreshContext;
@@ -213,6 +214,11 @@ impl MessageProcessor {
         auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));
+        let analytics_events_client =
+            AnalyticsEventsClient::new(Arc::clone(&config), Arc::clone(&auth_manager));
+        thread_manager
+            .plugins_manager()
+            .set_analytics_events_client(analytics_events_client.clone());
         // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
         thread_manager
             .plugins_manager()
@@ -235,6 +241,7 @@ impl MessageProcessor {
             loader_overrides,
             cloud_requirements,
             thread_manager,
+            analytics_events_client,
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
 
