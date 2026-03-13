@@ -224,6 +224,8 @@ fn request_app_server_skills_list(
     force_reload: bool,
 ) {
     tokio::spawn(async move {
+        let requested_cwds = cwds.clone();
+
         let request_id =
             RequestId::Integer(NEXT_APP_SERVER_REQUEST_ID.fetch_add(1, Ordering::Relaxed));
         let result = client
@@ -239,7 +241,10 @@ fn request_app_server_skills_list(
             .map(into_core_skills_list_response_event)
             .map_err(|err| format!("skills/list failed: {err}"));
 
-        app_event_tx.send(AppEvent::SkillsListLoaded { result });
+        app_event_tx.send(AppEvent::SkillsListLoaded {
+            requested_cwds,
+            result,
+        });
     });
 }
 
@@ -2346,6 +2351,25 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
+    fn handle_skills_list_loaded(
+        &mut self,
+        requested_cwds: Vec<PathBuf>,
+        result: std::result::Result<ListSkillsResponseEvent, String>,
+    ) -> Result<()> {
+        let event = result.map_err(|err| color_eyre::eyre::eyre!(err))?;
+        let current_cwd = self.chat_widget.config_ref().cwd.clone();
+
+        if !requested_cwds.contains(&current_cwd) {
+            return Ok(());
+        }
+
+        emit_skill_load_warnings(&self.app_event_tx, &errors_for_cwd(&current_cwd, &event));
+        self.chat_widget.set_skills_from_response(&event);
+        self.chat_widget.refresh_plugin_mentions();
+
+        Ok(())
+    }
+
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
@@ -2655,12 +2679,11 @@ impl App {
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
             }
-            AppEvent::SkillsListLoaded { result } => {
-                let event = result.map_err(|err| color_eyre::eyre::eyre!(err))?;
-                let cwd = self.chat_widget.config_ref().cwd.clone();
-                emit_skill_load_warnings(&self.app_event_tx, &errors_for_cwd(&cwd, &event));
-                self.chat_widget.set_skills_from_response(&event);
-                self.chat_widget.refresh_plugin_mentions();
+            AppEvent::SkillsListLoaded {
+                requested_cwds,
+                result,
+            } => {
+                self.handle_skills_list_loaded(requested_cwds, result)?;
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
@@ -4112,9 +4135,13 @@ mod tests {
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionConfiguredEvent;
     use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SkillMetadata;
+    use codex_protocol::protocol::SkillScope;
+    use codex_protocol::protocol::SkillsListEntry;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
@@ -5943,6 +5970,25 @@ mod tests {
             .and_then(TomlValue::as_bool)
     }
 
+    fn test_skill_response(cwd: PathBuf, skill_name: &str) -> ListSkillsResponseEvent {
+        ListSkillsResponseEvent {
+            skills: vec![SkillsListEntry {
+                cwd: cwd.clone(),
+                skills: vec![SkillMetadata {
+                    name: skill_name.to_string(),
+                    description: format!("{skill_name} description"),
+                    short_description: None,
+                    interface: None,
+                    dependencies: None,
+                    path: cwd.join(format!("{skill_name}/SKILL.md")),
+                    scope: SkillScope::Repo,
+                    enabled: true,
+                }],
+                errors: Vec::new(),
+            }],
+        }
+    }
+
     fn all_model_presets() -> Vec<ModelPreset> {
         codex_core::test_support::all_model_presets().clone()
     }
@@ -6405,6 +6451,49 @@ mod tests {
             effective_skills_list_cwds(requested.clone(), Path::new("/tmp/current")),
             requested
         );
+    }
+
+    #[tokio::test]
+    async fn stale_skills_list_loaded_for_old_cwd_does_not_clear_current_skills() -> Result<()> {
+        let mut app = make_test_app().await;
+        let stale_cwd_tmp = tempdir()?;
+        let stale_cwd = stale_cwd_tmp.path().to_path_buf();
+        let current_cwd_tmp = tempdir()?;
+        let current_cwd = current_cwd_tmp.path().to_path_buf();
+
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: current_cwd.clone(),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        app.chat_widget
+            .set_skills_from_response(&test_skill_response(current_cwd.clone(), "current-skill"));
+        assert_eq!(app.chat_widget.loaded_skill_names(), vec!["current-skill"]);
+
+        app.handle_skills_list_loaded(
+            vec![stale_cwd.clone()],
+            Ok(test_skill_response(stale_cwd, "stale-skill")),
+        )?;
+
+        assert_eq!(app.chat_widget.loaded_skill_names(), vec!["current-skill"]);
+
+        Ok(())
     }
 
     #[tokio::test]
