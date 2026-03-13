@@ -657,6 +657,13 @@ impl ConfigBuilder {
     }
 }
 
+/// Rewrites the legacy `guardian_approval` feature flag to
+/// `smart_approvals` in `config.toml` before normal config loading.
+///
+/// If the old key is present and enabled, this preserves the enabled state by
+/// setting `smart_approvals = true` when the new key is not already present.
+/// In all cases it removes the deprecated `guardian_approval` entry so future
+/// loads only see the canonical feature flag name.
 async fn maybe_migrate_guardian_approval_alias(codex_home: &Path) -> std::io::Result<bool> {
     let config_path = codex_home.join(CONFIG_TOML_FILE);
     if !tokio::fs::try_exists(&config_path).await? {
