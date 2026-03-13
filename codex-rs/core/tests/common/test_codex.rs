@@ -183,6 +183,7 @@ impl TestCodexBuilder {
             ThreadManager::new(
                 &config,
                 codex_core::test_support::auth_manager_from_auth(auth.clone()),
+                None,
                 SessionSource::Exec,
                 CollaborationModesConfig::default(),
             )

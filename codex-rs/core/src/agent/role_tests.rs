@@ -567,7 +567,7 @@ enabled = false
         .await
         .expect("custom role should apply");
 
-    let plugins_manager = Arc::new(PluginsManager::new(home.path().to_path_buf()));
+    let plugins_manager = Arc::new(PluginsManager::new(home.path().to_path_buf(), None));
     let skills_manager = SkillsManager::new(home.path().to_path_buf(), plugins_manager, true);
     let outcome = skills_manager.skills_for_config(&config);
     let skill = outcome

@@ -25,7 +25,7 @@ fn new_with_disabled_bundled_skills_removes_stale_cached_system_skills() {
     fs::write(stale_system_skill_dir.join("SKILL.md"), "# stale\n")
         .expect("write stale system skill");
 
-    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
+    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf(), None));
     let _skills_manager =
         SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, false);
 
@@ -50,7 +50,7 @@ async fn skills_for_config_seeds_cache_by_cwd() {
         .await
         .expect("defaults for test should always succeed");
 
-    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
+    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf(), None));
     let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, true);
 
     write_user_skill(&codex_home, "a", "skill-a", "from a");
@@ -84,7 +84,7 @@ async fn skills_for_cwd_reuses_cached_entry_even_when_entry_has_extra_roots() {
         .await
         .expect("defaults for test should always succeed");
 
-    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
+    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf(), None));
     let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, true);
     let _ = skills_manager.skills_for_config(&config);
 
@@ -145,7 +145,7 @@ async fn skills_for_config_excludes_bundled_skills_when_disabled_in_config() {
         .await
         .expect("load config");
 
-    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
+    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf(), None));
     let skills_manager = SkillsManager::new(
         codex_home.path().to_path_buf(),
         plugins_manager,
@@ -193,7 +193,7 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
         .await
         .expect("defaults for test should always succeed");
 
-    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
+    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf(), None));
     let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, true);
     let _ = skills_manager.skills_for_config(&config);
 

@@ -394,31 +394,19 @@ pub struct PluginsManager {
     codex_home: PathBuf,
     store: PluginStore,
     cache_by_cwd: RwLock<HashMap<PathBuf, PluginLoadOutcome>>,
-    analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
+    analytics_events_client: Option<AnalyticsEventsClient>,
 }
 
 impl PluginsManager {
-    pub fn new(codex_home: PathBuf) -> Self {
+    pub fn new(
+        codex_home: PathBuf,
+        analytics_events_client: Option<AnalyticsEventsClient>,
+    ) -> Self {
         Self {
             codex_home: codex_home.clone(),
             store: PluginStore::new(codex_home),
             cache_by_cwd: RwLock::new(HashMap::new()),
-            analytics_events_client: RwLock::new(None),
-        }
-    }
-
-    pub fn set_analytics_events_client(&self, analytics_events_client: AnalyticsEventsClient) {
-        let mut stored_client = match self.analytics_events_client.write() {
-            Ok(client_guard) => client_guard,
-            Err(err) => err.into_inner(),
-        };
-        *stored_client = Some(analytics_events_client);
-    }
-
-    fn analytics_events_client(&self) -> Option<AnalyticsEventsClient> {
-        match self.analytics_events_client.read() {
-            Ok(client) => client.clone(),
-            Err(err) => err.into_inner().clone(),
+            analytics_events_client,
         }
     }
 
@@ -508,7 +496,7 @@ impl PluginsManager {
             .map(|_| ())
             .map_err(PluginInstallError::from)?;
 
-        if let Some(analytics_events_client) = self.analytics_events_client() {
+        if let Some(analytics_events_client) = self.analytics_events_client.as_ref() {
             analytics_events_client.track_plugin_installed(plugin_telemetry_metadata_from_root(
                 &result.plugin_id,
                 result.installed_path.as_path(),
@@ -543,7 +531,7 @@ impl PluginsManager {
             .await?;
 
         if let Some(plugin_telemetry) = plugin_telemetry
-            && let Some(analytics_events_client) = self.analytics_events_client()
+            && let Some(analytics_events_client) = self.analytics_events_client.as_ref()
         {
             analytics_events_client.track_plugin_uninstalled(plugin_telemetry);
         }

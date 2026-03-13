@@ -192,9 +192,12 @@ impl MessageProcessor {
         auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));
+        let analytics_events_client =
+            AnalyticsEventsClient::new(Arc::clone(&config), Arc::clone(&auth_manager));
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
+            Some(analytics_events_client.clone()),
             session_source,
             CollaborationModesConfig {
                 default_mode_request_user_input: config
@@ -207,11 +210,6 @@ impl MessageProcessor {
             .plugins_manager()
             .maybe_start_curated_repo_sync_for_config(&config);
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
-        let analytics_events_client =
-            AnalyticsEventsClient::new(Arc::clone(&config), Arc::clone(&auth_manager));
-        thread_manager
-            .plugins_manager()
-            .set_analytics_events_client(analytics_events_client.clone());
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager,
             thread_manager: Arc::clone(&thread_manager),

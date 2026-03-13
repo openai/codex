@@ -110,7 +110,8 @@ fn load_plugins_from_config(config_toml: &str, codex_home: &Path) -> PluginLoadO
         ConfigRequirementsToml::default(),
     )
     .expect("config layer stack should build");
-    PluginsManager::new(codex_home.to_path_buf()).plugins_for_layer_stack(codex_home, &stack, false)
+    PluginsManager::new(codex_home.to_path_buf(), None)
+        .plugins_for_layer_stack(codex_home, &stack, false)
 }
 
 async fn load_config(codex_home: &Path, cwd: &Path) -> crate::config::Config {
@@ -748,7 +749,7 @@ async fn install_plugin_updates_config_with_relative_path_and_plugin_key() {
     )
     .unwrap();
 
-    let result = PluginsManager::new(tmp.path().to_path_buf())
+    let result = PluginsManager::new(tmp.path().to_path_buf(), None)
         .install_plugin(PluginInstallRequest {
             plugin_name: "sample-plugin".to_string(),
             marketplace_path: AbsolutePathBuf::try_from(
@@ -793,7 +794,7 @@ enabled = true
 "#,
     );
 
-    let manager = PluginsManager::new(tmp.path().to_path_buf());
+    let manager = PluginsManager::new(tmp.path().to_path_buf(), None);
     manager
         .uninstall_plugin("sample-plugin@debug".to_string())
         .await
@@ -865,7 +866,7 @@ enabled = false
     );
 
     let config = load_config(tmp.path(), &repo_root).await;
-    let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
+    let marketplaces = PluginsManager::new(tmp.path().to_path_buf(), None)
         .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
         .unwrap();
 
@@ -951,7 +952,7 @@ async fn list_marketplaces_includes_curated_repo_marketplace() {
     .unwrap();
 
     let config = load_config(tmp.path(), tmp.path()).await;
-    let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
+    let marketplaces = PluginsManager::new(tmp.path().to_path_buf(), None)
         .list_marketplaces_for_config(&config, &[])
         .unwrap();
 
@@ -1044,7 +1045,7 @@ enabled = false
     );
 
     let config = load_config(tmp.path(), &repo_a_root).await;
-    let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
+    let marketplaces = PluginsManager::new(tmp.path().to_path_buf(), None)
         .list_marketplaces_for_config(
             &config,
             &[
@@ -1147,7 +1148,7 @@ enabled = true
     );
 
     let config = load_config(tmp.path(), &repo_root).await;
-    let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
+    let marketplaces = PluginsManager::new(tmp.path().to_path_buf(), None)
         .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
         .unwrap();
 
@@ -1231,7 +1232,7 @@ enabled = true
 
     let mut config = load_config(tmp.path(), tmp.path()).await;
     config.chatgpt_base_url = format!("{}/backend-api/", server.uri());
-    let manager = PluginsManager::new(tmp.path().to_path_buf());
+    let manager = PluginsManager::new(tmp.path().to_path_buf(), None);
     let result = manager
         .sync_plugins_from_remote(
             &config,
@@ -1325,7 +1326,7 @@ enabled = false
 
     let mut config = load_config(tmp.path(), tmp.path()).await;
     config.chatgpt_base_url = format!("{}/backend-api/", server.uri());
-    let manager = PluginsManager::new(tmp.path().to_path_buf());
+    let manager = PluginsManager::new(tmp.path().to_path_buf(), None);
     let result = manager
         .sync_plugins_from_remote(
             &config,
@@ -1387,7 +1388,7 @@ enabled = false
 
     let mut config = load_config(tmp.path(), tmp.path()).await;
     config.chatgpt_base_url = format!("{}/backend-api/", server.uri());
-    let manager = PluginsManager::new(tmp.path().to_path_buf());
+    let manager = PluginsManager::new(tmp.path().to_path_buf(), None);
     let err = manager
         .sync_plugins_from_remote(
             &config,
@@ -1475,7 +1476,7 @@ plugins = true
 
     let mut config = load_config(tmp.path(), tmp.path()).await;
     config.chatgpt_base_url = format!("{}/backend-api/", server.uri());
-    let manager = PluginsManager::new(tmp.path().to_path_buf());
+    let manager = PluginsManager::new(tmp.path().to_path_buf(), None);
     let result = manager
         .sync_plugins_from_remote(
             &config,
@@ -1616,11 +1617,8 @@ fn load_plugins_ignores_project_config_files() {
     )
     .expect("config layer stack should build");
 
-    let outcome = PluginsManager::new(codex_home.path().to_path_buf()).plugins_for_layer_stack(
-        &project_root,
-        &stack,
-        false,
-    );
+    let outcome = PluginsManager::new(codex_home.path().to_path_buf(), None)
+        .plugins_for_layer_stack(&project_root, &stack, false);
 
     assert_eq!(outcome, PluginLoadOutcome::default());
 }

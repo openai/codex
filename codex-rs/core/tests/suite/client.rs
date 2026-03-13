@@ -818,6 +818,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     let thread_manager = ThreadManager::new(
         &config,
         auth_manager,
+        None,
         SessionSource::Exec,
         CollaborationModesConfig {
             default_mode_request_user_input: config
