@@ -140,6 +140,7 @@ pub(crate) enum AppEvent {
 
     /// Result of an app-server-proxied `skills/list` request.
     SkillsListLoaded {
+        requested_cwds: Vec<PathBuf>,
         result: Result<ListSkillsResponseEvent, String>,
     },
 
