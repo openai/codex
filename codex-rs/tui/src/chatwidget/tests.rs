@@ -8846,20 +8846,13 @@ async fn disabled_fast_slash_command_with_args_restores_draft_instead_of_queuein
 }
 
 #[tokio::test]
-async fn queued_disabled_fast_slash_draft_is_rejected_on_replay() {
+async fn serialized_disabled_fast_slash_draft_is_rejected_immediately() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::FastMode, false);
     chat.on_task_started();
 
     chat.handle_serialized_slash_command(UserMessage::from("/fast on".to_string()));
-
-    assert_eq!(
-        chat.queued_user_message_texts(),
-        vec!["/fast on".to_string()]
-    );
-
-    chat.on_task_complete(None, false);
 
     assert_no_submit_op(&mut op_rx);
     assert!(chat.queued_user_messages.is_empty());
