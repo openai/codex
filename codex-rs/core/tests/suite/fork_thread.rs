@@ -51,6 +51,7 @@ async fn fork_thread_twice_drops_to_first_message() {
                     text: text.to_string(),
                     text_elements: Vec::new(),
                 }],
+                ephemeral_context: Vec::new(),
                 final_output_json_schema: None,
             })
             .await

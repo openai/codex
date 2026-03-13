@@ -50,6 +50,7 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
                 text: "start sleep".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -104,6 +105,7 @@ async fn interrupt_tool_records_history_entries() {
                 text: "start history recording".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -122,6 +124,7 @@ async fn interrupt_tool_records_history_entries() {
                 text: "follow up".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -202,6 +205,7 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
                 text: "start interrupt marker".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -220,6 +224,7 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
                 text: "follow up".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await

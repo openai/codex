@@ -76,6 +76,7 @@ async fn no_collaboration_instructions_by_default() -> Result<()> {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -125,6 +126,7 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -221,6 +223,7 @@ async fn override_then_next_turn_uses_updated_collaboration_instructions() -> Re
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -341,6 +344,7 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -367,6 +371,7 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -422,6 +427,7 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -448,6 +454,7 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -505,6 +512,7 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -534,6 +542,7 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -592,6 +601,7 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -621,6 +631,7 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -683,6 +694,7 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -696,6 +708,7 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
                 text: "after resume".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -751,6 +764,7 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;

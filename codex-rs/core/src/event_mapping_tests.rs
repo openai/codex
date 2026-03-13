@@ -219,6 +219,68 @@ fn skips_user_instructions_and_env() {
 }
 
 #[test]
+fn strips_ephemeral_context_prefix_from_user_message() {
+    let item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: "<additional_context_for_this_turn>\n  <title>Context from my editor</title>\n  <content>\n## Active file: src/main.rs\n  </content>\n</additional_context_for_this_turn>".to_string(),
+            },
+            ContentItem::InputText {
+                text: "Explain this function.".to_string(),
+            },
+        ],
+        end_turn: None,
+        phase: None,
+    };
+
+    let turn_item = parse_turn_item(&item).expect("expected user message turn item");
+    let TurnItem::UserMessage(user_message) = turn_item else {
+        panic!("expected TurnItem::UserMessage");
+    };
+    assert_eq!(
+        user_message.content,
+        vec![UserInput::Text {
+            text: "Explain this function.".to_string(),
+            text_elements: Vec::new(),
+        }]
+    );
+}
+
+#[test]
+fn drops_user_message_when_only_ephemeral_context_prefix_is_present() {
+    let item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "<additional_context_for_this_turn>\n  <title>Context from my editor</title>\n  <content>\n## Active file: src/main.rs\n  </content>\n</additional_context_for_this_turn>".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    };
+
+    assert!(parse_turn_item(&item).is_none());
+}
+
+#[test]
+fn parses_empty_user_message_as_user_turn() {
+    let item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: Vec::new(),
+        end_turn: None,
+        phase: None,
+    };
+
+    let turn_item = parse_turn_item(&item).expect("expected empty user message turn item");
+    let TurnItem::UserMessage(user_message) = turn_item else {
+        panic!("expected TurnItem::UserMessage");
+    };
+    assert_eq!(user_message.content, Vec::<UserInput>::new());
+}
+
+#[test]
 fn parses_agent_message() {
     let item = ResponseItem::Message {
         id: Some("msg-1".to_string()),

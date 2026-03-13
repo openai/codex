@@ -90,6 +90,7 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
                 text: "Record some messages".into(),
                 text_elements: text_elements.clone(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -175,6 +176,7 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
                 text: "Record reasoning messages".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -264,6 +266,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
                 text: "Record initial instructions".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -304,6 +307,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
                 text: "Resume with different model".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -319,6 +323,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
                 text: "Second turn after resume".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -389,6 +394,7 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
                 text: "Record initial instructions".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -431,6 +437,7 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
                 text: "first turn after override".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;

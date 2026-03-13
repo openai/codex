@@ -19,6 +19,7 @@ use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::user_input::EphemeralContext;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -57,6 +58,13 @@ const DUMMY_FUNCTION_NAME: &str = "test_tool";
 
 fn summary_with_prefix(summary: &str) -> String {
     format!("{SUMMARY_PREFIX}\n{summary}")
+}
+
+fn editor_context(path: &str) -> Vec<EphemeralContext> {
+    vec![EphemeralContext {
+        title: "Context from my editor".to_string(),
+        text: format!("## Active file: {path}"),
+    }]
 }
 
 fn context_snapshot_options() -> ContextSnapshotOptions {
@@ -233,6 +241,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
                 text: "hello remote compact".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -247,6 +256,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
                 text: "after compact".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -377,6 +387,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
                 text: "hello remote compact".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -451,6 +462,7 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
                 text: first_user_message.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -462,6 +474,7 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
                 text: second_user_message.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -571,6 +584,7 @@ async fn auto_remote_compact_trims_function_call_history_to_fit_context_window()
                 text: first_user_message.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -582,6 +596,7 @@ async fn auto_remote_compact_trims_function_call_history_to_fit_context_window()
                 text: second_user_message.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -599,6 +614,7 @@ async fn auto_remote_compact_trims_function_call_history_to_fit_context_window()
                 text: "turn that triggers auto compact".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -696,6 +712,7 @@ async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
                 text: "turn that exceeds token threshold".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -707,6 +724,7 @@ async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
                 text: "turn that triggers auto compact".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -798,6 +816,7 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
                 text: first_user_message.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -812,6 +831,7 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
                 text: second_user_message.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -897,6 +917,7 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
                 text: first_user_message.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -911,6 +932,7 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
                 text: second_user_message.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -979,6 +1001,7 @@ async fn remote_manual_compact_emits_context_compaction_items() -> Result<()> {
                 text: "manual remote compact".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1057,6 +1080,7 @@ async fn remote_manual_compact_failure_emits_task_error_event() -> Result<()> {
                 text: "manual remote compact".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1139,6 +1163,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
                 text: "needs compaction".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1280,6 +1305,7 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
                 text: "start remote compact flow".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1295,6 +1321,7 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
                 text: "after compact in same session".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1317,6 +1344,7 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
                 text: "after resume".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1411,6 +1439,7 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
                 text: "start remote compact flow".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1425,6 +1454,7 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
                 text: "after compact in same session".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1494,6 +1524,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_restates_realtime_sta
                 text: "USER_ONE".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1505,6 +1536,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_restates_realtime_sta
                 text: "USER_TWO".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1569,6 +1601,7 @@ async fn remote_request_uses_custom_experimental_realtime_start_instructions() -
                 text: "USER_ONE".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1627,6 +1660,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_restates_realtime_end
                 text: "USER_ONE".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1640,6 +1674,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_restates_realtime_end
                 text: "USER_TWO".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1712,6 +1747,7 @@ async fn snapshot_request_shape_remote_manual_compact_restates_realtime_start() 
                 text: "USER_ONE".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1726,6 +1762,7 @@ async fn snapshot_request_shape_remote_manual_compact_restates_realtime_start() 
                 text: "USER_TWO".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1806,6 +1843,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_does_not_restate_real
                 text: "SETUP_USER".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1819,6 +1857,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_does_not_restate_real
                 text: "USER_TWO".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1907,6 +1946,7 @@ async fn snapshot_request_shape_remote_compact_resume_restates_realtime_end() ->
                 text: "USER_ONE".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -1934,6 +1974,7 @@ async fn snapshot_request_shape_remote_compact_resume_restates_realtime_end() ->
                 text: "USER_TWO".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -2026,6 +2067,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
                     text: user.to_string(),
                     text_elements: Vec::new(),
                 }],
+                ephemeral_context: Vec::new(),
                 final_output_json_schema: None,
             })
             .await?;
@@ -2110,6 +2152,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
                 text: "BEFORE_SWITCH_USER".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -2135,6 +2178,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
                 text: "AFTER_SWITCH_USER".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -2251,6 +2295,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
                 text: "USER_ONE".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -2262,6 +2307,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_context_window_exceed
                 text: "USER_TWO".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -2344,6 +2390,7 @@ async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Res
                 text: "USER_ONE".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -2367,6 +2414,120 @@ async fn snapshot_request_shape_remote_mid_turn_continuation_compaction() -> Res
                 ("Remote Post-Compaction History Layout", &requests[1]),
             ]
         )
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_remote_mid_turn_compaction_replaces_ephemeral_context() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(200);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let responses_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("m1", "REMOTE_SETUP_REPLY"),
+                responses::ev_completed_with_tokens("r1", 60),
+            ]),
+            responses::sse(vec![
+                responses::ev_function_call("call-remote-mid-turn", DUMMY_FUNCTION_NAME, "{}"),
+                responses::ev_completed_with_tokens("r2", 500),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("m3", "REMOTE_MID_TURN_FINAL_REPLY"),
+                responses::ev_completed_with_tokens("r3", 80),
+            ]),
+        ],
+    )
+    .await;
+
+    let compact_mock = responses::mount_compact_user_history_with_summary_once(
+        harness.server(),
+        &summary_with_prefix("REMOTE_MID_TURN_SUMMARY"),
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "SETUP_USER".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ephemeral_context: editor_context("src/old.rs"),
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ephemeral_context: editor_context("src/new.rs"),
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(compact_mock.requests().len(), 1);
+    let requests = responses_mock.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected setup turn, active turn, and continuation requests"
+    );
+
+    let compact_request = compact_mock.single_request();
+    let post_compact_request = &requests[2];
+    insta::assert_snapshot!(
+        "remote_mid_turn_compaction_replaces_ephemeral_context_shapes",
+        format_labeled_requests_snapshot(
+            "Remote mid-turn continuation compaction keeps both prior and active ephemeral_context in the compact request, then reinjects only the active turn ephemeral_context into the continuation request.",
+            &[
+                ("Remote Compaction Request", &compact_request),
+                (
+                    "Remote Post-Compaction History Layout",
+                    post_compact_request
+                ),
+            ]
+        )
+    );
+
+    assert!(
+        compact_request.body_contains_text("src/old.rs"),
+        "expected remote compact request to include earlier turn ephemeral context from history"
+    );
+    assert!(
+        compact_request.body_contains_text("src/new.rs"),
+        "expected remote compact request to include the active turn ephemeral context"
+    );
+
+    let follow_up_user_texts = post_compact_request.message_input_texts("user");
+    assert!(
+        follow_up_user_texts
+            .iter()
+            .any(|text| text.contains("src/new.rs")),
+        "expected remote continuation request to reinject the active turn ephemeral context"
+    );
+    assert!(
+        !follow_up_user_texts
+            .iter()
+            .any(|text| text.contains("src/old.rs")),
+        "did not expect remote continuation request to retain the compacted-away earlier ephemeral context"
     );
 
     Ok(())
@@ -2419,6 +2580,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_summary_only_reinject
                 text: "USER_ONE".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -2502,6 +2664,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
                 text: "USER_ONE".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -2516,6 +2679,7 @@ async fn snapshot_request_shape_remote_mid_turn_compaction_multi_summary_reinjec
                 text: "USER_TWO".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -2595,6 +2759,7 @@ async fn snapshot_request_shape_remote_manual_compact_without_previous_user_mess
                 text: "USER_ONE".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;

@@ -305,6 +305,7 @@ impl AgentControl {
                 agent_id,
                 Op::UserInput {
                     items,
+                    ephemeral_context: Vec::new(),
                     final_output_json_schema: None,
                 },
             )

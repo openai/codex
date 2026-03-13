@@ -1,0 +1,24 @@
+---
+source: core/tests/suite/model_visible_layout.rs
+expression: "format_labeled_requests_snapshot(\"Turns resend fresh ephemeral editor context while keeping it outside durable turn-state diffs.\",\n&[(\"First Request (With Editor Context)\", &requests[0]),\n(\"Second Request (Refreshed Editor Context)\", &requests[1]),])"
+---
+Scenario: Turns resend fresh ephemeral editor context while keeping it outside durable turn-state diffs.
+
+## First Request (With Editor Context)
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user[3]:
+    [01] <SKILLS_SECTION>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
+    [03] <additional_context_for_this_turn>\n  <title>Context from my editor</title>\n  <content>\n## Act...
+02:message/user:first turn with editor context
+
+## Second Request (Refreshed Editor Context)
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user[3]:
+    [01] <SKILLS_SECTION>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
+    [03] <additional_context_for_this_turn>\n  <title>Context from my editor</title>\n  <content>\n## Act...
+02:message/user:first turn with editor context
+03:message/assistant:turn one complete
+04:message/user:<additional_context_for_this_turn>\n  <title>Context from my editor</title>\n  <content>\n## Act...
+05:message/user:second turn with refreshed editor context

@@ -14,7 +14,8 @@
 //!    `matches_contextual_user_text()` for custom matching.
 //! 4. If the fragment is derived from `TurnContext` and should participate in
 //!    initial-context assembly and turn-to-turn diffing, implementing
-//!    `build(...)`.
+//!    `build(...)` for the common zero-or-one case or overriding
+//!    `build_many(...)` for zero-or-many sources.
 //! 5. Registering the fragment exactly once in
 //!    `REGISTERED_MODEL_VISIBLE_FRAGMENTS` in the rough order it should appear
 //!    in model-visible context.
@@ -73,10 +74,13 @@ use codex_protocol::models::developer_realtime_start_text_with_instructions;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use codex_protocol::protocol::EPHEMERAL_CONTEXT_CLOSE_TAG;
+use codex_protocol::protocol::EPHEMERAL_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_protocol::protocol::USER_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::USER_INSTRUCTIONS_OPEN_TAG;
+use codex_protocol::user_input::EphemeralContext as ProtocolEphemeralContext;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -94,7 +98,7 @@ struct ModelVisibleFragmentRegistration {
         Option<&TurnContextItem>,
         &TurnContext,
         &TurnContextDiffParams<'_>,
-    ) -> Option<BuiltTurnStateFragment>,
+    ) -> Vec<BuiltTurnStateFragment>,
 }
 
 impl ModelVisibleFragmentRegistration {
@@ -117,17 +121,19 @@ fn build_registered_turn_state_fragment<F: ModelVisibleContextFragment>(
     reference_context_item: Option<&TurnContextItem>,
     turn_context: &TurnContext,
     params: &TurnContextDiffParams<'_>,
-) -> Option<BuiltTurnStateFragment> {
-    let fragment = F::build(turn_context, reference_context_item, params)?;
-    match F::Role::MESSAGE_ROLE {
-        MessageRole::Developer => Some(BuiltTurnStateFragment::Developer(
-            DeveloperTextFragment::new(fragment.render_text()),
-        )),
-        MessageRole::User => Some(BuiltTurnStateFragment::ContextualUser(
-            ContextualUserTextFragment::new(fragment.render_text()),
-        )),
-        MessageRole::Assistant | MessageRole::System => None,
-    }
+) -> Vec<BuiltTurnStateFragment> {
+    F::build_many(turn_context, reference_context_item, params)
+        .into_iter()
+        .filter_map(|fragment| match F::Role::MESSAGE_ROLE {
+            MessageRole::Developer => Some(BuiltTurnStateFragment::Developer(
+                DeveloperTextFragment::new(fragment.render_text()),
+            )),
+            MessageRole::User => Some(BuiltTurnStateFragment::ContextualUser(
+                ContextualUserTextFragment::new(fragment.render_text()),
+            )),
+            MessageRole::Assistant | MessageRole::System => None,
+        })
+        .collect()
 }
 
 /// Canonical ordered registry for all current model-visible fragments.
@@ -146,6 +152,7 @@ const REGISTERED_MODEL_VISIBLE_FRAGMENTS: &[ModelVisibleFragmentRegistration] = 
     ModelVisibleFragmentRegistration::of::<SkillsSectionFragment>(),
     ModelVisibleFragmentRegistration::of::<ChildAgentsInstructionsFragment>(),
     ModelVisibleFragmentRegistration::of::<EnvironmentContext>(),
+    ModelVisibleFragmentRegistration::of::<EphemeralContextFragment>(),
     ModelVisibleFragmentRegistration::of::<SkillInstructions>(),
     ModelVisibleFragmentRegistration::of::<PluginInstructions>(),
     ModelVisibleFragmentRegistration::of::<UserShellCommandFragment>(),
@@ -842,6 +849,49 @@ impl ModelVisibleContextFragment for EnvironmentContext {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename = "ephemeral_context_fragment", rename_all = "snake_case")]
+pub(crate) struct EphemeralContextFragment {
+    title: String,
+    text: String,
+}
+
+impl ModelVisibleContextFragment for EphemeralContextFragment {
+    type Role = ContextualUserContextRole;
+
+    fn render_text(&self) -> String {
+        Self::wrap_contextual_user_body(format!(
+            "  <title>{}</title>\n  <content>\n{}\n  </content>",
+            self.title, self.text
+        ))
+    }
+
+    fn build_many(
+        turn_context: &TurnContext,
+        _reference_context_item: Option<&TurnContextItem>,
+        _params: &TurnContextDiffParams<'_>,
+    ) -> Vec<Self> {
+        // Ephemeral context is current-turn-scoped state: rebuild the active
+        // turn's latest snapshot, but never diff it against persisted
+        // reference_context_item history from older turns.
+        turn_context
+            .ephemeral_context
+            .iter()
+            .map(|context| Self {
+                title: context.title.clone(),
+                text: context.text.clone(),
+            })
+            .collect()
+    }
+
+    fn contextual_user_markers() -> Option<ContextualUserFragmentMarkers> {
+        Some(ContextualUserFragmentMarkers::new(
+            EPHEMERAL_CONTEXT_OPEN_TAG,
+            EPHEMERAL_CONTEXT_CLOSE_TAG,
+        ))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Contextual-user runtime fragments
 // ---------------------------------------------------------------------------
@@ -1012,6 +1062,26 @@ pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
         || is_legacy_contextual_user_fragment(text)
 }
 
+pub(crate) fn is_ephemeral_context_fragment(content_item: &ContentItem) -> bool {
+    let ContentItem::InputText { text } = content_item else {
+        return false;
+    };
+    EphemeralContextFragment::matches_contextual_user_text(text)
+}
+
+pub(crate) fn ephemeral_context_content_items(
+    ephemeral_context: &[ProtocolEphemeralContext],
+) -> Vec<ContentItem> {
+    ephemeral_context
+        .iter()
+        .map(|context| EphemeralContextFragment {
+            title: context.title.clone(),
+            text: context.text.clone(),
+        })
+        .map(ModelVisibleContextFragment::into_content_item)
+        .collect()
+}
+
 pub(crate) fn build_turn_state_fragments(
     reference_context_item: Option<&TurnContextItem>,
     turn_context: &TurnContext,
@@ -1019,7 +1089,7 @@ pub(crate) fn build_turn_state_fragments(
 ) -> Vec<BuiltTurnStateFragment> {
     REGISTERED_MODEL_VISIBLE_FRAGMENTS
         .iter()
-        .filter_map(|registration| {
+        .flat_map(|registration| {
             (registration.build_turn_state)(reference_context_item, turn_context, params)
         })
         .collect()

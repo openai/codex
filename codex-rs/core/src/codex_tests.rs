@@ -66,9 +66,12 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::developer_personality_spec_text;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::ConversationAudioParams;
+use codex_protocol::protocol::EPHEMERAL_CONTEXT_CLOSE_TAG;
+use codex_protocol::protocol::EPHEMERAL_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_protocol::user_input::EphemeralContext;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
 use opentelemetry::trace::TracerProvider as _;
@@ -761,7 +764,11 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
         .await;
-    expected.extend(session.build_initial_context(&turn_context).await);
+    expected.extend(
+        session
+            .build_initial_context_without_reference_context_item(&turn_context)
+            .await,
+    );
     let history_after_seed = session.clone_history().await;
     assert_eq!(expected, history_after_seed.raw_items());
 
@@ -926,7 +933,7 @@ async fn record_initial_history_reconstructs_forked_transcript() {
     let reconstruction_turn = session.new_default_turn().await;
     expected.extend(
         session
-            .build_initial_context(reconstruction_turn.as_ref())
+            .build_initial_context_without_reference_context_item(reconstruction_turn.as_ref())
             .await,
     );
     let history = session.state.lock().await.clone_history();
@@ -3409,7 +3416,9 @@ async fn record_context_updates_and_set_reference_context_item_injects_full_cont
         .record_context_updates_and_set_reference_context_item(&turn_context)
         .await;
     let history = session.clone_history().await;
-    let initial_context = session.build_initial_context(&turn_context).await;
+    let initial_context = session
+        .build_initial_context_without_reference_context_item(&turn_context)
+        .await;
     assert_eq!(history.raw_items().to_vec(), initial_context);
 
     let current_context = session.reference_context_item().await;
@@ -3453,7 +3462,11 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
 
     let history = session.clone_history().await;
     let mut expected_history = vec![compacted_summary];
-    expected_history.extend(session.build_initial_context(&turn_context).await);
+    expected_history.extend(
+        session
+            .build_initial_context_without_reference_context_item(&turn_context)
+            .await,
+    );
     assert_eq!(history.raw_items().to_vec(), expected_history);
 }
 
@@ -3961,6 +3974,58 @@ async fn steer_input_returns_active_turn_id() {
 
     assert_eq!(turn_id, tc.sub_id);
     assert!(sess.has_pending_input().await);
+}
+
+#[tokio::test]
+async fn user_input_or_turn_steering_preserves_ephemeral_context() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    handlers::user_input_or_turn(
+        &sess,
+        "steer-submission".to_string(),
+        Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "steer".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ephemeral_context: vec![EphemeralContext {
+                title: "Context from my editor".to_string(),
+                text: "## Active file: src/main.rs".to_string(),
+            }],
+            final_output_json_schema: None,
+        },
+    )
+    .await;
+
+    assert_eq!(
+        sess.get_pending_input().await,
+        vec![ResponseInputItem::Message {
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: format!(
+                        "{EPHEMERAL_CONTEXT_OPEN_TAG}\n  <title>Context from my editor</title>\n  <content>\n## Active file: src/main.rs\n  </content>\n{EPHEMERAL_CONTEXT_CLOSE_TAG}"
+                    ),
+                },
+                ContentItem::InputText {
+                    text: "steer".to_string(),
+                },
+            ],
+        }]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

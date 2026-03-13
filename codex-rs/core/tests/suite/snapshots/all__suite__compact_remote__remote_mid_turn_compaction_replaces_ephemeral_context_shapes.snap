@@ -1,0 +1,28 @@
+---
+source: core/tests/suite/compact_remote.rs
+expression: "format_labeled_requests_snapshot(\"Remote mid-turn continuation compaction keeps both prior and active ephemeral_context in the compact request, then reinjects only the active turn ephemeral_context into the continuation request.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", post_compact_request),])"
+---
+Scenario: Remote mid-turn continuation compaction keeps both prior and active ephemeral_context in the compact request, then reinjects only the active turn ephemeral_context into the continuation request.
+
+## Remote Compaction Request
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user[3]:
+    [01] <SKILLS_SECTION>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
+    [03] <additional_context_for_this_turn>\n  <title>Context from my edi...
+02:message/user:SETUP_USER
+03:message/assistant:REMOTE_SETUP_REPLY
+04:message/user:<additional_context_for_this_turn>\n  <title>Context from my edi...
+05:message/user:USER_TWO
+06:function_call/test_tool
+07:function_call_output:unsupported call: test_tool
+
+## Remote Post-Compaction History Layout
+00:message/user:SETUP_USER
+01:message/developer:<PERMISSIONS_INSTRUCTIONS>
+02:message/user[3]:
+    [01] <SKILLS_SECTION>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
+    [03] <additional_context_for_this_turn>\n  <title>Context from my edi...
+03:message/user:USER_TWO
+04:compaction:encrypted=true

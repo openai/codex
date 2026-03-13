@@ -628,6 +628,7 @@ async fn run_guardian_subagent(
     codex
         .submit(Op::UserInput {
             items: prompt_items,
+            ephemeral_context: Vec::new(),
             final_output_json_schema: Some(schema),
         })
         .await?;

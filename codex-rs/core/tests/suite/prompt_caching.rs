@@ -160,6 +160,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -171,6 +172,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -251,6 +253,7 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -262,6 +265,7 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -324,6 +328,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -335,6 +340,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -416,6 +422,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -451,6 +458,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -532,6 +540,7 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
                 text: "first message".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -683,6 +692,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;

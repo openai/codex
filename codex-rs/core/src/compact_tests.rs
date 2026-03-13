@@ -122,6 +122,64 @@ do things
 }
 
 #[test]
+fn collect_user_messages_filters_ephemeral_context_entries() {
+    let items = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "<additional_context_for_this_turn>\n  <title>Context from my editor</title>\n  <content>\n## Active file: src/main.rs\n  </content>\n</additional_context_for_this_turn>"
+                    .to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "real user message".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+    ];
+
+    let collected = collect_user_messages(&items);
+
+    assert_eq!(vec!["real user message".to_string()], collected);
+}
+
+#[test]
+fn collect_user_messages_preserves_empty_user_turns() {
+    let items = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: Vec::new(),
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "real user message".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+    ];
+
+    let collected = collect_user_messages(&items);
+
+    assert_eq!(
+        vec![String::new(), "real user message".to_string()],
+        collected
+    );
+}
+
+#[test]
 fn build_token_limited_compacted_history_truncates_overlong_user_messages() {
     // Use a small truncation limit so the test remains fast while still validating
     // that oversized user content is truncated.

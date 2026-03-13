@@ -8,42 +8,62 @@ import type { ReasoningSummary } from "../ReasoningSummary";
 import type { ServiceTier } from "../ServiceTier";
 import type { JsonValue } from "../serde_json/JsonValue";
 import type { AskForApproval } from "./AskForApproval";
+import type { EphemeralContext } from "./EphemeralContext";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { UserInput } from "./UserInput";
 
-export type TurnStartParams = {threadId: string, input: Array<UserInput>, /**
+export type TurnStartParams = { threadId: string, input: Array<UserInput>, 
+/**
+ * Additional model-visible context for this turn, such as editor or IDE state.
+ * If compaction happens while this turn is still in progress, the current
+ * turn's ephemeral context is preserved so the turn can continue.
+ * Ephemeral context from older turns is stripped during compaction, so
+ * clients should send a fresh snapshot on each turn instead of expecting
+ * it to persist automatically.
+ */
+ephemeralContext?: Array<EphemeralContext> | null, 
+/**
  * Override the working directory for this turn and subsequent turns.
  */
-cwd?: string | null, /**
+cwd?: string | null, 
+/**
  * Override the approval policy for this turn and subsequent turns.
  */
-approvalPolicy?: AskForApproval | null, /**
+approvalPolicy?: AskForApproval | null, 
+/**
  * Override the sandbox policy for this turn and subsequent turns.
  */
-sandboxPolicy?: SandboxPolicy | null, /**
+sandboxPolicy?: SandboxPolicy | null, 
+/**
  * Override the model for this turn and subsequent turns.
  */
-model?: string | null, /**
+model?: string | null, 
+/**
  * Override the service tier for this turn and subsequent turns.
  */
-serviceTier?: ServiceTier | null | null, /**
+serviceTier?: ServiceTier | null | null, 
+/**
  * Override the reasoning effort for this turn and subsequent turns.
  */
-effort?: ReasoningEffort | null, /**
+effort?: ReasoningEffort | null, 
+/**
  * Override the reasoning summary for this turn and subsequent turns.
  */
-summary?: ReasoningSummary | null, /**
+summary?: ReasoningSummary | null, 
+/**
  * Override the personality for this turn and subsequent turns.
  */
-personality?: Personality | null, /**
+personality?: Personality | null, 
+/**
  * Optional JSON Schema used to constrain the final assistant message for
  * this turn.
  */
-outputSchema?: JsonValue | null, /**
+outputSchema?: JsonValue | null, 
+/**
  * EXPERIMENTAL - Set a pre-set collaboration mode.
  * Takes precedence over model, reasoning_effort, and developer instructions if set.
  *
  * For `collaboration_mode.settings.developer_instructions`, `null` means
  * "use the built-in instructions for the selected mode".
  */
-collaborationMode?: CollaborationMode | null};
+collaborationMode?: CollaborationMode | null, };

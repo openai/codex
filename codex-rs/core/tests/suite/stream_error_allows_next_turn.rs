@@ -95,6 +95,7 @@ async fn continue_after_stream_error() {
                 text: "first message".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -114,6 +115,7 @@ async fn continue_after_stream_error() {
                 text: "follow up".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await

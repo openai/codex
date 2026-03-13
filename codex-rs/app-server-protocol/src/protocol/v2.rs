@@ -79,6 +79,7 @@ use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
+use codex_protocol::user_input::EphemeralContext as CoreEphemeralContext;
 use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -3607,9 +3608,38 @@ pub enum TurnStatus {
 )]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct EphemeralContext {
+    /// Human-readable title for additional context sent with one turn.
+    pub title: String,
+    /// Free-form text payload for additional context sent with one turn.
+    pub text: String,
+}
+
+impl From<EphemeralContext> for CoreEphemeralContext {
+    fn from(value: EphemeralContext) -> Self {
+        Self {
+            title: value.title,
+            text: value.text,
+        }
+    }
+}
+
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
+    /// Additional model-visible context for this turn, such as editor or IDE state.
+    /// If compaction happens while this turn is still in progress, the current
+    /// turn's ephemeral context is preserved so the turn can continue.
+    /// Ephemeral context from older turns is stripped during compaction, so
+    /// clients should send a fresh snapshot on each turn instead of expecting
+    /// it to persist automatically.
+    #[ts(optional = nullable)]
+    pub ephemeral_context: Option<Vec<EphemeralContext>>,
     /// Override the working directory for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
@@ -7140,6 +7170,7 @@ mod tests {
         let without_override = TurnStartParams {
             thread_id: "thread_123".to_string(),
             input: vec![],
+            ephemeral_context: None,
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
@@ -7154,5 +7185,36 @@ mod tests {
         let serialized_without_override =
             serde_json::to_value(&without_override).expect("params should serialize");
         assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+
+    #[test]
+    fn turn_start_params_serialize_ephemeral_context() {
+        let params = TurnStartParams {
+            thread_id: "thread_123".to_string(),
+            input: vec![],
+            ephemeral_context: Some(vec![EphemeralContext {
+                title: "Context from my editor".to_string(),
+                text: "## Active file: src/main.rs".to_string(),
+            }]),
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            model: None,
+            service_tier: None,
+            effort: None,
+            summary: None,
+            output_schema: None,
+            collaboration_mode: None,
+            personality: None,
+        };
+
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+        assert_eq!(
+            serialized.get("ephemeralContext"),
+            Some(&json!([{
+                "title": "Context from my editor",
+                "text": "## Active file: src/main.rs",
+            }]))
+        );
     }
 }

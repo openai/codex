@@ -23,10 +23,13 @@ The key modules are:
 Model-visible prompt context falls into three buckets:
 
 1. Turn-state fragments.
-   These are derived from current durable turn/session state and are the ones
-   that must survive history-mutating flows such as resume, compaction,
-   backtracking, and fork by being rebuilt from current state plus an optional
-   persisted baseline.
+   These are derived from current `TurnContext` state. Most represent durable
+   turn/session state that must survive history-mutating flows such as resume,
+   compaction, backtracking, and fork by being rebuilt from current state plus
+   an optional persisted baseline. Some, such as ephemeral context, are
+   intentionally current-turn-scoped: they rebuild from the active
+   `TurnContext`, but are not persisted in the durable baseline for older
+   turns.
 2. Registered runtime fragments.
    These are not derived from `TurnContext` diffs, but they are still modeled
    as typed fragments because they are emitted into model-visible history and,
@@ -39,7 +42,7 @@ Model-visible prompt context falls into three buckets:
 
 The single most important distinction is whether the model-visible state is:
 
-- durable turn/session state that should be rebuilt from `TurnContext`
+- turn/session state that should be rebuilt from `TurnContext`
 - or a one-off event/message that is only relevant because it just happened
 
 That determines whether the fragment needs `build(...)`.
@@ -79,7 +82,7 @@ That trait owns:
 
 - `type Role`
 - `render_text()`
-- optional `build(...)` for turn-state fragments
+- optional `build(...)` / `build_many(...)` for turn-state fragments
 - optional contextual-user detection via `contextual_user_markers()` or
   `matches_contextual_user_text()`
 - standard conversions such as `into_message()` and `into_response_input_item()`
@@ -106,7 +109,13 @@ registered.
 ### 3. Build semantics
 
 [`ModelVisibleContextFragment::build(...)`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/model_visible_context.rs#L187)
-is the canonical hook for turn-state fragments.
+is the canonical hook for the common zero-or-one turn-state case.
+
+When one turn-state source intentionally renders multiple model-visible
+content items, override
+[`ModelVisibleContextFragment::build_many(...)`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/model_visible_context.rs#L199)
+instead. The default `build_many(...)` implementation just lifts
+`build(...) -> Option<Self>` into `Vec<Self>`.
 
 It receives:
 
@@ -225,8 +234,8 @@ These are typed and registered, but not built from `TurnContext` diffs:
 
 ### Registered turn-state contextual-user fragments
 
-These implement `build(...)` and participate in both full initial context and
-steady-state diffs:
+These implement `build(...)` or `build_many(...)` and participate in both full
+initial context and steady-state diffs:
 
 - `UserInstructionsFragment`
 - `AgentsMdInstructions`
@@ -234,11 +243,14 @@ steady-state diffs:
 - `SkillsSectionFragment`
 - `ChildAgentsInstructionsFragment`
 - `EnvironmentContext`
+- `EphemeralContextFragment`
 
 Some of these are true steady-state diff fragments (`UserInstructionsFragment`,
-`AgentsMdInstructions`, `EnvironmentContext`). Others intentionally rebuild only
-when there is no baseline and therefore behave as initial-context fragments
-expressed through the same `build(...)` hook (`JsReplInstructionsFragment`,
+`AgentsMdInstructions`, `EnvironmentContext`). `EphemeralContextFragment`
+intentionally uses `build_many(...)` because one turn can inject multiple
+ephemeral context content items. Others intentionally rebuild only when there
+is no baseline and therefore behave as initial-context fragments expressed
+through the same `build(...)` hook (`JsReplInstructionsFragment`,
 `SkillsSectionFragment`, `ChildAgentsInstructionsFragment`).
 
 ### Registered runtime contextual-user fragments
@@ -360,6 +372,8 @@ When adding new model-visible context:
 4. Implement `ModelVisibleContextFragment`.
 5. Set `type Role` correctly.
 6. If it is turn-state context, implement `build(...)`.
+   Override `build_many(...)` instead when one turn-state source should emit
+   multiple content items.
 7. If it is contextual-user, provide stable detection with
    `contextual_user_markers()` or custom `matches_contextual_user_text()`.
 8. Register it exactly once in `REGISTERED_MODEL_VISIBLE_FRAGMENTS`, in prompt
@@ -371,7 +385,7 @@ When adding new model-visible context:
 Rule of thumb:
 
 - “This is durable prompt state” => registered typed fragment, usually with
-  `build(...)`
+  `build(...)` or, for zero-or-many cases, `build_many(...)`
 - “This is a one-off contextual/runtime marker” => registered typed fragment,
   usually without `build(...)`
 - “This is an isolated developer-only text event” => plain developer text is

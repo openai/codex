@@ -3479,6 +3479,23 @@
       ],
       "type": "object"
     },
+    "EphemeralContext": {
+      "properties": {
+        "text": {
+          "description": "Free-form text payload for additional context sent with one turn.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Human-readable title for additional context sent with one turn.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "title"
+      ],
+      "type": "object"
+    },
     "ErrorNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -10932,6 +10949,16 @@
             }
           ],
           "description": "Override the reasoning effort for this turn and subsequent turns."
+        },
+        "ephemeralContext": {
+          "description": "Additional model-visible context for this turn, such as editor or IDE state. If compaction happens while this turn is still in progress, the current turn's ephemeral context is preserved so the turn can continue. Ephemeral context from older turns is stripped during compaction, so clients should send a fresh snapshot on each turn instead of expecting it to persist automatically.",
+          "items": {
+            "$ref": "#/definitions/EphemeralContext"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "input": {
           "items": {

@@ -836,6 +836,7 @@ async fn responses_websocket_usage_limit_error_emits_rate_limit_event() {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -921,6 +922,7 @@ async fn responses_websocket_invalid_request_error_with_status_is_forwarded() {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await

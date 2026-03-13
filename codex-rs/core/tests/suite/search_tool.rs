@@ -381,6 +381,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
                 text: "Find the calendar create tool".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;

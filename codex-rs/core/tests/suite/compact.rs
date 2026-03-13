@@ -17,6 +17,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::WarningEvent;
+use codex_protocol::user_input::EphemeralContext;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -79,6 +80,13 @@ fn summary_with_prefix(summary: &str) -> String {
 
 fn set_test_compact_prompt(config: &mut Config) {
     config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+}
+
+fn editor_context(path: &str) -> Vec<EphemeralContext> {
+    vec![EphemeralContext {
+        title: "Context from my editor".to_string(),
+        text: format!("## Active file: {path}"),
+    }]
 }
 
 fn body_contains_text(body: &str, text: &str) -> bool {
@@ -239,6 +247,7 @@ async fn summarize_context_three_requests_and_instructions() {
                 text: "hello world".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -261,6 +270,7 @@ async fn summarize_context_three_requests_and_instructions() {
                 text: THIRD_USER_MSG.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -437,6 +447,7 @@ async fn manual_compact_uses_custom_prompt() {
                 text: "USER_ONE".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -581,6 +592,7 @@ async fn manual_compact_emits_context_compaction_items() {
                 text: "manual compact".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -744,6 +756,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
                 text: user_message.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1248,6 +1261,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
                 text: FIRST_AUTO_MSG.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1261,6 +1275,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
                 text: SECOND_AUTO_MSG.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1274,6 +1289,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
                 text: POST_AUTO_USER_MSG.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1442,6 +1458,7 @@ async fn auto_compact_emits_context_compaction_items() {
                     text: user.into(),
                     text_elements: Vec::new(),
                 }],
+                ephemeral_context: Vec::new(),
                 final_output_json_schema: None,
             })
             .await
@@ -1520,6 +1537,7 @@ async fn auto_compact_starts_after_turn_started() {
                 text: FIRST_AUTO_MSG.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1532,6 +1550,7 @@ async fn auto_compact_starts_after_turn_started() {
                 text: SECOND_AUTO_MSG.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -1544,6 +1563,7 @@ async fn auto_compact_starts_after_turn_started() {
                 text: POST_AUTO_USER_MSG.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -2031,6 +2051,7 @@ async fn auto_compact_persists_rollout_entries() {
                 text: FIRST_AUTO_MSG.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -2043,6 +2064,7 @@ async fn auto_compact_persists_rollout_entries() {
                 text: SECOND_AUTO_MSG.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -2055,6 +2077,7 @@ async fn auto_compact_persists_rollout_entries() {
                 text: POST_AUTO_USER_MSG.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -2141,6 +2164,7 @@ async fn manual_compact_retries_after_context_window_error() {
                 text: "first turn".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -2252,6 +2276,7 @@ async fn manual_compact_non_context_failure_retries_then_emits_task_error() {
                 text: "first turn".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -2344,6 +2369,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
                 text: first_user_message.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -2359,6 +2385,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
                 text: second_user_message.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -2374,6 +2401,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
                 text: final_user_message.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -2535,6 +2563,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
                     text: user.into(),
                     text_elements: Vec::new(),
                 }],
+                ephemeral_context: Vec::new(),
                 final_output_json_schema: None,
             })
             .await
@@ -2637,6 +2666,7 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
                 text: FUNCTION_CALL_LIMIT_MSG.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -2693,6 +2723,125 @@ async fn snapshot_request_shape_mid_turn_continuation_compaction() {
                 ),
             ]
         )
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_mid_turn_compaction_replaces_ephemeral_context() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let context_window = 100;
+    let limit = context_window * 90 / 100;
+    let over_limit_tokens = context_window * 95 / 100 + 1;
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", FIRST_REPLY),
+                ev_completed_with_tokens("r1", 60),
+            ]),
+            sse(vec![
+                ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
+                ev_completed_with_tokens("r2", over_limit_tokens),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", &auto_summary(AUTO_SUMMARY_TEXT)),
+                ev_completed_with_tokens("r3", 10),
+            ]),
+            sse(vec![
+                ev_assistant_message("m4", FINAL_REPLY),
+                ev_completed_with_tokens("r4", 10),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_context_window = Some(context_window);
+            config.model_auto_compact_token_limit = Some(limit);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "SETUP_USER".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ephemeral_context: editor_context("src/old.rs"),
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit setup user input");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: FUNCTION_CALL_LIMIT_MSG.to_string(),
+                text_elements: Vec::new(),
+            }],
+            ephemeral_context: editor_context("src/new.rs"),
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit active user input");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        4,
+        "expected setup turn, active turn, compact, and continuation requests"
+    );
+
+    insta::assert_snapshot!(
+        "mid_turn_compaction_replaces_ephemeral_context_shapes",
+        format_labeled_requests_snapshot(
+            "Mid-turn continuation compaction keeps both prior and active ephemeral_context in the compact request, then reinjects only the active turn ephemeral_context into the continuation request.",
+            &[
+                ("Local Compaction Request", &requests[2]),
+                ("Local Post-Compaction History Layout", &requests[3]),
+            ]
+        )
+    );
+
+    let compact_user_texts = requests[2].message_input_texts("user");
+    assert!(
+        compact_user_texts
+            .iter()
+            .any(|text| text.contains("src/old.rs")),
+        "expected compact request to include earlier turn ephemeral context from history"
+    );
+    assert!(
+        compact_user_texts
+            .iter()
+            .any(|text| text.contains("src/new.rs")),
+        "expected compact request to include the active turn ephemeral context"
+    );
+
+    let follow_up_user_texts = requests[3].message_input_texts("user");
+    assert!(
+        follow_up_user_texts
+            .iter()
+            .any(|text| text.contains("src/new.rs")),
+        "expected continuation request to reinject the active turn ephemeral context"
+    );
+    assert!(
+        !follow_up_user_texts
+            .iter()
+            .any(|text| text.contains("src/old.rs")),
+        "did not expect continuation request to retain the compacted-away earlier ephemeral context"
     );
 }
 
@@ -2831,6 +2980,7 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
                     text: user.into(),
                     text_elements: Vec::new(),
                 }],
+                ephemeral_context: Vec::new(),
                 final_output_json_schema: None,
             })
             .await
@@ -2948,6 +3098,7 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
                     text: user.into(),
                     text_elements: Vec::new(),
                 }],
+                ephemeral_context: Vec::new(),
                 final_output_json_schema: None,
             })
             .await
@@ -3007,6 +3158,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
                     text: user.to_string(),
                     text_elements: Vec::new(),
                 }],
+                ephemeral_context: Vec::new(),
                 final_output_json_schema: None,
             })
             .await
@@ -3041,6 +3193,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
                     text_elements: Vec::new(),
                 },
             ],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -3078,6 +3231,122 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
             .iter()
             .any(|url| url == image_url.as_str()),
         "expected post-compaction follow-up request to keep incoming user image content"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_request_shape_pre_turn_compaction_replaces_ephemeral_context() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", FIRST_REPLY),
+                ev_completed_with_tokens("r1", 60),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", "SECOND_REPLY"),
+                ev_completed_with_tokens("r2", 500),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", "PRE_TURN_SUMMARY"),
+                ev_completed_with_tokens("r3", 100),
+            ]),
+            sse(vec![
+                ev_assistant_message("m4", FINAL_REPLY),
+                ev_completed_with_tokens("r4", 80),
+            ]),
+        ],
+    )
+    .await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(200);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_ONE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ephemeral_context: editor_context("src/old.rs"),
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit first user input");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_TWO".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ephemeral_context: Vec::new(),
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit second user input");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "USER_THREE".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ephemeral_context: editor_context("src/new.rs"),
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit third user input");
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 4, "expected user, user, compact, follow-up");
+
+    insta::assert_snapshot!(
+        "pre_turn_compaction_replaces_ephemeral_context_shapes",
+        format_labeled_requests_snapshot(
+            "Pre-turn auto-compaction keeps prior turn ephemeral_context in the compact request, but the follow-up request carries only the fresh turn ephemeral_context.",
+            &[
+                ("Local Compaction Request", &requests[2]),
+                ("Local Post-Compaction History Layout", &requests[3]),
+            ]
+        )
+    );
+
+    let compact_user_texts = requests[2].message_input_texts("user");
+    assert!(
+        compact_user_texts
+            .iter()
+            .any(|text| text.contains("src/old.rs")),
+        "expected compact request to include the previous turn ephemeral context"
+    );
+    let follow_up_user_texts = requests[3].message_input_texts("user");
+    assert!(
+        follow_up_user_texts
+            .iter()
+            .any(|text| text.contains("src/new.rs")),
+        "expected follow-up request to include the incoming turn ephemeral context"
+    );
+    assert!(
+        !follow_up_user_texts
+            .iter()
+            .any(|text| text.contains("src/old.rs")),
+        "did not expect follow-up request to retain the compacted-away ephemeral context"
     );
 }
 
@@ -3251,6 +3520,7 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
                 text: "USER_ONE".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -3263,6 +3533,7 @@ async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
                 text: "USER_TWO".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await
@@ -3333,6 +3604,7 @@ async fn snapshot_request_shape_manual_compact_without_previous_user_messages() 
                 text: "AFTER_MANUAL_EMPTY_COMPACT".to_string(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await

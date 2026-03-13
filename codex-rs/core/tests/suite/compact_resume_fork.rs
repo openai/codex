@@ -649,6 +649,7 @@ async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
                 text: text.into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await

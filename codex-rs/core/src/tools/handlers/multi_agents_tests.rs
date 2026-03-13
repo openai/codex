@@ -535,6 +535,7 @@ async fn send_input_accepts_structured_items() {
                 text_elements: Vec::new(),
             },
         ],
+        ephemeral_context: Vec::new(),
         final_output_json_schema: None,
     };
     let captured = manager
