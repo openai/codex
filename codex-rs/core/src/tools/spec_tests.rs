@@ -2551,6 +2551,36 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
 }
 
 #[test]
+fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+    let ToolSpec::Freeform(FreeformTool { description, .. }) = &find_tool(&tools, "exec").spec
+    else {
+        panic!("expected freeform tool");
+    };
+
+    assert!(!description.starts_with(
+        "Use `exec/exec_wait` tool to run all other tools, do not attempt to use any other tools directly"
+    ));
+    assert!(!description.contains("### `update_plan` (`update_plan`)"));
+    assert!(!description.contains("### `view_image` (`view_image`)"));
+}
+
+#[test]
 fn chat_tools_include_top_level_name() {
     let properties =
         BTreeMap::from([("foo".to_string(), JsonSchema::String { description: None })]);

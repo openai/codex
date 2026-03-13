@@ -10,6 +10,7 @@ use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::code_mode::WAIT_TOOL_NAME;
+use crate::tools::code_mode::is_code_mode_nested_tool;
 use crate::tools::code_mode::tool_description as code_mode_tool_description;
 use crate::tools::code_mode::wait_tool_description as code_mode_wait_tool_description;
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
@@ -2024,22 +2025,6 @@ SOURCE: /[\s\S]+/
     })
 }
 
-fn code_mode_nested_tool_details(spec: ToolSpec) -> Option<(String, String)> {
-    match spec {
-        ToolSpec::Function(tool)
-            if tool.name != PUBLIC_TOOL_NAME && tool.name != WAIT_TOOL_NAME =>
-        {
-            Some((tool.name, tool.description))
-        }
-        ToolSpec::Freeform(tool)
-            if tool.name != PUBLIC_TOOL_NAME && tool.name != WAIT_TOOL_NAME =>
-        {
-            Some((tool.name, tool.description))
-        }
-        _ => None,
-    }
-}
-
 fn create_list_mcp_resources_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -2494,8 +2479,14 @@ pub(crate) fn build_specs_with_discoverable_tools(
         .build();
         let mut enabled_tools = nested_specs
             .into_iter()
-            .map(|spec| augment_tool_spec_for_code_mode(spec.spec, true))
-            .filter_map(code_mode_nested_tool_details)
+            .filter_map(|spec| {
+                let (name, description) = match augment_tool_spec_for_code_mode(spec.spec, true) {
+                    ToolSpec::Function(tool) => (tool.name, tool.description),
+                    ToolSpec::Freeform(tool) => (tool.name, tool.description),
+                    _ => return None,
+                };
+                is_code_mode_nested_tool(&name).then_some((name, description))
+            })
             .collect::<Vec<_>>();
         enabled_tools.sort_by(|left, right| left.0.cmp(&right.0));
         enabled_tools.dedup_by(|left, right| left.0 == right.0);
