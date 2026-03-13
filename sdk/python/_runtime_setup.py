@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path
 
 PACKAGE_NAME = "codex-cli-bin"
-RUNTIME_VERSION_ENV_VAR = "CODEX_PYTHON_RUNTIME_VERSION"
+PINNED_RUNTIME_VERSION = "0.115.0-alpha.11"
 REPO_SLUG = "openai/codex"
 
 
@@ -24,55 +24,20 @@ class RuntimeSetupError(RuntimeError):
     pass
 
 
-def configured_runtime_version() -> str | None:
-    value = os.environ.get(RUNTIME_VERSION_ENV_VAR)
-    if value is None:
-        return None
-    normalized = value.strip()
-    if not normalized:
-        raise RuntimeSetupError(
-            f"{RUNTIME_VERSION_ENV_VAR} is set but empty. "
-            "Set it to a release version like 0.115.0-alpha.11."
-        )
-    return normalized
-
-
-def required_runtime_version() -> str:
-    version = configured_runtime_version()
-    if version is not None:
-        return version
-    raise RuntimeSetupError(
-        f"Set {RUNTIME_VERSION_ENV_VAR}=<version> so repo-local examples and real "
-        "integration coverage can install the pinned codex-cli-bin runtime package."
-    )
+def pinned_runtime_version() -> str:
+    return PINNED_RUNTIME_VERSION
 
 
 def ensure_runtime_package_installed(
     python_executable: str | Path,
     sdk_python_dir: Path,
-    runtime_version: str | None = None,
     install_target: Path | None = None,
 ) -> str:
-    requested_version = runtime_version or configured_runtime_version()
+    requested_version = pinned_runtime_version()
     installed_version = None
     if install_target is None:
         installed_version = _installed_runtime_version(python_executable)
-    normalized_requested = (
-        _normalized_package_version(requested_version) if requested_version is not None else None
-    )
-    if requested_version is None:
-        if install_target is not None:
-            raise RuntimeSetupError(
-                f"{RUNTIME_VERSION_ENV_VAR} is required when installing {PACKAGE_NAME} "
-                "into an isolated target directory."
-            )
-        if installed_version is None:
-            raise RuntimeSetupError(
-                f"Unable to locate {PACKAGE_NAME} in {python_executable}.\n"
-                f"Install {PACKAGE_NAME} first, or set {RUNTIME_VERSION_ENV_VAR}=<version> "
-                "to download a matching release codex artifact and install a local runtime wheel."
-            )
-        return installed_version
+    normalized_requested = _normalized_package_version(requested_version)
 
     if installed_version is not None and _normalized_package_version(installed_version) == normalized_requested:
         return requested_version
@@ -371,10 +336,9 @@ def _normalized_package_version(version: str) -> str:
 
 __all__ = [
     "PACKAGE_NAME",
-    "RUNTIME_VERSION_ENV_VAR",
+    "PINNED_RUNTIME_VERSION",
     "RuntimeSetupError",
-    "configured_runtime_version",
     "ensure_runtime_package_installed",
+    "pinned_runtime_version",
     "platform_asset_name",
-    "required_runtime_version",
 ]

@@ -19,7 +19,7 @@ root_str = str(ROOT)
 if root_str not in sys.path:
     sys.path.insert(0, root_str)
 
-from _runtime_setup import ensure_runtime_package_installed, required_runtime_version
+from _runtime_setup import ensure_runtime_package_installed, pinned_runtime_version
 
 RUN_REAL_CODEX_TESTS = os.environ.get("RUN_REAL_CODEX_TESTS") == "1"
 pytestmark = pytest.mark.skipif(
@@ -67,7 +67,7 @@ class PreparedRuntimeEnv:
 
 @pytest.fixture(scope="session")
 def runtime_env(tmp_path_factory: pytest.TempPathFactory) -> PreparedRuntimeEnv:
-    runtime_version = required_runtime_version()
+    runtime_version = pinned_runtime_version()
     temp_root = tmp_path_factory.mktemp("python-runtime-env")
     isolated_site = temp_root / "site-packages"
     python = sys.executable
@@ -89,13 +89,11 @@ def runtime_env(tmp_path_factory: pytest.TempPathFactory) -> PreparedRuntimeEnv:
     ensure_runtime_package_installed(
         python,
         ROOT,
-        runtime_version,
         install_target=isolated_site,
     )
 
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join([str(isolated_site), str(ROOT / "src")])
-    env["CODEX_PYTHON_RUNTIME_VERSION"] = runtime_version
     env["CODEX_PYTHON_SDK_DIR"] = str(ROOT)
     return PreparedRuntimeEnv(python=python, env=env, runtime_version=runtime_version)
 

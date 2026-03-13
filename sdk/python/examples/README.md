@@ -25,11 +25,12 @@ When running examples from this repo checkout, the SDK source uses the local
 tree and does not bundle a runtime binary. The helper in `examples/_bootstrap.py`
 uses the installed `codex-cli-bin` runtime package.
 
-If `codex-cli-bin` is not already installed, set `CODEX_PYTHON_RUNTIME_VERSION`
-to a release version like `0.115.0-alpha.11`; the bootstrap will download the
-matching GitHub release artifact, stage a temporary local `codex-cli-bin`
-package, install it into your active interpreter, and clean up the temporary
-files afterward.
+If the pinned `codex-cli-bin` runtime is not already installed, the bootstrap
+will download the matching GitHub release artifact, stage a temporary local
+`codex-cli-bin` package, install it into your active interpreter, and clean up
+the temporary files afterward.
+
+Current pinned runtime version: `0.115.0-alpha.11`
 
 ## Run examples
 
@@ -43,12 +44,11 @@ python examples/<example-folder>/async.py
 The examples bootstrap local imports from `sdk/python/src` automatically, so no
 SDK wheel install is required. You only need the Python dependencies for your
 active interpreter and an installed `codex-cli-bin` runtime package (either
-already present or provisioned through `CODEX_PYTHON_RUNTIME_VERSION`).
+already present or automatically provisioned by the bootstrap).
 
 ## Recommended first run
 
 ```bash
-export CODEX_PYTHON_RUNTIME_VERSION=0.115.0-alpha.11
 python examples/01_quickstart_constructor/sync.py
 python examples/01_quickstart_constructor/async.py
 ```
