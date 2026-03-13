@@ -41,11 +41,6 @@ expression: searching
           [--confirm-world-writable] [--remember-world-writable] [--enable-windows-
           sandbox=elevated|legacy]
 
-  /setup-default-sandbox
-    set up elevated agent sandbox
-    Usage:
-        /setup-default-sandbox
-
   /experimental
     toggle experimental features
     Usage:
@@ -161,11 +156,6 @@ expression: searching
     Usage:
         /mcp
 
-  /apps
-    manage apps
-    Usage:
-        /apps
-
   /logout
     log out of Codex
     Usage:
@@ -213,17 +203,6 @@ expression: searching
         /personality
         /personality <none|friendly|pragmatic>
 
-  /realtime
-    toggle realtime voice mode (experimental)
-    Usage:
-        /realtime
-
-  /settings
-    configure realtime microphone/speaker
-    Usage:
-        /settings
-        /settings <microphone|speaker> [default|<device-name>]
-
   /test-approval
     test approval request
     Usage:
@@ -241,4 +220,4 @@ expression: searching
         /debug-m-drop
 
 
-  Search: /maintainers  |  enter apply  |  esc cancel                          1 match | 1-233/240
+  Search: /maintainers  |  enter apply  |  esc cancel                          1 match | 1-212/219

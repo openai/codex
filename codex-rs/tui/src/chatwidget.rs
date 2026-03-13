@@ -4369,7 +4369,9 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Help => {
                 self.bottom_pane
-                    .show_view(Box::new(crate::bottom_pane::SlashHelpView::new()));
+                    .show_view(Box::new(crate::bottom_pane::SlashHelpView::new(
+                        self.builtin_command_flags(),
+                    )));
                 QueueReplayControl::Continue
             }
             SlashCommand::Feedback => {
@@ -4804,7 +4806,9 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Help => {
                 self.bottom_pane
-                    .show_view(Box::new(crate::bottom_pane::SlashHelpView::new()));
+                    .show_view(Box::new(crate::bottom_pane::SlashHelpView::new(
+                        self.builtin_command_flags(),
+                    )));
                 QueueReplayControl::Continue
             }
             SlashCommand::Approvals | SlashCommand::Permissions => {
@@ -5840,32 +5844,33 @@ impl ChatWidget {
         text: &'a str,
     ) -> Option<(SlashCommand, &'a str, usize)> {
         let (name, rest, rest_offset) = parse_slash_name(text)?;
-        let cmd = find_builtin_command(
-            name,
-            BuiltinCommandFlags {
-                collaboration_modes_enabled: self.collaboration_modes_enabled(),
-                connectors_enabled: self.connectors_enabled(),
-                fast_command_enabled: self.fast_mode_enabled(),
-                personality_command_enabled: self.config.features.enabled(Feature::Personality),
-                realtime_conversation_enabled: self.realtime_conversation_enabled(),
-                audio_device_selection_enabled: self.realtime_audio_device_selection_enabled(),
-                allow_elevate_sandbox: {
-                    #[cfg(target_os = "windows")]
-                    {
-                        codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                            && matches!(
-                                WindowsSandboxLevel::from_config(&self.config),
-                                WindowsSandboxLevel::RestrictedToken
-                            )
-                    }
-                    #[cfg(not(target_os = "windows"))]
-                    {
-                        false
-                    }
-                },
-            },
-        )?;
+        let cmd = find_builtin_command(name, self.builtin_command_flags())?;
         Some((cmd, rest, rest_offset))
+    }
+
+    fn builtin_command_flags(&self) -> BuiltinCommandFlags {
+        BuiltinCommandFlags {
+            collaboration_modes_enabled: self.collaboration_modes_enabled(),
+            connectors_enabled: self.connectors_enabled(),
+            fast_command_enabled: self.fast_mode_enabled(),
+            personality_command_enabled: self.config.features.enabled(Feature::Personality),
+            realtime_conversation_enabled: self.realtime_conversation_enabled(),
+            audio_device_selection_enabled: self.realtime_audio_device_selection_enabled(),
+            allow_elevate_sandbox: {
+                #[cfg(target_os = "windows")]
+                {
+                    codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                        && matches!(
+                            WindowsSandboxLevel::from_config(&self.config),
+                            WindowsSandboxLevel::RestrictedToken
+                        )
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    false
+                }
+            },
+        }
     }
 
     fn is_known_slash_draft(&self, draft: &UserMessage) -> bool {

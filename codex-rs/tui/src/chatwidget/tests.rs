@@ -6128,30 +6128,30 @@ async fn slash_help_search_navigates_matches_with_n_and_p() {
     let _ = render_bottom_popup(&chat, 100);
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Char('/')));
-    for ch in "toggle".chars() {
+    for ch in "show".chars() {
         chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
     }
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let first = render_bottom_popup(&chat, 100);
     assert!(first.contains("n/p match"));
-    assert!(first.contains("/fast"));
+    assert!(first.contains("/help"));
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Char('n')));
     let second = render_bottom_popup(&chat, 100);
-    assert!(second.contains("/experimental"));
+    assert!(second.contains("/diff"));
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Char('n')));
     let third = render_bottom_popup(&chat, 100);
-    assert!(third.contains("/realtime"));
+    assert!(third.contains("/status"));
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Char('p')));
     let previous = render_bottom_popup(&chat, 100);
-    assert!(previous.contains("/experimental"));
+    assert!(previous.contains("/diff"));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT));
     let shifted_previous = render_bottom_popup(&chat, 100);
-    assert!(shifted_previous.contains("/fast"));
+    assert!(shifted_previous.contains("/help"));
 }
 
 #[tokio::test]

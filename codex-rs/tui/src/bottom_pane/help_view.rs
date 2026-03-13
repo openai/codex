@@ -14,12 +14,13 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
+use crate::bottom_pane::BuiltinCommandFlags;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::popup_consts::MAX_POPUP_ROWS;
 use crate::bottom_pane::selection_popup_common::render_menu_surface;
+use crate::bottom_pane::visible_builtins_for_input;
 use crate::key_hint;
-use crate::slash_command::visible_built_in_slash_commands;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
 
@@ -49,15 +50,17 @@ struct HelpSearch {
 
 pub(crate) struct SlashHelpView {
     complete: bool,
+    rows: Vec<HelpRow>,
     scroll_top: Cell<usize>,
     follow_selected_match: Cell<bool>,
     search: HelpSearch,
 }
 
 impl SlashHelpView {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(flags: BuiltinCommandFlags) -> Self {
         Self {
             complete: false,
+            rows: Self::build_document(flags),
             scroll_top: Cell::new(0),
             follow_selected_match: Cell::new(false),
             search: HelpSearch::default(),
@@ -71,7 +74,7 @@ impl SlashHelpView {
             .into()
     }
 
-    fn build_document() -> Vec<HelpRow> {
+    fn build_document(flags: BuiltinCommandFlags) -> Vec<HelpRow> {
         let mut rows = vec![
             HelpRow {
                 plain_text: "Slash Commands".to_string(),
@@ -103,7 +106,7 @@ impl SlashHelpView {
             },
         ];
 
-        for cmd in visible_built_in_slash_commands() {
+        for cmd in visible_builtins_for_input(flags) {
             rows.push(HelpRow {
                 plain_text: format!("/{}", cmd.command()),
                 line: Line::from(format!("/{}", cmd.command()).cyan().bold()),
@@ -273,8 +276,7 @@ impl SlashHelpView {
             return;
         }
 
-        let matches =
-            Self::matching_logical_rows(&Self::build_document(), &self.search.active_query);
+        let matches = Self::matching_logical_rows(&self.rows, &self.search.active_query);
         if matches.is_empty() {
             return;
         }
@@ -425,8 +427,7 @@ impl crate::render::renderable::Renderable for SlashHelpView {
         let [_footer_gap_area, footer_line_area] =
             Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(footer_area);
 
-        let rows = Self::build_document();
-        let (lines, row_starts, row_ends) = Self::wrap_rows(&rows, body_area.width);
+        let (lines, row_starts, row_ends) = Self::wrap_rows(&self.rows, body_area.width);
         let header_lines = lines.iter().take(2).cloned().collect::<Vec<_>>();
         let mut body_lines = lines.iter().skip(2).cloned().collect::<Vec<_>>();
         let visible_rows = Self::visible_body_rows(body_area.height);
@@ -436,7 +437,7 @@ impl crate::render::renderable::Renderable for SlashHelpView {
         if self.search.input.is_none()
             && !self.search.active_query.is_empty()
             && let Some(selected_row_idx) =
-                Self::matching_logical_rows(&rows, &self.search.active_query)
+                Self::matching_logical_rows(&self.rows, &self.search.active_query)
                     .get(self.search.selected_match)
                     .copied()
         {
@@ -464,7 +465,8 @@ impl crate::render::renderable::Renderable for SlashHelpView {
 
         let footer_line = self.footer_line();
         Paragraph::new(footer_line.clone()).render(footer_line_area, buf);
-        let indicator = self.search_indicator(&rows, body_lines.len(), visible_rows, scroll_top);
+        let indicator =
+            self.search_indicator(&self.rows, body_lines.len(), visible_rows, scroll_top);
         let indicator_width = UnicodeWidthStr::width(indicator.as_str()) as u16;
         let footer_width = footer_line.width() as u16;
         if footer_width + indicator_width + 2 <= footer_line_area.width {
@@ -481,8 +483,7 @@ impl crate::render::renderable::Renderable for SlashHelpView {
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        let rows = Self::build_document();
-        let (wrapped_rows, _, _) = Self::wrap_rows(&rows, width.saturating_sub(4));
+        let (wrapped_rows, _, _) = Self::wrap_rows(&self.rows, width.saturating_sub(4));
         let content_rows = wrapped_rows.len() as u16;
         content_rows.max(HELP_VIEW_MIN_BODY_ROWS + 4)
     }

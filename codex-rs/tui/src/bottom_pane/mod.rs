@@ -154,6 +154,7 @@ pub(crate) use list_selection_view::SelectionItem;
 pub(crate) use prompt_args::parse_slash_name;
 pub(crate) use slash_commands::BuiltinCommandFlags;
 pub(crate) use slash_commands::find_builtin_command;
+pub(crate) use slash_commands::visible_builtins_for_input;
 
 /// Pane displayed in the lower half of the chat UI.
 ///
