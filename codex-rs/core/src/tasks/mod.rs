@@ -227,9 +227,6 @@ impl Session {
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             active_turn.clear_pending().await;
         }
-        if reason == TurnAbortReason::Interrupted {
-            self.close_unified_exec_processes().await;
-        }
     }
 
     pub async fn on_task_finished(
@@ -396,6 +393,16 @@ impl Session {
             .await;
     }
 
+    pub(crate) async fn cleanup_after_interrupt(&self, turn_context: &Arc<TurnContext>) {
+        self.close_unified_exec_processes().await;
+
+        if let Some(manager) = turn_context.js_repl.manager_if_initialized()
+            && let Err(err) = manager.interrupt_turn_exec(&turn_context.sub_id).await
+        {
+            warn!("failed to interrupt js_repl kernel: {err}");
+        }
+    }
+
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
         let sub_id = task.turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
@@ -425,6 +432,8 @@ impl Session {
             .await;
 
         if reason == TurnAbortReason::Interrupted {
+            self.cleanup_after_interrupt(&task.turn_context).await;
+
             let marker = ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),

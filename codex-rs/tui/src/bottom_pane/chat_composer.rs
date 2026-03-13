@@ -5366,6 +5366,7 @@ mod tests {
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                managed_network_override: None,
                 path_to_skills_md: PathBuf::from("/tmp/repo/google-calendar/SKILL.md"),
                 scope: codex_protocol::protocol::SkillScope::Repo,
             }]));

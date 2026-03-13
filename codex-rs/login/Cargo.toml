@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
+codex-client = { workspace = true }
 codex-core = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 rand = { workspace = true }
@@ -17,7 +18,6 @@ reqwest = { workspace = true, features = ["json", "blocking"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-tempfile = { workspace = true }
 tiny_http = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",

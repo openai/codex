@@ -79,6 +79,7 @@ imported local file. They are not resolved relative to the imported file's locat
 - `codex.tmpDir`: per-session scratch directory path.
 - `codex.tool(name, args?)`: executes a normal Codex tool call from inside `js_repl` (including shell tools like `shell` / `shell_command` when available).
 - `codex.emitImage(imageLike)`: explicitly adds one image to the outer `js_repl` function output each time you call it.
+- `codex.tool(...)` and `codex.emitImage(...)` keep stable helper identities across cells. Saved references and persisted objects can reuse them in later cells, but async callbacks that fire after a cell finishes still fail because no exec is active.
 - Imported local files run in the same VM context, so they can also access `codex.*`, the captured `console`, and Node-like `import.meta` helpers.
 - Each `codex.tool(...)` call emits a bounded summary at `info` level from the `codex_core::tools::js_repl` logger. At `trace` level, the same path also logs the exact raw response object or error string seen by JavaScript.
 - Nested `codex.tool(...)` outputs stay inside JavaScript unless you emit them explicitly.

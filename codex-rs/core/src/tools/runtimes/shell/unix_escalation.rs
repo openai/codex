@@ -65,11 +65,11 @@ pub(crate) struct PreparedUnifiedExecZshFork {
 const PROMPT_CONFLICT_REASON: &str =
     "approval required by policy, but AskForApproval is set to Never";
 const REJECT_SANDBOX_APPROVAL_REASON: &str =
-    "approval required by policy, but AskForApproval::Reject.sandbox_approval is set";
+    "approval required by policy, but AskForApproval::Granular.sandbox_approval is false";
 const REJECT_RULES_APPROVAL_REASON: &str =
-    "approval required by policy rule, but AskForApproval::Reject.rules is set";
+    "approval required by policy rule, but AskForApproval::Granular.rules is false";
 const REJECT_SKILL_APPROVAL_REASON: &str =
-    "approval required by skill, but AskForApproval::Reject.skill_approval is set";
+    "approval required by skill, but AskForApproval::Granular.skill_approval is false";
 
 fn approval_sandbox_permissions(
     sandbox_permissions: SandboxPermissions,
@@ -358,18 +358,18 @@ fn execve_prompt_is_rejected_by_policy(
 ) -> Option<&'static str> {
     match (approval_policy, decision_source) {
         (AskForApproval::Never, _) => Some(PROMPT_CONFLICT_REASON),
-        (AskForApproval::Reject(reject_config), DecisionSource::SkillScript { .. })
-            if reject_config.rejects_skill_approval() =>
+        (AskForApproval::Granular(granular_config), DecisionSource::SkillScript { .. })
+            if !granular_config.allows_skill_approval() =>
         {
             Some(REJECT_SKILL_APPROVAL_REASON)
         }
-        (AskForApproval::Reject(reject_config), DecisionSource::PrefixRule)
-            if reject_config.rejects_rules_approval() =>
+        (AskForApproval::Granular(granular_config), DecisionSource::PrefixRule)
+            if !granular_config.allows_rules_approval() =>
         {
             Some(REJECT_RULES_APPROVAL_REASON)
         }
-        (AskForApproval::Reject(reject_config), DecisionSource::UnmatchedCommandFallback)
-            if reject_config.rejects_sandbox_approval() =>
+        (AskForApproval::Granular(granular_config), DecisionSource::UnmatchedCommandFallback)
+            if !granular_config.allows_sandbox_approval() =>
         {
             Some(REJECT_SANDBOX_APPROVAL_REASON)
         }
