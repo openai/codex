@@ -9,7 +9,7 @@ use crate::file_watcher::WatchRegistration;
 use crate::protocol::Event;
 use crate::protocol::Op;
 use crate::protocol::Submission;
-use codex_protocol::config_types::ApprovalReviewPolicy;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ContentItem;
@@ -34,7 +34,7 @@ pub struct ThreadConfigSnapshot {
     pub model_provider_id: String,
     pub service_tier: Option<ServiceTier>,
     pub approval_policy: AskForApproval,
-    pub approval_review_policy: ApprovalReviewPolicy,
+    pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox_policy: SandboxPolicy,
     pub cwd: PathBuf,
     pub ephemeral: bool,

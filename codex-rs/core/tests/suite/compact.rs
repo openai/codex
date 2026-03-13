@@ -3012,7 +3012,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
         .submit(Op::OverrideTurnContext {
             cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,

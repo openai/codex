@@ -339,7 +339,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         config_profile,
         // Default to never ask for approvals in headless mode. Feature flags can override.
         approval_policy: Some(AskForApproval::Never),
-        approval_review_policy: None,
+        approvals_reviewer: None,
         sandbox_mode,
         cwd: resolved_cwd,
         model_provider: model_provider.clone(),
@@ -688,7 +688,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         input: items.into_iter().map(Into::into).collect(),
                         cwd: Some(default_cwd),
                         approval_policy: Some(default_approval_policy.into()),
-                        approval_review_policy: None,
+                        approvals_reviewer: None,
                         sandbox_policy: Some(default_sandbox_policy.clone().into()),
                         model: None,
                         service_tier: None,
@@ -916,7 +916,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
-        approval_review_policy: approval_review_policy_override_from_config(config),
+        approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
@@ -932,7 +932,7 @@ fn thread_resume_params_from_config(config: &Config, path: Option<PathBuf>) -> T
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
-        approval_review_policy: approval_review_policy_override_from_config(config),
+        approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         config: config_request_overrides_from_config(config),
         ..ThreadResumeParams::default()
@@ -946,10 +946,10 @@ fn config_request_overrides_from_config(config: &Config) -> Option<HashMap<Strin
         .map(|profile| HashMap::from([("profile".to_string(), Value::String(profile.clone()))]))
 }
 
-fn approval_review_policy_override_from_config(
+fn approvals_reviewer_override_from_config(
     config: &Config,
-) -> Option<codex_app_server_protocol::ApprovalReviewPolicy> {
-    Some(config.approval_review_policy.into())
+) -> Option<codex_app_server_protocol::ApprovalsReviewer> {
+    Some(config.approvals_reviewer.into())
 }
 
 async fn send_request_with_response<T>(
@@ -980,7 +980,7 @@ fn session_configured_from_thread_start_response(
         response.model_provider.clone(),
         response.service_tier,
         response.approval_policy.to_core(),
-        response.approval_review_policy.to_core(),
+        response.approvals_reviewer.to_core(),
         response.sandbox.to_core(),
         response.cwd.clone(),
         response.reasoning_effort,
@@ -998,7 +998,7 @@ fn session_configured_from_thread_resume_response(
         response.model_provider.clone(),
         response.service_tier,
         response.approval_policy.to_core(),
-        response.approval_review_policy.to_core(),
+        response.approvals_reviewer.to_core(),
         response.sandbox.to_core(),
         response.cwd.clone(),
         response.reasoning_effort,
@@ -1027,7 +1027,7 @@ fn session_configured_from_thread_response(
     model_provider_id: String,
     service_tier: Option<codex_protocol::config_types::ServiceTier>,
     approval_policy: AskForApproval,
-    approval_review_policy: codex_protocol::config_types::ApprovalReviewPolicy,
+    approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     sandbox_policy: codex_protocol::protocol::SandboxPolicy,
     cwd: PathBuf,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
@@ -1043,7 +1043,7 @@ fn session_configured_from_thread_response(
         model_provider_id,
         service_tier,
         approval_policy,
-        approval_review_policy,
+        approvals_reviewer,
         sandbox_policy,
         cwd,
         reasoning_effort,
@@ -1610,7 +1610,7 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
 mod tests {
     use super::*;
     use codex_otel::set_parent_from_w3c_trace_context;
-    use codex_protocol::config_types::ApprovalReviewPolicy;
+    use codex_protocol::config_types::ApprovalsReviewer;
     use opentelemetry::trace::TraceContextExt;
     use opentelemetry::trace::TraceId;
     use opentelemetry::trace::TracerProvider as _;
@@ -1848,8 +1848,8 @@ mod tests {
         let params = thread_start_params_from_config(&config);
 
         assert_eq!(
-            params.approval_review_policy,
-            Some(codex_app_server_protocol::ApprovalReviewPolicy::ManualOnly)
+            params.approvals_reviewer,
+            Some(codex_app_server_protocol::ApprovalsReviewer::User)
         );
     }
 
@@ -1859,7 +1859,7 @@ mod tests {
         let cwd = tempdir().expect("create temp cwd");
         std::fs::write(
             codex_home.path().join("config.toml"),
-            "approval_review_policy = \"auto-only\"\n",
+            "approvals_reviewer = \"guardian_subagent\"\n",
         )
         .expect("write auto-review config");
         let config = ConfigBuilder::default()
@@ -1872,8 +1872,8 @@ mod tests {
         let params = thread_start_params_from_config(&config);
 
         assert_eq!(
-            params.approval_review_policy,
-            Some(codex_app_server_protocol::ApprovalReviewPolicy::AutoOnly)
+            params.approvals_reviewer,
+            Some(codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent)
         );
     }
 
@@ -1903,7 +1903,7 @@ mod tests {
             service_tier: None,
             cwd: PathBuf::from("/tmp"),
             approval_policy: codex_app_server_protocol::AskForApproval::OnRequest,
-            approval_review_policy: codex_app_server_protocol::ApprovalReviewPolicy::AutoOnly,
+            approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent,
             sandbox: codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
                 read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
@@ -1917,6 +1917,9 @@ mod tests {
         let event = session_configured_from_thread_start_response(&response)
             .expect("build bootstrap session configured event");
 
-        assert_eq!(event.approval_review_policy, ApprovalReviewPolicy::AutoOnly);
+        assert_eq!(
+            event.approvals_reviewer,
+            ApprovalsReviewer::GuardianSubagent
+        );
     }
 }

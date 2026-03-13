@@ -17,8 +17,6 @@ use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermis
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
-use codex_app_server_protocol::AutomaticApprovalReview;
-use codex_app_server_protocol::AutomaticApprovalReviewStatus;
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
 use codex_app_server_protocol::CollabAgentState as V2CollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool;
@@ -45,12 +43,14 @@ use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::GrantedPermissionProfile as V2GrantedPermissionProfile;
+use codex_app_server_protocol::GuardianApprovalReview;
+use codex_app_server_protocol::GuardianApprovalReviewStatus;
 use codex_app_server_protocol::HookCompletedNotification;
 use codex_app_server_protocol::HookStartedNotification;
 use codex_app_server_protocol::InterruptConversationResponse;
-use codex_app_server_protocol::ItemAutoApprovalReviewCompletedNotification;
-use codex_app_server_protocol::ItemAutoApprovalReviewStartedNotification;
 use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification;
+use codex_app_server_protocol::ItemGuardianApprovalReviewStartedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
@@ -198,16 +198,16 @@ fn guardian_auto_approval_review_notification(
     } else {
         assessment.turn_id.clone()
     };
-    let review = AutomaticApprovalReview {
+    let review = GuardianApprovalReview {
         status: match assessment.status {
             codex_protocol::protocol::GuardianAssessmentStatus::InProgress => {
-                AutomaticApprovalReviewStatus::InProgress
+                GuardianApprovalReviewStatus::InProgress
             }
             codex_protocol::protocol::GuardianAssessmentStatus::Approved => {
-                AutomaticApprovalReviewStatus::Approved
+                GuardianApprovalReviewStatus::Approved
             }
             codex_protocol::protocol::GuardianAssessmentStatus::Denied => {
-                AutomaticApprovalReviewStatus::Denied
+                GuardianApprovalReviewStatus::Denied
             }
         },
         risk_score: assessment.risk_score,
@@ -216,8 +216,8 @@ fn guardian_auto_approval_review_notification(
     };
     match assessment.status {
         codex_protocol::protocol::GuardianAssessmentStatus::InProgress => {
-            ServerNotification::ItemAutoApprovalReviewStarted(
-                ItemAutoApprovalReviewStartedNotification {
+            ServerNotification::ItemGuardianApprovalReviewStarted(
+                ItemGuardianApprovalReviewStartedNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id,
                     target_item_id: assessment.id.clone(),
@@ -227,8 +227,8 @@ fn guardian_auto_approval_review_notification(
         }
         codex_protocol::protocol::GuardianAssessmentStatus::Approved
         | codex_protocol::protocol::GuardianAssessmentStatus::Denied => {
-            ServerNotification::ItemAutoApprovalReviewCompleted(
-                ItemAutoApprovalReviewCompletedNotification {
+            ServerNotification::ItemGuardianApprovalReviewCompleted(
+                ItemGuardianApprovalReviewCompletedNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id,
                     target_item_id: assessment.id.clone(),
@@ -2711,7 +2711,7 @@ mod tests {
     use anyhow::Result;
     use anyhow::anyhow;
     use anyhow::bail;
-    use codex_app_server_protocol::AutomaticApprovalReviewStatus;
+    use codex_app_server_protocol::GuardianApprovalReviewStatus;
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_protocol::mcp::CallToolResult;
@@ -2771,13 +2771,13 @@ mod tests {
         );
 
         match notification {
-            ServerNotification::ItemAutoApprovalReviewStarted(payload) => {
+            ServerNotification::ItemGuardianApprovalReviewStarted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-event");
                 assert_eq!(payload.target_item_id, "item-1");
                 assert_eq!(
                     payload.review.status,
-                    AutomaticApprovalReviewStatus::InProgress
+                    GuardianApprovalReviewStatus::InProgress
                 );
                 assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
@@ -2805,15 +2805,15 @@ mod tests {
         );
 
         match notification {
-            ServerNotification::ItemAutoApprovalReviewCompleted(payload) => {
+            ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.target_item_id, "item-2");
-                assert_eq!(payload.review.status, AutomaticApprovalReviewStatus::Denied);
+                assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
                 assert_eq!(payload.review.risk_score, Some(91));
                 assert_eq!(
                     payload.review.risk_level,
-                    Some(codex_app_server_protocol::RiskLevel::High)
+                    Some(codex_app_server_protocol::GuardianRiskLevel::High)
                 );
                 assert_eq!(payload.review.rationale.as_deref(), Some("too risky"));
             }

@@ -7,7 +7,7 @@ import type { ReasoningEffort } from "../ReasoningEffort";
 import type { ReasoningSummary } from "../ReasoningSummary";
 import type { ServiceTier } from "../ServiceTier";
 import type { JsonValue } from "../serde_json/JsonValue";
-import type { ApprovalReviewPolicy } from "./ApprovalReviewPolicy";
+import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { UserInput } from "./UserInput";
@@ -19,10 +19,10 @@ cwd?: string | null, /**
  * Override the approval policy for this turn and subsequent turns.
  */
 approvalPolicy?: AskForApproval | null, /**
- * Override whether approvals stay manual or are automatically reviewed by
- * a carefully prompted subagent for this turn and subsequent turns.
+ * Override who adjudicates approval requests for this turn and
+ * subsequent turns. This does not disable ARC.
  */
-approvalReviewPolicy?: ApprovalReviewPolicy | null, /**
+approvalsReviewer?: ApprovalsReviewer | null, /**
  * Override the sandbox policy for this turn and subsequent turns.
  */
 sandboxPolicy?: SandboxPolicy | null, /**

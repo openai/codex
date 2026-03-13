@@ -69,12 +69,18 @@ pub enum SandboxMode {
 #[derive(
     Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, JsonSchema, TS,
 )]
-#[serde(rename_all = "kebab-case")]
-#[strum(serialize_all = "kebab-case")]
-pub enum ApprovalReviewPolicy {
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum ApprovalsReviewer {
     #[default]
-    ManualOnly,
-    AutoOnly,
+    #[serde(rename = "user", alias = "manual-only")]
+    User,
+    #[serde(
+        rename = "guardian_subagent",
+        alias = "auto-only",
+        alias = "guardian-subagent"
+    )]
+    GuardianSubagent,
 }
 
 #[derive(

@@ -7,14 +7,14 @@ import type { ServiceTier } from "../ServiceTier";
 import type { Verbosity } from "../Verbosity";
 import type { WebSearchMode } from "../WebSearchMode";
 import type { JsonValue } from "../serde_json/JsonValue";
-import type { ApprovalReviewPolicy } from "./ApprovalReviewPolicy";
+import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
 import type { ToolsV2 } from "./ToolsV2";
 
 export type ProfileV2 = { model: string | null, model_provider: string | null, approval_policy: AskForApproval | null, 
 /**
- * Optional override for how approval requests are reviewed in this
- * profile. Use `manual-only` for user approval prompts or `auto-only` for
- * automatic approval review by a carefully prompted subagent.
+ * Optional override for who adjudicates approval requests in this profile.
+ * Use `user` for direct user prompts or `guardian_subagent` to route
+ * eligible approvals through guardian. This does not disable ARC.
  */
-approval_review_policy: ApprovalReviewPolicy | null, service_tier: ServiceTier | null, model_reasoning_effort: ReasoningEffort | null, model_reasoning_summary: ReasoningSummary | null, model_verbosity: Verbosity | null, web_search: WebSearchMode | null, tools: ToolsV2 | null, chatgpt_base_url: string | null, } & ({ [key in string]?: number | string | boolean | Array<JsonValue> | { [key in string]?: JsonValue } | null });
+approvals_reviewer: ApprovalsReviewer | null, service_tier: ServiceTier | null, model_reasoning_effort: ReasoningEffort | null, model_reasoning_summary: ReasoningSummary | null, model_verbosity: Verbosity | null, web_search: WebSearchMode | null, tools: ToolsV2 | null, chatgpt_base_url: string | null, } & ({ [key in string]?: number | string | boolean | Array<JsonValue> | { [key in string]?: JsonValue } | null });

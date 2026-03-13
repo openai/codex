@@ -56,7 +56,7 @@ use codex_chatgpt::connectors;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintResult;
-use codex_core::config::types::ApprovalReviewPolicy;
+use codex_core::config::types::ApprovalsReviewer;
 use codex_core::config::types::Notifications;
 use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::ConfigLayerStackOrdering;
@@ -1279,7 +1279,7 @@ impl ChatWidget {
             self.config.permissions.sandbox_policy =
                 Constrained::allow_only(event.sandbox_policy.clone());
         }
-        self.config.approval_review_policy = event.approval_review_policy;
+        self.config.approvals_reviewer = event.approvals_reviewer;
         let initial_messages = event.initial_messages.clone();
         self.last_copyable_output = None;
         let forked_from_id = event.forked_from_id;
@@ -6057,7 +6057,7 @@ impl ChatWidget {
             tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: None,
-                approval_review_policy: None,
+                approvals_reviewer: None,
                 sandbox_policy: None,
                 windows_sandbox_level: None,
                 model: Some(switch_model_for_events.clone()),
@@ -6179,7 +6179,7 @@ impl ChatWidget {
                     tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                         cwd: None,
                         approval_policy: None,
-                        approval_review_policy: None,
+                        approvals_reviewer: None,
                         sandbox_policy: None,
                         model: None,
                         effort: None,
@@ -6932,7 +6932,7 @@ impl ChatWidget {
         let current_approval = self.config.permissions.approval_policy.value();
         let current_sandbox = self.config.permissions.sandbox_policy.get();
         let guardian_approval_enabled = self.config.features.enabled(Feature::GuardianApproval);
-        let current_review_policy = self.config.approval_review_policy;
+        let current_review_policy = self.config.approvals_reviewer;
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
 
@@ -7037,7 +7037,7 @@ impl ChatWidget {
                             preset.approval,
                             preset.sandbox.clone(),
                             base_name.clone(),
-                            ApprovalReviewPolicy::ManualOnly,
+                            ApprovalsReviewer::User,
                         )
                     }
                 }
@@ -7047,7 +7047,7 @@ impl ChatWidget {
                         preset.approval,
                         preset.sandbox.clone(),
                         base_name.clone(),
-                        ApprovalReviewPolicy::ManualOnly,
+                        ApprovalsReviewer::User,
                     )
                 }
             } else {
@@ -7055,14 +7055,14 @@ impl ChatWidget {
                     preset.approval,
                     preset.sandbox.clone(),
                     base_name.clone(),
-                    ApprovalReviewPolicy::ManualOnly,
+                    ApprovalsReviewer::User,
                 )
             };
             if preset.id == "auto" {
                 items.push(SelectionItem {
                     name: base_name.clone(),
                     description: base_description.clone(),
-                    is_current: current_review_policy == ApprovalReviewPolicy::ManualOnly
+                    is_current: current_review_policy == ApprovalsReviewer::User
                         && Self::preset_matches_current(current_approval, current_sandbox, &preset),
                     actions: default_actions,
                     dismiss_on_select: true,
@@ -7074,10 +7074,10 @@ impl ChatWidget {
                     items.push(SelectionItem {
                         name: "Smart Approvals".to_string(),
                         description: Some(
-                            "Same workspace-write permissions as Default, but `on-request` approvals are dispatched to a carefully-prompted security reviewer subagent."
+                            "Same workspace-write permissions as Default, but eligible `on-request` approvals are routed through the guardian reviewer subagent."
                                 .to_string(),
                         ),
-                        is_current: current_review_policy == ApprovalReviewPolicy::AutoOnly
+                        is_current: current_review_policy == ApprovalsReviewer::GuardianSubagent
                             && Self::preset_matches_current(
                                 current_approval,
                                 current_sandbox,
@@ -7087,7 +7087,7 @@ impl ChatWidget {
                             preset.approval,
                             preset.sandbox.clone(),
                             "Smart Approvals".to_string(),
-                            ApprovalReviewPolicy::AutoOnly,
+                            ApprovalsReviewer::GuardianSubagent,
                         ),
                         dismiss_on_select: true,
                         disabled_reason: approval_disabled_reason
@@ -7154,14 +7154,14 @@ impl ChatWidget {
         approval: AskForApproval,
         sandbox: SandboxPolicy,
         label: String,
-        approval_review_policy: ApprovalReviewPolicy,
+        approvals_reviewer: ApprovalsReviewer,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
             let sandbox_clone = sandbox.clone();
             tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: Some(approval),
-                approval_review_policy: Some(approval_review_policy),
+                approvals_reviewer: Some(approvals_reviewer),
                 sandbox_policy: Some(sandbox_clone.clone()),
                 windows_sandbox_level: None,
                 model: None,
@@ -7173,7 +7173,7 @@ impl ChatWidget {
             }));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
-            tx.send(AppEvent::UpdateApprovalReviewPolicy(approval_review_policy));
+            tx.send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
             tx.send(AppEvent::InsertHistoryCell(Box::new(
                 history_cell::new_info_event(format!("Permissions updated to {label}"), None),
             )));
@@ -7271,7 +7271,7 @@ impl ChatWidget {
             approval,
             sandbox.clone(),
             selected_name.clone(),
-            ApprovalReviewPolicy::ManualOnly,
+            ApprovalsReviewer::User,
         );
         accept_actions.push(Box::new(|tx| {
             tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
@@ -7281,7 +7281,7 @@ impl ChatWidget {
             approval,
             sandbox,
             selected_name,
-            ApprovalReviewPolicy::ManualOnly,
+            ApprovalsReviewer::User,
         );
         accept_and_remember_actions.push(Box::new(|tx| {
             tx.send(AppEvent::UpdateFullAccessWarningAcknowledged(true));
@@ -7396,7 +7396,7 @@ impl ChatWidget {
                 approval,
                 sandbox,
                 mode_label.to_string(),
-                ApprovalReviewPolicy::ManualOnly,
+                ApprovalsReviewer::User,
             ));
         }
 
@@ -7410,7 +7410,7 @@ impl ChatWidget {
                 approval,
                 sandbox,
                 mode_label.to_string(),
-                ApprovalReviewPolicy::ManualOnly,
+                ApprovalsReviewer::User,
             ));
         }
 
@@ -7774,8 +7774,8 @@ impl ChatWidget {
         enabled
     }
 
-    pub(crate) fn set_approval_review_policy(&mut self, policy: ApprovalReviewPolicy) {
-        self.config.approval_review_policy = policy;
+    pub(crate) fn set_approvals_reviewer(&mut self, policy: ApprovalsReviewer) {
+        self.config.approvals_reviewer = policy;
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
@@ -7899,7 +7899,7 @@ impl ChatWidget {
             .send(AppEvent::CodexOp(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: None,
-                approval_review_policy: None,
+                approvals_reviewer: None,
                 sandbox_policy: None,
                 windows_sandbox_level: None,
                 model: None,

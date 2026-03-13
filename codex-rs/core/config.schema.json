@@ -168,10 +168,10 @@
       "description": "Tool settings for a single app.",
       "type": "object"
     },
-    "ApprovalReviewPolicy": {
+    "ApprovalsReviewer": {
       "enum": [
-        "manual-only",
-        "auto-only"
+        "user",
+        "guardian_subagent"
       ],
       "type": "string"
     },
@@ -311,8 +311,8 @@
         "approval_policy": {
           "$ref": "#/definitions/AskForApproval"
         },
-        "approval_review_policy": {
-          "$ref": "#/definitions/ApprovalReviewPolicy"
+        "approvals_reviewer": {
+          "$ref": "#/definitions/ApprovalsReviewer"
         },
         "chatgpt_base_url": {
           "type": "string"
@@ -1779,13 +1779,13 @@
       ],
       "description": "Default approval policy for executing commands."
     },
-    "approval_review_policy": {
+    "approvals_reviewer": {
       "allOf": [
         {
-          "$ref": "#/definitions/ApprovalReviewPolicy"
+          "$ref": "#/definitions/ApprovalsReviewer"
         }
       ],
-      "description": "Whether approval requests remain manual or are automatically reviewed."
+      "description": "Selects who adjudicates approval requests once an action has already been escalated for review. This does not disable separate safety checks such as ARC."
     },
     "apps": {
       "allOf": [

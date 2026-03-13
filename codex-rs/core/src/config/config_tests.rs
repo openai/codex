@@ -1,7 +1,7 @@
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
-use crate::config::types::ApprovalReviewPolicy;
+use crate::config::types::ApprovalsReviewer;
 use crate::config::types::BundledSkillsConfig;
 use crate::config::types::FeedbackConfigToml;
 use crate::config::types::HistoryPersistence;
@@ -4203,7 +4203,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
                 windows_sandbox_private_desktop: true,
                 macos_seatbelt_profile_extensions: None,
             },
-            approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+            approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(None),
             user_instructions: None,
             notify: None,
@@ -4342,7 +4342,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
             windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
         notify: None,
@@ -4479,7 +4479,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
             windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
         notify: None,
@@ -4602,7 +4602,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
             windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
         notify: None,
@@ -5497,8 +5497,8 @@ shell_tool = true
 }
 
 #[tokio::test]
-async fn approval_review_policy_defaults_to_manual_only_without_guardian_feature()
--> std::io::Result<()> {
+async fn approvals_reviewer_defaults_to_manual_only_without_guardian_feature() -> std::io::Result<()>
+{
     let codex_home = TempDir::new()?;
 
     let config = ConfigBuilder::default()
@@ -5507,15 +5507,12 @@ async fn approval_review_policy_defaults_to_manual_only_without_guardian_feature
         .build()
         .await?;
 
-    assert_eq!(
-        config.approval_review_policy,
-        ApprovalReviewPolicy::ManualOnly
-    );
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
     Ok(())
 }
 
 #[tokio::test]
-async fn approval_review_policy_stays_manual_only_when_guardian_feature_is_enabled()
+async fn approvals_reviewer_stays_manual_only_when_guardian_feature_is_enabled()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
@@ -5531,20 +5528,16 @@ smart_approvals = true
         .build()
         .await?;
 
-    assert_eq!(
-        config.approval_review_policy,
-        ApprovalReviewPolicy::ManualOnly
-    );
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
     Ok(())
 }
 
 #[tokio::test]
-async fn approval_review_policy_can_be_set_in_config_without_smart_approvals() -> std::io::Result<()>
-{
+async fn approvals_reviewer_can_be_set_in_config_without_smart_approvals() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
-        r#"approval_review_policy = "manual-only"
+        r#"approvals_reviewer = "user"
 "#,
     )?;
 
@@ -5554,23 +5547,19 @@ async fn approval_review_policy_can_be_set_in_config_without_smart_approvals() -
         .build()
         .await?;
 
-    assert_eq!(
-        config.approval_review_policy,
-        ApprovalReviewPolicy::ManualOnly
-    );
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
     Ok(())
 }
 
 #[tokio::test]
-async fn approval_review_policy_can_be_set_in_profile_without_smart_approvals()
--> std::io::Result<()> {
+async fn approvals_reviewer_can_be_set_in_profile_without_smart_approvals() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"profile = "guardian"
 
 [profiles.guardian]
-approval_review_policy = "auto-only"
+approvals_reviewer = "guardian_subagent"
 "#,
     )?;
 
@@ -5581,8 +5570,29 @@ approval_review_policy = "auto-only"
         .await?;
 
     assert_eq!(
-        config.approval_review_policy,
-        ApprovalReviewPolicy::AutoOnly
+        config.approvals_reviewer,
+        ApprovalsReviewer::GuardianSubagent
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_approval_review_policy_alias_and_values_still_deserialize() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        "approval_review_policy = \"auto-only\"\n",
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.approvals_reviewer,
+        ApprovalsReviewer::GuardianSubagent
     );
     Ok(())
 }

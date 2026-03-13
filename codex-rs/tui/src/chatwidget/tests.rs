@@ -20,7 +20,7 @@ use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_core::CodexAuth;
-use codex_core::config::ApprovalReviewPolicy;
+use codex_core::config::ApprovalsReviewer;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
@@ -185,7 +185,7 @@ async fn resumed_initial_messages_render_history() {
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -295,7 +295,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -356,7 +356,7 @@ async fn replayed_user_message_preserves_remote_image_urls() {
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -424,7 +424,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: expected_sandbox.clone(),
         cwd: expected_cwd.clone(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -467,7 +467,7 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -520,7 +520,7 @@ async fn replayed_user_message_with_only_local_images_does_not_render_history_ce
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -632,7 +632,7 @@ async fn submission_preserves_text_elements_and_local_images() {
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -716,7 +716,7 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -811,7 +811,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -876,7 +876,7 @@ async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -916,7 +916,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -956,7 +956,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -997,7 +997,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -4302,7 +4302,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -5563,7 +5563,7 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
-        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -8478,7 +8478,7 @@ async fn permissions_selection_hides_smart_approvals_when_feature_disabled_even_
         chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
     }
     chat.config.notices.hide_full_access_warning = Some(true);
-    chat.config.approval_review_policy = ApprovalReviewPolicy::AutoOnly;
+    chat.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
     chat.config
         .permissions
         .approval_policy
@@ -8523,7 +8523,7 @@ async fn permissions_selection_marks_smart_approvals_current_after_session_confi
             model_provider_id: "test-provider".to_string(),
             service_tier: None,
             approval_policy: AskForApproval::OnRequest,
-            approval_review_policy: ApprovalReviewPolicy::AutoOnly,
+            approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
             sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
             cwd: PathBuf::from("/tmp/project"),
             reasoning_effort: None,
@@ -8571,7 +8571,7 @@ async fn permissions_selection_marks_smart_approvals_current_with_custom_workspa
             model_provider_id: "test-provider".to_string(),
             service_tier: None,
             approval_policy: AskForApproval::OnRequest,
-            approval_review_policy: ApprovalReviewPolicy::AutoOnly,
+            approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
             sandbox_policy: SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![extra_root],
                 read_only_access: ReadOnlyAccess::FullAccess,
@@ -8627,7 +8627,7 @@ async fn permissions_selection_can_disable_smart_approvals() {
     assert!(
         events.iter().any(|event| matches!(
             event,
-            AppEvent::UpdateApprovalReviewPolicy(ApprovalReviewPolicy::ManualOnly)
+            AppEvent::UpdateApprovalsReviewer(ApprovalsReviewer::User)
         )),
         "expected selecting Default from Smart Approvals to switch back to manual approval review: {events:?}"
     );
@@ -8640,7 +8640,7 @@ async fn permissions_selection_can_disable_smart_approvals() {
 }
 
 #[tokio::test]
-async fn permissions_selection_sends_approval_review_policy_in_override_turn_context() {
+async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     #[cfg(target_os = "windows")]
     {
@@ -8666,7 +8666,7 @@ async fn permissions_selection_sends_approval_review_policy_in_override_turn_con
         Op::OverrideTurnContext {
             cwd: None,
             approval_policy: Some(AskForApproval::OnRequest),
-            approval_review_policy: Some(ApprovalReviewPolicy::AutoOnly),
+            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
             sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
             windows_sandbox_level: None,
             model: None,

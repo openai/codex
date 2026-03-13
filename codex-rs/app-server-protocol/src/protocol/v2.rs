@@ -13,7 +13,7 @@ use codex_protocol::approvals::NetworkApprovalContext as CoreNetworkApprovalCont
 use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment as CoreNetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction as CoreNetworkPolicyRuleAction;
-use codex_protocol::config_types::ApprovalReviewPolicy as CoreApprovalReviewPolicy;
+use codex_protocol::config_types::ApprovalsReviewer as CoreApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask as CoreCollaborationModeMask;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -51,7 +51,7 @@ use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
-use codex_protocol::protocol::GuardianRiskLevel as CoreRiskLevel;
+use codex_protocol::protocol::GuardianRiskLevel as CoreGuardianRiskLevel;
 use codex_protocol::protocol::HookEventName as CoreHookEventName;
 use codex_protocol::protocol::HookExecutionMode as CoreHookExecutionMode;
 use codex_protocol::protocol::HookHandlerType as CoreHookHandlerType;
@@ -258,29 +258,36 @@ impl From<CoreAskForApproval> for AskForApproval {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "kebab-case")]
-#[ts(rename_all = "kebab-case", export_to = "v2/")]
-/// Controls whether approvals remain manual or are automatically reviewed by a
-/// carefully prompted subagent.
-pub enum ApprovalReviewPolicy {
-    ManualOnly,
-    AutoOnly,
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+/// Selects who adjudicates approval requests once an action has already been
+/// escalated for review. This does not disable separate safety checks such as
+/// ARC.
+pub enum ApprovalsReviewer {
+    #[serde(rename = "user", alias = "manual-only")]
+    User,
+    #[serde(
+        rename = "guardian_subagent",
+        alias = "auto-only",
+        alias = "guardian-subagent"
+    )]
+    GuardianSubagent,
 }
 
-impl ApprovalReviewPolicy {
-    pub fn to_core(self) -> CoreApprovalReviewPolicy {
+impl ApprovalsReviewer {
+    pub fn to_core(self) -> CoreApprovalsReviewer {
         match self {
-            ApprovalReviewPolicy::ManualOnly => CoreApprovalReviewPolicy::ManualOnly,
-            ApprovalReviewPolicy::AutoOnly => CoreApprovalReviewPolicy::AutoOnly,
+            ApprovalsReviewer::User => CoreApprovalsReviewer::User,
+            ApprovalsReviewer::GuardianSubagent => CoreApprovalsReviewer::GuardianSubagent,
         }
     }
 }
 
-impl From<CoreApprovalReviewPolicy> for ApprovalReviewPolicy {
-    fn from(value: CoreApprovalReviewPolicy) -> Self {
+impl From<CoreApprovalsReviewer> for ApprovalsReviewer {
+    fn from(value: CoreApprovalsReviewer) -> Self {
         match value {
-            CoreApprovalReviewPolicy::ManualOnly => ApprovalReviewPolicy::ManualOnly,
-            CoreApprovalReviewPolicy::AutoOnly => ApprovalReviewPolicy::AutoOnly,
+            CoreApprovalsReviewer::User => ApprovalsReviewer::User,
+            CoreApprovalsReviewer::GuardianSubagent => ApprovalsReviewer::GuardianSubagent,
         }
     }
 }
@@ -548,10 +555,11 @@ pub struct ProfileV2 {
     pub model_provider: Option<String>,
     #[experimental(nested)]
     pub approval_policy: Option<AskForApproval>,
-    /// Optional override for how approval requests are reviewed in this
-    /// profile. Use `manual-only` for user approval prompts or `auto-only` for
-    /// automatic approval review by a carefully prompted subagent.
-    pub approval_review_policy: Option<ApprovalReviewPolicy>,
+    /// Optional override for who adjudicates approval requests in this profile.
+    /// Use `user` for direct user prompts or `guardian_subagent` to route
+    /// eligible approvals through guardian. This does not disable ARC.
+    #[serde(alias = "approval_review_policy")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub service_tier: Option<ServiceTier>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
@@ -651,10 +659,11 @@ pub struct Config {
     pub model_provider: Option<String>,
     #[experimental(nested)]
     pub approval_policy: Option<AskForApproval>,
-    /// Optional default for how approval requests are reviewed. Use
-    /// `manual-only` for user approval prompts or `auto-only` for automatic
-    /// approval review by a carefully prompted subagent.
-    pub approval_review_policy: Option<ApprovalReviewPolicy>,
+    /// Optional default for who adjudicates approval requests. Use `user` for
+    /// direct user prompts or `guardian_subagent` to route eligible approvals
+    /// through guardian. This does not disable ARC.
+    #[serde(alias = "approval_review_policy")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
     pub forced_chatgpt_workspace_id: Option<String>,
@@ -2459,10 +2468,11 @@ pub struct ThreadStartParams {
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
-    /// Override whether approvals stay manual or are automatically reviewed by
-    /// a carefully prompted subagent for this thread and subsequent turns.
+    /// Override who adjudicates approval requests for this thread and
+    /// subsequent turns. This does not disable ARC.
     #[ts(optional = nullable)]
-    pub approval_review_policy: Option<ApprovalReviewPolicy>,
+    #[serde(alias = "approvalReviewPolicy")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
@@ -2525,9 +2535,10 @@ pub struct ThreadStartResponse {
     pub cwd: PathBuf,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
-    /// Whether approvals remain manual or are automatically reviewed by a
-    /// carefully prompted subagent.
-    pub approval_review_policy: ApprovalReviewPolicy,
+    /// Who adjudicates approval requests for this thread. This does not
+    /// disable ARC.
+    #[serde(alias = "approvalReviewPolicy")]
+    pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
@@ -2580,10 +2591,11 @@ pub struct ThreadResumeParams {
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
-    /// Override whether approvals stay manual or are automatically reviewed by
-    /// a carefully prompted subagent for this thread and subsequent turns.
+    /// Override who adjudicates approval requests for this thread and
+    /// subsequent turns. This does not disable ARC.
     #[ts(optional = nullable)]
-    pub approval_review_policy: Option<ApprovalReviewPolicy>,
+    #[serde(alias = "approvalReviewPolicy")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
@@ -2612,9 +2624,10 @@ pub struct ThreadResumeResponse {
     pub cwd: PathBuf,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
-    /// Whether approvals remain manual or are automatically reviewed by a
-    /// carefully prompted subagent.
-    pub approval_review_policy: ApprovalReviewPolicy,
+    /// Who adjudicates approval requests for this thread. This does not
+    /// disable ARC.
+    #[serde(alias = "approvalReviewPolicy")]
+    pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
@@ -2658,10 +2671,11 @@ pub struct ThreadForkParams {
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
-    /// Override whether approvals stay manual or are automatically reviewed by
-    /// a carefully prompted subagent for this thread and subsequent turns.
+    /// Override who adjudicates approval requests for this thread and
+    /// subsequent turns. This does not disable ARC.
     #[ts(optional = nullable)]
-    pub approval_review_policy: Option<ApprovalReviewPolicy>,
+    #[serde(alias = "approvalReviewPolicy")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
@@ -2690,9 +2704,10 @@ pub struct ThreadForkResponse {
     pub cwd: PathBuf,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
-    /// Whether approvals remain manual or are automatically reviewed by a
-    /// carefully prompted subagent.
-    pub approval_review_policy: ApprovalReviewPolicy,
+    /// Who adjudicates approval requests for this thread. This does not
+    /// disable ARC.
+    #[serde(alias = "approvalReviewPolicy")]
+    pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
@@ -3816,10 +3831,11 @@ pub struct TurnStartParams {
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
-    /// Override whether approvals stay manual or are automatically reviewed by
-    /// a carefully prompted subagent for this turn and subsequent turns.
+    /// Override who adjudicates approval requests for this turn and
+    /// subsequent turns. This does not disable ARC.
     #[ts(optional = nullable)]
-    pub approval_review_policy: Option<ApprovalReviewPolicy>,
+    #[serde(alias = "approvalReviewPolicy")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     /// Override the sandbox policy for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
@@ -4259,8 +4275,8 @@ impl ThreadItem {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Lifecycle state for an automatic approval review.
-pub enum AutomaticApprovalReviewStatus {
+/// [UNSTABLE] Lifecycle state for a guardian approval review.
+pub enum GuardianApprovalReviewStatus {
     InProgress,
     Approved,
     Denied,
@@ -4269,19 +4285,19 @@ pub enum AutomaticApprovalReviewStatus {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export_to = "v2/")]
-/// [UNSTABLE] Risk level assigned by automatic approval review.
-pub enum RiskLevel {
+/// [UNSTABLE] Risk level assigned by guardian approval review.
+pub enum GuardianRiskLevel {
     Low,
     Medium,
     High,
 }
 
-impl From<CoreRiskLevel> for RiskLevel {
-    fn from(value: CoreRiskLevel) -> Self {
+impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
+    fn from(value: CoreGuardianRiskLevel) -> Self {
         match value {
-            CoreRiskLevel::Low => Self::Low,
-            CoreRiskLevel::Medium => Self::Medium,
-            CoreRiskLevel::High => Self::High,
+            CoreGuardianRiskLevel::Low => Self::Low,
+            CoreGuardianRiskLevel::Medium => Self::Medium,
+            CoreGuardianRiskLevel::High => Self::High,
         }
     }
 }
@@ -4292,13 +4308,13 @@ impl From<CoreRiskLevel> for RiskLevel {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct AutomaticApprovalReview {
-    pub status: AutomaticApprovalReviewStatus,
+pub struct GuardianApprovalReview {
+    pub status: GuardianApprovalReviewStatus,
     #[serde(alias = "risk_score")]
     #[ts(type = "number | null")]
     pub risk_score: Option<u8>,
     #[serde(alias = "risk_level")]
-    pub risk_level: Option<RiskLevel>,
+    pub risk_level: Option<GuardianRiskLevel>,
     pub rationale: Option<String>,
 }
 
@@ -4738,11 +4754,11 @@ pub struct ItemStartedNotification {
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Temporary notification payload for guardian automatic approval
 /// review. This shape is expected to change soon.
-pub struct ItemAutoApprovalReviewStartedNotification {
+pub struct ItemGuardianApprovalReviewStartedNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub target_item_id: String,
-    pub review: AutomaticApprovalReview,
+    pub review: GuardianApprovalReview,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4750,11 +4766,11 @@ pub struct ItemAutoApprovalReviewStartedNotification {
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Temporary notification payload for guardian automatic approval
 /// review. This shape is expected to change soon.
-pub struct ItemAutoApprovalReviewCompletedNotification {
+pub struct ItemGuardianApprovalReviewCompletedNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub target_item_id: String,
-    pub review: AutomaticApprovalReview,
+    pub review: GuardianApprovalReview,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -6732,7 +6748,7 @@ mod tests {
                 request_permissions: true,
                 mcp_elicitations: false,
             }),
-            approval_review_policy: None,
+            approvals_reviewer: None,
             service_tier: None,
             model_reasoning_effort: None,
             model_reasoning_summary: None,
@@ -6761,7 +6777,7 @@ mod tests {
                 request_permissions: false,
                 mcp_elicitations: true,
             }),
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_mode: None,
             sandbox_workspace_write: None,
             forced_chatgpt_workspace_id: None,
@@ -6794,7 +6810,7 @@ mod tests {
             model_auto_compact_token_limit: None,
             model_provider: None,
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_mode: None,
             sandbox_workspace_write: None,
             forced_chatgpt_workspace_id: None,
@@ -6814,7 +6830,7 @@ mod tests {
                         request_permissions: false,
                         mcp_elicitations: true,
                     }),
-                    approval_review_policy: None,
+                    approvals_reviewer: None,
                     service_tier: None,
                     model_reasoning_effort: None,
                     model_reasoning_summary: None,
@@ -7252,7 +7268,7 @@ mod tests {
 
     #[test]
     fn automatic_approval_review_deserializes_legacy_snake_case_risk_fields() {
-        let review: AutomaticApprovalReview = serde_json::from_value(json!({
+        let review: GuardianApprovalReview = serde_json::from_value(json!({
             "status": "denied",
             "risk_score": 91,
             "risk_level": "high",
@@ -7261,12 +7277,25 @@ mod tests {
         .expect("legacy snake_case automatic review should deserialize");
         assert_eq!(
             review,
-            AutomaticApprovalReview {
-                status: AutomaticApprovalReviewStatus::Denied,
+            GuardianApprovalReview {
+                status: GuardianApprovalReviewStatus::Denied,
                 risk_score: Some(91),
-                risk_level: Some(RiskLevel::High),
+                risk_level: Some(GuardianRiskLevel::High),
                 rationale: Some("too risky".to_string()),
             }
+        );
+    }
+
+    #[test]
+    fn thread_start_params_deserialize_legacy_approval_review_policy_field_and_values() {
+        let params: ThreadStartParams = serde_json::from_value(json!({
+            "input": [],
+            "approvalReviewPolicy": "auto-only",
+        }))
+        .expect("legacy approval review policy should deserialize");
+        assert_eq!(
+            params.approvals_reviewer,
+            Some(ApprovalsReviewer::GuardianSubagent)
         );
     }
 
@@ -7576,7 +7605,7 @@ mod tests {
             input: vec![],
             cwd: None,
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             model: None,
             service_tier: None,

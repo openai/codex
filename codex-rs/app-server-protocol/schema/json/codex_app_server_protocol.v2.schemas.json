@@ -532,11 +532,11 @@
     "AppToolsConfig": {
       "type": "object"
     },
-    "ApprovalReviewPolicy": {
-      "description": "Controls whether approvals remain manual or are automatically reviewed by a carefully prompted subagent.",
+    "ApprovalsReviewer": {
+      "description": "Selects who adjudicates approval requests once an action has already been escalated for review. This does not disable separate safety checks such as ARC.",
       "enum": [
-        "manual-only",
-        "auto-only"
+        "user",
+        "guardian_subagent"
       ],
       "type": "string"
     },
@@ -707,51 +707,6 @@
           "type": "string"
         }
       ]
-    },
-    "AutomaticApprovalReview": {
-      "description": "[UNSTABLE] Temporary guardian approval review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
-      "properties": {
-        "rationale": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "riskLevel": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/RiskLevel"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "riskScore": {
-          "format": "uint8",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "status": {
-          "$ref": "#/definitions/AutomaticApprovalReviewStatus"
-        }
-      },
-      "required": [
-        "status"
-      ],
-      "type": "object"
-    },
-    "AutomaticApprovalReviewStatus": {
-      "description": "[UNSTABLE] Lifecycle state for an automatic approval review.",
-      "enum": [
-        "inProgress",
-        "approved",
-        "denied"
-      ],
-      "type": "string"
     },
     "ByteRange": {
       "properties": {
@@ -2878,16 +2833,16 @@
             }
           ]
         },
-        "approval_review_policy": {
+        "approvals_reviewer": {
           "anyOf": [
             {
-              "$ref": "#/definitions/ApprovalReviewPolicy"
+              "$ref": "#/definitions/ApprovalsReviewer"
             },
             {
               "type": "null"
             }
           ],
-          "description": "Optional default for how approval requests are reviewed. Use `manual-only` for user approval prompts or `auto-only` for automatic approval review by a carefully prompted subagent."
+          "description": "Optional default for who adjudicates approval requests. Use `user` for direct user prompts or `guardian_subagent` to route eligible approvals through guardian. This does not disable ARC."
         },
         "compact_prompt": {
           "type": [
@@ -4652,6 +4607,60 @@
       },
       "type": "object"
     },
+    "GuardianApprovalReview": {
+      "description": "[UNSTABLE] Temporary guardian approval review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
+      "properties": {
+        "rationale": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "riskLevel": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuardianRiskLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "riskScore": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/GuardianApprovalReviewStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "GuardianApprovalReviewStatus": {
+      "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
+      "enum": [
+        "inProgress",
+        "approved",
+        "denied"
+      ],
+      "type": "string"
+    },
+    "GuardianRiskLevel": {
+      "description": "[UNSTABLE] Risk level assigned by guardian approval review.",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
     "HazelnutScope": {
       "enum": [
         "example",
@@ -4915,58 +4924,6 @@
         }
       ]
     },
-    "ItemAutoApprovalReviewCompletedNotification": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
-      "properties": {
-        "review": {
-          "$ref": "#/definitions/AutomaticApprovalReview"
-        },
-        "targetItemId": {
-          "type": "string"
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "turnId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "review",
-        "targetItemId",
-        "threadId",
-        "turnId"
-      ],
-      "title": "ItemAutoApprovalReviewCompletedNotification",
-      "type": "object"
-    },
-    "ItemAutoApprovalReviewStartedNotification": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
-      "properties": {
-        "review": {
-          "$ref": "#/definitions/AutomaticApprovalReview"
-        },
-        "targetItemId": {
-          "type": "string"
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "turnId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "review",
-        "targetItemId",
-        "threadId",
-        "turnId"
-      ],
-      "title": "ItemAutoApprovalReviewStartedNotification",
-      "type": "object"
-    },
     "ItemCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -4986,6 +4943,58 @@
         "turnId"
       ],
       "title": "ItemCompletedNotification",
+      "type": "object"
+    },
+    "ItemGuardianApprovalReviewCompletedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
+      "properties": {
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "targetItemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "review",
+        "targetItemId",
+        "threadId",
+        "turnId"
+      ],
+      "title": "ItemGuardianApprovalReviewCompletedNotification",
+      "type": "object"
+    },
+    "ItemGuardianApprovalReviewStartedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
+      "properties": {
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "targetItemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "review",
+        "targetItemId",
+        "threadId",
+        "turnId"
+      ],
+      "title": "ItemGuardianApprovalReviewStartedNotification",
       "type": "object"
     },
     "ItemStartedNotification": {
@@ -6299,16 +6308,16 @@
             }
           ]
         },
-        "approval_review_policy": {
+        "approvals_reviewer": {
           "anyOf": [
             {
-              "$ref": "#/definitions/ApprovalReviewPolicy"
+              "$ref": "#/definitions/ApprovalsReviewer"
             },
             {
               "type": "null"
             }
           ],
-          "description": "Optional override for how approval requests are reviewed in this profile. Use `manual-only` for user approval prompts or `auto-only` for automatic approval review by a carefully prompted subagent."
+          "description": "Optional override for who adjudicates approval requests in this profile. Use `user` for direct user prompts or `guardian_subagent` to route eligible approvals through guardian. This does not disable ARC."
         },
         "chatgpt_base_url": {
           "type": [
@@ -7582,15 +7591,6 @@
         }
       ]
     },
-    "RiskLevel": {
-      "description": "[UNSTABLE] Risk level assigned by automatic approval review.",
-      "enum": [
-        "low",
-        "medium",
-        "high"
-      ],
-      "type": "string"
-    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -8077,7 +8077,7 @@
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/ItemAutoApprovalReviewStartedNotification"
+              "$ref": "#/definitions/ItemGuardianApprovalReviewStartedNotification"
             }
           },
           "required": [
@@ -8097,7 +8097,7 @@
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/ItemAutoApprovalReviewCompletedNotification"
+              "$ref": "#/definitions/ItemGuardianApprovalReviewCompletedNotification"
             }
           },
           "required": [
@@ -9546,16 +9546,16 @@
             }
           ]
         },
-        "approvalReviewPolicy": {
+        "approvalsReviewer": {
           "anyOf": [
             {
-              "$ref": "#/definitions/ApprovalReviewPolicy"
+              "$ref": "#/definitions/ApprovalsReviewer"
             },
             {
               "type": "null"
             }
           ],
-          "description": "Override whether approvals stay manual or are automatically reviewed by a carefully prompted subagent for this thread and subsequent turns."
+          "description": "Override who adjudicates approval requests for this thread and subsequent turns. This does not disable ARC."
         },
         "baseInstructions": {
           "type": [
@@ -9641,13 +9641,13 @@
         "approvalPolicy": {
           "$ref": "#/definitions/AskForApproval"
         },
-        "approvalReviewPolicy": {
+        "approvalsReviewer": {
           "allOf": [
             {
-              "$ref": "#/definitions/ApprovalReviewPolicy"
+              "$ref": "#/definitions/ApprovalsReviewer"
             }
           ],
-          "description": "Whether approvals remain manual or are automatically reviewed by a carefully prompted subagent."
+          "description": "Who adjudicates approval requests for this thread. This does not disable ARC."
         },
         "cwd": {
           "type": "string"
@@ -9687,7 +9687,7 @@
       },
       "required": [
         "approvalPolicy",
-        "approvalReviewPolicy",
+        "approvalsReviewer",
         "cwd",
         "model",
         "modelProvider",
@@ -10684,16 +10684,16 @@
             }
           ]
         },
-        "approvalReviewPolicy": {
+        "approvalsReviewer": {
           "anyOf": [
             {
-              "$ref": "#/definitions/ApprovalReviewPolicy"
+              "$ref": "#/definitions/ApprovalsReviewer"
             },
             {
               "type": "null"
             }
           ],
-          "description": "Override whether approvals stay manual or are automatically reviewed by a carefully prompted subagent for this thread and subsequent turns."
+          "description": "Override who adjudicates approval requests for this thread and subsequent turns. This does not disable ARC."
         },
         "baseInstructions": {
           "type": [
@@ -10786,13 +10786,13 @@
         "approvalPolicy": {
           "$ref": "#/definitions/AskForApproval"
         },
-        "approvalReviewPolicy": {
+        "approvalsReviewer": {
           "allOf": [
             {
-              "$ref": "#/definitions/ApprovalReviewPolicy"
+              "$ref": "#/definitions/ApprovalsReviewer"
             }
           ],
-          "description": "Whether approvals remain manual or are automatically reviewed by a carefully prompted subagent."
+          "description": "Who adjudicates approval requests for this thread. This does not disable ARC."
         },
         "cwd": {
           "type": "string"
@@ -10832,7 +10832,7 @@
       },
       "required": [
         "approvalPolicy",
-        "approvalReviewPolicy",
+        "approvalsReviewer",
         "cwd",
         "model",
         "modelProvider",
@@ -10937,16 +10937,16 @@
             }
           ]
         },
-        "approvalReviewPolicy": {
+        "approvalsReviewer": {
           "anyOf": [
             {
-              "$ref": "#/definitions/ApprovalReviewPolicy"
+              "$ref": "#/definitions/ApprovalsReviewer"
             },
             {
               "type": "null"
             }
           ],
-          "description": "Override whether approvals stay manual or are automatically reviewed by a carefully prompted subagent for this thread and subsequent turns."
+          "description": "Override who adjudicates approval requests for this thread and subsequent turns. This does not disable ARC."
         },
         "baseInstructions": {
           "type": [
@@ -11044,13 +11044,13 @@
         "approvalPolicy": {
           "$ref": "#/definitions/AskForApproval"
         },
-        "approvalReviewPolicy": {
+        "approvalsReviewer": {
           "allOf": [
             {
-              "$ref": "#/definitions/ApprovalReviewPolicy"
+              "$ref": "#/definitions/ApprovalsReviewer"
             }
           ],
-          "description": "Whether approvals remain manual or are automatically reviewed by a carefully prompted subagent."
+          "description": "Who adjudicates approval requests for this thread. This does not disable ARC."
         },
         "cwd": {
           "type": "string"
@@ -11090,7 +11090,7 @@
       },
       "required": [
         "approvalPolicy",
-        "approvalReviewPolicy",
+        "approvalsReviewer",
         "cwd",
         "model",
         "modelProvider",
@@ -11600,16 +11600,16 @@
           ],
           "description": "Override the approval policy for this turn and subsequent turns."
         },
-        "approvalReviewPolicy": {
+        "approvalsReviewer": {
           "anyOf": [
             {
-              "$ref": "#/definitions/ApprovalReviewPolicy"
+              "$ref": "#/definitions/ApprovalsReviewer"
             },
             {
               "type": "null"
             }
           ],
-          "description": "Override whether approvals stay manual or are automatically reviewed by a carefully prompted subagent for this turn and subsequent turns."
+          "description": "Override who adjudicates approval requests for this turn and subsequent turns. This does not disable ARC."
         },
         "cwd": {
           "description": "Override the working directory for this turn and subsequent turns.",

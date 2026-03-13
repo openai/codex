@@ -381,51 +381,6 @@
         }
       ]
     },
-    "AutomaticApprovalReview": {
-      "description": "[UNSTABLE] Temporary guardian approval review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
-      "properties": {
-        "rationale": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "riskLevel": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/RiskLevel"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "riskScore": {
-          "format": "uint8",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "status": {
-          "$ref": "#/definitions/AutomaticApprovalReviewStatus"
-        }
-      },
-      "required": [
-        "status"
-      ],
-      "type": "object"
-    },
-    "AutomaticApprovalReviewStatus": {
-      "description": "[UNSTABLE] Lifecycle state for an automatic approval review.",
-      "enum": [
-        "inProgress",
-        "approved",
-        "denied"
-      ],
-      "type": "string"
-    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -1101,6 +1056,60 @@
       },
       "type": "object"
     },
+    "GuardianApprovalReview": {
+      "description": "[UNSTABLE] Temporary guardian approval review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
+      "properties": {
+        "rationale": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "riskLevel": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuardianRiskLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "riskScore": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/GuardianApprovalReviewStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "GuardianApprovalReviewStatus": {
+      "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
+      "enum": [
+        "inProgress",
+        "approved",
+        "denied"
+      ],
+      "type": "string"
+    },
+    "GuardianRiskLevel": {
+      "description": "[UNSTABLE] Risk level assigned by guardian approval review.",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
     "HookCompletedNotification": {
       "properties": {
         "run": {
@@ -1279,54 +1288,6 @@
       ],
       "type": "object"
     },
-    "ItemAutoApprovalReviewCompletedNotification": {
-      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
-      "properties": {
-        "review": {
-          "$ref": "#/definitions/AutomaticApprovalReview"
-        },
-        "targetItemId": {
-          "type": "string"
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "turnId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "review",
-        "targetItemId",
-        "threadId",
-        "turnId"
-      ],
-      "type": "object"
-    },
-    "ItemAutoApprovalReviewStartedNotification": {
-      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
-      "properties": {
-        "review": {
-          "$ref": "#/definitions/AutomaticApprovalReview"
-        },
-        "targetItemId": {
-          "type": "string"
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "turnId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "review",
-        "targetItemId",
-        "threadId",
-        "turnId"
-      ],
-      "type": "object"
-    },
     "ItemCompletedNotification": {
       "properties": {
         "item": {
@@ -1341,6 +1302,54 @@
       },
       "required": [
         "item",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
+    "ItemGuardianApprovalReviewCompletedNotification": {
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
+      "properties": {
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "targetItemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "review",
+        "targetItemId",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
+    "ItemGuardianApprovalReviewStartedNotification": {
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
+      "properties": {
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "targetItemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "review",
+        "targetItemId",
         "threadId",
         "turnId"
       ],
@@ -1783,15 +1792,6 @@
           "type": "integer"
         }
       ]
-    },
-    "RiskLevel": {
-      "description": "[UNSTABLE] Risk level assigned by automatic approval review.",
-      "enum": [
-        "low",
-        "medium",
-        "high"
-      ],
-      "type": "string"
     },
     "ServerRequestResolvedNotification": {
       "properties": {
@@ -3818,7 +3818,7 @@
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/ItemAutoApprovalReviewStartedNotification"
+          "$ref": "#/definitions/ItemGuardianApprovalReviewStartedNotification"
         }
       },
       "required": [
@@ -3838,7 +3838,7 @@
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/ItemAutoApprovalReviewCompletedNotification"
+          "$ref": "#/definitions/ItemGuardianApprovalReviewCompletedNotification"
         }
       },
       "required": [

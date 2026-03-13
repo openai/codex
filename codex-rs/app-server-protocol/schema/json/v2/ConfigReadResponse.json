@@ -96,11 +96,11 @@
     "AppToolsConfig": {
       "type": "object"
     },
-    "ApprovalReviewPolicy": {
-      "description": "Controls whether approvals remain manual or are automatically reviewed by a carefully prompted subagent.",
+    "ApprovalsReviewer": {
+      "description": "Selects who adjudicates approval requests once an action has already been escalated for review. This does not disable separate safety checks such as ARC.",
       "enum": [
-        "manual-only",
-        "auto-only"
+        "user",
+        "guardian_subagent"
       ],
       "type": "string"
     },
@@ -210,16 +210,16 @@
             }
           ]
         },
-        "approval_review_policy": {
+        "approvals_reviewer": {
           "anyOf": [
             {
-              "$ref": "#/definitions/ApprovalReviewPolicy"
+              "$ref": "#/definitions/ApprovalsReviewer"
             },
             {
               "type": "null"
             }
           ],
-          "description": "Optional default for how approval requests are reviewed. Use `manual-only` for user approval prompts or `auto-only` for automatic approval review by a carefully prompted subagent."
+          "description": "Optional default for who adjudicates approval requests. Use `user` for direct user prompts or `guardian_subagent` to route eligible approvals through guardian. This does not disable ARC."
         },
         "compact_prompt": {
           "type": [
@@ -597,16 +597,16 @@
             }
           ]
         },
-        "approval_review_policy": {
+        "approvals_reviewer": {
           "anyOf": [
             {
-              "$ref": "#/definitions/ApprovalReviewPolicy"
+              "$ref": "#/definitions/ApprovalsReviewer"
             },
             {
               "type": "null"
             }
           ],
-          "description": "Optional override for how approval requests are reviewed in this profile. Use `manual-only` for user approval prompts or `auto-only` for automatic approval review by a carefully prompted subagent."
+          "description": "Optional override for who adjudicates approval requests in this profile. Use `user` for direct user prompts or `guardian_subagent` to route eligible approvals through guardian. This does not disable ARC."
         },
         "chatgpt_base_url": {
           "type": [

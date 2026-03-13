@@ -5,11 +5,11 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
-    "ApprovalReviewPolicy": {
-      "description": "Controls whether approvals remain manual or are automatically reviewed by a carefully prompted subagent.",
+    "ApprovalsReviewer": {
+      "description": "Selects who adjudicates approval requests once an action has already been escalated for review. This does not disable separate safety checks such as ARC.",
       "enum": [
-        "manual-only",
-        "auto-only"
+        "user",
+        "guardian_subagent"
       ],
       "type": "string"
     },
@@ -1963,13 +1963,13 @@
     "approvalPolicy": {
       "$ref": "#/definitions/AskForApproval"
     },
-    "approvalReviewPolicy": {
+    "approvalsReviewer": {
       "allOf": [
         {
-          "$ref": "#/definitions/ApprovalReviewPolicy"
+          "$ref": "#/definitions/ApprovalsReviewer"
         }
       ],
-      "description": "Whether approvals remain manual or are automatically reviewed by a carefully prompted subagent."
+      "description": "Who adjudicates approval requests for this thread. This does not disable ARC."
     },
     "cwd": {
       "type": "string"
@@ -2009,7 +2009,7 @@
   },
   "required": [
     "approvalPolicy",
-    "approvalReviewPolicy",
+    "approvalsReviewer",
     "cwd",
     "model",
     "modelProvider",

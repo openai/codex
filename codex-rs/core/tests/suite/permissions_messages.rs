@@ -115,7 +115,7 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -259,7 +259,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -360,7 +360,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,

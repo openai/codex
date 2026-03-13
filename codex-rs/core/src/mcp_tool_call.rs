@@ -485,12 +485,12 @@ async fn maybe_request_mcp_tool_approval(
         .features
         .enabled(Feature::ToolCallMcpElicitation);
 
-    if monitor_reason.is_none() && routes_approval_to_guardian(turn_context) {
+    if routes_approval_to_guardian(turn_context) {
         let decision = review_approval_request(
             sess,
             turn_context,
             build_guardian_mcp_tool_review_request(call_id, invocation, metadata),
-            None,
+            monitor_reason.clone(),
         )
         .await;
         let decision = mcp_tool_approval_decision_from_guardian(decision);

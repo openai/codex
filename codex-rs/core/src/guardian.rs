@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_protocol::approvals::NetworkApprovalProtocol;
-use codex_protocol::config_types::ApprovalReviewPolicy;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
@@ -152,10 +152,11 @@ fn guardian_review_status_message(request: &GuardianApprovalRequest) -> String {
 }
 
 /// Whether this turn should route `on-request` approval prompts through the
-/// guardian reviewer instead of surfacing them to the user.
+/// guardian reviewer instead of surfacing them to the user. ARC may still
+/// block actions earlier in the flow.
 pub(crate) fn routes_approval_to_guardian(turn: &TurnContext) -> bool {
     turn.approval_policy.value() == AskForApproval::OnRequest
-        && turn.config.approval_review_policy == ApprovalReviewPolicy::AutoOnly
+        && turn.config.approvals_reviewer == ApprovalsReviewer::GuardianSubagent
 }
 
 pub(crate) fn is_guardian_subagent_source(

@@ -49,7 +49,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config::types::ApprovalReviewPolicy;
+use codex_core::config::types::ApprovalsReviewer;
 use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::Feature;
@@ -853,13 +853,14 @@ impl App {
             )
         });
         let mut approval_policy_override = None;
-        let mut approval_review_policy_override = None;
+        let mut approvals_reviewer_override = None;
         let mut sandbox_policy_override = None;
-        let approval_review_policy_config_scope = || {
+        let approvals_reviewer_config_scope = || {
             let effective_config = self.config.config_layer_stack.effective_config();
-            let root_configured = effective_config
-                .as_table()
-                .is_some_and(|table| table.contains_key("approval_review_policy"));
+            let root_configured = effective_config.as_table().is_some_and(|table| {
+                table.contains_key("approvals_reviewer")
+                    || table.contains_key("approval_review_policy")
+            });
             let profile_configured = self.active_profile.as_deref().is_some_and(|profile| {
                 effective_config
                     .as_table()
@@ -868,7 +869,8 @@ impl App {
                     .and_then(|profiles| profiles.get(profile))
                     .and_then(TomlValue::as_table)
                     .is_some_and(|profile_config| {
-                        profile_config.contains_key("approval_review_policy")
+                        profile_config.contains_key("approvals_reviewer")
+                            || profile_config.contains_key("approval_review_policy")
                     })
             });
             (root_configured, profile_configured)
@@ -910,11 +912,10 @@ impl App {
                 }
             }
             if feature == Feature::GuardianApproval && !enabled {
-                let (root_approval_review_policy_configured, _) =
-                    approval_review_policy_config_scope();
-                if self.active_profile.is_some() && root_approval_review_policy_configured {
+                let (root_approvals_reviewer_configured, _) = approvals_reviewer_config_scope();
+                if self.active_profile.is_some() && root_approvals_reviewer_configured {
                     self.chat_widget.add_error_message(
-                        "Cannot disable Smart Approvals in this profile because `approval_review_policy` is configured outside the active profile.".to_string(),
+                        "Cannot disable Smart Approvals in this profile because `approvals_reviewer` is configured outside the active profile.".to_string(),
                     );
                     continue;
                 }
@@ -934,36 +935,46 @@ impl App {
             self.chat_widget
                 .set_feature_enabled(feature, effective_enabled);
             if feature == Feature::GuardianApproval {
-                let previous_approval_review_policy = self.config.approval_review_policy;
+                let previous_approvals_reviewer = self.config.approvals_reviewer;
                 if effective_enabled {
-                    self.config.approval_review_policy = ApprovalReviewPolicy::AutoOnly;
+                    self.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
                     self.chat_widget
-                        .set_approval_review_policy(ApprovalReviewPolicy::AutoOnly);
-                    builder = builder.with_edits([ConfigEdit::SetPath {
-                        segments: scoped_segments("approval_review_policy"),
-                        value: ApprovalReviewPolicy::AutoOnly.to_string().into(),
-                    }]);
-                    if previous_approval_review_policy != ApprovalReviewPolicy::AutoOnly {
+                        .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
+                    builder = builder.with_edits([
+                        ConfigEdit::SetPath {
+                            segments: scoped_segments("approvals_reviewer"),
+                            value: ApprovalsReviewer::GuardianSubagent.to_string().into(),
+                        },
+                        ConfigEdit::ClearPath {
+                            segments: scoped_segments("approval_review_policy"),
+                        },
+                    ]);
+                    if previous_approvals_reviewer != ApprovalsReviewer::GuardianSubagent {
                         permissions_history_label = Some("Smart Approvals");
                     }
                 } else if !effective_enabled {
                     let (
-                        _root_approval_review_policy_configured,
-                        profile_approval_review_policy_configured,
-                    ) = approval_review_policy_config_scope();
-                    if profile_approval_review_policy_configured || self.active_profile.is_none() {
-                        builder = builder.with_edits([ConfigEdit::ClearPath {
-                            segments: scoped_segments("approval_review_policy"),
-                        }]);
+                        _root_approvals_reviewer_configured,
+                        profile_approvals_reviewer_configured,
+                    ) = approvals_reviewer_config_scope();
+                    if profile_approvals_reviewer_configured || self.active_profile.is_none() {
+                        builder = builder.with_edits([
+                            ConfigEdit::ClearPath {
+                                segments: scoped_segments("approvals_reviewer"),
+                            },
+                            ConfigEdit::ClearPath {
+                                segments: scoped_segments("approval_review_policy"),
+                            },
+                        ]);
                     }
-                    self.config.approval_review_policy = ApprovalReviewPolicy::ManualOnly;
+                    self.config.approvals_reviewer = ApprovalsReviewer::User;
                     self.chat_widget
-                        .set_approval_review_policy(ApprovalReviewPolicy::ManualOnly);
-                    if previous_approval_review_policy != ApprovalReviewPolicy::ManualOnly {
+                        .set_approvals_reviewer(ApprovalsReviewer::User);
+                    if previous_approvals_reviewer != ApprovalsReviewer::User {
                         permissions_history_label = Some("Default");
                     }
                 }
-                approval_review_policy_override = Some(self.config.approval_review_policy);
+                approvals_reviewer_override = Some(self.config.approvals_reviewer);
             }
             if feature == Feature::GuardianApproval && effective_enabled {
                 if let Err(err) = self
@@ -1025,13 +1036,13 @@ impl App {
         }
 
         if approval_policy_override.is_some()
-            || approval_review_policy_override.is_some()
+            || approvals_reviewer_override.is_some()
             || sandbox_policy_override.is_some()
         {
             let op = Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: approval_policy_override,
-                approval_review_policy: approval_review_policy_override,
+                approvals_reviewer: approvals_reviewer_override,
                 sandbox_policy: sandbox_policy_override,
                 windows_sandbox_level: None,
                 model: None,
@@ -1058,7 +1069,7 @@ impl App {
                     .send(AppEvent::CodexOp(Op::OverrideTurnContext {
                         cwd: None,
                         approval_policy: None,
-                        approval_review_policy: None,
+                        approvals_reviewer: None,
                         sandbox_policy: None,
                         windows_sandbox_level: Some(windows_sandbox_level),
                         model: None,
@@ -2968,7 +2979,7 @@ impl App {
                                     Op::OverrideTurnContext {
                                         cwd: None,
                                         approval_policy: None,
-                                        approval_review_policy: None,
+                                        approvals_reviewer: None,
                                         sandbox_policy: None,
                                         windows_sandbox_level: Some(windows_sandbox_level),
                                         model: None,
@@ -2992,9 +3003,7 @@ impl App {
                                     Op::OverrideTurnContext {
                                         cwd: None,
                                         approval_policy: Some(preset.approval),
-                                        approval_review_policy: Some(
-                                            self.config.approval_review_policy,
-                                        ),
+                                        approvals_reviewer: Some(self.config.approvals_reviewer),
                                         sandbox_policy: Some(preset.sandbox.clone()),
                                         windows_sandbox_level: Some(windows_sandbox_level),
                                         model: None,
@@ -3259,18 +3268,18 @@ impl App {
                     }
                 }
             }
-            AppEvent::UpdateApprovalReviewPolicy(policy) => {
-                self.config.approval_review_policy = policy;
-                self.chat_widget.set_approval_review_policy(policy);
+            AppEvent::UpdateApprovalsReviewer(policy) => {
+                self.config.approvals_reviewer = policy;
+                self.chat_widget.set_approvals_reviewer(policy);
                 let profile = self.active_profile.as_deref();
                 let segments = if let Some(profile) = profile {
                     vec![
                         "profiles".to_string(),
                         profile.to_string(),
-                        "approval_review_policy".to_string(),
+                        "approvals_reviewer".to_string(),
                     ]
                 } else {
-                    vec!["approval_review_policy".to_string()]
+                    vec!["approvals_reviewer".to_string()]
                 };
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
@@ -3283,10 +3292,10 @@ impl App {
                 {
                     tracing::error!(
                         error = %err,
-                        "failed to persist approval review policy update"
+                        "failed to persist approvals reviewer update"
                     );
                     self.chat_widget
-                        .add_error_message(format!("Failed to save approval review policy: {err}"));
+                        .add_error_message(format!("Failed to save approvals reviewer: {err}"));
                 }
             }
             AppEvent::UpdateFeatureFlags { updates } => {
@@ -3789,7 +3798,7 @@ impl App {
                 model_provider_id: config_snapshot.model_provider_id,
                 service_tier: config_snapshot.service_tier,
                 approval_policy: config_snapshot.approval_policy,
-                approval_review_policy: config_snapshot.approval_review_policy,
+                approvals_reviewer: config_snapshot.approvals_reviewer,
                 sandbox_policy: config_snapshot.sandbox_policy,
                 cwd: config_snapshot.cwd,
                 reasoning_effort: config_snapshot.reasoning_effort,
@@ -4302,7 +4311,7 @@ mod tests {
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
-                approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/tmp/project"),
                 reasoning_effort: None,
@@ -4475,7 +4484,7 @@ mod tests {
                         model_provider_id: "test-provider".to_string(),
                         service_tier: None,
                         approval_policy: AskForApproval::Never,
-                        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                        approvals_reviewer: ApprovalsReviewer::User,
                         sandbox_policy: SandboxPolicy::new_read_only_policy(),
                         cwd: PathBuf::from("/tmp/project"),
                         reasoning_effort: None,
@@ -4553,7 +4562,7 @@ mod tests {
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
-                approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/tmp/project"),
                 reasoning_effort: None,
@@ -4635,7 +4644,7 @@ mod tests {
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
-                approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/tmp/project"),
                 reasoning_effort: None,
@@ -4716,7 +4725,7 @@ mod tests {
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
-                approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/tmp/project"),
                 reasoning_effort: None,
@@ -4791,7 +4800,7 @@ mod tests {
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
-                approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/tmp/project"),
                 reasoning_effort: None,
@@ -4905,7 +4914,7 @@ mod tests {
                         model_provider_id: "test-provider".to_string(),
                         service_tier: None,
                         approval_policy: AskForApproval::Never,
-                        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                        approvals_reviewer: ApprovalsReviewer::User,
                         sandbox_policy: SandboxPolicy::new_read_only_policy(),
                         cwd: PathBuf::from("/tmp/project"),
                         reasoning_effort: None,
@@ -4975,7 +4984,7 @@ mod tests {
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
-                approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/tmp/project"),
                 reasoning_effort: None,
@@ -5079,7 +5088,7 @@ mod tests {
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
-                approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/tmp/project"),
                 reasoning_effort: None,
@@ -5156,7 +5165,7 @@ mod tests {
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
-                approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/tmp/project"),
                 reasoning_effort: None,
@@ -5340,8 +5349,8 @@ mod tests {
                 .enabled(Feature::GuardianApproval)
         );
         assert_eq!(
-            app.config.approval_review_policy,
-            ApprovalReviewPolicy::AutoOnly
+            app.config.approvals_reviewer,
+            ApprovalsReviewer::GuardianSubagent
         );
         assert_eq!(
             app.config.permissions.approval_policy.value(),
@@ -5364,8 +5373,8 @@ mod tests {
             &SandboxPolicy::new_workspace_write_policy()
         );
         assert_eq!(
-            app.chat_widget.config_ref().approval_review_policy,
-            ApprovalReviewPolicy::AutoOnly
+            app.chat_widget.config_ref().approvals_reviewer,
+            ApprovalsReviewer::GuardianSubagent
         );
         assert_eq!(app.runtime_approval_policy_override, None);
         assert_eq!(app.runtime_sandbox_policy_override, None);
@@ -5374,7 +5383,7 @@ mod tests {
             Ok(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: Some(AskForApproval::OnRequest),
-                approval_review_policy: Some(ApprovalReviewPolicy::AutoOnly),
+                approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
                 sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
                 windows_sandbox_level: None,
                 model: None,
@@ -5399,7 +5408,7 @@ mod tests {
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(config.contains("smart_approvals = true"));
-        assert!(config.contains("approval_review_policy = \"auto-only\""));
+        assert!(config.contains("approvals_reviewer = \"guardian_subagent\""));
         assert!(config.contains("approval_policy = \"on-request\""));
         assert!(config.contains("sandbox_mode = \"workspace-write\""));
         Ok(())
@@ -5412,7 +5421,7 @@ mod tests {
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
-        let config_toml = "approval_review_policy = \"auto-only\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nsmart_approvals = true\n";
+        let config_toml = "approvals_reviewer = \"guardian_subagent\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nsmart_approvals = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
         app.config.config_layer_stack = app
@@ -5424,9 +5433,9 @@ mod tests {
             .set_enabled(Feature::GuardianApproval, true)?;
         app.chat_widget
             .set_feature_enabled(Feature::GuardianApproval, true);
-        app.config.approval_review_policy = ApprovalReviewPolicy::AutoOnly;
+        app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
         app.chat_widget
-            .set_approval_review_policy(ApprovalReviewPolicy::AutoOnly);
+            .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
         app.config
             .permissions
             .approval_policy
@@ -5450,17 +5459,14 @@ mod tests {
                 .features
                 .enabled(Feature::GuardianApproval)
         );
-        assert_eq!(
-            app.config.approval_review_policy,
-            ApprovalReviewPolicy::ManualOnly
-        );
+        assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::User);
         assert_eq!(
             app.config.permissions.approval_policy.value(),
             AskForApproval::OnRequest
         );
         assert_eq!(
-            app.chat_widget.config_ref().approval_review_policy,
-            ApprovalReviewPolicy::ManualOnly
+            app.chat_widget.config_ref().approvals_reviewer,
+            ApprovalsReviewer::User
         );
         assert_eq!(app.runtime_approval_policy_override, None);
         assert_eq!(
@@ -5468,7 +5474,7 @@ mod tests {
             Ok(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: None,
-                approval_review_policy: Some(ApprovalReviewPolicy::ManualOnly),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: None,
                 windows_sandbox_level: None,
                 model: None,
@@ -5493,7 +5499,7 @@ mod tests {
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(!config.contains("smart_approvals = true"));
-        assert!(!config.contains("approval_review_policy ="));
+        assert!(!config.contains("approvals_reviewer ="));
         assert!(config.contains("approval_policy = \"on-request\""));
         assert!(config.contains("sandbox_mode = \"workspace-write\""));
         Ok(())
@@ -5506,28 +5512,28 @@ mod tests {
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
-        let config_toml = "approval_review_policy = \"manual-only\"\n";
+        let config_toml = "approvals_reviewer = \"user\"\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
         app.config.config_layer_stack = app
             .config
             .config_layer_stack
             .with_user_config(&config_toml_path, user_config);
-        app.config.approval_review_policy = ApprovalReviewPolicy::ManualOnly;
+        app.config.approvals_reviewer = ApprovalsReviewer::User;
         app.chat_widget
-            .set_approval_review_policy(ApprovalReviewPolicy::ManualOnly);
+            .set_approvals_reviewer(ApprovalsReviewer::User);
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
             .await;
 
         assert!(app.config.features.enabled(Feature::GuardianApproval));
         assert_eq!(
-            app.config.approval_review_policy,
-            ApprovalReviewPolicy::AutoOnly
+            app.config.approvals_reviewer,
+            ApprovalsReviewer::GuardianSubagent
         );
         assert_eq!(
-            app.chat_widget.config_ref().approval_review_policy,
-            ApprovalReviewPolicy::AutoOnly
+            app.chat_widget.config_ref().approvals_reviewer,
+            ApprovalsReviewer::GuardianSubagent
         );
         assert_eq!(
             app.config.permissions.approval_policy.value(),
@@ -5546,7 +5552,7 @@ mod tests {
             Ok(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: Some(AskForApproval::OnRequest),
-                approval_review_policy: Some(ApprovalReviewPolicy::AutoOnly),
+                approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
                 sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
                 windows_sandbox_level: None,
                 model: None,
@@ -5559,7 +5565,7 @@ mod tests {
         );
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-        assert!(config.contains("approval_review_policy = \"auto-only\""));
+        assert!(config.contains("approvals_reviewer = \"guardian_subagent\""));
         assert!(config.contains("smart_approvals = true"));
         assert!(config.contains("approval_policy = \"on-request\""));
         assert!(config.contains("sandbox_mode = \"workspace-write\""));
@@ -5573,7 +5579,7 @@ mod tests {
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
-        let config_toml = "approval_review_policy = \"manual-only\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nsmart_approvals = true\n";
+        let config_toml = "approvals_reviewer = \"user\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nsmart_approvals = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
         app.config.config_layer_stack = app
@@ -5585,28 +5591,25 @@ mod tests {
             .set_enabled(Feature::GuardianApproval, true)?;
         app.chat_widget
             .set_feature_enabled(Feature::GuardianApproval, true);
-        app.config.approval_review_policy = ApprovalReviewPolicy::ManualOnly;
+        app.config.approvals_reviewer = ApprovalsReviewer::User;
         app.chat_widget
-            .set_approval_review_policy(ApprovalReviewPolicy::ManualOnly);
+            .set_approvals_reviewer(ApprovalsReviewer::User);
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
             .await;
 
         assert!(!app.config.features.enabled(Feature::GuardianApproval));
+        assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::User);
         assert_eq!(
-            app.config.approval_review_policy,
-            ApprovalReviewPolicy::ManualOnly
-        );
-        assert_eq!(
-            app.chat_widget.config_ref().approval_review_policy,
-            ApprovalReviewPolicy::ManualOnly
+            app.chat_widget.config_ref().approvals_reviewer,
+            ApprovalsReviewer::User
         );
         assert_eq!(
             op_rx.try_recv(),
             Ok(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: None,
-                approval_review_policy: Some(ApprovalReviewPolicy::ManualOnly),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: None,
                 windows_sandbox_level: None,
                 model: None,
@@ -5624,7 +5627,7 @@ mod tests {
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(!config.contains("smart_approvals = true"));
-        assert!(!config.contains("approval_review_policy ="));
+        assert!(!config.contains("approvals_reviewer ="));
         Ok(())
     }
 
@@ -5636,35 +5639,35 @@ mod tests {
         app.config.codex_home = codex_home.path().to_path_buf();
         app.active_profile = Some("guardian".to_string());
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
-        let config_toml = "profile = \"guardian\"\napproval_review_policy = \"manual-only\"\n";
+        let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"user\"\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
         app.config.config_layer_stack = app
             .config
             .config_layer_stack
             .with_user_config(&config_toml_path, user_config);
-        app.config.approval_review_policy = ApprovalReviewPolicy::ManualOnly;
+        app.config.approvals_reviewer = ApprovalsReviewer::User;
         app.chat_widget
-            .set_approval_review_policy(ApprovalReviewPolicy::ManualOnly);
+            .set_approvals_reviewer(ApprovalsReviewer::User);
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
             .await;
 
         assert!(app.config.features.enabled(Feature::GuardianApproval));
         assert_eq!(
-            app.config.approval_review_policy,
-            ApprovalReviewPolicy::AutoOnly
+            app.config.approvals_reviewer,
+            ApprovalsReviewer::GuardianSubagent
         );
         assert_eq!(
-            app.chat_widget.config_ref().approval_review_policy,
-            ApprovalReviewPolicy::AutoOnly
+            app.chat_widget.config_ref().approvals_reviewer,
+            ApprovalsReviewer::GuardianSubagent
         );
         assert_eq!(
             op_rx.try_recv(),
             Ok(Op::OverrideTurnContext {
                 cwd: None,
                 approval_policy: Some(AskForApproval::OnRequest),
-                approval_review_policy: Some(ApprovalReviewPolicy::AutoOnly),
+                approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
                 sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
                 windows_sandbox_level: None,
                 model: None,
@@ -5688,12 +5691,12 @@ mod tests {
         assert_eq!(
             config_value
                 .as_table()
-                .and_then(|table| table.get("approval_review_policy")),
-            Some(&TomlValue::String("manual-only".to_string()))
+                .and_then(|table| table.get("approvals_reviewer")),
+            Some(&TomlValue::String("user".to_string()))
         );
         assert_eq!(
-            profile_config.get("approval_review_policy"),
-            Some(&TomlValue::String("auto-only".to_string()))
+            profile_config.get("approvals_reviewer"),
+            Some(&TomlValue::String("guardian_subagent".to_string()))
         );
         Ok(())
     }
@@ -5706,7 +5709,7 @@ mod tests {
         app.config.codex_home = codex_home.path().to_path_buf();
         app.active_profile = Some("guardian".to_string());
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
-        let config_toml = "profile = \"guardian\"\napproval_review_policy = \"manual-only\"\n\n[features]\nsmart_approvals = true\n";
+        let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"user\"\n\n[features]\nsmart_approvals = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
         app.config.config_layer_stack = app
@@ -5718,9 +5721,9 @@ mod tests {
             .set_enabled(Feature::GuardianApproval, true)?;
         app.chat_widget
             .set_feature_enabled(Feature::GuardianApproval, true);
-        app.config.approval_review_policy = ApprovalReviewPolicy::ManualOnly;
+        app.config.approvals_reviewer = ApprovalsReviewer::User;
         app.chat_widget
-            .set_approval_review_policy(ApprovalReviewPolicy::ManualOnly);
+            .set_approvals_reviewer(ApprovalsReviewer::User);
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
             .await;
@@ -5732,13 +5735,10 @@ mod tests {
                 .features
                 .enabled(Feature::GuardianApproval)
         );
+        assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::User);
         assert_eq!(
-            app.config.approval_review_policy,
-            ApprovalReviewPolicy::ManualOnly
-        );
-        assert_eq!(
-            app.chat_widget.config_ref().approval_review_policy,
-            ApprovalReviewPolicy::ManualOnly
+            app.chat_widget.config_ref().approvals_reviewer,
+            ApprovalsReviewer::User
         );
         assert!(
             op_rx.try_recv().is_err(),
@@ -5761,8 +5761,8 @@ mod tests {
         assert_eq!(
             toml::from_str::<TomlValue>(&config)?
                 .as_table()
-                .and_then(|table| table.get("approval_review_policy")),
-            Some(&TomlValue::String("manual-only".to_string()))
+                .and_then(|table| table.get("approvals_reviewer")),
+            Some(&TomlValue::String("user".to_string()))
         );
         Ok(())
     }
@@ -5869,7 +5869,7 @@ mod tests {
                         model_provider_id: "test-provider".to_string(),
                         service_tier: None,
                         approval_policy: AskForApproval::OnRequest,
-                        approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                        approvals_reviewer: ApprovalsReviewer::User,
                         sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
                         cwd: PathBuf::from("/tmp/agent"),
                         reasoning_effort: None,
@@ -6090,7 +6090,7 @@ mod tests {
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
-                approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/tmp/project"),
                 reasoning_effort: Some(ReasoningEffortConfig::High),
@@ -6741,7 +6741,7 @@ mod tests {
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
-                approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: next_cwd.clone(),
                 reasoning_effort: None,
@@ -6857,7 +6857,7 @@ mod tests {
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
-                approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
@@ -6917,7 +6917,7 @@ mod tests {
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
-                approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
@@ -7010,7 +7010,7 @@ mod tests {
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
-                approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
@@ -7076,7 +7076,7 @@ mod tests {
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
-                approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
@@ -7157,7 +7157,7 @@ mod tests {
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
-                approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/home/user/project"),
                 reasoning_effort: None,
@@ -7285,7 +7285,7 @@ mod tests {
             model_provider_id: "test-provider".to_string(),
             service_tier: None,
             approval_policy: AskForApproval::Never,
-            approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+            approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: None,
@@ -7355,7 +7355,7 @@ mod tests {
                 model_provider_id: "test-provider".to_string(),
                 service_tier: None,
                 approval_policy: AskForApproval::Never,
-                approval_review_policy: ApprovalReviewPolicy::ManualOnly,
+                approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 cwd: PathBuf::from("/tmp/project"),
                 reasoning_effort: None,

@@ -125,7 +125,7 @@ pub use permissions::PermissionsToml;
 pub(crate) use permissions::resolve_permission_profile;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
-pub use types::ApprovalReviewPolicy;
+pub use types::ApprovalsReviewer;
 
 pub use codex_git::GhostSnapshotConfig;
 
@@ -236,8 +236,10 @@ pub struct Config {
     /// Effective permission configuration for shell tool execution.
     pub permissions: Permissions,
 
-    /// Whether approvals remain manual or are automatically reviewed.
-    pub approval_review_policy: ApprovalReviewPolicy,
+    /// Selects who adjudicates approval requests once an action has already
+    /// been escalated for review. This does not disable separate safety checks
+    /// such as ARC.
+    pub approvals_reviewer: ApprovalsReviewer,
 
     /// enforce_residency means web traffic cannot be routed outside of a
     /// particular geography. HTTP clients should direct their requests
@@ -1137,8 +1139,11 @@ pub struct ConfigToml {
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
 
-    /// Whether approval requests remain manual or are automatically reviewed.
-    pub approval_review_policy: Option<ApprovalReviewPolicy>,
+    /// Selects who adjudicates approval requests once an action has already
+    /// been escalated for review. This does not disable separate safety checks
+    /// such as ARC.
+    #[serde(alias = "approval_review_policy")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
@@ -1834,7 +1839,7 @@ pub struct ConfigOverrides {
     pub review_model: Option<String>,
     pub cwd: Option<PathBuf>,
     pub approval_policy: Option<AskForApproval>,
-    pub approval_review_policy: Option<ApprovalReviewPolicy>,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
     pub model_provider: Option<String>,
     pub service_tier: Option<Option<ServiceTier>>,
@@ -1999,7 +2004,7 @@ impl Config {
             review_model: override_review_model,
             cwd,
             approval_policy: approval_policy_override,
-            approval_review_policy: approval_review_policy_override,
+            approvals_reviewer: approvals_reviewer_override,
             sandbox_mode,
             model_provider,
             service_tier: service_tier_override,
@@ -2208,10 +2213,10 @@ impl Config {
             );
             approval_policy = constrained_approval_policy.value();
         }
-        let approval_review_policy = approval_review_policy_override
-            .or(config_profile.approval_review_policy)
-            .or(cfg.approval_review_policy)
-            .unwrap_or(ApprovalReviewPolicy::ManualOnly);
+        let approvals_reviewer = approvals_reviewer_override
+            .or(config_profile.approvals_reviewer)
+            .or(cfg.approvals_reviewer)
+            .unwrap_or(ApprovalsReviewer::User);
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
@@ -2514,7 +2519,7 @@ impl Config {
                 windows_sandbox_private_desktop,
                 macos_seatbelt_profile_extensions: None,
             },
-            approval_review_policy,
+            approvals_reviewer,
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
             user_instructions,

@@ -1854,7 +1854,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
-            approval_review_policy,
+            approvals_reviewer,
             sandbox,
             config,
             service_name,
@@ -1873,7 +1873,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
-            approval_review_policy,
+            approvals_reviewer,
             sandbox,
             base_instructions,
             developer_instructions,
@@ -2097,7 +2097,7 @@ impl CodexMessageProcessor {
                     service_tier: config_snapshot.service_tier,
                     cwd: config_snapshot.cwd,
                     approval_policy: config_snapshot.approval_policy.into(),
-                    approval_review_policy: config_snapshot.approval_review_policy.into(),
+                    approvals_reviewer: config_snapshot.approvals_reviewer.into(),
                     sandbox: config_snapshot.sandbox_policy.into(),
                     reasoning_effort: config_snapshot.reasoning_effort,
                 };
@@ -2143,7 +2143,7 @@ impl CodexMessageProcessor {
         service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
         cwd: Option<String>,
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
-        approval_review_policy: Option<codex_app_server_protocol::ApprovalReviewPolicy>,
+        approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
@@ -2156,8 +2156,8 @@ impl CodexMessageProcessor {
             cwd: cwd.map(PathBuf::from),
             approval_policy: approval_policy
                 .map(codex_app_server_protocol::AskForApproval::to_core),
-            approval_review_policy: approval_review_policy
-                .map(codex_app_server_protocol::ApprovalReviewPolicy::to_core),
+            approvals_reviewer: approvals_reviewer
+                .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
             sandbox_mode: sandbox.map(SandboxMode::to_core),
             codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
@@ -3365,7 +3365,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
-            approval_review_policy,
+            approvals_reviewer,
             sandbox,
             config: request_overrides,
             base_instructions,
@@ -3399,7 +3399,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
-            approval_review_policy,
+            approvals_reviewer,
             sandbox,
             base_instructions,
             developer_instructions,
@@ -3499,7 +3499,7 @@ impl CodexMessageProcessor {
                     service_tier: session_configured.service_tier,
                     cwd: session_configured.cwd,
                     approval_policy: session_configured.approval_policy.into(),
-                    approval_review_policy: session_configured.approval_review_policy.into(),
+                    approvals_reviewer: session_configured.approvals_reviewer.into(),
                     sandbox: session_configured.sandbox_policy.into(),
                     reasoning_effort: session_configured.reasoning_effort,
                 };
@@ -3839,7 +3839,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
-            approval_review_policy,
+            approvals_reviewer,
             sandbox,
             config: cli_overrides,
             base_instructions,
@@ -3921,7 +3921,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
-            approval_review_policy,
+            approvals_reviewer,
             sandbox,
             base_instructions,
             developer_instructions,
@@ -4090,7 +4090,7 @@ impl CodexMessageProcessor {
             service_tier: session_configured.service_tier,
             cwd: session_configured.cwd,
             approval_policy: session_configured.approval_policy.into(),
-            approval_review_policy: session_configured.approval_review_policy.into(),
+            approvals_reviewer: session_configured.approvals_reviewer.into(),
             sandbox: session_configured.sandbox_policy.into(),
             reasoning_effort: session_configured.reasoning_effort,
         };
@@ -5880,7 +5880,7 @@ impl CodexMessageProcessor {
 
         let has_any_overrides = params.cwd.is_some()
             || params.approval_policy.is_some()
-            || params.approval_review_policy.is_some()
+            || params.approvals_reviewer.is_some()
             || params.sandbox_policy.is_some()
             || params.model.is_some()
             || params.service_tier.is_some()
@@ -5898,9 +5898,9 @@ impl CodexMessageProcessor {
                     Op::OverrideTurnContext {
                         cwd: params.cwd,
                         approval_policy: params.approval_policy.map(AskForApproval::to_core),
-                        approval_review_policy: params
-                            .approval_review_policy
-                            .map(codex_app_server_protocol::ApprovalReviewPolicy::to_core),
+                        approvals_reviewer: params
+                            .approvals_reviewer
+                            .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
                         sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
                         windows_sandbox_level: None,
                         model: params.model,
@@ -7207,7 +7207,7 @@ async fn handle_pending_thread_resume_request(
         model_provider_id,
         service_tier,
         approval_policy,
-        approval_review_policy,
+        approvals_reviewer,
         sandbox_policy,
         cwd,
         reasoning_effort,
@@ -7220,7 +7220,7 @@ async fn handle_pending_thread_resume_request(
         service_tier,
         cwd,
         approval_policy: approval_policy.into(),
-        approval_review_policy: approval_review_policy.into(),
+        approvals_reviewer: approvals_reviewer.into(),
         sandbox: sandbox_policy.into(),
         reasoning_effort,
     };
@@ -7359,12 +7359,12 @@ fn collect_resume_override_mismatches(
             ));
         }
     }
-    if let Some(requested_review_policy) = request.approval_review_policy.as_ref() {
-        let active_review_policy: codex_app_server_protocol::ApprovalReviewPolicy =
-            config_snapshot.approval_review_policy.into();
+    if let Some(requested_review_policy) = request.approvals_reviewer.as_ref() {
+        let active_review_policy: codex_app_server_protocol::ApprovalsReviewer =
+            config_snapshot.approvals_reviewer.into();
         if requested_review_policy != &active_review_policy {
             mismatch_details.push(format!(
-                "approval_review_policy requested={requested_review_policy:?} active={active_review_policy:?}"
+                "approvals_reviewer requested={requested_review_policy:?} active={active_review_policy:?}"
             ));
         }
     }
@@ -8273,7 +8273,7 @@ mod tests {
             service_tier: Some(Some(codex_protocol::config_types::ServiceTier::Fast)),
             cwd: None,
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox: None,
             config: None,
             base_instructions: None,
@@ -8286,7 +8286,7 @@ mod tests {
             model_provider_id: "openai".to_string(),
             service_tier: Some(codex_protocol::config_types::ServiceTier::Flex),
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
-            approval_review_policy: codex_protocol::config_types::ApprovalReviewPolicy::ManualOnly,
+            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
             cwd: PathBuf::from("/tmp"),
             ephemeral: false,

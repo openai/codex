@@ -108,7 +108,7 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -205,7 +205,7 @@ async fn override_then_next_turn_uses_updated_collaboration_instructions() -> Re
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -257,7 +257,7 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -327,7 +327,7 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -354,7 +354,7 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -410,7 +410,7 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -437,7 +437,7 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -492,7 +492,7 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -522,7 +522,7 @@ async fn collaboration_mode_update_emits_new_instruction_message_when_mode_chang
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -581,7 +581,7 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -611,7 +611,7 @@ async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged()
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -676,7 +676,7 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -739,7 +739,7 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
-            approval_review_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
