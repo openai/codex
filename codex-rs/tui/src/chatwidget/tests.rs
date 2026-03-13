@@ -5423,6 +5423,7 @@ async fn queued_init_replay_stops_after_submitting_user_turn() {
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: tempdir.path().to_path_buf(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -5670,6 +5671,7 @@ async fn queued_plan_replay_stops_after_submitting_user_turn() {
         model_provider_id: "test-provider".to_string(),
         service_tier: None,
         approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
         cwd: PathBuf::from("/home/user/project"),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -8573,6 +8575,7 @@ async fn queued_followup_waits_for_popup_opened_during_running_turn() {
             model_provider_id: "test-provider".to_string(),
             service_tier: None,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -9449,6 +9452,7 @@ async fn permissions_selection_can_disable_smart_approvals() {
     }
     chat.config.notices.hide_full_access_warning = Some(true);
     chat.set_feature_enabled(Feature::GuardianApproval, true);
+    chat.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
     chat.config
         .permissions
         .approval_policy
@@ -9466,11 +9470,14 @@ async fn permissions_selection_can_disable_smart_approvals() {
 
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
     assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::UpdateApprovalsReviewer(ApprovalsReviewer::User)
-        )),
-        "expected selecting Default from Smart Approvals to switch back to manual approval review: {events:?}"
+        events.iter().any(|event| {
+            matches!(
+                event,
+                AppEvent::HandleSlashCommandDraft(draft)
+                    if *draft == ChatWidget::approval_preset_draft("auto", &[])
+            )
+        }),
+        "expected selecting Default from Smart Approvals to queue the default approvals draft: {events:?}"
     );
     assert!(
         !events
@@ -12072,6 +12079,7 @@ async fn queued_theme_selection_resumes_followup_after_idle_resume() {
             model_provider_id: "test-provider".to_string(),
             service_tier: None,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -12140,6 +12148,7 @@ async fn queued_personality_selection_resumes_followup_after_idle_resume() {
             model_provider_id: "test-provider".to_string(),
             service_tier: None,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: Some(ReasoningEffortConfig::default()),
@@ -12219,6 +12228,7 @@ async fn queued_followup_waits_for_popup_dismissal_before_idle_resume() {
             model_provider_id: "test-provider".to_string(),
             service_tier: None,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             cwd: PathBuf::from("/home/user/project"),
             reasoning_effort: Some(ReasoningEffortConfig::default()),

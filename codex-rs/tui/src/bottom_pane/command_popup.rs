@@ -29,7 +29,7 @@ pub(crate) enum CommandItem {
 
 pub(crate) struct CommandPopup {
     command_filter: String,
-    builtins: Vec<(&'static str, SlashCommand)>,
+    builtins: Vec<SlashCommand>,
     prompts: Vec<CustomPrompt>,
     state: ScrollState,
 }
@@ -62,13 +62,15 @@ impl From<CommandPopupFlags> for slash_commands::BuiltinCommandFlags {
 impl CommandPopup {
     pub(crate) fn new(mut prompts: Vec<CustomPrompt>, flags: CommandPopupFlags) -> Self {
         // Keep built-in availability in sync with the composer.
-        let builtins: Vec<(&'static str, SlashCommand)> =
-            slash_commands::builtins_for_input(flags.into())
-                .into_iter()
-                .filter(|(name, _)| !name.starts_with("debug"))
-                .collect();
+        let builtins: Vec<SlashCommand> = slash_commands::visible_builtins_for_input(flags.into())
+            .into_iter()
+            .filter(|cmd| !cmd.command().starts_with("debug"))
+            .collect();
         // Exclude prompts that collide with builtin command names and sort by name.
-        let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
+        let exclude: HashSet<String> = builtins
+            .iter()
+            .map(|cmd| cmd.command().to_string())
+            .collect();
         prompts.retain(|p| !exclude.contains(&p.name));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
@@ -83,7 +85,7 @@ impl CommandPopup {
         let exclude: HashSet<String> = self
             .builtins
             .iter()
-            .map(|(n, _)| (*n).to_string())
+            .map(|cmd| cmd.command().to_string())
             .collect();
         prompts.retain(|p| !exclude.contains(&p.name));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
@@ -142,7 +144,7 @@ impl CommandPopup {
         let mut out: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
         if filter.is_empty() {
             // Built-ins first, in presentation order.
-            for (_, cmd) in self.builtins.iter() {
+            for cmd in self.builtins.iter() {
                 if ALIAS_COMMANDS.contains(cmd) {
                     continue;
                 }
@@ -183,7 +185,7 @@ impl CommandPopup {
                 }
             };
 
-        for (_, cmd) in self.builtins.iter() {
+        for cmd in self.builtins.iter() {
             push_match(CommandItem::Builtin(*cmd), cmd.command(), None, 0);
         }
         // Support both search styles:
