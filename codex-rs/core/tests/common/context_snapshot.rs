@@ -21,12 +21,14 @@ pub enum ContextSnapshotRenderMode {
 #[derive(Debug, Clone)]
 pub struct ContextSnapshotOptions {
     render_mode: ContextSnapshotRenderMode,
+    strip_capability_instructions: bool,
 }
 
 impl Default for ContextSnapshotOptions {
     fn default() -> Self {
         Self {
             render_mode: ContextSnapshotRenderMode::RedactedText,
+            strip_capability_instructions: false,
         }
     }
 }
@@ -34,6 +36,11 @@ impl Default for ContextSnapshotOptions {
 impl ContextSnapshotOptions {
     pub fn render_mode(mut self, render_mode: ContextSnapshotRenderMode) -> Self {
         self.render_mode = render_mode;
+        self
+    }
+
+    pub fn strip_capability_instructions(mut self) -> Self {
+        self.strip_capability_instructions = true;
         self
     }
 }
@@ -73,17 +80,23 @@ pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshot
                         .map(|content| {
                             content
                                 .iter()
-                                .map(|entry| {
+                                .filter_map(|entry| {
                                     if let Some(text) = entry.get("text").and_then(Value::as_str) {
-                                        return format_snapshot_text(text, options);
+                                        if options.strip_capability_instructions
+                                            && role == "developer"
+                                            && is_capability_instruction_text(text)
+                                        {
+                                            return None;
+                                        }
+                                        return Some(format_snapshot_text(text, options));
                                     }
                                     let Some(content_type) =
                                         entry.get("type").and_then(Value::as_str)
                                     else {
-                                        return "<UNKNOWN_CONTENT_ITEM>".to_string();
+                                        return Some("<UNKNOWN_CONTENT_ITEM>".to_string());
                                     };
                                     let Some(content_object) = entry.as_object() else {
-                                        return format!("<{content_type}>");
+                                        return Some(format!("<{content_type}>"));
                                     };
                                     let mut extra_keys = content_object
                                         .keys()
@@ -91,11 +104,11 @@ pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshot
                                         .cloned()
                                         .collect::<Vec<String>>();
                                     extra_keys.sort();
-                                    if extra_keys.is_empty() {
+                                    Some(if extra_keys.is_empty() {
                                         format!("<{content_type}>")
                                     } else {
                                         format!("<{content_type}:{}>", extra_keys.join(","))
-                                    }
+                                    })
                                 })
                                 .collect::<Vec<String>>()
                         })
@@ -299,6 +312,12 @@ fn canonicalize_snapshot_text(text: &str) -> String {
     normalize_dynamic_snapshot_paths(text)
 }
 
+fn is_capability_instruction_text(text: &str) -> bool {
+    text.starts_with(APPS_INSTRUCTIONS_OPEN_TAG)
+        || text.starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG)
+        || text.starts_with(PLUGINS_INSTRUCTIONS_OPEN_TAG)
+}
+
 fn normalize_dynamic_snapshot_paths(text: &str) -> String {
     static SYSTEM_SKILL_PATH_RE: OnceLock<Regex> = OnceLock::new();
     let system_skill_path_re = SYSTEM_SKILL_PATH_RE.get_or_init(|| {
@@ -408,6 +427,28 @@ mod tests {
             rendered,
             "00:message/developer[3]:\n    [01] <APPS_INSTRUCTIONS>\n    [02] <SKILLS_INSTRUCTIONS>\n    [03] <PLUGINS_INSTRUCTIONS>"
         );
+    }
+
+    #[test]
+    fn strip_capability_instructions_omits_capability_parts_from_developer_messages() {
+        let items = vec![json!({
+            "type": "message",
+            "role": "developer",
+            "content": [
+                { "type": "input_text", "text": "<permissions instructions>\n...</permissions instructions>" },
+                { "type": "input_text", "text": "<skills_instructions>\n## Skills\n...</skills_instructions>" },
+                { "type": "input_text", "text": "<plugins_instructions>\n## Plugins\n...</plugins_instructions>" }
+            ]
+        })];
+
+        let rendered = format_response_items_snapshot(
+            &items,
+            &ContextSnapshotOptions::default()
+                .render_mode(ContextSnapshotRenderMode::RedactedText)
+                .strip_capability_instructions(),
+        );
+
+        assert_eq!(rendered, "00:message/developer:<PERMISSIONS_INSTRUCTIONS>");
     }
 
     #[test]

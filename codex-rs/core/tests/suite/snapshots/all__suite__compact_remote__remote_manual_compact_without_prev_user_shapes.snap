@@ -5,8 +5,6 @@ expression: "format_labeled_requests_snapshot(\"Remote manual /compact with no p
 Scenario: Remote manual /compact with no prior user turn skips the remote compact request; the follow-up turn carries canonical context and new user message.
 
 ## Remote Post-Compaction History Layout
-00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <SKILLS_INSTRUCTIONS>
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:USER_ONE

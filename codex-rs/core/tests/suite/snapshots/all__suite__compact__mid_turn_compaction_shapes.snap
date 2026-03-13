@@ -5,9 +5,7 @@ expression: "format_labeled_requests_snapshot(\"True mid-turn continuation compa
 Scenario: True mid-turn continuation compaction after tool output: compact request includes tool artifacts, and the continuation request includes the summary in the same turn.
 
 ## Local Compaction Request
-00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <SKILLS_INSTRUCTIONS>
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:function call limit push
 03:function_call/test_tool
@@ -15,9 +13,7 @@ Scenario: True mid-turn continuation compaction after tool output: compact reque
 05:message/user:<SUMMARIZATION_PROMPT>
 
 ## Local Post-Compaction History Layout
-00:message/developer[2]:
-    [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <SKILLS_INSTRUCTIONS>
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:function call limit push
 03:message/user:<COMPACTION_SUMMARY>\nAUTO_SUMMARY
