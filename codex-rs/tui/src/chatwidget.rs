@@ -4911,8 +4911,17 @@ impl ChatWidget {
                                 "Default permissions require Windows sandbox setup. Re-run with --enable-windows-sandbox=elevated or --enable-windows-sandbox=legacy.".to_string(),
                             );
                         };
-                        self.app_event_tx
-                            .send(AppEvent::EnableWindowsSandboxForAgentMode { preset, mode });
+                        match mode {
+                            WindowsSandboxEnableMode::Elevated => {
+                                self.app_event_tx
+                                    .send(AppEvent::BeginWindowsSandboxElevatedSetup { preset });
+                            }
+                            WindowsSandboxEnableMode::Legacy => {
+                                self.app_event_tx.send(
+                                    AppEvent::EnableWindowsSandboxForAgentMode { preset, mode },
+                                );
+                            }
+                        }
                         return QueueReplayControl::Stop;
                     }
                     if preset.id == "auto"

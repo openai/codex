@@ -9114,6 +9114,22 @@ async fn permissions_selection_emits_history_cell_when_selection_changes() {
     );
 }
 
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn approvals_elevated_inline_args_start_windows_sandbox_setup() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_windows_sandbox_mode(None);
+    chat.handle_serialized_slash_command(ChatWidget::approval_preset_draft(
+        "auto",
+        &["--enable-windows-sandbox=elevated"],
+    ));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::BeginWindowsSandboxElevatedSetup { preset }) if preset.id == "auto"
+    );
+}
+
 #[tokio::test]
 async fn permissions_selection_history_snapshot_after_mode_switch() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
