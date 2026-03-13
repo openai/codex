@@ -230,14 +230,14 @@ pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -
         &flat_v2_bundle,
     )?;
 
-    // internal only (not a public stable API)
-    let internal_out_dir = out_dir.join("internal");
-    ensure_dir(&internal_out_dir)?;
-    write_json_schema::<RolloutLine>(&internal_out_dir, "RolloutLine")?;
-
     if !experimental_api {
         filter_experimental_json_files(out_dir)?;
     }
+
+    // internal only (not a public stable interface)
+    let internal_out_dir = out_dir.join("internal");
+    ensure_dir(&internal_out_dir)?;
+    write_json_schema::<RolloutLine>(&internal_out_dir, "RolloutLine")?;
 
     Ok(())
 }
