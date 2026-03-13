@@ -1650,8 +1650,12 @@ Answer the user's side question directly and concisely.\n\
         self.has_emitted_history_lines = false;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
-        tui.terminal.clear_scrollback()?;
-        tui.terminal.clear()?;
+        if let Err(err) = tui.terminal.clear_scrollback() {
+            tracing::warn!(error = %err, "failed to clear terminal scrollback during thread switch");
+        }
+        if let Err(err) = tui.terminal.clear() {
+            tracing::warn!(error = %err, "failed to clear terminal during thread switch");
+        }
         Ok(())
     }
 
