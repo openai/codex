@@ -46,6 +46,7 @@ use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
 use codex_core::config::types::NotificationMethod;
+use codex_core::terminal::Multiplexer;
 
 mod event_stream;
 mod frame_rate_limiter;
@@ -260,7 +261,11 @@ pub struct Tui {
 impl Tui {
     pub fn new(terminal: Terminal) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
-        let frame_requester = FrameRequester::new(draw_tx.clone());
+        let min_frame_interval = match codex_core::terminal::terminal_info().multiplexer {
+            Some(Multiplexer::Tmux { .. }) => Duration::from_millis(100),
+            _ => frame_rate_limiter::MIN_FRAME_INTERVAL,
+        };
+        let frame_requester = FrameRequester::new(draw_tx.clone(), min_frame_interval);
 
         // Detect keyboard enhancement support before any EventStream is created so the
         // crossterm poller can acquire its lock without contention.

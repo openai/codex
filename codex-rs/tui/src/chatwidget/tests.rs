@@ -7084,7 +7084,11 @@ async fn experimental_popup_includes_guardian_approval() {
     insta::with_settings!({ snapshot_suffix => "linux" }, {
         assert_snapshot!("experimental_popup_includes_guardian_approval", popup);
     });
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "android")]
+    insta::with_settings!({ snapshot_suffix => "android" }, {
+        assert_snapshot!("experimental_popup_includes_guardian_approval", popup);
+    });
+    #[cfg(all(not(target_os = "linux"), not(target_os = "android")))]
     assert_snapshot!("experimental_popup_includes_guardian_approval", popup);
 }
 
