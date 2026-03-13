@@ -236,9 +236,9 @@ pub struct Config {
     /// Effective permission configuration for shell tool execution.
     pub permissions: Permissions,
 
-    /// Selects who adjudicates approval requests once an action has already
-    /// been escalated for review. This does not disable separate safety checks
-    /// such as ARC.
+    /// Configures who approval requests are routed to for review once they have
+    /// been escalated. This does not disable separate safety checks such as
+    /// ARC.
     pub approvals_reviewer: ApprovalsReviewer,
 
     /// enforce_residency means web traffic cannot be routed outside of a
@@ -1146,9 +1146,9 @@ pub struct ConfigToml {
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
 
-    /// Selects who adjudicates approval requests once an action has already
-    /// been escalated for review. This does not disable separate safety checks
-    /// such as ARC.
+    /// Configures who approval requests are routed to for review once they have
+    /// been escalated. This does not disable separate safety checks such as
+    /// ARC.
     pub approvals_reviewer: Option<ApprovalsReviewer>,
 
     #[serde(default)]

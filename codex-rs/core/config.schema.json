@@ -1786,7 +1786,7 @@
           "$ref": "#/definitions/ApprovalsReviewer"
         }
       ],
-      "description": "Selects who adjudicates approval requests once an action has already been escalated for review. This does not disable separate safety checks such as ARC."
+      "description": "Configures who approval requests are routed to for review once they have been escalated. This does not disable separate safety checks such as ARC."
     },
     "apps": {
       "allOf": [

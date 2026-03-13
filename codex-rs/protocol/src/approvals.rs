@@ -135,8 +135,9 @@ pub struct GuardianAssessmentEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub rationale: Option<String>,
-    /// Canonical action payload that was reviewed. Required for denied assessments
-    /// so clients can show the rejected request, optional otherwise.
+    /// Canonical action payload that was reviewed. Included when available so
+    /// clients can render pending or resolved review state alongside the
+    /// reviewed request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub action: Option<JsonValue>,
