@@ -3,8 +3,6 @@ use super::ModelClient;
 use super::PendingUnauthorizedRetry;
 use super::UnauthorizedRecoveryExecution;
 use super::WebsocketSession;
-use crate::endpoint_config_telemetry::EndpointConfigTelemetrySource;
-use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::response_debug_context::extract_response_debug_context;
 use codex_api::TransportError;
 use codex_otel::SessionTelemetry;
@@ -32,47 +30,6 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
         false,
         None,
     )
-}
-
-#[test]
-fn model_client_new_requires_explicit_provider_id_for_builtin_endpoint_defaults() {
-    let provider = crate::model_provider_info::create_oss_provider_with_base_url(
-        "http://localhost:1234/v1",
-        crate::model_provider_info::WireApi::Responses,
-    );
-
-    let client = ModelClient::new(
-        None,
-        ThreadId::new(),
-        provider.clone(),
-        SessionSource::Cli,
-        None,
-        false,
-        false,
-        false,
-        None,
-    );
-    let client_with_provider_id = ModelClient::new_with_provider_id(
-        None,
-        ThreadId::new(),
-        LMSTUDIO_OSS_PROVIDER_ID,
-        provider,
-        SessionSource::Cli,
-        None,
-        false,
-        false,
-        false,
-        None,
-    );
-
-    assert_eq!(
-        client.state.endpoint_telemetry_source,
-        EndpointConfigTelemetrySource::new("config_toml", false)
-    );
-    assert_eq!(
-        client_with_provider_id.state.endpoint_telemetry_source,
-        EndpointConfigTelemetrySource::new("default", true)
-    );
 }
 
 fn test_model_info() -> ModelInfo {

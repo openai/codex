@@ -93,9 +93,6 @@ use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::config::Config;
 use crate::default_client::build_reqwest_client;
-use crate::default_client::current_residency_header_telemetry;
-use crate::endpoint_config_telemetry::EndpointConfigTelemetry;
-use crate::endpoint_config_telemetry::EndpointConfigTelemetrySource;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
@@ -137,7 +134,6 @@ struct ModelClientState {
     auth_manager: Option<Arc<AuthManager>>,
     conversation_id: ThreadId,
     provider: ModelProviderInfo,
-    endpoint_telemetry_source: EndpointConfigTelemetrySource,
     session_source: SessionSource,
     model_verbosity: Option<VerbosityConfig>,
     responses_websockets_enabled_by_feature: bool,
@@ -156,25 +152,16 @@ struct CurrentClientSetup {
     auth: Option<CodexAuth>,
     api_provider: codex_api::Provider,
     api_auth: CoreAuthProvider,
-    endpoint_telemetry: EndpointConfigTelemetry,
-    provider_header_names: Option<String>,
 }
 
 #[derive(Clone, Copy)]
 struct RequestRouteTelemetry {
     endpoint: &'static str,
-    residency_header_attached: bool,
-    residency_header_value: Option<&'static str>,
 }
 
 impl RequestRouteTelemetry {
     fn for_endpoint(endpoint: &'static str) -> Self {
-        let residency = current_residency_header_telemetry();
-        Self {
-            endpoint,
-            residency_header_attached: residency.attached,
-            residency_header_value: residency.value,
-        }
+        Self { endpoint }
     }
 }
 
@@ -276,70 +263,11 @@ impl ModelClient {
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
     ) -> Self {
-        let endpoint_telemetry_source =
-            EndpointConfigTelemetrySource::for_provider_without_id(&provider);
-        Self::new_with_endpoint_telemetry_source(
-            auth_manager,
-            conversation_id,
-            provider,
-            endpoint_telemetry_source,
-            session_source,
-            model_verbosity,
-            responses_websockets_enabled_by_feature,
-            enable_request_compression,
-            include_timing_metrics,
-            beta_features_header,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_with_provider_id(
-        auth_manager: Option<Arc<AuthManager>>,
-        conversation_id: ThreadId,
-        provider_id: &str,
-        provider: ModelProviderInfo,
-        session_source: SessionSource,
-        model_verbosity: Option<VerbosityConfig>,
-        responses_websockets_enabled_by_feature: bool,
-        enable_request_compression: bool,
-        include_timing_metrics: bool,
-        beta_features_header: Option<String>,
-    ) -> Self {
-        let endpoint_telemetry_source =
-            EndpointConfigTelemetrySource::for_provider(provider_id, &provider);
-        Self::new_with_endpoint_telemetry_source(
-            auth_manager,
-            conversation_id,
-            provider,
-            endpoint_telemetry_source,
-            session_source,
-            model_verbosity,
-            responses_websockets_enabled_by_feature,
-            enable_request_compression,
-            include_timing_metrics,
-            beta_features_header,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_with_endpoint_telemetry_source(
-        auth_manager: Option<Arc<AuthManager>>,
-        conversation_id: ThreadId,
-        provider: ModelProviderInfo,
-        endpoint_telemetry_source: EndpointConfigTelemetrySource,
-        session_source: SessionSource,
-        model_verbosity: Option<VerbosityConfig>,
-        responses_websockets_enabled_by_feature: bool,
-        enable_request_compression: bool,
-        include_timing_metrics: bool,
-        beta_features_header: Option<String>,
-    ) -> Self {
         Self {
             state: Arc::new(ModelClientState {
                 auth_manager,
                 conversation_id,
                 provider,
-                endpoint_telemetry_source,
                 session_source,
                 model_verbosity,
                 responses_websockets_enabled_by_feature,
@@ -407,8 +335,6 @@ impl ModelClient {
                 &client_setup.api_auth,
                 PendingUnauthorizedRetry::default(),
             ),
-            client_setup.endpoint_telemetry,
-            client_setup.provider_header_names.clone(),
             RequestRouteTelemetry::for_endpoint(RESPONSES_COMPACT_ENDPOINT),
         );
         let client =
@@ -476,8 +402,6 @@ impl ModelClient {
                 &client_setup.api_auth,
                 PendingUnauthorizedRetry::default(),
             ),
-            client_setup.endpoint_telemetry,
-            client_setup.provider_header_names.clone(),
             RequestRouteTelemetry::for_endpoint(MEMORIES_SUMMARIZE_ENDPOINT),
         );
         let client =
@@ -522,15 +446,11 @@ impl ModelClient {
     fn build_request_telemetry(
         session_telemetry: &SessionTelemetry,
         auth_context: AuthRequestTelemetryContext,
-        endpoint_telemetry: EndpointConfigTelemetry,
-        provider_header_names: Option<String>,
         request_route_telemetry: RequestRouteTelemetry,
     ) -> Arc<dyn RequestTelemetry> {
         let telemetry = Arc::new(ApiTelemetry::new(
             session_telemetry.clone(),
             auth_context,
-            endpoint_telemetry,
-            provider_header_names,
             request_route_telemetry,
         ));
         let request_telemetry: Arc<dyn RequestTelemetry> = telemetry;
@@ -587,16 +507,10 @@ impl ModelClient {
             .provider
             .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
-        let endpoint_telemetry = self
-            .state
-            .endpoint_telemetry_source
-            .classify(api_provider.base_url.as_str());
         Ok(CurrentClientSetup {
             auth,
             api_provider,
             api_auth,
-            endpoint_telemetry,
-            provider_header_names: self.state.provider.telemetry_header_names(),
         })
     }
 
@@ -613,8 +527,6 @@ impl ModelClient {
         turn_state: Option<Arc<OnceLock<String>>>,
         turn_metadata_header: Option<&str>,
         auth_context: AuthRequestTelemetryContext,
-        endpoint_telemetry: EndpointConfigTelemetry,
-        provider_header_names: Option<&str>,
         request_route_telemetry: RequestRouteTelemetry,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
         let headers = self.build_websocket_headers(turn_state.as_ref(), turn_metadata_header);
@@ -645,20 +557,11 @@ impl ModelClient {
             auth_context.recovery_mode,
             auth_context.recovery_phase,
             request_route_telemetry.endpoint,
-            request_route_telemetry.residency_header_attached,
-            request_route_telemetry.residency_header_value,
-            provider_header_names,
-            endpoint_telemetry.base_url_origin,
-            endpoint_telemetry.host_class,
-            endpoint_telemetry.base_url_source,
-            endpoint_telemetry.base_url_is_default,
             false,
             response_debug.request_id.as_deref(),
             response_debug.cf_ray.as_deref(),
             response_debug.auth_error.as_deref(),
             response_debug.auth_error_code.as_deref(),
-            response_debug.error_body_class,
-            response_debug.safe_error_message,
         );
         emit_feedback_request_tags(&FeedbackRequestTags {
             endpoint: request_route_telemetry.endpoint,
@@ -669,20 +572,10 @@ impl ModelClient {
             auth_recovery_mode: auth_context.recovery_mode,
             auth_recovery_phase: auth_context.recovery_phase,
             auth_connection_reused: Some(false),
-            provider_header_names,
-            base_url_origin: endpoint_telemetry.base_url_origin,
-            host_class: endpoint_telemetry.host_class,
-            base_url_source: endpoint_telemetry.base_url_source,
-            base_url_is_default: endpoint_telemetry.base_url_is_default,
-            residency_header_attached: Some(request_route_telemetry.residency_header_attached),
-            residency_header_value: request_route_telemetry.residency_header_value,
             auth_request_id: response_debug.request_id.as_deref(),
             auth_cf_ray: response_debug.cf_ray.as_deref(),
             auth_error: response_debug.auth_error.as_deref(),
             auth_error_code: response_debug.auth_error_code.as_deref(),
-            error_body_class: response_debug.error_body_class,
-            safe_error_message: response_debug.safe_error_message,
-            geo_denial_detected: Some(response_debug.geo_denial_detected),
             auth_recovery_followup_success: auth_context
                 .retry_after_unauthorized
                 .then_some(result.is_ok()),
@@ -691,23 +584,6 @@ impl ModelClient {
                 .then_some(status)
                 .flatten(),
         });
-        if status == Some(StatusCode::UNAUTHORIZED.as_u16()) && response_debug.geo_denial_detected {
-            session_telemetry.record_geo_denial(
-                request_route_telemetry.endpoint,
-                auth_context.auth_header_attached,
-                auth_context.auth_header_name,
-                request_route_telemetry.residency_header_attached,
-                request_route_telemetry.residency_header_value,
-                provider_header_names,
-                status,
-                response_debug.request_id.as_deref(),
-                response_debug.cf_ray.as_deref(),
-                response_debug.auth_error.as_deref(),
-                response_debug.auth_error_code.as_deref(),
-                response_debug.error_body_class.unwrap_or_default(),
-                response_debug.safe_error_message,
-            );
-        }
         result
     }
 
@@ -955,7 +831,6 @@ impl ModelClientSession {
             &client_setup.api_auth,
             PendingUnauthorizedRetry::default(),
         );
-        let endpoint_telemetry = client_setup.endpoint_telemetry;
         let connection = self
             .client
             .connect_websocket(
@@ -965,8 +840,6 @@ impl ModelClientSession {
                 Some(Arc::clone(&self.turn_state)),
                 None,
                 auth_context,
-                endpoint_telemetry,
-                client_setup.provider_header_names.as_deref(),
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
             )
             .await?;
@@ -995,8 +868,6 @@ impl ModelClientSession {
         turn_metadata_header: Option<&str>,
         options: &ApiResponsesOptions,
         auth_context: AuthRequestTelemetryContext,
-        endpoint_telemetry: EndpointConfigTelemetry,
-        provider_header_names: Option<&str>,
         request_route_telemetry: RequestRouteTelemetry,
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
         let needs_new = match self.websocket_session.connection.as_ref() {
@@ -1020,8 +891,6 @@ impl ModelClientSession {
                     Some(turn_state),
                     turn_metadata_header,
                     auth_context,
-                    endpoint_telemetry,
-                    provider_header_names,
                     request_route_telemetry,
                 )
                 .await?;
@@ -1102,8 +971,6 @@ impl ModelClientSession {
             let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(
                 session_telemetry,
                 request_auth_context,
-                client_setup.endpoint_telemetry,
-                client_setup.provider_header_names.clone(),
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
             );
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
@@ -1211,8 +1078,6 @@ impl ModelClientSession {
                     turn_metadata_header,
                     &options,
                     request_auth_context,
-                    client_setup.endpoint_telemetry,
-                    client_setup.provider_header_names.as_deref(),
                     RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
                 )
                 .await
@@ -1264,15 +1129,11 @@ impl ModelClientSession {
     fn build_streaming_telemetry(
         session_telemetry: &SessionTelemetry,
         auth_context: AuthRequestTelemetryContext,
-        endpoint_telemetry: EndpointConfigTelemetry,
-        provider_header_names: Option<String>,
         request_route_telemetry: RequestRouteTelemetry,
     ) -> (Arc<dyn RequestTelemetry>, Arc<dyn SseTelemetry>) {
         let telemetry = Arc::new(ApiTelemetry::new(
             session_telemetry.clone(),
             auth_context,
-            endpoint_telemetry,
-            provider_header_names,
             request_route_telemetry,
         ));
         let request_telemetry: Arc<dyn RequestTelemetry> = telemetry.clone();
@@ -1287,8 +1148,6 @@ impl ModelClientSession {
         let telemetry = Arc::new(ApiTelemetry::new(
             session_telemetry.clone(),
             AuthRequestTelemetryContext::default(),
-            EndpointConfigTelemetry::default(),
-            None,
             RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
         ));
         let websocket_telemetry: Arc<dyn WebsocketTelemetry> = telemetry;
@@ -1733,8 +1592,6 @@ fn api_error_http_status(error: &ApiError) -> Option<u16> {
 struct ApiTelemetry {
     session_telemetry: SessionTelemetry,
     auth_context: AuthRequestTelemetryContext,
-    endpoint_telemetry: EndpointConfigTelemetry,
-    provider_header_names: Option<String>,
     request_route_telemetry: RequestRouteTelemetry,
 }
 
@@ -1742,15 +1599,11 @@ impl ApiTelemetry {
     fn new(
         session_telemetry: SessionTelemetry,
         auth_context: AuthRequestTelemetryContext,
-        endpoint_telemetry: EndpointConfigTelemetry,
-        provider_header_names: Option<String>,
         request_route_telemetry: RequestRouteTelemetry,
     ) -> Self {
         Self {
             session_telemetry,
             auth_context,
-            endpoint_telemetry,
-            provider_header_names,
             request_route_telemetry,
         }
     }
@@ -1780,19 +1633,10 @@ impl RequestTelemetry for ApiTelemetry {
             self.auth_context.recovery_mode,
             self.auth_context.recovery_phase,
             self.request_route_telemetry.endpoint,
-            self.request_route_telemetry.residency_header_attached,
-            self.request_route_telemetry.residency_header_value,
-            self.provider_header_names.as_deref(),
-            self.endpoint_telemetry.base_url_origin,
-            self.endpoint_telemetry.host_class,
-            self.endpoint_telemetry.base_url_source,
-            self.endpoint_telemetry.base_url_is_default,
             debug.request_id.as_deref(),
             debug.cf_ray.as_deref(),
             debug.auth_error.as_deref(),
             debug.auth_error_code.as_deref(),
-            debug.error_body_class,
-            debug.safe_error_message,
         );
         emit_feedback_request_tags(&FeedbackRequestTags {
             endpoint: self.request_route_telemetry.endpoint,
@@ -1803,20 +1647,10 @@ impl RequestTelemetry for ApiTelemetry {
             auth_recovery_mode: self.auth_context.recovery_mode,
             auth_recovery_phase: self.auth_context.recovery_phase,
             auth_connection_reused: None,
-            provider_header_names: self.provider_header_names.as_deref(),
-            base_url_origin: self.endpoint_telemetry.base_url_origin,
-            host_class: self.endpoint_telemetry.host_class,
-            base_url_source: self.endpoint_telemetry.base_url_source,
-            base_url_is_default: self.endpoint_telemetry.base_url_is_default,
-            residency_header_attached: Some(self.request_route_telemetry.residency_header_attached),
-            residency_header_value: self.request_route_telemetry.residency_header_value,
             auth_request_id: debug.request_id.as_deref(),
             auth_cf_ray: debug.cf_ray.as_deref(),
             auth_error: debug.auth_error.as_deref(),
             auth_error_code: debug.auth_error_code.as_deref(),
-            error_body_class: debug.error_body_class,
-            safe_error_message: debug.safe_error_message,
-            geo_denial_detected: Some(debug.geo_denial_detected),
             auth_recovery_followup_success: self
                 .auth_context
                 .retry_after_unauthorized
@@ -1827,23 +1661,6 @@ impl RequestTelemetry for ApiTelemetry {
                 .then_some(status)
                 .flatten(),
         });
-        if status == Some(StatusCode::UNAUTHORIZED.as_u16()) && debug.geo_denial_detected {
-            self.session_telemetry.record_geo_denial(
-                self.request_route_telemetry.endpoint,
-                self.auth_context.auth_header_attached,
-                self.auth_context.auth_header_name,
-                self.request_route_telemetry.residency_header_attached,
-                self.request_route_telemetry.residency_header_value,
-                self.provider_header_names.as_deref(),
-                status,
-                debug.request_id.as_deref(),
-                debug.cf_ray.as_deref(),
-                debug.auth_error.as_deref(),
-                debug.auth_error_code.as_deref(),
-                debug.error_body_class.unwrap_or_default(),
-                debug.safe_error_message,
-            );
-        }
     }
 }
 

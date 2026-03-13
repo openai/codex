@@ -30,12 +30,6 @@ pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ResidencyHeaderTelemetry {
-    pub attached: bool,
-    pub value: Option<&'static str>,
-}
-
 #[derive(Debug, Clone)]
 pub struct Originator {
     pub value: String,
@@ -93,20 +87,6 @@ pub fn set_default_client_residency_requirement(enforce_residency: Option<Reside
         return;
     };
     *guard = enforce_residency;
-}
-
-pub fn current_residency_header_telemetry() -> ResidencyHeaderTelemetry {
-    let Ok(guard) = REQUIREMENTS_RESIDENCY.read() else {
-        tracing::warn!("Failed to acquire requirements residency lock");
-        return ResidencyHeaderTelemetry::default();
-    };
-    let Some(requirement) = guard.as_ref() else {
-        return ResidencyHeaderTelemetry::default();
-    };
-    ResidencyHeaderTelemetry {
-        attached: true,
-        value: Some(residency_header_value(*requirement)),
-    }
 }
 
 pub fn originator() -> Originator {
@@ -242,18 +222,12 @@ pub fn default_headers() -> HeaderMap {
         && let Some(requirement) = guard.as_ref()
         && !headers.contains_key(RESIDENCY_HEADER_NAME)
     {
-        headers.insert(
-            RESIDENCY_HEADER_NAME,
-            HeaderValue::from_static(residency_header_value(*requirement)),
-        );
+        let value = match requirement {
+            ResidencyRequirement::Us => HeaderValue::from_static("us"),
+        };
+        headers.insert(RESIDENCY_HEADER_NAME, value);
     }
     headers
-}
-
-fn residency_header_value(requirement: ResidencyRequirement) -> &'static str {
-    match requirement {
-        ResidencyRequirement::Us => "us",
-    }
 }
 
 fn is_sandboxed() -> bool {

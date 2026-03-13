@@ -88,23 +88,6 @@ async fn test_create_client_sets_default_headers() {
 }
 
 #[test]
-fn current_residency_header_telemetry_reports_attached_value() {
-    set_default_client_residency_requirement(Some(ResidencyRequirement::Us));
-    assert_eq!(
-        current_residency_header_telemetry(),
-        ResidencyHeaderTelemetry {
-            attached: true,
-            value: Some("us"),
-        }
-    );
-    set_default_client_residency_requirement(None);
-    assert_eq!(
-        current_residency_header_telemetry(),
-        ResidencyHeaderTelemetry::default()
-    );
-}
-
-#[test]
 fn test_invalid_suffix_is_sanitized() {
     let prefix = "codex_cli_rs/0.0.0";
     let suffix = "bad\rsuffix";

@@ -25,7 +25,6 @@ use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
 use crate::connectors;
-use crate::endpoint_config_telemetry::resolve_endpoint_config_telemetry_source;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::FEATURES;
 use crate::features::Feature;
@@ -1530,8 +1529,7 @@ impl Session {
         }
 
         let auth = auth.as_ref();
-        let provider_auth_mode = auth.map(CodexAuth::auth_mode);
-        let auth_mode = provider_auth_mode.map(TelemetryAuthMode::from);
+        let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
         let account_id = auth.and_then(CodexAuth::get_account_id);
         let account_email = auth.and_then(CodexAuth::get_account_email);
         let originator = crate::default_client::originator().value;
@@ -1576,22 +1574,9 @@ impl Session {
                 },
             )],
         );
-        let endpoint_telemetry_source = resolve_endpoint_config_telemetry_source(
-            config.as_ref(),
-            session_configuration.session_source.clone(),
-        );
-        let conversation_start_endpoint_telemetry = config
-            .model_provider
-            .to_api_provider(provider_auth_mode)
-            .map(|provider| endpoint_telemetry_source.classify(provider.base_url.as_str()))
-            .unwrap_or_else(|_| endpoint_telemetry_source.redacted_unknown());
 
         session_telemetry.conversation_starts(
             config.model_provider.name.as_str(),
-            conversation_start_endpoint_telemetry.base_url_origin,
-            conversation_start_endpoint_telemetry.host_class,
-            conversation_start_endpoint_telemetry.base_url_source,
-            conversation_start_endpoint_telemetry.base_url_is_default,
             session_configuration.collaboration_mode.reasoning_effort(),
             config
                 .model_reasoning_summary
@@ -1768,11 +1753,10 @@ impl Session {
             network_proxy,
             network_approval: Arc::clone(&network_approval),
             state_db: state_db_ctx.clone(),
-            model_client: ModelClient::new_with_endpoint_telemetry_source(
+            model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
                 session_configuration.provider.clone(),
-                endpoint_telemetry_source,
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
                 ws_version_from_features(config.as_ref()),

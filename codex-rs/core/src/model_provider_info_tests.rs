@@ -105,32 +105,3 @@ wire_api = "chat"
     let err = toml::from_str::<ModelProviderInfo>(provider_toml).unwrap_err();
     assert!(err.to_string().contains(CHAT_WIRE_API_REMOVED_ERROR));
 }
-
-#[test]
-fn telemetry_header_names_only_report_valid_header_names_without_values() {
-    let provider = ModelProviderInfo {
-        name: "Example".into(),
-        base_url: Some("https://example.com".into()),
-        env_key: None,
-        env_key_instructions: None,
-        experimental_bearer_token: None,
-        wire_api: WireApi::Responses,
-        query_params: None,
-        http_headers: Some(maplit::hashmap! {
-            "X-Example-Header".to_string() => "example-value".to_string(),
-            "bad\nname".to_string() => "ignored".to_string(),
-            "X-Bad-Value".to_string() => "bad\nvalue".to_string(),
-        }),
-        env_http_headers: None,
-        request_max_retries: None,
-        stream_max_retries: None,
-        stream_idle_timeout_ms: None,
-        requires_openai_auth: false,
-        supports_websockets: false,
-    };
-
-    assert_eq!(
-        provider.telemetry_header_names().as_deref(),
-        Some("x-example-header")
-    );
-}

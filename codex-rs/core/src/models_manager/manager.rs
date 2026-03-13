@@ -5,8 +5,6 @@ use crate::auth::AuthManager;
 use crate::auth::AuthMode;
 use crate::config::Config;
 use crate::default_client::build_reqwest_client;
-use crate::default_client::current_residency_header_telemetry;
-use crate::endpoint_config_telemetry::EndpointConfigTelemetrySource;
 use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
 use crate::model_provider_info::ModelProviderInfo;
@@ -42,20 +40,11 @@ const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
-const OPENAI_PROVIDER_ID: &str = "openai";
-
 #[derive(Clone)]
 struct ModelsRequestTelemetry {
     auth_mode: Option<String>,
     auth_header_attached: bool,
     auth_header_name: Option<&'static str>,
-    residency_header_attached: bool,
-    residency_header_value: Option<&'static str>,
-    provider_header_names: Option<String>,
-    base_url_origin: &'static str,
-    host_class: &'static str,
-    base_url_source: &'static str,
-    base_url_is_default: bool,
 }
 
 impl RequestTelemetry for ModelsRequestTelemetry {
@@ -82,19 +71,10 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             endpoint = MODELS_ENDPOINT,
             auth.header_attached = self.auth_header_attached,
             auth.header_name = self.auth_header_name,
-            residency_header_attached = self.residency_header_attached,
-            residency_header_value = self.residency_header_value,
-            provider_header_names = self.provider_header_names.as_deref(),
-            base_url_origin = self.base_url_origin,
-            host_class = self.host_class,
-            base_url_source = self.base_url_source,
-            base_url_is_default = self.base_url_is_default,
             auth.request_id = response_debug.request_id.as_deref(),
             auth.cf_ray = response_debug.cf_ray.as_deref(),
             auth.error = response_debug.auth_error.as_deref(),
             auth.error_code = response_debug.auth_error_code.as_deref(),
-            error_body_class = response_debug.error_body_class,
-            safe_error_message = response_debug.safe_error_message,
             auth.mode = self.auth_mode.as_deref(),
         );
         tracing::event!(
@@ -108,19 +88,10 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             endpoint = MODELS_ENDPOINT,
             auth.header_attached = self.auth_header_attached,
             auth.header_name = self.auth_header_name,
-            residency_header_attached = self.residency_header_attached,
-            residency_header_value = self.residency_header_value,
-            provider_header_names = self.provider_header_names.as_deref(),
-            base_url_origin = self.base_url_origin,
-            host_class = self.host_class,
-            base_url_source = self.base_url_source,
-            base_url_is_default = self.base_url_is_default,
             auth.request_id = response_debug.request_id.as_deref(),
             auth.cf_ray = response_debug.cf_ray.as_deref(),
             auth.error = response_debug.auth_error.as_deref(),
             auth.error_code = response_debug.auth_error_code.as_deref(),
-            error_body_class = response_debug.error_body_class,
-            safe_error_message = response_debug.safe_error_message,
             auth.mode = self.auth_mode.as_deref(),
         );
         emit_feedback_request_tags(&FeedbackRequestTags {
@@ -132,68 +103,13 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             auth_recovery_mode: None,
             auth_recovery_phase: None,
             auth_connection_reused: None,
-            provider_header_names: self.provider_header_names.as_deref(),
-            base_url_origin: self.base_url_origin,
-            host_class: self.host_class,
-            base_url_source: self.base_url_source,
-            base_url_is_default: self.base_url_is_default,
-            residency_header_attached: Some(self.residency_header_attached),
-            residency_header_value: self.residency_header_value,
             auth_request_id: response_debug.request_id.as_deref(),
             auth_cf_ray: response_debug.cf_ray.as_deref(),
             auth_error: response_debug.auth_error.as_deref(),
             auth_error_code: response_debug.auth_error_code.as_deref(),
-            error_body_class: response_debug.error_body_class,
-            safe_error_message: response_debug.safe_error_message,
-            geo_denial_detected: Some(response_debug.geo_denial_detected),
             auth_recovery_followup_success: None,
             auth_recovery_followup_status: None,
         });
-
-        if status == Some(http::StatusCode::UNAUTHORIZED.as_u16())
-            && response_debug.geo_denial_detected
-        {
-            tracing::event!(
-                target: "codex_otel.log_only",
-                tracing::Level::INFO,
-                event.name = "codex.geo_denial",
-                geo_denial_detected = true,
-                request_id = response_debug.request_id.as_deref(),
-                cf_ray = response_debug.cf_ray.as_deref(),
-                endpoint = MODELS_ENDPOINT,
-                auth.header_attached = self.auth_header_attached,
-                auth.header_name = self.auth_header_name,
-                auth.mode = self.auth_mode.as_deref(),
-                residency_header_attached = self.residency_header_attached,
-                residency_header_value = self.residency_header_value,
-                provider_header_names = self.provider_header_names.as_deref(),
-                http_status = status,
-                auth.error = response_debug.auth_error.as_deref(),
-                auth.error_code = response_debug.auth_error_code.as_deref(),
-                error_body_class = response_debug.error_body_class.unwrap_or_default(),
-                safe_error_message = response_debug.safe_error_message,
-            );
-            tracing::event!(
-                target: "codex_otel.trace_safe",
-                tracing::Level::INFO,
-                event.name = "codex.geo_denial",
-                geo_denial_detected = true,
-                request_id = response_debug.request_id.as_deref(),
-                cf_ray = response_debug.cf_ray.as_deref(),
-                endpoint = MODELS_ENDPOINT,
-                auth.header_attached = self.auth_header_attached,
-                auth.header_name = self.auth_header_name,
-                auth.mode = self.auth_mode.as_deref(),
-                residency_header_attached = self.residency_header_attached,
-                residency_header_value = self.residency_header_value,
-                provider_header_names = self.provider_header_names.as_deref(),
-                http_status = status,
-                auth.error = response_debug.auth_error.as_deref(),
-                auth.error_code = response_debug.auth_error_code.as_deref(),
-                error_body_class = response_debug.error_body_class.unwrap_or_default(),
-                safe_error_message = response_debug.safe_error_message,
-            );
-        }
     }
 }
 
@@ -481,21 +397,10 @@ impl ModelsManager {
         let api_provider = self.provider.to_api_provider(auth_mode)?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
         let transport = ReqwestTransport::new(build_reqwest_client());
-        let endpoint_telemetry =
-            EndpointConfigTelemetrySource::for_provider(OPENAI_PROVIDER_ID, &self.provider)
-                .classify(api_provider.base_url.as_str());
-        let residency = current_residency_header_telemetry();
         let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
             auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),
             auth_header_attached: api_auth.auth_header_attached(),
             auth_header_name: api_auth.auth_header_name(),
-            residency_header_attached: residency.attached,
-            residency_header_value: residency.value,
-            provider_header_names: self.provider.telemetry_header_names(),
-            base_url_origin: endpoint_telemetry.base_url_origin,
-            host_class: endpoint_telemetry.host_class,
-            base_url_source: endpoint_telemetry.base_url_source,
-            base_url_is_default: endpoint_telemetry.base_url_is_default,
         });
         let client = ModelsClient::new(transport, api_provider, api_auth)
             .with_telemetry(Some(request_telemetry));

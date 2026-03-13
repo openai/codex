@@ -46,20 +46,10 @@ pub(crate) struct FeedbackRequestTags<'a> {
     pub auth_recovery_mode: Option<&'a str>,
     pub auth_recovery_phase: Option<&'a str>,
     pub auth_connection_reused: Option<bool>,
-    pub provider_header_names: Option<&'a str>,
-    pub base_url_origin: &'a str,
-    pub host_class: &'a str,
-    pub base_url_source: &'a str,
-    pub base_url_is_default: bool,
-    pub residency_header_attached: Option<bool>,
-    pub residency_header_value: Option<&'a str>,
     pub auth_request_id: Option<&'a str>,
     pub auth_cf_ray: Option<&'a str>,
     pub auth_error: Option<&'a str>,
     pub auth_error_code: Option<&'a str>,
-    pub error_body_class: Option<&'a str>,
-    pub safe_error_message: Option<&'a str>,
-    pub geo_denial_detected: Option<bool>,
     pub auth_recovery_followup_success: Option<bool>,
     pub auth_recovery_followup_status: Option<u16>,
 }
@@ -68,11 +58,7 @@ pub(crate) fn emit_feedback_request_tags(tags: &FeedbackRequestTags<'_>) {
     let preserve_401_context_only = tags.auth_retry_after_unauthorized == Some(true);
     feedback_tags!(
         endpoint = tags.endpoint,
-        auth_header_attached = tags.auth_header_attached,
-        base_url_origin = tags.base_url_origin,
-        host_class = tags.host_class,
-        base_url_source = tags.base_url_source,
-        base_url_is_default = tags.base_url_is_default
+        auth_header_attached = tags.auth_header_attached
     );
 
     if let Some(auth_header_name) = tags.auth_header_name {
@@ -93,15 +79,6 @@ pub(crate) fn emit_feedback_request_tags(tags: &FeedbackRequestTags<'_>) {
     if let Some(auth_connection_reused) = tags.auth_connection_reused {
         feedback_tags!(auth_connection_reused = auth_connection_reused);
     }
-    if let Some(provider_header_names) = tags.provider_header_names {
-        feedback_tags!(provider_header_names = provider_header_names);
-    }
-    if let Some(residency_header_attached) = tags.residency_header_attached {
-        feedback_tags!(residency_header_attached = residency_header_attached);
-    }
-    if let Some(residency_header_value) = tags.residency_header_value {
-        feedback_tags!(residency_header_value = residency_header_value);
-    }
     if !preserve_401_context_only && let Some(auth_request_id) = tags.auth_request_id {
         feedback_tags!(auth_request_id = auth_request_id);
     }
@@ -113,15 +90,6 @@ pub(crate) fn emit_feedback_request_tags(tags: &FeedbackRequestTags<'_>) {
     }
     if !preserve_401_context_only && let Some(auth_error_code) = tags.auth_error_code {
         feedback_tags!(auth_error_code = auth_error_code);
-    }
-    if let Some(error_body_class) = tags.error_body_class {
-        feedback_tags!(error_body_class = error_body_class);
-    }
-    if let Some(safe_error_message) = tags.safe_error_message {
-        feedback_tags!(safe_error_message = safe_error_message);
-    }
-    if let Some(geo_denial_detected) = tags.geo_denial_detected {
-        feedback_tags!(geo_denial_detected = geo_denial_detected);
     }
     if let Some(auth_recovery_followup_success) = tags.auth_recovery_followup_success {
         feedback_tags!(auth_recovery_followup_success = auth_recovery_followup_success);

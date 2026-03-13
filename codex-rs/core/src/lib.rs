@@ -31,7 +31,6 @@ pub mod connectors;
 mod context_manager;
 mod contextual_user_message;
 pub mod custom_prompts;
-mod endpoint_config_telemetry;
 pub mod env;
 mod environment_context;
 pub mod error;

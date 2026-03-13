@@ -100,20 +100,10 @@ fn emit_feedback_request_tags_records_sentry_feedback_fields() {
         auth_recovery_mode: Some("managed"),
         auth_recovery_phase: Some("refresh_token"),
         auth_connection_reused: Some(true),
-        provider_header_names: Some("openai-project"),
-        base_url_origin: "chatgpt.com",
-        host_class: "openai_chatgpt",
-        base_url_source: "default",
-        base_url_is_default: true,
-        residency_header_attached: Some(true),
-        residency_header_value: Some("us"),
         auth_request_id: Some("req-123"),
         auth_cf_ray: Some("ray-123"),
         auth_error: Some("missing_authorization_header"),
         auth_error_code: Some("token_expired"),
-        error_body_class: Some("workspace_not_authorized_in_region"),
-        safe_error_message: Some("Workspace is not authorized in this region."),
-        geo_denial_detected: Some(true),
         auth_recovery_followup_success: Some(true),
         auth_recovery_followup_status: Some(200),
     });
@@ -138,10 +128,6 @@ fn emit_feedback_request_tags_records_sentry_feedback_fields() {
     assert_eq!(
         tags.get("auth_error_code").map(String::as_str),
         Some("\"token_expired\"")
-    );
-    assert_eq!(
-        tags.get("geo_denial_detected").map(String::as_str),
-        Some("true")
     );
     assert_eq!(
         tags.get("auth_recovery_followup_success")
@@ -207,20 +193,10 @@ fn emit_feedback_request_tags_skips_duplicate_latest_auth_fields_after_unauthori
         auth_recovery_mode: Some("managed"),
         auth_recovery_phase: Some("refresh_token"),
         auth_connection_reused: None,
-        provider_header_names: Some("openai-project"),
-        base_url_origin: "chatgpt.com",
-        host_class: "openai_chatgpt",
-        base_url_source: "default",
-        base_url_is_default: true,
-        residency_header_attached: Some(false),
-        residency_header_value: None,
         auth_request_id: Some("req-123"),
         auth_cf_ray: Some("ray-123"),
         auth_error: Some("missing_authorization_header"),
         auth_error_code: Some("token_expired"),
-        error_body_class: None,
-        safe_error_message: None,
-        geo_denial_detected: Some(false),
         auth_recovery_followup_success: Some(false),
         auth_recovery_followup_status: Some(401),
     });
