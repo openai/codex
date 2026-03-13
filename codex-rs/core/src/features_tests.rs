@@ -121,10 +121,26 @@ fn image_generation_is_under_development() {
 }
 
 #[test]
-fn image_detail_original_feature_is_under_development() {
+fn image_detail_original_is_experimental_and_user_toggleable() {
+    let spec = Feature::ImageDetailOriginal.info();
+    let stage = spec.stage;
+
+    assert!(matches!(stage, Stage::Experimental { .. }));
     assert_eq!(
-        Feature::ImageDetailOriginal.stage(),
-        Stage::UnderDevelopment
+        stage.experimental_menu_name(),
+        Some("Original image detail")
+    );
+    assert_eq!(
+        stage.experimental_menu_description(),
+        Some(
+            "Allow the model to request `detail: \"original\"` for tool-emitted images on supported models so it sees the full-resolution image instead of a resized approximation. This affects tools like `view_image` and `js_repl`, not images attached directly in the UI. It is particularly important for localization and precise UI targeting, for reading small text, and for reasoning about precise layout."
+        )
+    );
+    assert_eq!(
+        stage.experimental_announcement(),
+        Some(
+            "NEW: Original image detail is now available in /experimental. Enable it to let tools request full-resolution image detail on supported models for CUA and localization tasks."
+        )
     );
     assert_eq!(Feature::ImageDetailOriginal.default_enabled(), false);
 }
