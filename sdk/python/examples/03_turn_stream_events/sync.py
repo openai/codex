@@ -12,7 +12,7 @@ ensure_local_sdk_src()
 from codex_app_server import Codex, TextInput
 
 with Codex(config=runtime_config()) as codex:
-    thread = codex.thread_start(model="gpt-5", config={"model_reasoning_effort": "high"})
+    thread = codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
     turn = thread.turn(TextInput("Count from 1 to 200 with commas, then one summary sentence."))
 
     # Best effort controls: models can finish quickly, so races are expected.

@@ -16,7 +16,7 @@ from codex_app_server import AsyncCodex, TextInput
 
 async def main() -> None:
     async with AsyncCodex(config=runtime_config()) as codex:
-        thread = await codex.thread_start(model="gpt-5", config={"model_reasoning_effort": "high"})
+        thread = await codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
         first = await (await thread.turn(TextInput("One sentence about structured planning."))).run()
         second = await (await thread.turn(TextInput("Now restate it for a junior engineer."))).run()
 
@@ -33,7 +33,7 @@ async def main() -> None:
         try:
             resumed = await codex.thread_resume(
                 unarchived.id,
-                model="gpt-5",
+                model="gpt-5.4",
                 config={"model_reasoning_effort": "high"},
             )
             resumed_result = await (await resumed.turn(TextInput("Continue in one short sentence."))).run()
@@ -43,7 +43,7 @@ async def main() -> None:
 
         forked_info = "n/a"
         try:
-            forked = await codex.thread_fork(unarchived.id, model="gpt-5")
+            forked = await codex.thread_fork(unarchived.id, model="gpt-5.4")
             forked_result = await (await forked.turn(TextInput("Take a different angle in one short sentence."))).run()
             forked_info = f"{forked_result.turn_id} {forked_result.status}"
         except Exception as exc:

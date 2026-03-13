@@ -51,14 +51,14 @@ APPROVAL_POLICY = AskForApproval.model_validate("never")
 
 async def main() -> None:
     async with AsyncCodex(config=runtime_config()) as codex:
-        thread = await codex.thread_start(model="gpt-5", config={"model_reasoning_effort": "high"})
+        thread = await codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
 
         turn = await thread.turn(
             TextInput(PROMPT),
             approval_policy=APPROVAL_POLICY,
             cwd=str(Path.cwd()),
             effort=ReasoningEffort.medium,
-            model="gpt-5",
+            model="gpt-5.4",
             output_schema=OUTPUT_SCHEMA,
             personality=Personality.pragmatic,
             sandbox_policy=SANDBOX_POLICY,

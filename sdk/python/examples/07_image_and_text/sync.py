@@ -14,7 +14,7 @@ from codex_app_server import Codex, ImageInput, TextInput
 REMOTE_IMAGE_URL = "https://raw.githubusercontent.com/github/explore/main/topics/python/python.png"
 
 with Codex(config=runtime_config()) as codex:
-    thread = codex.thread_start(model="gpt-5", config={"model_reasoning_effort": "high"})
+    thread = codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
     result = thread.turn(
         [
             TextInput("What is in this image? Give 3 bullets."),

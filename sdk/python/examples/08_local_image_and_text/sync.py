@@ -16,7 +16,7 @@ if not IMAGE_PATH.exists():
     raise FileNotFoundError(f"Missing bundled image: {IMAGE_PATH}")
 
 with Codex(config=runtime_config()) as codex:
-    thread = codex.thread_start(model="gpt-5", config={"model_reasoning_effort": "high"})
+    thread = codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
 
     result = thread.turn(
         [

@@ -40,7 +40,7 @@ def _format_usage(usage: object | None) -> str:
 
 
 with Codex(config=runtime_config()) as codex:
-    thread = codex.thread_start(model="gpt-5", config={"model_reasoning_effort": "high"})
+    thread = codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
     print("Thread:", thread.id)
 
     while True:
