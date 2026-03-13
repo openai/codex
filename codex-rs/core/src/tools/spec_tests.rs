@@ -2205,7 +2205,7 @@ fn shell_tool_with_request_permission_includes_additional_permissions() {
         panic!("expected sandbox_permissions description");
     };
     assert!(description.contains("with_additional_permissions"));
-    assert!(description.contains("macOS permissions"));
+    assert!(description.contains("filesystem or network permissions"));
 
     let Some(JsonSchema::Object {
         properties: additional_properties,
@@ -2216,7 +2216,7 @@ fn shell_tool_with_request_permission_includes_additional_permissions() {
     };
     assert!(additional_properties.contains_key("network"));
     assert!(additional_properties.contains_key("file_system"));
-    assert!(additional_properties.contains_key("macos"));
+    assert!(!additional_properties.contains_key("macos"));
 }
 
 #[test]

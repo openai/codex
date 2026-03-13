@@ -389,43 +389,6 @@ fn create_file_system_permissions_schema() -> JsonSchema {
     }
 }
 
-fn create_macos_permissions_schema() -> JsonSchema {
-    JsonSchema::Object {
-        properties: BTreeMap::from([
-            (
-                "preferences".to_string(),
-                JsonSchema::String {
-                    description: Some(
-                        "macOS preferences access. Supported values: `none`, `read_only`, or `read_write`."
-                            .to_string(),
-                    ),
-                },
-            ),
-            (
-                "automations".to_string(),
-                JsonSchema::Array {
-                    items: Box::new(JsonSchema::String { description: None }),
-                    description: Some("macOS automation access as app bundle identifiers.".to_string()),
-                },
-            ),
-            (
-                "accessibility".to_string(),
-                JsonSchema::Boolean {
-                    description: Some("Whether to request macOS accessibility access.".to_string()),
-                },
-            ),
-            (
-                "calendar".to_string(),
-                JsonSchema::Boolean {
-                    description: Some("Whether to request macOS calendar access.".to_string()),
-                },
-            ),
-        ]),
-        required: None,
-        additional_properties: Some(false.into()),
-    }
-}
-
 fn create_additional_permissions_schema() -> JsonSchema {
     JsonSchema::Object {
         properties: BTreeMap::from([
@@ -434,7 +397,6 @@ fn create_additional_permissions_schema() -> JsonSchema {
                 "file_system".to_string(),
                 create_file_system_permissions_schema(),
             ),
-            ("macos".to_string(), create_macos_permissions_schema()),
         ]),
         required: None,
         additional_properties: Some(false.into()),
@@ -464,7 +426,7 @@ fn create_approval_parameters(
             JsonSchema::String {
                 description: Some(
                     if exec_permission_approvals_enabled {
-                        "Sandbox permissions for the command. Use \"with_additional_permissions\" to request additional sandboxed filesystem, network, or macOS permissions (preferred), or \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
+                        "Sandbox permissions for the command. Use \"with_additional_permissions\" to request additional sandboxed filesystem or network permissions (preferred), or \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
                     } else {
                         "Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
                     }
