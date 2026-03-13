@@ -5604,6 +5604,7 @@ impl ChatWidget {
         SlashCommandInvocation::with_args(SlashCommand::Approvals, args).into_user_message()
     }
 
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn settings_device_draft(kind: RealtimeAudioDeviceKind, name: Option<&str>) -> UserMessage {
         let kind_name = match kind {
             RealtimeAudioDeviceKind::Microphone => "microphone",
