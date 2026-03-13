@@ -303,6 +303,7 @@ pub(crate) struct ToolCtx {
     pub call_id: String,
     pub tool_name: String,
     pub command_override: Option<Vec<String>>,
+    pub effective_command: Option<Arc<tokio::sync::Mutex<Vec<String>>>>,
 }
 
 #[derive(Debug)]

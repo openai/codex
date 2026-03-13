@@ -403,14 +403,6 @@ impl ShellHandler {
         }
 
         let source = ExecCommandSource::Agent;
-        let emitter = ToolEmitter::shell(
-            exec_params.command.clone(),
-            exec_params.cwd.clone(),
-            source,
-            freeform,
-        );
-        let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
-        emitter.begin(event_ctx).await;
 
         let exec_approval_requirement = session
             .services
@@ -454,12 +446,15 @@ impl ShellHandler {
                 }
             }
         };
+        let effective_command =
+            std::sync::Arc::new(tokio::sync::Mutex::new(exec_params.command.clone()));
         let tool_ctx = ToolCtx {
             session: session.clone(),
             turn: turn.clone(),
             call_id: call_id.clone(),
             tool_name,
             command_override: None,
+            effective_command: Some(std::sync::Arc::clone(&effective_command)),
         };
         let out = orchestrator
             .run(
@@ -471,6 +466,12 @@ impl ShellHandler {
             )
             .await
             .map(|result| result.output);
+        let emitter = ToolEmitter::shell(
+            effective_command.lock().await.clone(),
+            exec_params.cwd.clone(),
+            source,
+            freeform,
+        );
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         let content = emitter.finish(event_ctx, out).await?;
         Ok(FunctionToolOutput::from_text(content, Some(true)))

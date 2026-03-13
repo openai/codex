@@ -224,6 +224,19 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
     ) -> Result<ExecToolCallOutput, ToolError> {
         let session_shell = ctx.session.user_shell();
         let base_command = ctx.command_override.as_ref().unwrap_or(&req.command);
+        crate::tools::events::ToolEmitter::shell(
+            base_command.to_vec(),
+            req.cwd.clone(),
+            ExecCommandSource::Agent,
+            false,
+        )
+        .begin(crate::tools::events::ToolEventCtx::new(
+            ctx.session.as_ref(),
+            ctx.turn.as_ref(),
+            &ctx.call_id,
+            None,
+        ))
+        .await;
         let command = maybe_wrap_shell_lc_with_snapshot(
             base_command,
             session_shell.as_ref(),
