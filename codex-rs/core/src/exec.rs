@@ -831,33 +831,33 @@ pub(crate) fn unsupported_windows_restricted_token_sandbox_reason(
     network_sandbox_policy: NetworkSandboxPolicy,
     sandbox_policy_cwd: &Path,
 ) -> Option<String> {
-    if should_use_windows_restricted_token_sandbox(
-        sandbox,
-        sandbox_policy,
-        file_system_sandbox_policy,
-    ) && !file_system_sandbox_policy
-        .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd)
-    {
-        return None;
-    }
-
     if sandbox != SandboxType::WindowsRestrictedToken {
         return None;
     }
 
-    if file_system_sandbox_policy
-        .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd)
+    let needs_direct_runtime_enforcement = file_system_sandbox_policy
+        .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd);
+
+    if should_use_windows_restricted_token_sandbox(
+        sandbox,
+        sandbox_policy,
+        file_system_sandbox_policy,
+    ) && !needs_direct_runtime_enforcement
     {
-        return Some(
-            "windows sandbox backend cannot enforce split filesystem permissions directly; refusing to run unsandboxed"
-                .to_string(),
-        );
+        return None;
     }
 
-    Some(format!(
-        "windows sandbox backend cannot enforce file_system={:?}, network={network_sandbox_policy:?}, legacy_policy={sandbox_policy:?}; refusing to run unsandboxed",
-        file_system_sandbox_policy.kind,
-    ))
+    let reason = if needs_direct_runtime_enforcement {
+        "windows sandbox backend cannot enforce split filesystem permissions directly; refusing to run unsandboxed"
+            .to_string()
+    } else {
+        format!(
+            "windows sandbox backend cannot enforce file_system={:?}, network={network_sandbox_policy:?}, legacy_policy={sandbox_policy:?}; refusing to run unsandboxed",
+            file_system_sandbox_policy.kind,
+        )
+    };
+
+    Some(reason)
 }
 /// Consumes the output of a child process, truncating it so it is suitable for
 /// use as the output of a `shell` tool call. Also enforces specified timeout.
