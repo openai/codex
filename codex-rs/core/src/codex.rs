@@ -373,6 +373,7 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
+const MAX_MID_TURN_COMPACTION_ATTEMPTS: u32 = 3;
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -5552,6 +5553,7 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let mut server_model_warning_emitted_for_turn = false;
+    let mut mid_turn_compaction_attempts = 0_u32;
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
@@ -5694,6 +5696,23 @@ pub(crate) async fn run_turn(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached && needs_follow_up {
+                    mid_turn_compaction_attempts += 1;
+                    if mid_turn_compaction_attempts > MAX_MID_TURN_COMPACTION_ATTEMPTS {
+                        error!(
+                            turn_id = %turn_context.sub_id,
+                            mid_turn_compaction_attempts,
+                            "mid-turn compaction exceeded retry limit"
+                        );
+                        let event = EventMsg::Error(CodexErr::ContextWindowExceeded.to_error_event(
+                            Some(
+                                format!(
+                                    "Mid-turn compaction exceeded retry limit ({MAX_MID_TURN_COMPACTION_ATTEMPTS} attempts); start a new thread or compact manually"
+                                ),
+                            ),
+                        ));
+                        sess.send_event(&turn_context, event).await;
+                        break;
+                    }
                     if run_auto_compact(
                         &sess,
                         &turn_context,
@@ -5706,6 +5725,7 @@ pub(crate) async fn run_turn(
                     }
                     continue;
                 }
+                mid_turn_compaction_attempts = 0;
 
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;

@@ -5,6 +5,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::compact::InitialContextInjection;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
+use crate::compact::merge_appended_history_items;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
@@ -21,6 +22,7 @@ use codex_protocol::models::ResponseItem;
 use futures::TryFutureExt;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
@@ -70,7 +72,8 @@ async fn run_remote_compact_task_inner_impl(
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
-    let mut history = sess.clone_history().await;
+    let history_snapshot = sess.clone_history().await;
+    let mut history = history_snapshot.clone();
     let base_instructions = sess.get_base_instructions().await;
     let deleted_items = trim_function_call_history_to_fit_context_window(
         &mut history,
@@ -132,6 +135,19 @@ async fn run_remote_compact_task_inner_impl(
 
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);
+    }
+    let latest_history_snapshot = sess.clone_history().await;
+    if merge_appended_history_items(
+        &mut new_history,
+        history_snapshot.raw_items(),
+        latest_history_snapshot.raw_items(),
+    )
+    .is_none()
+    {
+        warn!(
+            turn_id = %turn_context.sub_id,
+            "session history changed non-append-only during remote compaction; skipping concurrent tail merge"
+        );
     }
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
