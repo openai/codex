@@ -262,15 +262,9 @@ impl AppsRequirementsToml {
     }
 }
 
-/// Merge lower-precedence enabled settings into `base` using descending-precedence evaluation.
-///
-/// This function assumes `base` represents higher-precedence settings and `incoming`
-/// represents lower-precedence settings.
-///
-/// For each entry:
-/// - if either side sets `enabled = false`, the merged value is `false`;
-/// - otherwise, keep the higher-precedence value when present;
-/// - otherwise, use the lower-precedence value.
+/// Merge `enabled` configs from a lower-precedence source into an existing higher-precedence set.
+/// This lets managed sources (for example Cloud/MDM) enforce setting disablement across layers.
+/// Implemented with AppsRequirementsToml for now, could be abstracted if we have more enablement-style configs in the future.
 pub(crate) fn merge_enablement_settings_descending(
     base: &mut AppsRequirementsToml,
     incoming: AppsRequirementsToml,
@@ -715,88 +709,6 @@ mod tests {
         }
     }
 
-    fn apps_requirements(entries: &[(&str, Option<bool>)]) -> AppsRequirementsToml {
-        AppsRequirementsToml {
-            apps: entries
-                .iter()
-                .map(|(app_id, enabled)| {
-                    (
-                        (*app_id).to_string(),
-                        AppRequirementToml { enabled: *enabled },
-                    )
-                })
-                .collect(),
-        }
-    }
-
-    #[test]
-    fn merge_enablement_settings_descending_unions_distinct_apps() {
-        let mut merged = apps_requirements(&[("connector_high", Some(false))]);
-        let lower = apps_requirements(&[("connector_low", Some(true))]);
-
-        merge_enablement_settings_descending(&mut merged, lower);
-
-        assert_eq!(
-            merged,
-            apps_requirements(&[
-                ("connector_high", Some(false)),
-                ("connector_low", Some(true))
-            ]),
-        );
-    }
-
-    #[test]
-    fn merge_enablement_settings_descending_prefers_false_from_lower_precedence() {
-        let mut merged = apps_requirements(&[("connector_123123", Some(true))]);
-        let lower = apps_requirements(&[("connector_123123", Some(false))]);
-
-        merge_enablement_settings_descending(&mut merged, lower);
-
-        assert_eq!(
-            merged,
-            apps_requirements(&[("connector_123123", Some(false))]),
-        );
-    }
-
-    #[test]
-    fn merge_enablement_settings_descending_keeps_higher_true_when_lower_is_unset() {
-        let mut merged = apps_requirements(&[("connector_123123", Some(true))]);
-        let lower = apps_requirements(&[("connector_123123", None)]);
-
-        merge_enablement_settings_descending(&mut merged, lower);
-
-        assert_eq!(
-            merged,
-            apps_requirements(&[("connector_123123", Some(true))]),
-        );
-    }
-
-    #[test]
-    fn merge_enablement_settings_descending_uses_lower_value_when_higher_missing() {
-        let mut merged = apps_requirements(&[]);
-        let lower = apps_requirements(&[("connector_123123", Some(true))]);
-
-        merge_enablement_settings_descending(&mut merged, lower);
-
-        assert_eq!(
-            merged,
-            apps_requirements(&[("connector_123123", Some(true))]),
-        );
-    }
-
-    #[test]
-    fn merge_enablement_settings_descending_preserves_higher_false_when_lower_missing_app() {
-        let mut merged = apps_requirements(&[("connector_123123", Some(false))]);
-        let lower = apps_requirements(&[]);
-
-        merge_enablement_settings_descending(&mut merged, lower);
-
-        assert_eq!(
-            merged,
-            apps_requirements(&[("connector_123123", Some(false))]),
-        );
-    }
-
     #[test]
     fn merge_unset_fields_copies_every_field_and_sets_sources() {
         let mut target = ConfigRequirementsWithSources::default();
@@ -933,6 +845,110 @@ mod tests {
             }
         );
         Ok(())
+    }
+
+    #[test]
+    fn deserialize_apps_requirements() -> Result<()> {
+        let toml_str = r#"
+            [apps.connector_123123]
+            enabled = false
+        "#;
+        let requirements: ConfigRequirementsToml = from_str(toml_str)?;
+
+        assert_eq!(
+            requirements.apps,
+            Some(AppsRequirementsToml {
+                apps: BTreeMap::from([(
+                    "connector_123123".to_string(),
+                    AppRequirementToml {
+                        enabled: Some(false),
+                    },
+                )]),
+            })
+        );
+        Ok(())
+    }
+
+    fn apps_requirements(entries: &[(&str, Option<bool>)]) -> AppsRequirementsToml {
+        AppsRequirementsToml {
+            apps: entries
+                .iter()
+                .map(|(app_id, enabled)| {
+                    (
+                        (*app_id).to_string(),
+                        AppRequirementToml { enabled: *enabled },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn merge_enablement_settings_descending_unions_distinct_apps() {
+        let mut merged = apps_requirements(&[("connector_high", Some(false))]);
+        let lower = apps_requirements(&[("connector_low", Some(true))]);
+
+        merge_enablement_settings_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            apps_requirements(&[
+                ("connector_high", Some(false)),
+                ("connector_low", Some(true))
+            ]),
+        );
+    }
+
+    #[test]
+    fn merge_enablement_settings_descending_prefers_false_from_lower_precedence() {
+        let mut merged = apps_requirements(&[("connector_123123", Some(true))]);
+        let lower = apps_requirements(&[("connector_123123", Some(false))]);
+
+        merge_enablement_settings_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            apps_requirements(&[("connector_123123", Some(false))]),
+        );
+    }
+
+    #[test]
+    fn merge_enablement_settings_descending_keeps_higher_true_when_lower_is_unset() {
+        let mut merged = apps_requirements(&[("connector_123123", Some(true))]);
+        let lower = apps_requirements(&[("connector_123123", None)]);
+
+        merge_enablement_settings_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            apps_requirements(&[("connector_123123", Some(true))]),
+        );
+    }
+
+    #[test]
+    fn merge_enablement_settings_descending_uses_lower_value_when_higher_missing() {
+        let mut merged = apps_requirements(&[]);
+        let lower = apps_requirements(&[("connector_123123", Some(true))]);
+
+        merge_enablement_settings_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            apps_requirements(&[("connector_123123", Some(true))]),
+        );
+    }
+
+    #[test]
+    fn merge_enablement_settings_descending_preserves_higher_false_when_lower_missing_app() {
+        let mut merged = apps_requirements(&[("connector_123123", Some(false))]);
+        let lower = apps_requirements(&[]);
+
+        merge_enablement_settings_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            apps_requirements(&[("connector_123123", Some(false))]),
+        );
     }
 
     #[test]
@@ -1429,28 +1445,6 @@ mod tests {
                 ]),
                 RequirementSource::Unknown,
             ))
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn deserialize_apps_requirements() -> Result<()> {
-        let toml_str = r#"
-            [apps.connector_123123]
-            enabled = false
-        "#;
-        let requirements: ConfigRequirementsToml = from_str(toml_str)?;
-
-        assert_eq!(
-            requirements.apps,
-            Some(AppsRequirementsToml {
-                apps: BTreeMap::from([(
-                    "connector_123123".to_string(),
-                    AppRequirementToml {
-                        enabled: Some(false),
-                    },
-                )]),
-            })
         );
         Ok(())
     }
