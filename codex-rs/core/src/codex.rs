@@ -64,7 +64,6 @@ use codex_hooks::HookPayload;
 use codex_hooks::HookResult;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
-use codex_hooks::UserPromptSubmitRequest;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_network_proxy::normalize_host;
@@ -204,6 +203,8 @@ use crate::feedback_tags;
 use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::git_info::get_git_repo_root;
+use crate::hook_runtime::run_pending_session_start_hooks;
+use crate::hook_runtime::run_user_prompt_submit_hooks;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
@@ -5936,109 +5937,6 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
-}
-
-async fn run_user_prompt_submit_hooks(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
-    prompt: String,
-) -> bool {
-    let user_prompt_submit_permission_mode = match turn_context.approval_policy.value() {
-        AskForApproval::Never => "bypassPermissions",
-        AskForApproval::UnlessTrusted
-        | AskForApproval::OnFailure
-        | AskForApproval::OnRequest
-        | AskForApproval::Granular(_) => "default",
-    }
-    .to_string();
-    let user_prompt_submit_request = UserPromptSubmitRequest {
-        session_id: sess.conversation_id,
-        turn_id: turn_context.sub_id.clone(),
-        cwd: turn_context.cwd.clone(),
-        transcript_path: sess.current_rollout_path().await,
-        model: turn_context.model_info.slug.clone(),
-        permission_mode: user_prompt_submit_permission_mode,
-        prompt,
-    };
-    for run in sess
-        .hooks()
-        .preview_user_prompt_submit(&user_prompt_submit_request)
-    {
-        sess.send_event(
-            turn_context,
-            EventMsg::HookStarted(crate::protocol::HookStartedEvent {
-                turn_id: Some(turn_context.sub_id.clone()),
-                run,
-            }),
-        )
-        .await;
-    }
-    let user_prompt_submit_outcome = sess
-        .hooks()
-        .run_user_prompt_submit(user_prompt_submit_request)
-        .await;
-    for completed in user_prompt_submit_outcome.hook_events {
-        sess.send_event(turn_context, EventMsg::HookCompleted(completed))
-            .await;
-    }
-    if let Some(additional_context) = user_prompt_submit_outcome.additional_context {
-        let developer_message: ResponseItem = DeveloperInstructions::new(additional_context).into();
-        sess.record_conversation_items(turn_context, std::slice::from_ref(&developer_message))
-            .await;
-    }
-    user_prompt_submit_outcome.should_stop
-}
-
-async fn run_pending_session_start_hooks(
-    sess: &Arc<Session>,
-    turn_context: &Arc<TurnContext>,
-) -> bool {
-    let Some(session_start_source) = sess.take_pending_session_start_source().await else {
-        return false;
-    };
-
-    let session_start_permission_mode = match turn_context.approval_policy.value() {
-        AskForApproval::Never => "bypassPermissions",
-        AskForApproval::UnlessTrusted
-        | AskForApproval::OnFailure
-        | AskForApproval::OnRequest
-        | AskForApproval::Granular(_) => "default",
-    }
-    .to_string();
-    let session_start_request = codex_hooks::SessionStartRequest {
-        session_id: sess.conversation_id,
-        cwd: turn_context.cwd.clone(),
-        transcript_path: sess.current_rollout_path().await,
-        model: turn_context.model_info.slug.clone(),
-        permission_mode: session_start_permission_mode,
-        source: session_start_source,
-    };
-    for run in sess.hooks().preview_session_start(&session_start_request) {
-        sess.send_event(
-            turn_context,
-            EventMsg::HookStarted(crate::protocol::HookStartedEvent {
-                turn_id: Some(turn_context.sub_id.clone()),
-                run,
-            }),
-        )
-        .await;
-    }
-    let session_start_outcome = sess
-        .hooks()
-        .run_session_start(session_start_request, Some(turn_context.sub_id.clone()))
-        .await;
-    for completed in session_start_outcome.hook_events {
-        sess.send_event(turn_context, EventMsg::HookCompleted(completed))
-            .await;
-    }
-    if !session_start_outcome.should_stop
-        && let Some(additional_context) = session_start_outcome.additional_context
-    {
-        let developer_message: ResponseItem = DeveloperInstructions::new(additional_context).into();
-        sess.record_conversation_items(turn_context, std::slice::from_ref(&developer_message))
-            .await;
-    }
-    session_start_outcome.should_stop
 }
 
 async fn run_pre_sampling_compact(
