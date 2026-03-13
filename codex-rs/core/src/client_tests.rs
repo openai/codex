@@ -1,10 +1,19 @@
+use super::AuthRequestTelemetryContext;
 use super::ModelClient;
+use super::PendingUnauthorizedRetry;
+use super::UnauthorizedRecoveryExecution;
+use super::WebsocketSession;
+use crate::endpoint_config_telemetry::EndpointConfigTelemetrySource;
+use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
+use crate::response_debug_context::extract_response_debug_context;
+use codex_api::TransportError;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
+use reqwest::StatusCode;
 use serde_json::json;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
@@ -23,6 +32,47 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
         false,
         None,
     )
+}
+
+#[test]
+fn model_client_new_requires_explicit_provider_id_for_builtin_endpoint_defaults() {
+    let provider = crate::model_provider_info::create_oss_provider_with_base_url(
+        "http://localhost:1234/v1",
+        crate::model_provider_info::WireApi::Responses,
+    );
+
+    let client = ModelClient::new(
+        None,
+        ThreadId::new(),
+        provider.clone(),
+        SessionSource::Cli,
+        None,
+        false,
+        false,
+        false,
+        None,
+    );
+    let client_with_provider_id = ModelClient::new_with_provider_id(
+        None,
+        ThreadId::new(),
+        LMSTUDIO_OSS_PROVIDER_ID,
+        provider,
+        SessionSource::Cli,
+        None,
+        false,
+        false,
+        false,
+        None,
+    );
+
+    assert_eq!(
+        client.state.endpoint_telemetry_source,
+        EndpointConfigTelemetrySource::new("config_toml", false)
+    );
+    assert_eq!(
+        client_with_provider_id.state.endpoint_telemetry_source,
+        EndpointConfigTelemetrySource::new("default", true)
+    );
 }
 
 fn test_model_info() -> ModelInfo {
@@ -93,4 +143,65 @@ async fn summarize_memories_returns_empty_for_empty_input() {
         .await
         .expect("empty summarize request should succeed");
     assert_eq!(output.len(), 0);
+}
+
+#[test]
+fn extract_response_debug_context_decodes_identity_headers() {
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        "x-oai-request-id",
+        http::HeaderValue::from_static("req-401"),
+    );
+    headers.insert("cf-ray", http::HeaderValue::from_static("ray-401"));
+    headers.insert(
+        "x-openai-authorization-error",
+        http::HeaderValue::from_static("missing_authorization_header"),
+    );
+    headers.insert(
+        "x-error-json",
+        http::HeaderValue::from_static("eyJlcnJvciI6eyJjb2RlIjoidG9rZW5fZXhwaXJlZCJ9fQ=="),
+    );
+
+    let context = extract_response_debug_context(&TransportError::Http {
+        status: StatusCode::UNAUTHORIZED,
+        url: Some("https://chatgpt.com/backend-api/codex/models".to_string()),
+        headers: Some(headers),
+        body: Some(r#"{"detail":"Unauthorized"}"#.to_string()),
+    });
+
+    assert_eq!(context.request_id.as_deref(), Some("req-401"));
+    assert_eq!(context.cf_ray.as_deref(), Some("ray-401"));
+    assert_eq!(
+        context.auth_error.as_deref(),
+        Some("missing_authorization_header")
+    );
+    assert_eq!(context.auth_error_code.as_deref(), Some("token_expired"));
+}
+
+#[test]
+fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
+    let auth_context = AuthRequestTelemetryContext::new(
+        &crate::api_bridge::CoreAuthProvider::for_test(Some("access-token"), Some("workspace-123")),
+        PendingUnauthorizedRetry::from_recovery(UnauthorizedRecoveryExecution {
+            mode: "managed",
+            phase: "refresh_token",
+        }),
+    );
+
+    assert!(auth_context.auth_header_attached);
+    assert_eq!(auth_context.auth_header_name, Some("authorization"));
+    assert!(auth_context.retry_after_unauthorized);
+    assert_eq!(auth_context.recovery_mode, Some("managed"));
+    assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
+}
+
+#[test]
+fn websocket_session_tracks_connection_reuse() {
+    let telemetry = WebsocketSession::default();
+
+    assert!(!telemetry.connection_reused());
+
+    telemetry.set_connection_reused(true);
+
+    assert!(telemetry.connection_reused());
 }

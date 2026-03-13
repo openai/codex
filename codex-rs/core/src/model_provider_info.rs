@@ -15,6 +15,7 @@ use http::header::HeaderValue;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
@@ -124,6 +125,38 @@ pub struct ModelProviderInfo {
 }
 
 impl ModelProviderInfo {
+    pub(crate) fn telemetry_header_names(&self) -> Option<String> {
+        let mut names = BTreeSet::new();
+
+        if let Some(headers) = &self.http_headers {
+            for (name, value) in headers {
+                if let (Ok(name), Ok(_value)) =
+                    (HeaderName::try_from(name), HeaderValue::try_from(value))
+                {
+                    names.insert(name.as_str().to_string());
+                }
+            }
+        }
+
+        if let Some(env_headers) = &self.env_http_headers {
+            for (header, env_var) in env_headers {
+                if let Ok(value) = std::env::var(env_var)
+                    && !value.trim().is_empty()
+                    && let (Ok(name), Ok(_value)) =
+                        (HeaderName::try_from(header), HeaderValue::try_from(value))
+                {
+                    names.insert(name.as_str().to_string());
+                }
+            }
+        }
+
+        if names.is_empty() {
+            None
+        } else {
+            Some(names.into_iter().collect::<Vec<_>>().join(","))
+        }
+    }
+
     fn build_header_map(&self) -> crate::error::Result<HeaderMap> {
         let capacity = self.http_headers.as_ref().map_or(0, HashMap::len)
             + self.env_http_headers.as_ref().map_or(0, HashMap::len);

@@ -292,6 +292,8 @@ pub struct UnexpectedResponseError {
     pub url: Option<String>,
     pub cf_ray: Option<String>,
     pub request_id: Option<String>,
+    pub identity_authorization_error: Option<String>,
+    pub identity_error_code: Option<String>,
 }
 
 const CLOUDFLARE_BLOCKED_MESSAGE: &str =
@@ -346,6 +348,12 @@ impl UnexpectedResponseError {
         if let Some(id) = &self.request_id {
             message.push_str(&format!(", request id: {id}"));
         }
+        if let Some(auth_error) = &self.identity_authorization_error {
+            message.push_str(&format!(", auth error: {auth_error}"));
+        }
+        if let Some(error_code) = &self.identity_error_code {
+            message.push_str(&format!(", auth error code: {error_code}"));
+        }
 
         Some(message)
     }
@@ -367,6 +375,12 @@ impl std::fmt::Display for UnexpectedResponseError {
             }
             if let Some(id) = &self.request_id {
                 message.push_str(&format!(", request id: {id}"));
+            }
+            if let Some(auth_error) = &self.identity_authorization_error {
+                message.push_str(&format!(", auth error: {auth_error}"));
+            }
+            if let Some(error_code) = &self.identity_error_code {
+                message.push_str(&format!(", auth error code: {error_code}"));
             }
             write!(f, "{message}")
         }

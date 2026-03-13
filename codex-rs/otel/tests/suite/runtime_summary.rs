@@ -47,8 +47,32 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         None,
         None,
     );
-    manager.record_api_request(1, Some(200), None, Duration::from_millis(300));
-    manager.record_websocket_request(Duration::from_millis(400), None);
+    manager.record_api_request(
+        1,
+        Some(200),
+        None,
+        Duration::from_millis(300),
+        false,
+        None,
+        false,
+        None,
+        None,
+        "/responses",
+        false,
+        None,
+        None,
+        "api.openai.com",
+        "openai_api",
+        "default",
+        true,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    manager.record_websocket_request(Duration::from_millis(400), None, false);
     let sse_response: std::result::Result<
         Option<std::result::Result<StreamEvent, eventsource_stream::EventStreamError<&str>>>,
         tokio::time::error::Elapsed,
