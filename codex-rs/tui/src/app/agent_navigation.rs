@@ -110,11 +110,6 @@ impl AgentNavigationState {
         }
     }
 
-    pub(crate) fn remove(&mut self, thread_id: ThreadId) {
-        self.threads.remove(&thread_id);
-        self.order.retain(|id| *id != thread_id);
-    }
-
     /// Drops all cached picker state.
     ///
     /// This is used when `App` tears down thread event state and needs the picker cache to return
