@@ -9490,6 +9490,31 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
     );
 }
 
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn world_writable_warning_without_preset_persists_dont_warn_again() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_world_writable_warning_confirmation(None, Vec::new(), 0, true);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events: Vec<AppEvent> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateWorldWritableWarningAcknowledged(true)
+        )),
+        "expected update-world-writable-warning acknowledgement event, got: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::PersistWorldWritableWarningAcknowledged)),
+        "expected persist-world-writable-warning acknowledgement event, got: {events:?}"
+    );
+}
+
 //
 // Snapshot test: command approval modal
 //
