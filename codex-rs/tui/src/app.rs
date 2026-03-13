@@ -857,6 +857,40 @@ impl App {
         self.chat_widget.set_approvals_reviewer(reviewer);
     }
 
+    fn try_set_approval_policy_on_config(
+        &mut self,
+        config: &mut Config,
+        policy: AskForApproval,
+        user_message_prefix: &str,
+        log_message: &str,
+    ) -> bool {
+        if let Err(err) = config.permissions.approval_policy.set(policy) {
+            tracing::warn!(error = %err, "{log_message}");
+            self.chat_widget
+                .add_error_message(format!("{user_message_prefix}: {err}"));
+            return false;
+        }
+
+        true
+    }
+
+    fn try_set_sandbox_policy_on_config(
+        &mut self,
+        config: &mut Config,
+        policy: SandboxPolicy,
+        user_message_prefix: &str,
+        log_message: &str,
+    ) -> bool {
+        if let Err(err) = config.permissions.sandbox_policy.set(policy) {
+            tracing::warn!(error = %err, "{log_message}");
+            self.chat_widget
+                .add_error_message(format!("{user_message_prefix}: {err}"));
+            return false;
+        }
+
+        true
+    }
+
     async fn update_feature_flags(&mut self, updates: Vec<(Feature, bool)>) {
         if updates.is_empty() {
             return;
@@ -907,40 +941,7 @@ impl App {
 
         for (feature, enabled) in updates {
             let feature_key = feature.key();
-            if feature == Feature::GuardianApproval && enabled {
-                // Enabling Smart Approvals should behave like selecting the
-                // matching `/approvals` preset, so validate those coupled
-                // approval/sandbox settings before we persist or patch runtime
-                // state.
-                if let Err(err) = self
-                    .config
-                    .permissions
-                    .approval_policy
-                    .can_set(&smart_approvals_mode.approval_policy)
-                {
-                    tracing::error!(
-                        error = %err,
-                        "failed to enable smart approvals due to approval policy constraints"
-                    );
-                    self.chat_widget
-                        .add_error_message(format!("Failed to enable Smart Approvals: {err}"));
-                    continue;
-                }
-                if let Err(err) = self
-                    .config
-                    .permissions
-                    .sandbox_policy
-                    .can_set(&smart_approvals_mode.sandbox_policy)
-                {
-                    tracing::error!(
-                        error = %err,
-                        "failed to enable smart approvals due to sandbox constraints"
-                    );
-                    self.chat_widget
-                        .add_error_message(format!("Failed to enable Smart Approvals: {err}"));
-                    continue;
-                }
-            }
+            let mut feature_edits = Vec::new();
             if feature == Feature::GuardianApproval
                 && !enabled
                 && self.active_profile.is_some()
@@ -951,7 +952,8 @@ impl App {
                     );
                 continue;
             }
-            if let Err(err) = next_config.features.set_enabled(feature, enabled) {
+            let mut feature_config = next_config.clone();
+            if let Err(err) = feature_config.features.set_enabled(feature, enabled) {
                 tracing::error!(
                     error = %err,
                     feature = feature_key,
@@ -962,67 +964,56 @@ impl App {
                 ));
                 continue;
             }
-            let effective_enabled = next_config.features.enabled(feature);
-            feature_updates_to_apply.push((feature, effective_enabled));
+            let effective_enabled = feature_config.features.enabled(feature);
             if feature == Feature::GuardianApproval {
-                let previous_approvals_reviewer = next_config.approvals_reviewer;
+                let previous_approvals_reviewer = feature_config.approvals_reviewer;
                 if effective_enabled {
                     // Persist the reviewer setting so future sessions keep the
                     // experiment's matching `/approvals` mode until the user
                     // changes it explicitly.
-                    next_config.approvals_reviewer = smart_approvals_mode.approvals_reviewer;
-                    builder = builder.with_edits([ConfigEdit::SetPath {
+                    feature_config.approvals_reviewer = smart_approvals_mode.approvals_reviewer;
+                    feature_edits.push(ConfigEdit::SetPath {
                         segments: scoped_segments("approvals_reviewer"),
                         value: smart_approvals_mode.approvals_reviewer.to_string().into(),
-                    }]);
+                    });
                     if previous_approvals_reviewer != smart_approvals_mode.approvals_reviewer {
                         permissions_history_label = Some("Smart Approvals");
                     }
                 } else if !effective_enabled {
                     if profile_approvals_reviewer_configured || self.active_profile.is_none() {
-                        builder = builder.with_edits([ConfigEdit::ClearPath {
+                        feature_edits.push(ConfigEdit::ClearPath {
                             segments: scoped_segments("approvals_reviewer"),
-                        }]);
+                        });
                     }
-                    next_config.approvals_reviewer = ApprovalsReviewer::User;
+                    feature_config.approvals_reviewer = ApprovalsReviewer::User;
                     if previous_approvals_reviewer != ApprovalsReviewer::User {
                         permissions_history_label = Some("Default");
                     }
                 }
-                approvals_reviewer_override = Some(next_config.approvals_reviewer);
+                approvals_reviewer_override = Some(feature_config.approvals_reviewer);
             }
             if feature == Feature::GuardianApproval && effective_enabled {
                 // The feature flag alone is not enough for the live session.
                 // We also align approval policy + sandbox to the Smart
                 // Approvals preset so enabling the experiment immediately makes
                 // guardian review observable in the current thread.
-                if let Err(err) = next_config
-                    .permissions
-                    .approval_policy
-                    .set(smart_approvals_mode.approval_policy)
-                {
-                    tracing::error!(
-                        error = %err,
-                        "failed to set smart approvals approval policy on app config"
-                    );
-                    self.chat_widget
-                        .add_error_message(format!("Failed to enable Smart Approvals: {err}"));
+                if !self.try_set_approval_policy_on_config(
+                    &mut feature_config,
+                    smart_approvals_mode.approval_policy,
+                    "Failed to enable Smart Approvals",
+                    "failed to set smart approvals approval policy on staged config",
+                ) {
                     continue;
                 }
-                if let Err(err) = next_config
-                    .permissions
-                    .sandbox_policy
-                    .set(smart_approvals_mode.sandbox_policy.clone())
-                {
-                    tracing::error!(
-                        error = %err,
-                        "failed to set smart approvals sandbox policy on app config"
-                    );
-                    self.chat_widget
-                        .add_error_message(format!("Failed to enable Smart Approvals: {err}"));
+                if !self.try_set_sandbox_policy_on_config(
+                    &mut feature_config,
+                    smart_approvals_mode.sandbox_policy.clone(),
+                    "Failed to enable Smart Approvals",
+                    "failed to set smart approvals sandbox policy on staged config",
+                ) {
                     continue;
                 }
-                builder = builder.with_edits([
+                feature_edits.extend([
                     ConfigEdit::SetPath {
                         segments: scoped_segments("approval_policy"),
                         value: "on-request".into(),
@@ -1035,7 +1026,11 @@ impl App {
                 approval_policy_override = Some(smart_approvals_mode.approval_policy);
                 sandbox_policy_override = Some(smart_approvals_mode.sandbox_policy.clone());
             }
-            builder = builder.set_feature_enabled(feature_key, effective_enabled);
+            next_config = feature_config;
+            feature_updates_to_apply.push((feature, effective_enabled));
+            builder = builder
+                .with_edits(feature_edits)
+                .set_feature_enabled(feature_key, effective_enabled);
         }
 
         // Persist first so the live session does not diverge from disk if the
@@ -3242,14 +3237,20 @@ impl App {
                 self.chat_widget.restart_realtime_audio_device(kind);
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
-                self.runtime_approval_policy_override = Some(policy);
-                if let Err(err) = self.config.permissions.approval_policy.set(policy) {
-                    tracing::warn!(%err, "failed to set approval policy on app config");
-                    self.chat_widget
-                        .add_error_message(format!("Failed to set approval policy: {err}"));
+                let mut config = self.config.clone();
+                if !self.try_set_approval_policy_on_config(
+                    &mut config,
+                    policy,
+                    "Failed to set approval policy",
+                    "failed to set approval policy on app config",
+                ) {
                     return Ok(AppRunControl::Continue);
                 }
-                self.chat_widget.set_approval_policy(policy);
+                self.config = config;
+                self.runtime_approval_policy_override =
+                    Some(self.config.permissions.approval_policy.value());
+                self.chat_widget
+                    .set_approval_policy(self.config.permissions.approval_policy.value());
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
                 #[cfg(target_os = "windows")]
@@ -3260,12 +3261,16 @@ impl App {
                 );
                 let policy_for_chat = policy.clone();
 
-                if let Err(err) = self.config.permissions.sandbox_policy.set(policy) {
-                    tracing::warn!(%err, "failed to set sandbox policy on app config");
-                    self.chat_widget
-                        .add_error_message(format!("Failed to set sandbox policy: {err}"));
+                let mut config = self.config.clone();
+                if !self.try_set_sandbox_policy_on_config(
+                    &mut config,
+                    policy,
+                    "Failed to set sandbox policy",
+                    "failed to set sandbox policy on app config",
+                ) {
                     return Ok(AppRunControl::Continue);
                 }
+                self.config = config;
                 if let Err(err) = self.chat_widget.set_sandbox_policy(policy_for_chat) {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
                     self.chat_widget
