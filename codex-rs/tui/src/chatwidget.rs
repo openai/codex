@@ -530,6 +530,77 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StatusIndicatorState {
+    header: String,
+    details: Option<String>,
+    details_max_lines: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct PendingGuardianReviewStatus {
+    entries: Vec<PendingGuardianReviewStatusEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingGuardianReviewStatusEntry {
+    id: String,
+    detail: String,
+}
+
+impl PendingGuardianReviewStatus {
+    fn start_or_update(&mut self, id: String, detail: String) {
+        if let Some(existing) = self.entries.iter_mut().find(|entry| entry.id == id) {
+            existing.detail = detail;
+        } else {
+            self.entries
+                .push(PendingGuardianReviewStatusEntry { id, detail });
+        }
+    }
+
+    fn finish(&mut self, id: &str) -> bool {
+        let original_len = self.entries.len();
+        self.entries.retain(|entry| entry.id != id);
+        self.entries.len() != original_len
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    fn status_indicator_state(&self) -> Option<StatusIndicatorState> {
+        let details = if self.entries.len() == 1 {
+            self.entries.first().map(|entry| entry.detail.clone())
+        } else if self.entries.is_empty() {
+            None
+        } else {
+            let mut lines = self
+                .entries
+                .iter()
+                .take(3)
+                .map(|entry| format!("• {}", entry.detail))
+                .collect::<Vec<_>>();
+            let remaining = self.entries.len().saturating_sub(3);
+            if remaining > 0 {
+                lines.push(format!("+{remaining} more"));
+            }
+            Some(lines.join("\n"))
+        };
+        let details = details?;
+        let header = if self.entries.len() == 1 {
+            String::from("Reviewing approval request")
+        } else {
+            format!("Reviewing {} approval requests", self.entries.len())
+        };
+        let details_max_lines = if self.entries.len() == 1 { 1 } else { 4 };
+        Some(StatusIndicatorState {
+            header,
+            details: Some(details),
+            details_max_lines,
+        })
+    }
+}
+
 /// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
 /// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
@@ -618,7 +689,7 @@ pub(crate) struct ChatWidget {
     // Current status details shown beneath the header, if any, after formatting.
     current_status_details: Option<String>,
     current_status_details_max_lines: usize,
-    active_guardian_reviews: Vec<(String, String)>,
+    pending_guardian_review_status: PendingGuardianReviewStatus,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
     // Set when commentary output completes; once stream queues go idle we restore the status row.
@@ -1063,6 +1134,11 @@ impl ChatWidget {
             self.current_status_details_max_lines,
         );
         self.pending_status_indicator_restore = false;
+    }
+
+    fn current_status_is_guardian_review(&self) -> bool {
+        self.current_status_header == "Reviewing approval request"
+            || self.current_status_header.starts_with("Reviewing ")
     }
 
     /// Update the status indicator header and details.
@@ -2336,71 +2412,38 @@ impl ChatWidget {
                 _ => None,
             }
         };
-        let refresh_guardian_review_status = |chat: &mut Self| {
-            if chat.active_guardian_reviews.is_empty() {
-                if chat.current_status_header == "Reviewing approval request"
-                    || chat.current_status_header.starts_with("Reviewing ")
-                {
-                    chat.set_status_header(String::from("Working"));
-                }
-                return;
-            }
-            let details = if chat.active_guardian_reviews.len() == 1 {
-                chat.active_guardian_reviews[0].1.clone()
-            } else {
-                let mut lines = chat
-                    .active_guardian_reviews
-                    .iter()
-                    .take(3)
-                    .map(|(_, detail)| format!("• {detail}"))
-                    .collect::<Vec<_>>();
-                let remaining = chat.active_guardian_reviews.len().saturating_sub(3);
-                if remaining > 0 {
-                    lines.push(format!("+{remaining} more"));
-                }
-                lines.join("\n")
-            };
-            let header = if chat.active_guardian_reviews.len() == 1 {
-                String::from("Reviewing approval request")
-            } else {
-                format!(
-                    "Reviewing {} approval requests",
-                    chat.active_guardian_reviews.len()
-                )
-            };
-            chat.set_status(
-                header,
-                Some(details),
-                StatusDetailsCapitalization::Preserve,
-                4,
-            );
-        };
 
         if ev.status == GuardianAssessmentStatus::InProgress
             && let Some(action) = ev.action.as_ref()
             && let Some(detail) = guardian_action_summary(action)
         {
-            if let Some((_, existing_detail)) = self
-                .active_guardian_reviews
-                .iter_mut()
-                .find(|(id, _)| id == &ev.id)
-            {
-                *existing_detail = detail;
-            } else {
-                self.active_guardian_reviews.push((ev.id.clone(), detail));
+            self.pending_guardian_review_status
+                .start_or_update(ev.id.clone(), detail);
+            if let Some(status) = self.pending_guardian_review_status.status_indicator_state() {
+                self.set_status(
+                    status.header,
+                    status.details,
+                    StatusDetailsCapitalization::Preserve,
+                    status.details_max_lines,
+                );
             }
-            refresh_guardian_review_status(self);
             self.request_redraw();
             return;
         }
 
-        let original_len = self.active_guardian_reviews.len();
-        self.active_guardian_reviews.retain(|(id, _)| id != &ev.id);
-        if self.active_guardian_reviews.len() != original_len {
-            refresh_guardian_review_status(self);
-        } else if self.active_guardian_reviews.is_empty()
-            && (self.current_status_header == "Reviewing approval request"
-                || self.current_status_header.starts_with("Reviewing "))
+        if self.pending_guardian_review_status.finish(&ev.id) {
+            if let Some(status) = self.pending_guardian_review_status.status_indicator_state() {
+                self.set_status(
+                    status.header,
+                    status.details,
+                    StatusDetailsCapitalization::Preserve,
+                    status.details_max_lines,
+                );
+            } else if self.current_status_is_guardian_review() {
+                self.set_status_header(String::from("Working"));
+            }
+        } else if self.pending_guardian_review_status.is_empty()
+            && self.current_status_is_guardian_review()
         {
             self.set_status_header(String::from("Working"));
         }
@@ -2870,7 +2913,7 @@ impl ChatWidget {
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(true);
         if let Some(command) = message.strip_prefix("Reviewing approval request: ") {
-            if !self.active_guardian_reviews.is_empty() {
+            if !self.pending_guardian_review_status.is_empty() {
                 return;
             }
             self.set_status(
@@ -3570,7 +3613,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             current_status_details: None,
             current_status_details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
-            active_guardian_reviews: Vec::new(),
+            pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             retry_status_header: None,
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
@@ -3758,7 +3801,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             current_status_details: None,
             current_status_details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
-            active_guardian_reviews: Vec::new(),
+            pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             retry_status_header: None,
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
@@ -3938,7 +3981,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             current_status_details: None,
             current_status_details_max_lines: STATUS_DETAILS_DEFAULT_MAX_LINES,
-            active_guardian_reviews: Vec::new(),
+            pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             retry_status_header: None,
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
