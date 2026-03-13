@@ -3451,6 +3451,8 @@ impl Session {
         );
         let separate_guardian_developer_message =
             crate::guardian::is_guardian_subagent_source(&session_source);
+        // Keep the guardian policy prompt out of the aggregated developer bundle so it
+        // stays isolated as its own top-level developer message for guardian subagents.
         if !separate_guardian_developer_message
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
         {
@@ -3537,6 +3539,8 @@ impl Session {
         {
             items.push(contextual_user_message);
         }
+        // Emit the guardian policy prompt as a separate developer item so the guardian
+        // subagent sees a distinct, easy-to-audit instruction block.
         if separate_guardian_developer_message
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
             && let Some(guardian_developer_message) =
