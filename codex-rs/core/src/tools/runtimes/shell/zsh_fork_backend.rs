@@ -46,6 +46,7 @@ mod imp {
     use super::*;
     use crate::tools::runtimes::shell::unix_escalation;
     use crate::unified_exec::SpawnLifecycle;
+    use codex_shell_escalation::ESCALATE_SOCKET_ENV_VAR;
     use codex_shell_escalation::EscalationSession;
 
     #[derive(Debug)]
@@ -54,6 +55,15 @@ mod imp {
     }
 
     impl SpawnLifecycle for ZshForkSpawnLifecycle {
+        fn inherited_fds(&self) -> Vec<i32> {
+            self.escalation_session
+                .env()
+                .get(ESCALATE_SOCKET_ENV_VAR)
+                .and_then(|fd| fd.parse().ok())
+                .into_iter()
+                .collect()
+        }
+
         fn after_spawn(&mut self) {
             self.escalation_session.close_client_socket();
         }

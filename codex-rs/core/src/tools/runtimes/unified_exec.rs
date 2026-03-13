@@ -122,6 +122,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                     session,
                     turn,
                     GuardianApprovalRequest::ExecCommand {
+                        id: call_id,
                         command,
                         cwd,
                         sandbox_permissions: req.sandbox_permissions,
