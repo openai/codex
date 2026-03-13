@@ -88,6 +88,7 @@ expression: searching
     Usage:
         /resume
         /resume <thread-id>
+        /resume <thread-id> --path <rollout-path>
 
   /fork
     fork the current chat

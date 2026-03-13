@@ -2518,7 +2518,9 @@ impl App {
             AppEvent::OpenResumePicker => {
                 match crate::resume_picker::run_resume_picker(tui, &self.config, false).await? {
                     SessionSelection::Resume(target_session) => {
-                        self.chat_widget.handle_resume_selection(target_session);
+                        self.chat_widget.handle_serialized_slash_command(
+                            ChatWidget::resume_selection_draft(&target_session),
+                        );
                         self.refresh_status_line();
                     }
                     SessionSelection::Exit

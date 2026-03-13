@@ -1902,7 +1902,6 @@ async fn make_chatwidget_manual(
         show_welcome_banner: true,
         startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
-        queued_resume_targets: VecDeque::new(),
         pending_steers: VecDeque::new(),
         submit_pending_steers_after_interrupt: false,
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
@@ -3682,7 +3681,6 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         composer: None,
         pending_steers: VecDeque::new(),
         queued_user_messages: VecDeque::new(),
-        queued_resume_targets: VecDeque::new(),
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         agent_turn_running: true,
@@ -5723,8 +5721,8 @@ async fn queued_resume_picker_selection_replays_exact_targets_in_order() {
         thread_id,
     };
 
-    chat.handle_resume_selection(first.clone());
-    chat.handle_resume_selection(second.clone());
+    chat.handle_serialized_slash_command(ChatWidget::resume_selection_draft(&first));
+    chat.handle_serialized_slash_command(ChatWidget::resume_selection_draft(&second));
 
     chat.bottom_pane.set_task_running(false);
     chat.drain_queued_inputs_until_blocked();

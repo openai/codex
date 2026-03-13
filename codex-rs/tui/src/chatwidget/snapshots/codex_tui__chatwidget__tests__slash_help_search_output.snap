@@ -83,6 +83,7 @@ expression: searching
     Usage:
         /resume
         /resume <thread-id>
+        /resume <thread-id> --path <rollout-path>
 
   /fork
     fork the current chat
@@ -240,4 +241,4 @@ expression: searching
         /debug-m-drop
 
 
-  Search: /maintainers  |  enter apply  |  esc cancel                          1 match | 1-232/239
+  Search: /maintainers  |  enter apply  |  esc cancel                          1 match | 1-233/240

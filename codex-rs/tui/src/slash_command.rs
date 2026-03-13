@@ -149,7 +149,7 @@ impl SlashCommand {
             ],
             SlashCommand::Rename => &["", "<title...>"],
             SlashCommand::New => &[""],
-            SlashCommand::Resume => &["", "<thread-id>"],
+            SlashCommand::Resume => &["", "<thread-id>", "<thread-id> --path <rollout-path>"],
             SlashCommand::Fork => &[""],
             SlashCommand::Init => &[""],
             SlashCommand::Compact => &[""],
