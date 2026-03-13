@@ -127,6 +127,24 @@ enum ThreadInteractiveRequest {
     Approval(ApprovalRequest),
     McpServerElicitation(McpServerElicitationFormRequest),
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SmartApprovalsMode {
+    approval_policy: AskForApproval,
+    approvals_reviewer: ApprovalsReviewer,
+    sandbox_policy: SandboxPolicy,
+}
+
+/// Enabling the Smart Approvals experiment should immediately route eligible
+/// approval requests through guardian, without requiring the user to also visit
+/// `/approvals` to pick a matching permissions preset.
+fn smart_approvals_mode() -> SmartApprovalsMode {
+    SmartApprovalsMode {
+        approval_policy: AskForApproval::OnRequest,
+        approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+    }
+}
 /// Baseline cadence for periodic stream commit animation ticks.
 ///
 /// Smooth-mode streaming drains one line per tick, so this interval controls
@@ -838,7 +856,7 @@ impl App {
             return;
         }
 
-        let smart_approvals_sandbox = SandboxPolicy::new_workspace_write_policy();
+        let smart_approvals_mode = smart_approvals_mode();
         let scoped_segments = |key: &str| {
             if let Some(profile) = self.active_profile.as_deref() {
                 vec!["profiles".to_string(), profile.to_string(), key.to_string()]
@@ -882,7 +900,7 @@ impl App {
                     .config
                     .permissions
                     .approval_policy
-                    .can_set(&AskForApproval::OnRequest)
+                    .can_set(&smart_approvals_mode.approval_policy)
                 {
                     tracing::error!(
                         error = %err,
@@ -896,7 +914,7 @@ impl App {
                     .config
                     .permissions
                     .sandbox_policy
-                    .can_set(&smart_approvals_sandbox)
+                    .can_set(&smart_approvals_mode.sandbox_policy)
                 {
                     tracing::error!(
                         error = %err,
@@ -933,14 +951,14 @@ impl App {
             if feature == Feature::GuardianApproval {
                 let previous_approvals_reviewer = self.config.approvals_reviewer;
                 if effective_enabled {
-                    self.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+                    self.config.approvals_reviewer = smart_approvals_mode.approvals_reviewer;
                     self.chat_widget
-                        .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
+                        .set_approvals_reviewer(smart_approvals_mode.approvals_reviewer);
                     builder = builder.with_edits([ConfigEdit::SetPath {
                         segments: scoped_segments("approvals_reviewer"),
-                        value: ApprovalsReviewer::GuardianSubagent.to_string().into(),
+                        value: smart_approvals_mode.approvals_reviewer.to_string().into(),
                     }]);
-                    if previous_approvals_reviewer != ApprovalsReviewer::GuardianSubagent {
+                    if previous_approvals_reviewer != smart_approvals_mode.approvals_reviewer {
                         permissions_history_label = Some("Smart Approvals");
                     }
                 } else if !effective_enabled {
@@ -967,7 +985,7 @@ impl App {
                     .config
                     .permissions
                     .approval_policy
-                    .set(AskForApproval::OnRequest)
+                    .set(smart_approvals_mode.approval_policy)
                 {
                     tracing::error!(
                         error = %err,
@@ -981,7 +999,7 @@ impl App {
                     .config
                     .permissions
                     .sandbox_policy
-                    .set(smart_approvals_sandbox.clone())
+                    .set(smart_approvals_mode.sandbox_policy.clone())
                 {
                     tracing::error!(
                         error = %err,
@@ -992,10 +1010,10 @@ impl App {
                     continue;
                 }
                 self.chat_widget
-                    .set_approval_policy(AskForApproval::OnRequest);
+                    .set_approval_policy(smart_approvals_mode.approval_policy);
                 if let Err(err) = self
                     .chat_widget
-                    .set_sandbox_policy(smart_approvals_sandbox.clone())
+                    .set_sandbox_policy(smart_approvals_mode.sandbox_policy.clone())
                 {
                     tracing::error!(
                         error = %err,
@@ -1015,8 +1033,8 @@ impl App {
                         value: "workspace-write".into(),
                     },
                 ]);
-                approval_policy_override = Some(AskForApproval::OnRequest);
-                sandbox_policy_override = Some(smart_approvals_sandbox.clone());
+                approval_policy_override = Some(smart_approvals_mode.approval_policy);
+                sandbox_policy_override = Some(smart_approvals_mode.sandbox_policy.clone());
             }
             builder = builder.set_feature_enabled(feature_key, effective_enabled);
         }
@@ -5323,6 +5341,7 @@ mod tests {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
+        let smart_approvals = smart_approvals_mode();
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
             .await;
@@ -5336,11 +5355,11 @@ mod tests {
         );
         assert_eq!(
             app.config.approvals_reviewer,
-            ApprovalsReviewer::GuardianSubagent
+            smart_approvals.approvals_reviewer
         );
         assert_eq!(
             app.config.permissions.approval_policy.value(),
-            AskForApproval::OnRequest
+            smart_approvals.approval_policy
         );
         assert_eq!(
             app.chat_widget
@@ -5348,7 +5367,7 @@ mod tests {
                 .permissions
                 .approval_policy
                 .value(),
-            AskForApproval::OnRequest
+            smart_approvals.approval_policy
         );
         assert_eq!(
             app.chat_widget
@@ -5356,11 +5375,11 @@ mod tests {
                 .permissions
                 .sandbox_policy
                 .get(),
-            &SandboxPolicy::new_workspace_write_policy()
+            &smart_approvals.sandbox_policy
         );
         assert_eq!(
             app.chat_widget.config_ref().approvals_reviewer,
-            ApprovalsReviewer::GuardianSubagent
+            smart_approvals.approvals_reviewer
         );
         assert_eq!(app.runtime_approval_policy_override, None);
         assert_eq!(app.runtime_sandbox_policy_override, None);
@@ -5368,9 +5387,9 @@ mod tests {
             op_rx.try_recv(),
             Ok(Op::OverrideTurnContext {
                 cwd: None,
-                approval_policy: Some(AskForApproval::OnRequest),
-                approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
-                sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
+                approval_policy: Some(smart_approvals.approval_policy),
+                approvals_reviewer: Some(smart_approvals.approvals_reviewer),
+                sandbox_policy: Some(smart_approvals.sandbox_policy.clone()),
                 windows_sandbox_level: None,
                 model: None,
                 effort: None,
@@ -5497,6 +5516,7 @@ mod tests {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
+        let smart_approvals = smart_approvals_mode();
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
         let config_toml = "approvals_reviewer = \"user\"\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
@@ -5515,15 +5535,15 @@ mod tests {
         assert!(app.config.features.enabled(Feature::GuardianApproval));
         assert_eq!(
             app.config.approvals_reviewer,
-            ApprovalsReviewer::GuardianSubagent
+            smart_approvals.approvals_reviewer
         );
         assert_eq!(
             app.chat_widget.config_ref().approvals_reviewer,
-            ApprovalsReviewer::GuardianSubagent
+            smart_approvals.approvals_reviewer
         );
         assert_eq!(
             app.config.permissions.approval_policy.value(),
-            AskForApproval::OnRequest
+            smart_approvals.approval_policy
         );
         assert_eq!(
             app.chat_widget
@@ -5531,15 +5551,15 @@ mod tests {
                 .permissions
                 .sandbox_policy
                 .get(),
-            &SandboxPolicy::new_workspace_write_policy()
+            &smart_approvals.sandbox_policy
         );
         assert_eq!(
             op_rx.try_recv(),
             Ok(Op::OverrideTurnContext {
                 cwd: None,
-                approval_policy: Some(AskForApproval::OnRequest),
-                approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
-                sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
+                approval_policy: Some(smart_approvals.approval_policy),
+                approvals_reviewer: Some(smart_approvals.approvals_reviewer),
+                sandbox_policy: Some(smart_approvals.sandbox_policy.clone()),
                 windows_sandbox_level: None,
                 model: None,
                 effort: None,
@@ -5623,6 +5643,7 @@ mod tests {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
+        let smart_approvals = smart_approvals_mode();
         app.active_profile = Some("guardian".to_string());
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
         let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"user\"\n";
@@ -5642,19 +5663,19 @@ mod tests {
         assert!(app.config.features.enabled(Feature::GuardianApproval));
         assert_eq!(
             app.config.approvals_reviewer,
-            ApprovalsReviewer::GuardianSubagent
+            smart_approvals.approvals_reviewer
         );
         assert_eq!(
             app.chat_widget.config_ref().approvals_reviewer,
-            ApprovalsReviewer::GuardianSubagent
+            smart_approvals.approvals_reviewer
         );
         assert_eq!(
             op_rx.try_recv(),
             Ok(Op::OverrideTurnContext {
                 cwd: None,
-                approval_policy: Some(AskForApproval::OnRequest),
-                approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
-                sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
+                approval_policy: Some(smart_approvals.approval_policy),
+                approvals_reviewer: Some(smart_approvals.approvals_reviewer),
+                sandbox_policy: Some(smart_approvals.sandbox_policy.clone()),
                 windows_sandbox_level: None,
                 model: None,
                 effort: None,
