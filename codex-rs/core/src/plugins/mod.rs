@@ -46,5 +46,3 @@ pub(crate) use render::render_explicit_plugin_instructions;
 pub(crate) use render::render_plugins_section;
 pub use store::PluginId;
 pub use toggles::collect_plugin_enabled_candidates;
-pub use toggles::plugin_toggle_events_to_emit;
-pub use toggles::read_plugin_enabled_states;

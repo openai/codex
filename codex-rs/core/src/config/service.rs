@@ -216,29 +216,6 @@ impl ConfigService {
             .await
     }
 
-    pub fn resolve_user_config_path(
-        &self,
-        file_path: Option<&str>,
-    ) -> Result<AbsolutePathBuf, ConfigServiceError> {
-        let allowed_path =
-            AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, &self.codex_home)
-                .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?;
-        let provided_path = match file_path {
-            Some(path) => AbsolutePathBuf::from_absolute_path(PathBuf::from(path))
-                .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?,
-            None => allowed_path.clone(),
-        };
-
-        if !paths_match(&allowed_path, &provided_path) {
-            return Err(ConfigServiceError::write(
-                ConfigWriteErrorCode::ConfigLayerReadonly,
-                "Only writes to the user config are allowed",
-            ));
-        }
-
-        Ok(provided_path)
-    }
-
     pub async fn batch_write(
         &self,
         params: ConfigBatchWriteParams,
@@ -274,7 +251,21 @@ impl ConfigService {
         expected_version: Option<String>,
         edits: Vec<(String, JsonValue, MergeStrategy)>,
     ) -> Result<ConfigWriteResponse, ConfigServiceError> {
-        let provided_path = self.resolve_user_config_path(file_path.as_deref())?;
+        let allowed_path =
+            AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, &self.codex_home)
+                .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?;
+        let provided_path = match file_path {
+            Some(path) => AbsolutePathBuf::from_absolute_path(PathBuf::from(path))
+                .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?,
+            None => allowed_path.clone(),
+        };
+
+        if !paths_match(&allowed_path, &provided_path) {
+            return Err(ConfigServiceError::write(
+                ConfigWriteErrorCode::ConfigLayerReadonly,
+                "Only writes to the user config are allowed",
+            ));
+        }
 
         let layers = self
             .load_thread_agnostic_config()

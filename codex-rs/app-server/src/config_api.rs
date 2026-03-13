@@ -24,12 +24,9 @@ use codex_core::config_loader::SandboxModeRequirement as CoreSandboxModeRequirem
 use codex_core::plugins::PluginId;
 use codex_core::plugins::collect_plugin_enabled_candidates;
 use codex_core::plugins::installed_plugin_telemetry_metadata;
-use codex_core::plugins::plugin_toggle_events_to_emit;
-use codex_core::plugins::read_plugin_enabled_states;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::Op;
 use serde_json::json;
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -123,23 +120,14 @@ impl ConfigApi {
         &self,
         params: ConfigValueWriteParams,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
-        let config_service = self.config_service();
         let pending_changes =
             collect_plugin_enabled_candidates([(&params.key_path, &params.value)].into_iter());
-        let validated_path = config_service
-            .resolve_user_config_path(params.file_path.as_deref())
-            .map_err(map_error)?;
-        let previous_states =
-            read_plugin_enabled_states(validated_path.as_path(), &pending_changes);
-        let response = config_service
+        let response = self
+            .config_service()
             .write_value(params)
             .await
             .map_err(map_error)?;
-        self.emit_plugin_toggle_events(
-            response.file_path.as_path(),
-            previous_states,
-            pending_changes,
-        );
+        self.emit_plugin_toggle_events(pending_changes);
         Ok(response)
     }
 
@@ -148,47 +136,26 @@ impl ConfigApi {
         params: ConfigBatchWriteParams,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
         let reload_user_config = params.reload_user_config;
-        let config_service = self.config_service();
         let pending_changes = collect_plugin_enabled_candidates(
             params
                 .edits
                 .iter()
                 .map(|edit| (&edit.key_path, &edit.value)),
         );
-        let validated_path = config_service
-            .resolve_user_config_path(params.file_path.as_deref())
-            .map_err(map_error)?;
-        let previous_states =
-            read_plugin_enabled_states(validated_path.as_path(), &pending_changes);
-        let response = config_service
+        let response = self
+            .config_service()
             .batch_write(params)
             .await
             .map_err(map_error)?;
-        self.emit_plugin_toggle_events(
-            response.file_path.as_path(),
-            previous_states,
-            pending_changes,
-        );
+        self.emit_plugin_toggle_events(pending_changes);
         if reload_user_config {
             self.user_config_reloader.reload_user_config().await;
         }
         Ok(response)
     }
 
-    fn emit_plugin_toggle_events(
-        &self,
-        config_path: &std::path::Path,
-        previous_states: BTreeMap<String, Option<bool>>,
-        pending_changes: BTreeMap<String, bool>,
-    ) {
-        if pending_changes.is_empty() {
-            return;
-        }
-
-        let updated_states = read_plugin_enabled_states(config_path, &pending_changes);
-        for (plugin_id, enabled) in
-            plugin_toggle_events_to_emit(&previous_states, &updated_states, pending_changes)
-        {
+    fn emit_plugin_toggle_events(&self, pending_changes: std::collections::BTreeMap<String, bool>) {
+        for (plugin_id, enabled) in pending_changes {
             let Ok(plugin_id) = PluginId::parse(&plugin_id) else {
                 continue;
             };
