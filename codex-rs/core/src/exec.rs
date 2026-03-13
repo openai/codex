@@ -815,6 +815,7 @@ fn should_use_windows_restricted_token_sandbox(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
 ) -> bool {
     sandbox == SandboxType::WindowsRestrictedToken
+        && sandbox_policy.has_full_disk_read_access()
         && file_system_sandbox_policy.kind == FileSystemSandboxKind::Restricted
         && !matches!(
             sandbox_policy,
