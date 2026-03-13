@@ -234,11 +234,11 @@ expression: popup
     Usage:
         /test-approval
 
-  /multi-agents
+  /subagents
     switch the active agent thread
     Usage:
-        /multi-agents
-        /multi-agents <thread-id>
+        /subagents
+        /subagents <thread-id>
 
   /debug-m-drop
     DO NOT USE
