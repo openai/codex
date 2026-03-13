@@ -1,4 +1,6 @@
 use super::*;
+use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
+use crate::mcp_tool_call::MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX;
 use async_channel::bounded;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::NetworkPermissions;
@@ -9,6 +11,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TurnAbortReason;
@@ -16,6 +19,9 @@ use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
@@ -338,5 +344,63 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
             turn_id: Some("child-turn-1".to_string()),
             decision: ReviewDecision::Abort,
         }
+    );
+}
+
+#[tokio::test]
+async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
+    let (parent_session, parent_ctx, _rx_events) =
+        crate::codex::make_session_and_context_with_rx().await;
+    let mut parent_ctx = Arc::try_unwrap(parent_ctx).expect("single turn context ref");
+    let mut config = (*parent_ctx.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    parent_ctx.config = Arc::new(config);
+    parent_ctx
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set on-request policy");
+    let parent_ctx = Arc::new(parent_ctx);
+
+    let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::from([(
+        "call-1".to_string(),
+        McpInvocation {
+            server: "custom_server".to_string(),
+            tool: "dangerous_tool".to_string(),
+            arguments: None,
+        },
+    )])));
+    let cancel_token = CancellationToken::new();
+    cancel_token.cancel();
+
+    let response = maybe_auto_review_mcp_request_user_input(
+        &parent_session,
+        &parent_ctx,
+        &pending_mcp_invocations,
+        &RequestUserInputEvent {
+            call_id: "call-1".to_string(),
+            turn_id: "child-turn-1".to_string(),
+            questions: vec![RequestUserInputQuestion {
+                id: format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_call-1"),
+                header: "Approve app tool call?".to_string(),
+                question: "Allow this app tool?".to_string(),
+                is_other: false,
+                is_secret: false,
+                options: None,
+            }],
+        },
+        &cancel_token,
+    )
+    .await;
+
+    assert_eq!(
+        response,
+        Some(RequestUserInputResponse {
+            answers: HashMap::from([(
+                format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_call-1"),
+                RequestUserInputAnswer {
+                    answers: vec![MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC.to_string()],
+                },
+            )]),
+        })
     );
 }

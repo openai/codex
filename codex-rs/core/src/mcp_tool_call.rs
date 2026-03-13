@@ -395,6 +395,9 @@ struct McpToolApprovalElicitationRequest<'a> {
 pub(crate) const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_call_approval";
 pub(crate) const MCP_TOOL_APPROVAL_ACCEPT: &str = "Allow";
 pub(crate) const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this session";
+// Internal-only token used when guardian synthesizes a decline on the
+// RequestUserInput compatibility path. This is not a user-facing option.
+pub(crate) const MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC: &str = "__codex_mcp_decline__";
 const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Allow and don't ask me again";
 const MCP_TOOL_APPROVAL_CANCEL: &str = "Cancel";
 const MCP_TOOL_APPROVAL_KIND_KEY: &str = "codex_approval_kind";
@@ -1084,6 +1087,11 @@ fn parse_mcp_tool_approval_response(
         return McpToolApprovalDecision::Cancel;
     };
     if answers
+        .iter()
+        .any(|answer| answer == MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC)
+    {
+        McpToolApprovalDecision::Decline
+    } else if answers
         .iter()
         .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION)
     {
