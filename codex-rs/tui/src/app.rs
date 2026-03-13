@@ -6228,11 +6228,7 @@ mod tests {
     }
 
     fn make_test_tui() -> crate::tui::Tui {
-        let terminal = crate::custom_terminal::Terminal::with_options(
-            ratatui::backend::CrosstermBackend::new(std::io::stdout()),
-        )
-        .expect("terminal");
-        crate::tui::Tui::new(terminal)
+        crate::tui::Tui::new_test()
     }
 
     fn app_enabled_in_effective_config(config: &Config, app_id: &str) -> Option<bool> {
