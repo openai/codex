@@ -759,6 +759,7 @@ async fn exec(
     if sandbox == SandboxType::WindowsRestrictedToken {
         if let Some(reason) = unsupported_windows_restricted_token_sandbox_reason(
             sandbox,
+            params.windows_sandbox_level,
             sandbox_policy,
             file_system_sandbox_policy,
             network_sandbox_policy,
@@ -811,27 +812,37 @@ async fn exec(
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn should_use_windows_restricted_token_sandbox(
     sandbox: SandboxType,
+    windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     sandbox_policy: &SandboxPolicy,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
 ) -> bool {
+    // Windows currently reuses SandboxType::WindowsRestrictedToken for both
+    // the legacy restricted-token backend and the elevated setup/runner path.
+    // The sandbox level decides whether restricted read-only policies are
+    // supported.
     sandbox == SandboxType::WindowsRestrictedToken
-        && sandbox_policy.has_full_disk_read_access()
         && file_system_sandbox_policy.kind == FileSystemSandboxKind::Restricted
         && !matches!(
             sandbox_policy,
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
         )
+        && (matches!(
+            windows_sandbox_level,
+            codex_protocol::config_types::WindowsSandboxLevel::Elevated
+        ) || sandbox_policy.has_full_disk_read_access())
 }
 
 #[cfg(any(target_os = "windows", test))]
 fn unsupported_windows_restricted_token_sandbox_reason(
     sandbox: SandboxType,
+    windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     sandbox_policy: &SandboxPolicy,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
 ) -> Option<String> {
     if should_use_windows_restricted_token_sandbox(
         sandbox,
+        windows_sandbox_level,
         sandbox_policy,
         file_system_sandbox_policy,
     ) {
