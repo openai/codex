@@ -10,6 +10,7 @@ use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_core::features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
+use codex_otel::current_span_w3c_trace_context;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 use codex_protocol::ThreadId;
@@ -24,6 +25,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::WebSocketConnectionConfig;
@@ -37,18 +39,51 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use futures::StreamExt;
+use opentelemetry::global;
+use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use serial_test::serial;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
+use tracing::Instrument;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use tracing_test::traced_test;
 
 const MODEL: &str = "gpt-5.2-codex";
 const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
+
+fn trace_id(traceparent: &str) -> &str {
+    traceparent
+        .split('-')
+        .nth(1)
+        .expect("traceparent missing trace id")
+}
+
+fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTraceContext) {
+    let trace = body["trace"].as_object().expect("missing trace payload");
+    let actual_traceparent = trace
+        .get("traceparent")
+        .and_then(serde_json::Value::as_str)
+        .expect("missing traceparent");
+    let expected_traceparent = expected_trace
+        .traceparent
+        .as_deref()
+        .expect("missing expected traceparent");
+
+    assert_eq!(trace_id(actual_traceparent), trace_id(expected_traceparent));
+    assert_eq!(
+        trace.get("tracestate").and_then(serde_json::Value::as_str),
+        expected_trace.tracestate.as_deref()
+    );
+}
 
 struct WebsocketTestHarness {
     _codex_home: TempDir,
@@ -115,6 +150,124 @@ async fn responses_websocket_streams_without_feature_flag_when_provider_supports
 
     assert_eq!(server.handshakes().len(), 1);
     assert_eq!(server.single_connection().len(), 1);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
+    skip_if_no_network!();
+
+    global::set_text_map_propagator(TraceContextPropagator::new());
+
+    let provider = SdkTracerProvider::builder().build();
+    let tracer = provider.tracer("client-websocket-test");
+    let subscriber =
+        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+    let _guard = subscriber.set_default();
+
+    let server = start_websocket_server(vec![vec![
+        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+    ]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![message_item("again")]);
+
+    let first_trace = {
+        let mut client_session = harness.client.new_session();
+        async {
+            let expected_trace =
+                current_span_w3c_trace_context().expect("current span should have trace context");
+            stream_until_complete(&mut client_session, &harness, &prompt_one).await;
+            expected_trace
+        }
+        .instrument(tracing::info_span!("client.websocket.turn_one"))
+        .await
+    };
+
+    let second_trace = {
+        let mut client_session = harness.client.new_session();
+        async {
+            let expected_trace =
+                current_span_w3c_trace_context().expect("current span should have trace context");
+            stream_until_complete(&mut client_session, &harness, &prompt_two).await;
+            expected_trace
+        }
+        .instrument(tracing::info_span!("client.websocket.turn_two"))
+        .await
+    };
+
+    assert_eq!(server.handshakes().len(), 1);
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+
+    let first_request = connection
+        .first()
+        .expect("missing first request")
+        .body_json();
+    let second_request = connection
+        .get(1)
+        .expect("missing second request")
+        .body_json();
+    assert_request_trace_matches(&first_request, &first_trace);
+    assert_request_trace_matches(&second_request, &second_trace);
+
+    let first_traceparent = first_request["trace"]["traceparent"]
+        .as_str()
+        .expect("missing first traceparent");
+    let second_traceparent = second_request["trace"]["traceparent"]
+        .as_str()
+        .expect("missing second traceparent");
+    assert_ne!(trace_id(first_traceparent), trace_id(second_traceparent));
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn responses_websocket_preconnect_does_not_replace_turn_trace_payload() {
+    skip_if_no_network!();
+
+    global::set_text_map_propagator(TraceContextPropagator::new());
+
+    let provider = SdkTracerProvider::builder().build();
+    let tracer = provider.tracer("client-websocket-test");
+    let subscriber =
+        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+    let _guard = subscriber.set_default();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut client_session = harness.client.new_session();
+    client_session
+        .preconnect_websocket(&harness.session_telemetry, &harness.model_info)
+        .await
+        .expect("websocket preconnect failed");
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    let expected_trace = async {
+        let expected_trace =
+            current_span_w3c_trace_context().expect("current span should have trace context");
+        stream_until_complete(&mut client_session, &harness, &prompt).await;
+        expected_trace
+    }
+    .instrument(tracing::info_span!("client.websocket.request"))
+    .await;
+
+    assert_eq!(server.handshakes().len(), 1);
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 1);
+    let request = connection.first().expect("missing request").body_json();
+    assert_request_trace_matches(&request, &expected_trace);
 
     server.shutdown().await;
 }

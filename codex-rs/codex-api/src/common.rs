@@ -5,6 +5,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::W3cTraceContext;
 use futures::Stream;
 use serde::Deserialize;
 use serde::Serialize;
@@ -185,6 +186,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
             text: request.text.clone(),
             generate: None,
             client_metadata: None,
+            trace: None,
         }
     }
 }
@@ -213,6 +215,8 @@ pub struct ResponseCreateWsRequest {
     pub generate: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_metadata: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace: Option<W3cTraceContext>,
 }
 
 #[derive(Debug, Serialize)]
