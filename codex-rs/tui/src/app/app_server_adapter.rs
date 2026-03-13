@@ -32,12 +32,11 @@ impl App {
                     "app-server event consumer lagged; dropping ignored events"
                 );
             }
-            InProcessServerEvent::ServerNotification(notification) => match notification {
-                ServerNotification::SkillsChanged(_) => {
+            InProcessServerEvent::ServerNotification(notification) => {
+                if let ServerNotification::SkillsChanged(_) = notification {
                     self.app_event_tx.send(AppEvent::RefreshSkillsList);
                 }
-                _ => {}
-            },
+            }
             InProcessServerEvent::LegacyNotification(_) => {}
             InProcessServerEvent::ServerRequest(request) => {
                 let request_id = request.id().clone();
