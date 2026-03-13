@@ -482,8 +482,8 @@ pub(crate) struct ChatWidgetInit {
     // Shared latch so we only warn once about invalid status-line item IDs.
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
     pub(crate) session_telemetry: SessionTelemetry,
-    /// When true, route eligible operations (currently `ListSkills`) through
-    /// the embedded app-server RPC instead of codex-core's op channel.
+    /// When true, route operations that have migrated to the embedded
+    /// app-server RPC instead of codex-core's op channel.
     pub(crate) use_app_server: bool,
 }
 
