@@ -102,6 +102,9 @@ pub(crate) async fn run_codex_thread_interactive(
     let parent_session_clone = Arc::clone(&parent_session);
     let parent_ctx_clone = Arc::clone(&parent_ctx);
     let codex_for_events = Arc::clone(&codex);
+    // Cache delegated MCP invocations so guardian can recover the full tool call
+    // context when the later legacy RequestUserInput approval event only carries
+    // a call_id plus approval question metadata.
     let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::<String, McpInvocation>::new()));
     tokio::spawn(async move {
         forward_events(
