@@ -994,6 +994,27 @@ impl App {
         }
     }
 
+    async fn shutdown_loaded_threads_except(&mut self, excluded_thread_id: ThreadId) {
+        let thread_ids: Vec<ThreadId> = self
+            .thread_event_channels
+            .keys()
+            .copied()
+            .filter(|thread_id| *thread_id != excluded_thread_id)
+            .collect();
+        let current_thread_id = self.chat_widget.thread_id();
+        for thread_id in thread_ids {
+            if Some(thread_id) == current_thread_id {
+                self.backtrack.pending_rollback = None;
+                self.suppress_shutdown_complete_thread_id = Some(thread_id);
+                self.chat_widget.submit_op(Op::Shutdown);
+            } else if let Ok(thread) = self.server.get_thread(thread_id).await {
+                let _ = thread.submit(Op::Shutdown).await;
+            }
+            self.server.remove_thread(&thread_id).await;
+            self.abort_thread_event_listener(thread_id);
+        }
+    }
+
     fn abort_thread_event_listener(&mut self, thread_id: ThreadId) {
         if let Some(handle) = self.thread_event_listener_tasks.remove(&thread_id) {
             handle.abort();
@@ -1146,17 +1167,29 @@ impl App {
     fn sync_btw_footer_hint(&mut self) {
         let Some(active_thread_id) = self.current_displayed_thread_id() else {
             self.chat_widget.set_footer_hint_override(None);
+            self.chat_widget.set_thread_rename_enabled(true);
             return;
         };
-        let Some(parent_thread_id) = self.btw_parent_threads.get(&active_thread_id).copied() else {
+        let Some(mut parent_thread_id) = self.btw_parent_threads.get(&active_thread_id).copied()
+        else {
             self.chat_widget.set_footer_hint_override(None);
+            self.chat_widget.set_thread_rename_enabled(true);
             return;
         };
+        self.chat_widget.set_thread_rename_enabled(false);
+        let mut depth = 1usize;
+        while let Some(next_parent_thread_id) =
+            self.btw_parent_threads.get(&parent_thread_id).copied()
+        {
+            depth += 1;
+            parent_thread_id = next_parent_thread_id;
+        }
+        let repeated_prefix = "BTW from ".repeat(depth.saturating_sub(1));
         let label = if self.primary_thread_id == Some(parent_thread_id) {
-            "from main thread · Esc to return".to_string()
+            format!("from {repeated_prefix}main thread · Esc to return")
         } else {
             let parent_label = self.thread_label(parent_thread_id);
-            format!("from parent thread ({parent_label}) · Esc to return")
+            format!("from {repeated_prefix}parent thread ({parent_label}) · Esc to return")
         };
         self.chat_widget
             .set_footer_hint_override(Some(vec![("BTW".to_string(), label)]));
@@ -1562,12 +1595,15 @@ impl App {
     }
 
     async fn select_agent_thread(&mut self, tui: &mut tui::Tui, thread_id: ThreadId) -> Result<()> {
-        if let Some(btw_thread_id) = self.current_displayed_thread_id()
+        let btw_thread_to_discard = if let Some(btw_thread_id) = self.current_displayed_thread_id()
             && self.btw_parent_threads.contains_key(&btw_thread_id)
             && btw_thread_id != thread_id
+            && self.btw_parent_threads.get(&thread_id).copied() != Some(btw_thread_id)
         {
-            self.discard_btw_thread(btw_thread_id).await;
-        }
+            Some(btw_thread_id)
+        } else {
+            None
+        };
         if self.active_thread_id == Some(thread_id) {
             return Ok(());
         }
@@ -1623,6 +1659,9 @@ impl App {
         }
         self.drain_active_thread_events(tui).await?;
         self.refresh_pending_thread_approvals().await;
+        if let Some(btw_thread_id) = btw_thread_to_discard {
+            self.discard_btw_thread(btw_thread_id).await;
+        }
 
         Ok(())
     }
@@ -2304,7 +2343,7 @@ impl App {
                             .await
                         {
                             Ok(resumed) => {
-                                self.shutdown_current_thread().await;
+                                self.shutdown_loaded_threads_except(resumed.thread_id).await;
                                 self.config = resume_config;
                                 tui.set_notification_method(self.config.tui_notification_method);
                                 self.file_search.update_search_dir(self.config.cwd.clone());
@@ -2372,7 +2411,7 @@ impl App {
                             .await
                         {
                             Ok(forked) => {
-                                self.shutdown_current_thread().await;
+                                self.shutdown_loaded_threads_except(forked.thread_id).await;
                                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                     tui,
                                     self.config.clone(),
@@ -5438,6 +5477,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nested_btw_preserves_parent_chain_and_esc_returns_one_level() -> Result<()> {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut tui = make_test_tui();
+
+        let parent_thread_id = setup_btw_parent_thread(&mut app, None).await?;
+        let child_thread_id = start_btw_thread(&mut app, &mut tui, parent_thread_id).await?;
+        let grandchild_thread_id = start_btw_thread(&mut app, &mut tui, child_thread_id).await?;
+
+        assert_eq!(app.active_thread_id, Some(grandchild_thread_id));
+        assert_eq!(
+            app.btw_parent_threads.get(&grandchild_thread_id).copied(),
+            Some(child_thread_id)
+        );
+        assert!(app.thread_event_channels.contains_key(&child_thread_id));
+        assert!(
+            app.thread_event_channels
+                .contains_key(&grandchild_thread_id)
+        );
+
+        app.handle_key_event(&mut tui, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .await;
+        assert_eq!(app.active_thread_id, Some(child_thread_id));
+        assert_eq!(app.active_btw_parent_thread(), Some(parent_thread_id));
+        assert!(app.thread_event_channels.contains_key(&child_thread_id));
+        assert!(
+            !app.thread_event_channels
+                .contains_key(&grandchild_thread_id)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn open_agent_picker_keeps_active_btw_thread_until_selection() -> Result<()> {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let mut tui = make_test_tui();
@@ -5461,6 +5532,53 @@ mod tests {
         assert_eq!(app.active_thread_id, Some(parent_thread_id));
         assert_eq!(app.active_btw_parent_thread(), None);
         assert!(!app.thread_event_channels.contains_key(&child_thread_id));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_switch_from_btw_keeps_current_thread_and_parent_chain() -> Result<()> {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut tui = make_test_tui();
+
+        let parent_thread_id = setup_btw_parent_thread(&mut app, None).await?;
+        let child_thread_id = start_btw_thread(&mut app, &mut tui, parent_thread_id).await?;
+        let missing_thread_id = ThreadId::new();
+
+        app.select_agent_thread(&mut tui, missing_thread_id).await?;
+
+        assert_eq!(app.active_thread_id, Some(child_thread_id));
+        assert_eq!(app.active_btw_parent_thread(), Some(parent_thread_id));
+        assert!(app.thread_event_channels.contains_key(&child_thread_id));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fork_current_session_discards_active_btw_chain() -> Result<()> {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut tui = make_test_tui();
+
+        let parent_thread_id = setup_btw_parent_thread(&mut app, None).await?;
+        let child_thread_id = start_btw_thread(&mut app, &mut tui, parent_thread_id).await?;
+        let child_rollout_path = app
+            .server
+            .get_thread(child_thread_id)
+            .await?
+            .rollout_path()
+            .expect("BTW child rollout path");
+        assert!(
+            child_rollout_path.exists(),
+            "expected BTW child rollout path"
+        );
+
+        let control = app
+            .handle_event(&mut tui, AppEvent::ForkCurrentSession)
+            .await?;
+        assert!(matches!(control, AppRunControl::Continue));
+
+        assert_eq!(app.active_btw_parent_thread(), None);
+        assert!(app.btw_parent_threads.is_empty());
+        assert!(app.server.get_thread(parent_thread_id).await.is_err());
+        assert!(app.server.get_thread(child_thread_id).await.is_err());
         Ok(())
     }
 

@@ -309,6 +309,7 @@ const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const FAST_STATUS_MODEL: &str = "gpt-5.4";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] =
     ["model-with-reasoning", "context-remaining", "current-dir"];
+const BTW_RENAME_DISABLED_MESSAGE: &str = "BTW threads are ephemeral and cannot be renamed.";
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -618,6 +619,7 @@ pub(crate) struct ChatWidget {
     suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
+    thread_rename_enabled: bool,
     forked_from: Option<ThreadId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
@@ -3259,6 +3261,7 @@ impl ChatWidget {
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
+            thread_rename_enabled: true,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
@@ -3444,6 +3447,7 @@ impl ChatWidget {
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
+            thread_rename_enabled: true,
             forked_from: None,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
@@ -3621,6 +3625,7 @@ impl ChatWidget {
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
+            thread_rename_enabled: true,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
@@ -3903,6 +3908,10 @@ impl ChatWidget {
         self.bottom_pane.set_footer_hint_override(items);
     }
 
+    pub(crate) fn set_thread_rename_enabled(&mut self, enabled: bool) {
+        self.thread_rename_enabled = enabled;
+    }
+
     pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
         self.bottom_pane.show_selection_view(params);
         self.request_redraw();
@@ -3986,6 +3995,10 @@ impl ChatWidget {
                 self.open_review_popup();
             }
             SlashCommand::Rename => {
+                if !self.thread_rename_enabled {
+                    self.add_error_message(BTW_RENAME_DISABLED_MESSAGE.to_string());
+                    return;
+                }
                 self.session_telemetry
                     .counter("codex.thread.rename", 1, &[]);
                 self.show_rename_prompt();
@@ -4306,6 +4319,10 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
+                if !self.thread_rename_enabled {
+                    self.add_error_message(BTW_RENAME_DISABLED_MESSAGE.to_string());
+                    return;
+                }
                 self.session_telemetry
                     .counter("codex.thread.rename", 1, &[]);
                 let Some((prepared_args, _prepared_elements)) =
@@ -4415,6 +4432,10 @@ impl ChatWidget {
     }
 
     fn show_rename_prompt(&mut self) {
+        if !self.thread_rename_enabled {
+            self.add_error_message(BTW_RENAME_DISABLED_MESSAGE.to_string());
+            return;
+        }
         let tx = self.app_event_tx.clone();
         let has_name = self
             .thread_name
