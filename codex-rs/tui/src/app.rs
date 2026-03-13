@@ -40,6 +40,7 @@ use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::InProcessAppServerClient;
+use codex_app_server_client::InProcessAppServerRequester;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_core::AuthManager;
@@ -2221,25 +2222,11 @@ impl App {
                         match event {
                             AppEvent::CodexOp(Op::ListSkills { cwds, force_reload }) =>
                             {
-                                let cwds = effective_skills_list_cwds(
-                                    cwds,
-                                    &app.chat_widget.config_ref().cwd,
-                                );
-                                let generation = app.next_skills_list_generation;
-                                app.next_skills_list_generation += 1;
-
-                                for cwd in &cwds {
-                                    app.latest_skills_list_generation_by_cwd.insert(cwd.clone(), generation);
-                                }
-
-                                request_skills_list(
-                                    app.app_event_tx.clone(),
-                                    app_server.requester(),
-                                    cwds,
-                                    force_reload,
-                                    generation,
-                                );
-
+                                app.trigger_skills_list_request(app_server.requester(), cwds, force_reload);
+                                AppRunControl::Continue
+                            }
+                            AppEvent::RefreshSkillsList => {
+                                app.trigger_skills_list_request(app_server.requester(), Vec::new(), true);
                                 AppRunControl::Continue
                             }
                             event => match app.handle_event(tui, event).await {
@@ -2426,6 +2413,30 @@ impl App {
         self.chat_widget.refresh_plugin_mentions();
 
         Ok(())
+    }
+
+    fn trigger_skills_list_request(
+        &mut self,
+        requester: InProcessAppServerRequester,
+        cwds: Vec<PathBuf>,
+        force_reload: bool,
+    ) {
+        let cwds = effective_skills_list_cwds(cwds, &self.chat_widget.config_ref().cwd);
+        let generation = self.next_skills_list_generation;
+        self.next_skills_list_generation += 1;
+
+        for cwd in &cwds {
+            self.latest_skills_list_generation_by_cwd
+                .insert(cwd.clone(), generation);
+        }
+
+        request_skills_list(
+            self.app_event_tx.clone(),
+            requester,
+            cwds,
+            force_reload,
+            generation,
+        );
     }
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
@@ -3747,6 +3758,9 @@ impl App {
                     }
                 }
             }
+            AppEvent::RefreshSkillsList => {
+                unreachable!("RefreshSkillsList is handled in App::run before handle_event");
+            }
         }
         Ok(AppRunControl::Continue)
     }
@@ -4217,10 +4231,18 @@ mod tests {
     use crate::history_cell::new_session_info;
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
+    use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
+    use codex_app_server_client::InProcessClientStartArgs;
+    use codex_app_server_client::InProcessServerEvent;
+    use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::SkillsChangedNotification;
+    use codex_arg0::Arg0DispatchPaths;
     use codex_core::CodexAuth;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::types::ModelAvailabilityNuxConfig;
+    use codex_core::config_loader::CloudRequirementsLoader;
+    use codex_core::config_loader::LoaderOverrides;
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::CollaborationMode;
@@ -6481,6 +6503,27 @@ smart_approvals = true
         )
     }
 
+    async fn start_test_app_server_client(config: Config) -> InProcessAppServerClient {
+        InProcessAppServerClient::start(InProcessClientStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(config),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: codex_feedback::CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            client_name: "codex-tui-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await
+        .expect("in-process app-server client should start")
+    }
+
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
         let mut seen = Vec::new();
         while let Ok(op) = op_rx.try_recv() {
@@ -6538,6 +6581,51 @@ smart_approvals = true
                 errors: Vec::new(),
             }],
         }
+    }
+
+    #[tokio::test]
+    async fn app_server_skills_changed_notification_emits_refresh_skills_list() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let client = start_test_app_server_client(app.config.clone()).await;
+
+        app.handle_app_server_event(
+            &client,
+            InProcessServerEvent::ServerNotification(ServerNotification::SkillsChanged(
+                SkillsChangedNotification {},
+            )),
+        )
+        .await;
+
+        assert_matches!(app_event_rx.try_recv(), Ok(AppEvent::RefreshSkillsList));
+
+        client.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn trigger_skills_list_request_uses_current_cwd_and_emits_result() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let client = start_test_app_server_client(app.config.clone()).await;
+        let current_cwd = app.chat_widget.config_ref().cwd.clone();
+
+        app.trigger_skills_list_request(client.requester(), Vec::new(), true);
+
+        let event = time::timeout(Duration::from_secs(5), app_event_rx.recv())
+            .await
+            .expect("timed out waiting for skills list event")
+            .expect("skills list event should be emitted");
+
+        assert_matches!(
+            event,
+            AppEvent::SkillsListLoaded {
+                requested_cwds,
+                generation,
+                result,
+            } if requested_cwds == vec![current_cwd] && generation == 0 && result.is_ok()
+        );
+
+        client.shutdown().await?;
+        Ok(())
     }
 
     fn all_model_presets() -> Vec<ModelPreset> {
