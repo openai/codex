@@ -357,6 +357,10 @@ enum AppServerSubcommand {
 
     /// [experimental] Generate JSON Schema for the app server protocol.
     GenerateJsonSchema(GenerateJsonSchemaCommand),
+
+    /// [internal] Generate internal JSON Schema artifacts for Codex tooling.
+    #[clap(hide = true)]
+    GenerateInternalJsonSchema(GenerateInternalJsonSchemaCommand),
 }
 
 #[derive(Debug, Args)]
@@ -383,6 +387,13 @@ struct GenerateJsonSchemaCommand {
     /// Include experimental methods and fields in the generated output
     #[arg(long = "experimental", default_value_t = false)]
     experimental: bool,
+}
+
+#[derive(Debug, Args)]
+struct GenerateInternalJsonSchemaCommand {
+    /// Output directory where internal JSON Schema artifacts will be written
+    #[arg(short = 'o', long = "out", value_name = "DIR")]
+    out_dir: PathBuf,
 }
 
 #[derive(Debug, Parser)]
@@ -664,6 +675,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     &gen_cli.out_dir,
                     gen_cli.experimental,
                 )?;
+            }
+            Some(AppServerSubcommand::GenerateInternalJsonSchema(gen_cli)) => {
+                codex_app_server_protocol::generate_internal_json_schema(&gen_cli.out_dir)?;
             }
         },
         #[cfg(target_os = "macos")]
