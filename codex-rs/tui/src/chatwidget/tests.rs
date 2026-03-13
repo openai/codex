@@ -1962,26 +1962,7 @@ fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
 }
 
 #[tokio::test]
-async fn list_skills_without_app_server_uses_core_op_channel() {
-    let (mut chat, mut app_rx, mut op_rx) = make_chatwidget_manual(None).await;
-
-    chat.handle_codex_event(Event {
-        id: "skills-update".into(),
-        msg: EventMsg::SkillsUpdateAvailable,
-    });
-
-    assert_matches!(
-        op_rx.try_recv(),
-        Ok(Op::ListSkills {
-            cwds,
-            force_reload: true,
-        }) if cwds.is_empty()
-    );
-    assert_matches!(app_rx.try_recv(), Err(TryRecvError::Empty));
-}
-
-#[tokio::test]
-async fn list_skills_with_app_server_uses_app_event_channel() {
+async fn skills_update_routes_list_skills_through_app_event_channel() {
     let (mut chat, mut app_rx, mut op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_codex_event(Event {

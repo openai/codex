@@ -30,7 +30,7 @@ pub(super) fn effective_skills_list_cwds(cwds: Vec<PathBuf>, current_cwd: &Path)
     }
 }
 
-pub(super) fn request_app_server_skills_list(
+pub(super) fn request_skills_list(
     app_event_tx: AppEventSender,
     client: InProcessAppServerRequester,
     cwds: Vec<PathBuf>,

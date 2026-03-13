@@ -238,7 +238,7 @@ pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
-async fn start_embedded_app_server(
+async fn start_app_server(
     arg0_paths: Arg0DispatchPaths,
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
@@ -246,7 +246,7 @@ async fn start_embedded_app_server(
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
 ) -> color_eyre::Result<InProcessAppServerClient> {
-    start_embedded_app_server_with(
+    start_app_server_with(
         arg0_paths,
         config,
         cli_kv_overrides,
@@ -258,7 +258,7 @@ async fn start_embedded_app_server(
     .await
 }
 
-async fn start_embedded_app_server_with<F, Fut>(
+async fn start_app_server_with<F, Fut>(
     arg0_paths: Arg0DispatchPaths,
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
@@ -298,7 +298,7 @@ where
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     })
     .await
-    .wrap_err("failed to start embedded app server")?;
+    .wrap_err("failed to start app server")?;
     Ok(client)
 }
 
@@ -1003,7 +1003,7 @@ async fn run_ratatui_app(
 
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
-    let embedded_app_server = match start_embedded_app_server(
+    let app_server = match start_app_server(
         arg0_paths,
         config.clone(),
         cli_kv_overrides.clone(),
@@ -1023,7 +1023,7 @@ async fn run_ratatui_app(
 
     let app_result = App::run(
         &mut tui,
-        embedded_app_server,
+        app_server,
         config,
         cli_kv_overrides.clone(),
         overrides.clone(),
@@ -1301,10 +1301,10 @@ mod tests {
             .await
     }
 
-    async fn start_test_embedded_app_server(
+    async fn start_test_app_server(
         config: Config,
     ) -> color_eyre::Result<InProcessAppServerClient> {
-        start_embedded_app_server(
+        start_app_server(
             Arg0DispatchPaths::default(),
             config,
             Vec::new(),
@@ -1332,10 +1332,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embedded_app_server_exposes_client_manager_accessors() -> color_eyre::Result<()> {
+    async fn app_server_exposes_client_manager_accessors() -> color_eyre::Result<()> {
         let temp_dir = TempDir::new()?;
         let config = build_config(&temp_dir).await?;
-        let app_server = start_test_embedded_app_server(config).await?;
+        let app_server = start_test_app_server(config).await?;
 
         assert!(Arc::ptr_eq(
             &app_server.auth_manager(),
@@ -1351,10 +1351,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embedded_app_server_start_failure_is_returned() -> color_eyre::Result<()> {
+    async fn app_server_start_failure_is_returned() -> color_eyre::Result<()> {
         let temp_dir = TempDir::new()?;
         let config = build_config(&temp_dir).await?;
-        let result = start_embedded_app_server_with(
+        let result = start_app_server_with(
             Arg0DispatchPaths::default(),
             config,
             Vec::new(),
@@ -1371,8 +1371,8 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("failed to start embedded app server"),
-            "error should preserve the embedded app server startup context"
+                .contains("failed to start app server"),
+            "error should preserve the app server startup context"
         );
         Ok(())
     }
