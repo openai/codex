@@ -1,3 +1,16 @@
+/*
+This module holds the temporary adapter layer between the TUI and the embedded
+in-process app server during the hybrid migration period.
+
+For now, the TUI still owns its existing direct-core behavior, but startup
+allocates an embedded app server and drains its event stream. Keeping the
+app-server-specific wiring here keeps that transitional logic out of the main
+`app.rs` orchestration path.
+
+As more TUI flows move onto the app-server surface directly, this adapter
+should shrink and eventually disappear.
+*/
+
 use super::App;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessServerEvent;
