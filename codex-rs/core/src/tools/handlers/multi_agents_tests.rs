@@ -12,10 +12,12 @@ use crate::protocol::Op;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionSource;
 use crate::protocol::SubAgentSource;
-use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolOutput;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
@@ -59,12 +61,30 @@ fn thread_manager() -> ThreadManager {
     )
 }
 
-fn expect_text_output(output: FunctionToolOutput) -> (String, Option<bool>) {
-    (
-        codex_protocol::models::function_call_output_content_items_to_text(&output.body)
-            .unwrap_or_default(),
-        output.success,
-    )
+fn expect_text_output<T>(output: T) -> (String, Option<bool>)
+where
+    T: ToolOutput,
+{
+    let response = output.to_response_item(
+        "call-1",
+        &ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+    );
+    match response {
+        ResponseInputItem::FunctionCallOutput { output, .. }
+        | ResponseInputItem::CustomToolCallOutput { output, .. } => {
+            let content = match output.body {
+                FunctionCallOutputBody::Text(text) => text,
+                FunctionCallOutputBody::ContentItems(items) => {
+                    codex_protocol::models::function_call_output_content_items_to_text(&items)
+                        .unwrap_or_default()
+                }
+            };
+            (content, output.success)
+        }
+        other => panic!("expected function output, got {other:?}"),
+    }
 }
 
 #[tokio::test]

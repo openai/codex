@@ -16,6 +16,7 @@ use crate::function_tool::FunctionCallError;
 use crate::models_manager::manager::RefreshStrategy;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -23,6 +24,7 @@ use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
@@ -42,6 +44,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -70,6 +73,38 @@ fn function_arguments(payload: ToolPayload) -> Result<String, FunctionCallError>
     }
 }
 
+fn tool_output_json_text<T>(value: &T, tool_name: &str) -> String
+where
+    T: Serialize,
+{
+    serde_json::to_string(value).unwrap_or_else(|err| {
+        JsonValue::String(format!("failed to serialize {tool_name} result: {err}")).to_string()
+    })
+}
+
+fn tool_output_response_item<T>(
+    call_id: &str,
+    payload: &ToolPayload,
+    value: &T,
+    success: Option<bool>,
+    tool_name: &str,
+) -> ResponseInputItem
+where
+    T: Serialize,
+{
+    FunctionToolOutput::from_text(tool_output_json_text(value, tool_name), success)
+        .to_response_item(call_id, payload)
+}
+
+fn tool_output_code_mode_result<T>(value: &T, tool_name: &str) -> JsonValue
+where
+    T: Serialize,
+{
+    serde_json::to_value(value).unwrap_or_else(|err| {
+        JsonValue::String(format!("failed to serialize {tool_name} result: {err}"))
+    })
+}
+
 mod spawn {
     use super::*;
     use crate::agent::control::SpawnAgentOptions;
@@ -83,7 +118,7 @@ mod spawn {
 
     #[async_trait]
     impl ToolHandler for Handler {
-        type Output = FunctionToolOutput;
+        type Output = SpawnAgentResult;
 
         fn kind(&self) -> ToolKind {
             ToolKind::Function
@@ -206,15 +241,10 @@ mod spawn {
             turn.session_telemetry
                 .counter("codex.multi_agent.spawn", 1, &[("role", role_tag)]);
 
-            let content = serde_json::to_string(&SpawnAgentResult {
+            Ok(SpawnAgentResult {
                 agent_id: new_thread_id.to_string(),
                 nickname,
             })
-            .map_err(|err| {
-                FunctionCallError::Fatal(format!("failed to serialize spawn_agent result: {err}"))
-            })?;
-
-            Ok(FunctionToolOutput::from_text(content, Some(true)))
         }
     }
 
@@ -230,9 +260,27 @@ mod spawn {
     }
 
     #[derive(Debug, Serialize)]
-    struct SpawnAgentResult {
+    pub(crate) struct SpawnAgentResult {
         agent_id: String,
         nickname: Option<String>,
+    }
+
+    impl ToolOutput for SpawnAgentResult {
+        fn log_preview(&self) -> String {
+            tool_output_json_text(self, "spawn_agent")
+        }
+
+        fn success_for_logging(&self) -> bool {
+            true
+        }
+
+        fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+            tool_output_response_item(call_id, payload, self, Some(true), "spawn_agent")
+        }
+
+        fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+            tool_output_code_mode_result(self, "spawn_agent")
+        }
     }
 }
 
@@ -243,7 +291,7 @@ mod send_input {
 
     #[async_trait]
     impl ToolHandler for Handler {
-        type Output = FunctionToolOutput;
+        type Output = SendInputResult;
 
         fn kind(&self) -> ToolKind {
             ToolKind::Function
@@ -323,14 +371,7 @@ mod send_input {
                 .await;
             let submission_id = result?;
 
-            let content =
-                serde_json::to_string(&SendInputResult { submission_id }).map_err(|err| {
-                    FunctionCallError::Fatal(format!(
-                        "failed to serialize send_input result: {err}"
-                    ))
-                })?;
-
-            Ok(FunctionToolOutput::from_text(content, Some(true)))
+            Ok(SendInputResult { submission_id })
         }
     }
 
@@ -344,8 +385,26 @@ mod send_input {
     }
 
     #[derive(Debug, Serialize)]
-    struct SendInputResult {
+    pub(crate) struct SendInputResult {
         submission_id: String,
+    }
+
+    impl ToolOutput for SendInputResult {
+        fn log_preview(&self) -> String {
+            tool_output_json_text(self, "send_input")
+        }
+
+        fn success_for_logging(&self) -> bool {
+            true
+        }
+
+        fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+            tool_output_response_item(call_id, payload, self, Some(true), "send_input")
+        }
+
+        fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+            tool_output_code_mode_result(self, "send_input")
+        }
     }
 }
 
@@ -357,7 +416,7 @@ mod resume_agent {
 
     #[async_trait]
     impl ToolHandler for Handler {
-        type Output = FunctionToolOutput;
+        type Output = ResumeAgentResult;
 
         fn kind(&self) -> ToolKind {
             ToolKind::Function
@@ -462,11 +521,7 @@ mod resume_agent {
             turn.session_telemetry
                 .counter("codex.multi_agent.resume", 1, &[]);
 
-            let content = serde_json::to_string(&ResumeAgentResult { status }).map_err(|err| {
-                FunctionCallError::Fatal(format!("failed to serialize resume_agent result: {err}"))
-            })?;
-
-            Ok(FunctionToolOutput::from_text(content, Some(true)))
+            Ok(ResumeAgentResult { status })
         }
     }
 
@@ -476,8 +531,26 @@ mod resume_agent {
     }
 
     #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
-    pub(super) struct ResumeAgentResult {
-        pub(super) status: AgentStatus,
+    pub(crate) struct ResumeAgentResult {
+        pub(crate) status: AgentStatus,
+    }
+
+    impl ToolOutput for ResumeAgentResult {
+        fn log_preview(&self) -> String {
+            tool_output_json_text(self, "resume_agent")
+        }
+
+        fn success_for_logging(&self) -> bool {
+            true
+        }
+
+        fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+            tool_output_response_item(call_id, payload, self, Some(true), "resume_agent")
+        }
+
+        fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+            tool_output_code_mode_result(self, "resume_agent")
+        }
     }
 
     async fn try_resume_closed_agent(
@@ -523,7 +596,7 @@ pub(crate) mod wait {
 
     #[async_trait]
     impl ToolHandler for Handler {
-        type Output = FunctionToolOutput;
+        type Output = WaitResult;
 
         fn kind(&self) -> ToolKind {
             ToolKind::Function
@@ -683,11 +756,7 @@ pub(crate) mod wait {
                 )
                 .await;
 
-            let content = serde_json::to_string(&result).map_err(|err| {
-                FunctionCallError::Fatal(format!("failed to serialize wait result: {err}"))
-            })?;
-
-            Ok(FunctionToolOutput::from_text(content, None))
+            Ok(result)
         }
     }
 
@@ -701,6 +770,24 @@ pub(crate) mod wait {
     pub(crate) struct WaitResult {
         pub(crate) status: HashMap<ThreadId, AgentStatus>,
         pub(crate) timed_out: bool,
+    }
+
+    impl ToolOutput for WaitResult {
+        fn log_preview(&self) -> String {
+            tool_output_json_text(self, "wait")
+        }
+
+        fn success_for_logging(&self) -> bool {
+            true
+        }
+
+        fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+            tool_output_response_item(call_id, payload, self, None, "wait")
+        }
+
+        fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+            tool_output_code_mode_result(self, "wait")
+        }
     }
 
     async fn wait_for_final_status(
@@ -733,7 +820,7 @@ pub mod close_agent {
 
     #[async_trait]
     impl ToolHandler for Handler {
-        type Output = FunctionToolOutput;
+        type Output = CloseAgentResult;
 
         fn kind(&self) -> ToolKind {
             ToolKind::Function
@@ -827,17 +914,31 @@ pub mod close_agent {
                 .await;
             result?;
 
-            let content = serde_json::to_string(&CloseAgentResult { status }).map_err(|err| {
-                FunctionCallError::Fatal(format!("failed to serialize close_agent result: {err}"))
-            })?;
-
-            Ok(FunctionToolOutput::from_text(content, Some(true)))
+            Ok(CloseAgentResult { status })
         }
     }
 
     #[derive(Debug, Deserialize, Serialize)]
-    pub(super) struct CloseAgentResult {
-        pub(super) status: AgentStatus,
+    pub(crate) struct CloseAgentResult {
+        pub(crate) status: AgentStatus,
+    }
+
+    impl ToolOutput for CloseAgentResult {
+        fn log_preview(&self) -> String {
+            tool_output_json_text(self, "close_agent")
+        }
+
+        fn success_for_logging(&self) -> bool {
+            true
+        }
+
+        fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+            tool_output_response_item(call_id, payload, self, Some(true), "close_agent")
+        }
+
+        fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+            tool_output_code_mode_result(self, "close_agent")
+        }
     }
 }
 

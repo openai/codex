@@ -91,6 +91,111 @@ fn unified_exec_output_schema() -> JsonValue {
         "additionalProperties": false
     })
 }
+
+fn agent_status_output_schema() -> JsonValue {
+    json!({
+        "oneOf": [
+            {
+                "type": "string",
+                "enum": ["pending_init", "running", "shutdown", "not_found"]
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "completed": {
+                        "type": ["string", "null"]
+                    }
+                },
+                "required": ["completed"],
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "errored": {
+                        "type": "string"
+                    }
+                },
+                "required": ["errored"],
+                "additionalProperties": false
+            }
+        ]
+    })
+}
+
+fn spawn_agent_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "agent_id": {
+                "type": "string",
+                "description": "Thread identifier for the spawned agent."
+            },
+            "nickname": {
+                "type": ["string", "null"],
+                "description": "User-facing nickname for the spawned agent when available."
+            }
+        },
+        "required": ["agent_id", "nickname"],
+        "additionalProperties": false
+    })
+}
+
+fn send_input_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "submission_id": {
+                "type": "string",
+                "description": "Identifier for the queued input submission."
+            }
+        },
+        "required": ["submission_id"],
+        "additionalProperties": false
+    })
+}
+
+fn resume_agent_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "status": agent_status_output_schema()
+        },
+        "required": ["status"],
+        "additionalProperties": false
+    })
+}
+
+fn wait_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "object",
+                "description": "Final statuses keyed by agent id for agents that finished before the timeout.",
+                "additionalProperties": agent_status_output_schema()
+            },
+            "timed_out": {
+                "type": "boolean",
+                "description": "Whether the wait call returned due to timeout before any agent reached a final status."
+            }
+        },
+        "required": ["status", "timed_out"],
+        "additionalProperties": false
+    })
+}
+
+fn close_agent_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "status": agent_status_output_schema()
+        },
+        "required": ["status"],
+        "additionalProperties": false
+    })
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ShellCommandBackendConfig {
     Classic,
@@ -975,7 +1080,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             required: None,
             additional_properties: Some(false.into()),
         },
-        output_schema: None,
+        output_schema: Some(spawn_agent_output_schema()),
     })
 }
 
@@ -1177,7 +1282,7 @@ fn create_send_input_tool() -> ToolSpec {
             required: Some(vec!["id".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: None,
+        output_schema: Some(send_input_output_schema()),
     })
 }
 
@@ -1202,7 +1307,7 @@ fn create_resume_agent_tool() -> ToolSpec {
             required: Some(vec!["id".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: None,
+        output_schema: Some(resume_agent_output_schema()),
     })
 }
 
@@ -1238,7 +1343,7 @@ fn create_wait_tool() -> ToolSpec {
             required: Some(vec!["ids".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: None,
+        output_schema: Some(wait_output_schema()),
     })
 }
 
@@ -1374,7 +1479,7 @@ fn create_close_agent_tool() -> ToolSpec {
             required: Some(vec!["id".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: None,
+        output_schema: Some(close_agent_output_schema()),
     })
 }
 
