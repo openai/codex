@@ -44,7 +44,6 @@ pub use js_repl::JsReplResetHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;
-pub use multi_agents::MultiAgentHandler;
 pub use plan::PlanHandler;
 pub use read_file::ReadFileHandler;
 pub use request_permissions::RequestPermissionsHandler;

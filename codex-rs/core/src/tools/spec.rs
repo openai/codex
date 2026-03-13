@@ -2324,7 +2324,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
-    use crate::tools::handlers::MultiAgentHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
@@ -2336,6 +2335,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ToolSuggestHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
+    use crate::tools::handlers::multi_agents::CloseAgentHandler;
+    use crate::tools::handlers::multi_agents::ResumeAgentHandler;
+    use crate::tools::handlers::multi_agents::SendInputHandler;
+    use crate::tools::handlers::multi_agents::SpawnAgentHandler;
+    use crate::tools::handlers::multi_agents::WaitHandler;
     use std::sync::Arc;
 
     let mut builder = ToolRegistryBuilder::new();
@@ -2698,7 +2702,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     }
 
     if config.collab_tools {
-        let multi_agent_handler = Arc::new(MultiAgentHandler);
         push_tool_spec(
             &mut builder,
             create_spawn_agent_tool(config),
@@ -2729,11 +2732,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
             false,
             config.code_mode_enabled,
         );
-        builder.register_handler("spawn_agent", multi_agent_handler.clone());
-        builder.register_handler("send_input", multi_agent_handler.clone());
-        builder.register_handler("resume_agent", multi_agent_handler.clone());
-        builder.register_handler("wait", multi_agent_handler.clone());
-        builder.register_handler("close_agent", multi_agent_handler);
+        builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
+        builder.register_handler("send_input", Arc::new(SendInputHandler));
+        builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
+        builder.register_handler("wait", Arc::new(WaitHandler));
+        builder.register_handler("close_agent", Arc::new(CloseAgentHandler));
     }
 
     if config.agent_jobs_tools {
