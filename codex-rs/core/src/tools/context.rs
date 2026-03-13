@@ -199,6 +199,43 @@ impl ToolOutput for FunctionToolOutput {
     }
 }
 
+pub struct AbortedToolOutput {
+    pub message: String,
+}
+
+impl ToolOutput for AbortedToolOutput {
+    fn log_preview(&self) -> String {
+        telemetry_preview(&self.message)
+    }
+
+    fn success_for_logging(&self) -> bool {
+        false
+    }
+
+    fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+        match payload {
+            ToolPayload::ToolSearch { .. } => ResponseInputItem::ToolSearchOutput {
+                call_id: call_id.to_string(),
+                status: "completed".to_string(),
+                execution: "client".to_string(),
+                tools: Vec::new(),
+            },
+            ToolPayload::Mcp { .. } => ResponseInputItem::McpToolCallOutput {
+                call_id: call_id.to_string(),
+                output: CallToolResult::from_error_text(self.message.clone()),
+            },
+            _ => function_tool_response(
+                call_id,
+                payload,
+                vec![FunctionCallOutputContentItem::InputText {
+                    text: self.message.clone(),
+                }],
+                None,
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecCommandToolOutput {
     pub event_call_id: String,
@@ -299,7 +336,7 @@ impl ExecCommandToolOutput {
     }
 }
 
-fn response_input_to_code_mode_result(response: ResponseInputItem) -> JsonValue {
+pub(crate) fn response_input_to_code_mode_result(response: ResponseInputItem) -> JsonValue {
     match response {
         ResponseInputItem::Message { content, .. } => content_items_to_code_mode_result(
             &content

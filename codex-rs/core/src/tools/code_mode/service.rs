@@ -9,8 +9,10 @@ use tracing::warn;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::features::Feature;
+use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::js_repl::resolve_compatible_node;
+use crate::tools::parallel::ToolCallRuntime;
 
 use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
@@ -22,7 +24,7 @@ pub(crate) struct CodeModeService {
     js_repl_node_path: Option<PathBuf>,
     stored_values: Mutex<HashMap<String, JsonValue>>,
     process: Arc<Mutex<Option<CodeModeProcess>>>,
-    next_session_id: Mutex<i32>,
+    next_cell_id: Mutex<u64>,
 }
 
 impl CodeModeService {
@@ -31,7 +33,7 @@ impl CodeModeService {
             js_repl_node_path,
             stored_values: Mutex::new(HashMap::new()),
             process: Arc::new(Mutex::new(None)),
-            next_session_id: Mutex::new(1),
+            next_cell_id: Mutex::new(1),
         }
     }
 
@@ -65,7 +67,8 @@ impl CodeModeService {
         &self,
         session: &Arc<Session>,
         turn: &Arc<TurnContext>,
-        tracker: &SharedTurnDiffTracker,
+        router: Arc<ToolRouter>,
+        tracker: SharedTurnDiffTracker,
     ) -> Option<CodeModeWorker> {
         if !turn.features.enabled(Feature::CodeMode) {
             return None;
@@ -73,8 +76,9 @@ impl CodeModeService {
         let exec = ExecContext {
             session: Arc::clone(session),
             turn: Arc::clone(turn),
-            tracker: Arc::clone(tracker),
         };
+        let tool_runtime =
+            ToolCallRuntime::new(router, Arc::clone(session), Arc::clone(turn), tracker);
         let mut process_slot = match self.ensure_started().await {
             Ok(process_slot) => process_slot,
             Err(err) => {
@@ -88,14 +92,14 @@ impl CodeModeService {
             );
             return None;
         };
-        Some(process.worker(exec))
+        Some(process.worker(exec, tool_runtime))
     }
 
-    pub(crate) async fn allocate_session_id(&self) -> i32 {
-        let mut next_session_id = self.next_session_id.lock().await;
-        let session_id = *next_session_id;
-        *next_session_id = next_session_id.saturating_add(1);
-        session_id
+    pub(crate) async fn allocate_cell_id(&self) -> String {
+        let mut next_cell_id = self.next_cell_id.lock().await;
+        let cell_id = *next_cell_id;
+        *next_cell_id = next_cell_id.saturating_add(1);
+        cell_id.to_string()
     }
 
     pub(crate) async fn allocate_request_id(&self) -> String {

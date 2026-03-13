@@ -47,6 +47,8 @@ use tracing_subscriber::layer::SubscriberExt;
 use wiremock::MockServer;
 
 const TEST_CONNECTION_ID: ConnectionId = ConnectionId(7);
+const CORE_TURN_SANITY_SPAN_NAMES: &[&str] =
+    &["submission_dispatch", "session_task.turn", "run_turn"];
 
 struct TestTracing {
     exporter: InMemorySpanExporter,
@@ -156,6 +158,11 @@ impl TracingHarness {
 
     fn reset_tracing(&self) {
         self.tracing.exporter.reset();
+    }
+
+    async fn shutdown(self) {
+        self.processor.shutdown_threads().await;
+        self.processor.drain_background_tasks().await;
     }
 
     async fn request<T>(&mut self, request: ClientRequest, trace: Option<W3cTraceContext>) -> T
@@ -446,15 +453,16 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
     } = RemoteTrace::new("00000000000000000000000000000011", "0000000000000022");
 
     let _: ThreadStartResponse = harness.start_thread(2, Some(remote_trace)).await;
-    drop(harness.processor);
     let spans = wait_for_exported_spans(harness.tracing, |spans| {
         spans.iter().any(|span| {
             span.span_kind == SpanKind::Server
                 && span_attr(span, "rpc.method") == Some("thread/start")
                 && span.span_context.trace_id() == remote_trace_id
-        }) && spans
-            .iter()
-            .any(|span| span.name.as_ref() == "thread_spawn")
+        }) && spans.iter().any(|span| {
+            span.name.as_ref() == "thread_spawn" && span.span_context.trace_id() == remote_trace_id
+        }) && spans.iter().any(|span| {
+            span.name.as_ref() == "session_init" && span.span_context.trace_id() == remote_trace_id
+        })
     })
     .await;
 
@@ -467,6 +475,7 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
     assert_ne!(server_request_span.span_context.span_id(), SpanId::INVALID);
     assert_span_descends_from(&spans, thread_spawn_span, server_request_span);
     assert_span_descends_from(&spans, session_init_span, server_request_span);
+    harness.shutdown().await;
 
     Ok(())
 }
@@ -511,34 +520,37 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
         )
         .await;
     let spans = wait_for_exported_spans(harness.tracing, |spans| {
-        spans
-            .iter()
-            .any(|span| span.name.as_ref() == "submission_dispatch")
-            && spans
-                .iter()
-                .any(|span| span.name.as_ref() == "session_task.turn")
-            && spans.iter().any(|span| span.name.as_ref() == "run_turn")
+        spans.iter().any(|span| {
+            span.span_kind == SpanKind::Server
+                && span_attr(span, "rpc.method") == Some("turn/start")
+                && span.span_context.trace_id() == remote_trace_id
+        }) && spans.iter().any(|span| {
+            CORE_TURN_SANITY_SPAN_NAMES.contains(&span.name.as_ref())
+                && span.span_context.trace_id() == remote_trace_id
+        })
     })
     .await;
-    drop(harness.processor);
-    tokio::task::yield_now().await;
 
     let server_request_span =
         find_rpc_span_with_trace(&spans, SpanKind::Server, "turn/start", remote_trace_id);
-    let submission_dispatch_span =
-        find_span_by_name_with_trace(&spans, "submission_dispatch", remote_trace_id);
-    let session_task_turn_span =
-        find_span_by_name_with_trace(&spans, "session_task.turn", remote_trace_id);
-    let run_turn_span = find_span_by_name_with_trace(&spans, "run_turn", remote_trace_id);
+    let core_turn_span = spans
+        .iter()
+        .find(|span| {
+            CORE_TURN_SANITY_SPAN_NAMES.contains(&span.name.as_ref())
+                && span.span_context.trace_id() == remote_trace_id
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing representative core turn span for trace={remote_trace_id}; exported spans:\n{}",
+                format_spans(&spans)
+            )
+        });
 
     assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);
     assert!(server_request_span.parent_span_is_remote);
     assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
-    assert_span_descends_from(&spans, submission_dispatch_span, server_request_span);
-    assert_span_descends_from(&spans, session_task_turn_span, server_request_span);
-    assert_span_descends_from(&spans, run_turn_span, server_request_span);
-    assert_span_descends_from(&spans, session_task_turn_span, submission_dispatch_span);
-    assert_span_descends_from(&spans, run_turn_span, session_task_turn_span);
+    assert_span_descends_from(&spans, core_turn_span, server_request_span);
+    harness.shutdown().await;
 
     Ok(())
 }

@@ -1,13 +1,13 @@
 use super::*;
 use async_channel::bounded;
 use codex_protocol::models::NetworkPermissions;
-use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use pretty_assertions::assert_eq;
@@ -150,11 +150,11 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
 
     let call_id = "tool-call-1".to_string();
     let expected_response = RequestPermissionsResponse {
-        permissions: PermissionProfile {
+        permissions: RequestPermissionProfile {
             network: Some(NetworkPermissions {
                 enabled: Some(true),
             }),
-            ..PermissionProfile::default()
+            ..RequestPermissionProfile::default()
         },
         scope: PermissionGrantScope::Turn,
     };
@@ -175,11 +175,11 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
                     call_id: request_call_id,
                     turn_id: "child-turn-1".to_string(),
                     reason: Some("need access".to_string()),
-                    permissions: PermissionProfile {
+                    permissions: RequestPermissionProfile {
                         network: Some(NetworkPermissions {
                             enabled: Some(true),
                         }),
-                        ..PermissionProfile::default()
+                        ..RequestPermissionProfile::default()
                     },
                 },
                 &cancel_token,

@@ -44,6 +44,14 @@ fn discoverable_connector(id: &str, name: &str, description: &str) -> Discoverab
     }))
 }
 
+fn search_capable_model_info() -> ModelInfo {
+    let config = test_config();
+    let mut model_info =
+        ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    model_info.supports_search_tool = true;
+    model_info
+}
+
 #[test]
 fn mcp_tool_to_openai_tool_inserts_empty_properties() {
     let mut schema = rmcp::model::JsonObject::new();
@@ -353,6 +361,54 @@ fn model_info_from_models_json(slug: &str) -> ModelInfo {
 }
 
 #[test]
+fn unified_exec_is_blocked_for_windows_sandboxed_policies_only() {
+    assert!(!unified_exec_allowed_in_environment(
+        true,
+        &SandboxPolicy::new_read_only_policy(),
+        WindowsSandboxLevel::RestrictedToken,
+    ));
+    assert!(!unified_exec_allowed_in_environment(
+        true,
+        &SandboxPolicy::new_workspace_write_policy(),
+        WindowsSandboxLevel::RestrictedToken,
+    ));
+    assert!(unified_exec_allowed_in_environment(
+        true,
+        &SandboxPolicy::DangerFullAccess,
+        WindowsSandboxLevel::RestrictedToken,
+    ));
+    assert!(unified_exec_allowed_in_environment(
+        true,
+        &SandboxPolicy::DangerFullAccess,
+        WindowsSandboxLevel::Disabled,
+    ));
+}
+
+#[test]
+fn model_provided_unified_exec_is_blocked_for_windows_sandboxed_policies() {
+    let mut model_info = model_info_from_models_json("gpt-5-codex");
+    model_info.shell_type = ConfigShellToolType::UnifiedExec;
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::new_workspace_write_policy(),
+        windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+    });
+
+    let expected_shell_type = if cfg!(target_os = "windows") {
+        ConfigShellToolType::ShellCommand
+    } else {
+        ConfigShellToolType::UnifiedExec
+    };
+    assert_eq!(config.shell_type, expected_shell_type);
+}
+
+#[test]
 fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     let model_info = model_info_from_models_json("gpt-5-codex");
     let mut features = Features::with_defaults();
@@ -364,6 +420,8 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&config, None, None, &[]).build();
 
@@ -403,7 +461,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         expected.insert(tool_name(&spec).to_string(), spec);
     }
 
-    if config.request_permission_enabled {
+    if config.exec_permission_approvals_enabled {
         let spec = create_request_permissions_tool();
         expected.insert(tool_name(&spec).to_string(), spec);
     }
@@ -436,6 +494,8 @@ fn test_build_specs_collab_tools_enabled() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     assert_contains_tool_names(
@@ -446,7 +506,7 @@ fn test_build_specs_collab_tools_enabled() {
 }
 
 #[test]
-fn test_build_specs_spawn_csv_enables_agent_jobs_and_collab_tools() {
+fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     let mut features = Features::with_defaults();
@@ -459,6 +519,8 @@ fn test_build_specs_spawn_csv_enables_agent_jobs_and_collab_tools() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     assert_contains_tool_names(
@@ -487,6 +549,8 @@ fn view_image_tool_omits_detail_without_original_detail_feature() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     let view_image = find_tool(&tools, VIEW_IMAGE_TOOL_NAME);
@@ -514,6 +578,8 @@ fn view_image_tool_includes_detail_with_original_detail_feature() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     let view_image = find_tool(&tools, VIEW_IMAGE_TOOL_NAME);
@@ -549,6 +615,8 @@ fn test_build_specs_artifact_tool_enabled() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     assert_contains_tool_names(&tools, &["artifacts"]);
@@ -571,6 +639,8 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
             "agent_job:test".to_string(),
         )),
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     assert_contains_tool_names(
@@ -600,6 +670,8 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     let request_user_input_tool = find_tool(&tools, "request_user_input");
@@ -616,6 +688,8 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     let request_user_input_tool = find_tool(&tools, "request_user_input");
@@ -639,6 +713,8 @@ fn request_permissions_requires_feature_flag() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     assert_lacks_tool_name(&tools, "request_permissions");
@@ -652,6 +728,8 @@ fn request_permissions_requires_feature_flag() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     let request_permissions_tool = find_tool(&tools, "request_permissions");
@@ -666,7 +744,7 @@ fn request_permissions_tool_is_independent_from_additional_permissions() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     let mut features = Features::with_defaults();
-    features.enable(Feature::RequestPermissions);
+    features.enable(Feature::ExecPermissionApprovals);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -674,6 +752,8 @@ fn request_permissions_tool_is_independent_from_additional_permissions() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
 
@@ -693,6 +773,8 @@ fn get_memory_requires_feature_flag() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     assert!(
@@ -714,6 +796,8 @@ fn js_repl_requires_feature_flag() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
 
@@ -741,6 +825,8 @@ fn js_repl_enabled_adds_tools() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     assert_contains_tool_names(&tools, &["js_repl", "js_repl_reset"]);
@@ -765,6 +851,8 @@ fn image_generation_tools_require_feature_and_supported_model() {
         features: &default_features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (default_tools, _) = build_specs(&default_tools_config, None, None, &[]).build();
     assert!(
@@ -780,6 +868,8 @@ fn image_generation_tools_require_feature_and_supported_model() {
         features: &image_generation_features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (supported_tools, _) = build_specs(&supported_tools_config, None, None, &[]).build();
     assert_contains_tool_names(&supported_tools, &["image_generation"]);
@@ -798,6 +888,8 @@ fn image_generation_tools_require_feature_and_supported_model() {
         features: &image_generation_features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     assert!(
@@ -838,6 +930,8 @@ fn assert_model_tools(
         features,
         web_search_mode,
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
@@ -873,6 +967,8 @@ fn web_search_mode_cached_sets_external_web_access_false() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
 
@@ -902,6 +998,8 @@ fn web_search_mode_live_sets_external_web_access_true() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
 
@@ -944,6 +1042,8 @@ fn web_search_config_is_forwarded_to_tool_spec() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     })
     .with_web_search_config(Some(web_search_config.clone()));
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
@@ -980,6 +1080,8 @@ fn web_search_tool_type_text_and_image_sets_search_content_types() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
 
@@ -1013,6 +1115,8 @@ fn mcp_resource_tools_are_hidden_without_mcp_servers() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
 
@@ -1037,6 +1141,8 @@ fn mcp_resource_tools_are_included_when_mcp_servers_are_present() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), None, &[]).build();
 
@@ -1230,6 +1336,8 @@ fn test_build_specs_default_shell_present() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), None, &[]).build();
 
@@ -1256,6 +1364,8 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
     assert_eq!(tools_config.shell_type, ConfigShellToolType::ShellCommand);
@@ -1283,6 +1393,8 @@ fn test_parallel_support_flags() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
 
@@ -1311,6 +1423,8 @@ fn test_test_model_info_includes_sync_tool() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
 
@@ -1345,6 +1459,8 @@ fn test_build_specs_mcp_tools_converted() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
         &tools_config,
@@ -1436,6 +1552,8 @@ fn test_build_specs_mcp_tools_sorted_by_name() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
     // Intentionally construct a map with keys that would sort alphabetically.
@@ -1472,8 +1590,7 @@ fn test_build_specs_mcp_tools_sorted_by_name() {
 
 #[test]
 fn search_tool_description_includes_only_codex_apps_connector_names() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
     let available_models = Vec::new();
@@ -1483,6 +1600,8 @@ fn search_tool_description_includes_only_codex_apps_connector_names() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
     let (tools, _) = build_specs(
@@ -1547,9 +1666,8 @@ fn search_tool_description_includes_only_codex_apps_connector_names() {
 }
 
 #[test]
-fn search_tool_requires_apps_feature_flag_only() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+fn search_tool_requires_model_capability_only() {
+    let model_info = search_capable_model_info();
     let app_tools = Some(HashMap::from([(
         "mcp__codex_apps__calendar_create_event".to_string(),
         ToolInfo {
@@ -1571,16 +1689,19 @@ fn search_tool_requires_apps_feature_flag_only() {
     let features = Features::with_defaults();
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
+        model_info: &ModelInfo {
+            supports_search_tool: false,
+            ..model_info.clone()
+        },
         available_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, app_tools.clone(), &[]).build();
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::Apps);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -1588,6 +1709,8 @@ fn search_tool_requires_apps_feature_flag_only() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, app_tools, &[]).build();
     assert_contains_tool_names(&tools, &[TOOL_SEARCH_TOOL_NAME]);
@@ -1595,8 +1718,7 @@ fn search_tool_requires_apps_feature_flag_only() {
 
 #[test]
 fn tool_suggest_is_not_registered_without_feature_flag() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
     let available_models = Vec::new();
@@ -1606,6 +1728,8 @@ fn tool_suggest_is_not_registered_without_feature_flag() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs_with_discoverable_tools(
         &tools_config,
@@ -1629,8 +1753,7 @@ fn tool_suggest_is_not_registered_without_feature_flag() {
 
 #[test]
 fn search_tool_description_handles_no_enabled_apps() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
     let available_models = Vec::new();
@@ -1640,6 +1763,8 @@ fn search_tool_description_handles_no_enabled_apps() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
     let (tools, _) = build_specs(&tools_config, None, Some(HashMap::new()), &[]).build();
@@ -1654,8 +1779,7 @@ fn search_tool_description_handles_no_enabled_apps() {
 
 #[test]
 fn search_tool_registers_namespaced_app_tool_aliases() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
     let available_models = Vec::new();
@@ -1665,6 +1789,8 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
     let (_, registry) = build_specs(
@@ -1718,8 +1844,7 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
 
 #[test]
 fn tool_suggest_description_lists_discoverable_tools() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
     features.enable(Feature::ToolSuggest);
@@ -1730,6 +1855,8 @@ fn tool_suggest_description_lists_discoverable_tools() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
     let discoverable_tools = vec![
@@ -1808,6 +1935,8 @@ fn test_mcp_tool_property_missing_type_defaults_to_string() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
     let (tools, _) = build_specs(
@@ -1866,6 +1995,8 @@ fn test_mcp_tool_integer_normalized_to_number() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
     let (tools, _) = build_specs(
@@ -1921,6 +2052,8 @@ fn test_mcp_tool_array_without_items_gets_default_string_items() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
     let (tools, _) = build_specs(
@@ -1978,6 +2111,8 @@ fn test_mcp_tool_anyof_defaults_to_string() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
     let (tools, _) = build_specs(
@@ -2070,7 +2205,7 @@ fn shell_tool_with_request_permission_includes_additional_permissions() {
         panic!("expected sandbox_permissions description");
     };
     assert!(description.contains("with_additional_permissions"));
-    assert!(description.contains("macOS permissions"));
+    assert!(description.contains("filesystem or network permissions"));
 
     let Some(JsonSchema::Object {
         properties: additional_properties,
@@ -2081,7 +2216,7 @@ fn shell_tool_with_request_permission_includes_additional_permissions() {
     };
     assert!(additional_properties.contains_key("network"));
     assert!(additional_properties.contains_key("file_system"));
-    assert!(additional_properties.contains_key("macos"));
+    assert!(!additional_properties.contains_key("macos"));
 }
 
 #[test]
@@ -2105,7 +2240,7 @@ fn request_permissions_tool_includes_full_permission_schema() {
     assert_eq!(additional_properties, &Some(false.into()));
     assert!(permission_properties.contains_key("network"));
     assert!(permission_properties.contains_key("file_system"));
-    assert!(permission_properties.contains_key("macos"));
+    assert!(!permission_properties.contains_key("macos"));
 
     let Some(JsonSchema::Object {
         properties: network_properties,
@@ -2129,20 +2264,6 @@ fn request_permissions_tool_includes_full_permission_schema() {
     assert_eq!(additional_properties, &Some(false.into()));
     assert!(file_system_properties.contains_key("read"));
     assert!(file_system_properties.contains_key("write"));
-
-    let Some(JsonSchema::Object {
-        properties: macos_properties,
-        additional_properties,
-        ..
-    }) = permission_properties.get("macos")
-    else {
-        panic!("expected macos object");
-    };
-    assert_eq!(additional_properties, &Some(false.into()));
-    assert!(macos_properties.contains_key("preferences"));
-    assert!(macos_properties.contains_key("automations"));
-    assert!(macos_properties.contains_key("accessibility"));
-    assert!(macos_properties.contains_key("calendar"));
 }
 
 #[test]
@@ -2187,6 +2308,8 @@ fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(
         &tools_config,
@@ -2296,6 +2419,8 @@ fn code_mode_augments_builtin_tool_descriptions_with_typed_sample() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
@@ -2307,7 +2432,7 @@ fn code_mode_augments_builtin_tool_descriptions_with_typed_sample() {
 
     assert_eq!(
         description,
-        "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nCode mode declaration:\n```ts\nimport { view_image } from \"tools.js\";\ndeclare function view_image(args: {\n  path: string;\n}): Promise<unknown>;\n```"
+        "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nCode mode declaration:\n```ts\ndeclare const tools: {\n  view_image(args: {\n    path: string;\n  }): Promise<unknown>;\n};\n```"
     );
 }
 
@@ -2325,6 +2450,8 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
 
     let (tools, _) = build_specs(
@@ -2357,7 +2484,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
 
     assert_eq!(
         description,
-        "Echo text\n\nCode mode declaration:\n```ts\nimport { echo } from \"tools/mcp/sample.js\";\ndeclare function echo(args: {\n  message: string;\n}): Promise<{\n  _meta?: unknown;\n  content: Array<unknown>;\n  isError?: boolean;\n  structuredContent?: unknown;\n}>;\n```"
+        "Echo text\n\nCode mode declaration:\n```ts\ndeclare const tools: {\n  mcp__sample__echo(args: {\n    message: string;\n  }): Promise<{\n    _meta?: unknown;\n    content: Array<unknown>;\n    isError?: boolean;\n    structuredContent?: unknown;\n  }>;\n};\n```"
     );
 }
 

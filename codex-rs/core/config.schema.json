@@ -231,14 +231,14 @@
         },
         {
           "additionalProperties": false,
-          "description": "Fine-grained rejection controls for approval prompts.\n\nWhen a field is `true`, prompts of that category are automatically rejected instead of shown to the user.",
+          "description": "Fine-grained controls for individual approval flows.\n\nWhen a field is `true`, commands in that category are allowed. When it is `false`, those requests are automatically rejected instead of shown to the user.",
           "properties": {
-            "reject": {
-              "$ref": "#/definitions/RejectConfig"
+            "granular": {
+              "$ref": "#/definitions/GranularApprovalConfig"
             }
           },
           "required": [
-            "reject"
+            "granular"
           ],
           "type": "object"
         },
@@ -363,7 +363,13 @@
             "enable_experimental_windows_sandbox": {
               "type": "boolean"
             },
+            "enable_fanout": {
+              "type": "boolean"
+            },
             "enable_request_compression": {
+              "type": "boolean"
+            },
+            "exec_permission_approvals": {
               "type": "boolean"
             },
             "experimental_use_freeform_apply_patch": {
@@ -420,6 +426,9 @@
             "realtime_conversation": {
               "type": "boolean"
             },
+            "realtime_conversation_v2": {
+              "type": "boolean"
+            },
             "remote_models": {
               "type": "boolean"
             },
@@ -457,9 +466,6 @@
               "type": "boolean"
             },
             "skill_mcp_dependency_install": {
-              "type": "boolean"
-            },
-            "spawn_csv": {
               "type": "boolean"
             },
             "sqlite": {
@@ -649,6 +655,38 @@
           "type": "integer"
         }
       },
+      "type": "object"
+    },
+    "GranularApprovalConfig": {
+      "properties": {
+        "mcp_elicitations": {
+          "description": "Whether to allow MCP elicitation prompts.",
+          "type": "boolean"
+        },
+        "request_permissions": {
+          "default": false,
+          "description": "Whether to allow prompts triggered by the `request_permissions` tool.",
+          "type": "boolean"
+        },
+        "rules": {
+          "description": "Whether to allow prompts triggered by execpolicy `prompt` rules.",
+          "type": "boolean"
+        },
+        "sandbox_approval": {
+          "description": "Whether to allow shell command approval requests, including inline `with_additional_permissions` and `require_escalated` requests.",
+          "type": "boolean"
+        },
+        "skill_approval": {
+          "default": false,
+          "description": "Whether to allow approval prompts triggered by skill script execution.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mcp_elicitations",
+        "rules",
+        "sandbox_approval"
+      ],
       "type": "object"
     },
     "History": {
@@ -1336,38 +1374,6 @@
         }
       ]
     },
-    "RejectConfig": {
-      "properties": {
-        "mcp_elicitations": {
-          "description": "Reject MCP elicitation prompts.",
-          "type": "boolean"
-        },
-        "request_permissions": {
-          "default": false,
-          "description": "Reject approval prompts related to built-in permission requests.",
-          "type": "boolean"
-        },
-        "rules": {
-          "description": "Reject prompts triggered by execpolicy `prompt` rules.",
-          "type": "boolean"
-        },
-        "sandbox_approval": {
-          "description": "Reject approval prompts related to sandbox escalation.",
-          "type": "boolean"
-        },
-        "skill_approval": {
-          "default": false,
-          "description": "Reject approval prompts triggered by skill script execution.",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "mcp_elicitations",
-        "rules",
-        "sandbox_approval"
-      ],
-      "type": "object"
-    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -1871,7 +1877,13 @@
         "enable_experimental_windows_sandbox": {
           "type": "boolean"
         },
+        "enable_fanout": {
+          "type": "boolean"
+        },
         "enable_request_compression": {
+          "type": "boolean"
+        },
+        "exec_permission_approvals": {
           "type": "boolean"
         },
         "experimental_use_freeform_apply_patch": {
@@ -1928,6 +1940,9 @@
         "realtime_conversation": {
           "type": "boolean"
         },
+        "realtime_conversation_v2": {
+          "type": "boolean"
+        },
         "remote_models": {
           "type": "boolean"
         },
@@ -1965,9 +1980,6 @@
           "type": "boolean"
         },
         "skill_mcp_dependency_install": {
-          "type": "boolean"
-        },
-        "spawn_csv": {
           "type": "boolean"
         },
         "sqlite": {

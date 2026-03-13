@@ -5,6 +5,7 @@ use crate::codex::Session;
 use crate::default_client::default_headers;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::features::Feature;
 use crate::realtime_context::build_realtime_startup_context;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -12,6 +13,7 @@ use async_channel::TrySendError;
 use codex_api::Provider as ApiProvider;
 use codex_api::RealtimeAudioFrame;
 use codex_api::RealtimeEvent;
+use codex_api::RealtimeEventParser;
 use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeWebsocketClient;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketEvents;
@@ -117,6 +119,7 @@ impl RealtimeConversationManager {
         prompt: String,
         model: Option<String>,
         session_id: Option<String>,
+        event_parser: RealtimeEventParser,
     ) -> CodexResult<(Receiver<RealtimeEvent>, Arc<AtomicBool>)> {
         let previous_state = {
             let mut guard = self.state.lock().await;
@@ -132,6 +135,7 @@ impl RealtimeConversationManager {
             instructions: prompt,
             model,
             session_id,
+            event_parser,
         };
         let client = RealtimeWebsocketClient::new(api_provider);
         let connection = client
@@ -298,6 +302,11 @@ pub(crate) async fn handle_start(
         format!("{prompt}\n\n{startup_context}")
     };
     let model = config.experimental_realtime_ws_model.clone();
+    let event_parser = if config.features.enabled(Feature::RealtimeConversationV2) {
+        RealtimeEventParser::RealtimeV2
+    } else {
+        RealtimeEventParser::V1
+    };
 
     let requested_session_id = params
         .session_id
@@ -313,6 +322,7 @@ pub(crate) async fn handle_start(
             prompt,
             model,
             requested_session_id.clone(),
+            event_parser,
         )
         .await
     {

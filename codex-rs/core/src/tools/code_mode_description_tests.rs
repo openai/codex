@@ -1,3 +1,4 @@
+use super::append_code_mode_sample;
 use super::render_json_schema_to_typescript;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -71,5 +72,33 @@ fn render_json_schema_to_typescript_sorts_object_properties() {
     assert_eq!(
         render_json_schema_to_typescript(&schema),
         "{\n  _meta?: string;\n  content: Array<string>;\n  isError?: boolean;\n  structuredContent?: string;\n}"
+    );
+}
+
+#[test]
+fn append_code_mode_sample_uses_global_tools_for_valid_identifiers() {
+    assert_eq!(
+        append_code_mode_sample(
+            "desc",
+            "mcp__ologs__get_profile",
+            "args",
+            "{ foo: string }".to_string(),
+            "unknown".to_string(),
+        ),
+        "desc\n\nCode mode declaration:\n```ts\ndeclare const tools: {\n  mcp__ologs__get_profile(args: { foo: string }): Promise<unknown>;\n};\n```"
+    );
+}
+
+#[test]
+fn append_code_mode_sample_normalizes_invalid_identifiers() {
+    assert_eq!(
+        append_code_mode_sample(
+            "desc",
+            "mcp__rmcp__echo-tool",
+            "args",
+            "{ foo: string }".to_string(),
+            "unknown".to_string(),
+        ),
+        "desc\n\nCode mode declaration:\n```ts\ndeclare const tools: {\n  mcp__rmcp__echo_tool(args: { foo: string }): Promise<unknown>;\n};\n```"
     );
 }
