@@ -20,7 +20,7 @@ pub struct CodeModeWaitHandler;
 
 #[derive(Debug, Deserialize)]
 struct ExecWaitArgs {
-    session_id: i32,
+    cell_id: String,
     #[serde(default = "default_wait_yield_time_ms")]
     yield_time_ms: u64,
     #[serde(default)]
@@ -73,12 +73,12 @@ impl ToolHandler for CodeModeWaitHandler {
                 let message = if args.terminate {
                     HostToNodeMessage::Terminate {
                         request_id: request_id.clone(),
-                        session_id: args.session_id,
+                        cell_id: args.cell_id.clone(),
                     }
                 } else {
                     HostToNodeMessage::Poll {
                         request_id: request_id.clone(),
-                        session_id: args.session_id,
+                        cell_id: args.cell_id.clone(),
                         yield_time_ms: args.yield_time_ms,
                     }
                 };
@@ -111,7 +111,7 @@ impl ToolHandler for CodeModeWaitHandler {
                     };
                     handle_node_message(
                         &exec,
-                        args.session_id,
+                        args.cell_id,
                         message,
                         Some(args.max_tokens),
                         started_at,

@@ -17,6 +17,7 @@ use crate::codex::TurnContext;
 use crate::tools::ToolRouter;
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::code_mode_description::code_mode_tool_reference;
+use crate::tools::code_mode_description::normalize_code_mode_identifier;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::parallel::ToolCallRuntime;
@@ -56,7 +57,7 @@ enum CodeModeSessionProgress {
 enum CodeModeExecutionStatus {
     Completed,
     Failed,
-    Running(i32),
+    Running(String),
     Terminated,
 }
 
@@ -78,7 +79,7 @@ pub(crate) fn wait_tool_description() -> &'static str {
 
 async fn handle_node_message(
     exec: &ExecContext,
-    session_id: i32,
+    cell_id: String,
     message: protocol::NodeToHostMessage,
     poll_max_output_tokens: Option<Option<usize>>,
     started_at: std::time::Instant,
@@ -90,7 +91,7 @@ async fn handle_node_message(
             delta_items = truncate_code_mode_result(delta_items, poll_max_output_tokens.flatten());
             prepend_script_status(
                 &mut delta_items,
-                CodeModeExecutionStatus::Running(session_id),
+                CodeModeExecutionStatus::Running(cell_id),
                 started_at.elapsed(),
             );
             Ok(CodeModeSessionProgress::Yielded {
@@ -160,8 +161,8 @@ fn prepend_script_status(
         match status {
             CodeModeExecutionStatus::Completed => "Script completed".to_string(),
             CodeModeExecutionStatus::Failed => "Script failed".to_string(),
-            CodeModeExecutionStatus::Running(session_id) => {
-                format!("Script running with session ID {session_id}")
+            CodeModeExecutionStatus::Running(cell_id) => {
+                format!("Script running with cell ID {cell_id}")
             }
             CodeModeExecutionStatus::Terminated => "Script terminated".to_string(),
         }
@@ -233,10 +234,11 @@ fn enabled_tool_from_spec(spec: ToolSpec) -> Option<protocol::EnabledTool> {
     };
 
     Some(protocol::EnabledTool {
+        global_name: normalize_code_mode_identifier(&tool_name),
         tool_name,
         module_path: reference.module_path,
         namespace: reference.namespace,
-        name: reference.tool_key,
+        name: normalize_code_mode_identifier(&reference.tool_key),
         description,
         kind,
     })
