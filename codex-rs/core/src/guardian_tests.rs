@@ -257,6 +257,35 @@ fn guardian_assessment_action_value_redacts_apply_patch_patch_text() {
     );
 }
 
+#[test]
+fn guardian_request_turn_id_prefers_network_access_owner_turn() {
+    let network_access = GuardianApprovalRequest::NetworkAccess {
+        id: "network-1".to_string(),
+        turn_id: "owner-turn".to_string(),
+        target: "https://example.com:443".to_string(),
+        host: "example.com".to_string(),
+        protocol: NetworkApprovalProtocol::Https,
+        port: 443,
+    };
+    let apply_patch = GuardianApprovalRequest::ApplyPatch {
+        id: "patch-1".to_string(),
+        cwd: PathBuf::from("/tmp"),
+        files: vec![AbsolutePathBuf::try_from("/tmp/guardian.txt").expect("absolute path")],
+        change_count: 1usize,
+        patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+hello\n*** End Patch"
+            .to_string(),
+    };
+
+    assert_eq!(
+        guardian_request_turn_id(&network_access, "fallback-turn"),
+        "owner-turn"
+    );
+    assert_eq!(
+        guardian_request_turn_id(&apply_patch, "fallback-turn"),
+        "fallback-turn"
+    );
+}
+
 #[tokio::test]
 async fn routes_approval_to_guardian_requires_auto_only_review_policy() {
     let (_session, mut turn) = crate::codex::make_session_and_context().await;

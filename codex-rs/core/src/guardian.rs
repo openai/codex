@@ -301,6 +301,7 @@ async fn run_guardian_review(
     external_cancel: Option<CancellationToken>,
 ) -> ReviewDecision {
     let assessment_id = guardian_request_id(&request).to_string();
+    let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
     let action_summary = guardian_assessment_action_value(&request);
     session
         .notify_background_event(turn.as_ref(), guardian_review_status_message(&request))
@@ -310,7 +311,7 @@ async fn run_guardian_review(
             turn.as_ref(),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: assessment_id.clone(),
-                turn_id: turn.sub_id.clone(),
+                turn_id: assessment_turn_id.clone(),
                 status: GuardianAssessmentStatus::InProgress,
                 risk_score: None,
                 risk_level: None,
@@ -407,7 +408,7 @@ async fn run_guardian_review(
             turn.as_ref(),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: assessment_id,
-                turn_id: turn.sub_id.clone(),
+                turn_id: assessment_turn_id,
                 status,
                 risk_score: Some(assessment.risk_score),
                 risk_level: Some(assessment.risk_level),
@@ -1111,6 +1112,21 @@ fn guardian_request_id(request: &GuardianApprovalRequest) -> &str {
         | GuardianApprovalRequest::McpToolCall { id, .. } => id,
         #[cfg(unix)]
         GuardianApprovalRequest::Execve { id, .. } => id,
+    }
+}
+
+fn guardian_request_turn_id<'a>(
+    request: &'a GuardianApprovalRequest,
+    default_turn_id: &'a str,
+) -> &'a str {
+    match request {
+        GuardianApprovalRequest::NetworkAccess { turn_id, .. } => turn_id,
+        GuardianApprovalRequest::Shell { .. }
+        | GuardianApprovalRequest::ExecCommand { .. }
+        | GuardianApprovalRequest::ApplyPatch { .. }
+        | GuardianApprovalRequest::McpToolCall { .. } => default_turn_id,
+        #[cfg(unix)]
+        GuardianApprovalRequest::Execve { .. } => default_turn_id,
     }
 }
 
