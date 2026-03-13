@@ -94,8 +94,13 @@ impl FsApi {
             .await
             .map_err(map_io_error)?;
         while let Some(entry) = read_dir.next_entry().await.map_err(map_io_error)? {
+            let metadata = tokio::fs::metadata(entry.path())
+                .await
+                .map_err(map_io_error)?;
             entries.push(FsReadDirectoryEntry {
                 file_name: entry.file_name().to_string_lossy().into_owned(),
+                is_directory: metadata.is_dir(),
+                is_file: metadata.is_file(),
             });
         }
         Ok(FsReadDirectoryResponse { entries })

@@ -2163,6 +2163,10 @@ pub struct FsReadDirectoryParams {
 pub struct FsReadDirectoryEntry {
     /// Direct child entry name only, not an absolute or relative path.
     pub file_name: String,
+    /// Whether this entry resolves to a directory.
+    pub is_directory: bool,
+    /// Whether this entry resolves to a regular file.
+    pub is_file: bool,
 }
 
 /// Directory entries returned by `fs/readDirectory`.

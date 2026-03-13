@@ -7476,10 +7476,20 @@
           "fileName": {
             "description": "Direct child entry name only, not an absolute or relative path.",
             "type": "string"
+          },
+          "isDirectory": {
+            "description": "Whether this entry resolves to a directory.",
+            "type": "boolean"
+          },
+          "isFile": {
+            "description": "Whether this entry resolves to a regular file.",
+            "type": "boolean"
           }
         },
         "required": [
-          "fileName"
+          "fileName",
+          "isDirectory",
+          "isFile"
         ],
         "type": "object"
       },

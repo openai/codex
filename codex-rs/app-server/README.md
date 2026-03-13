@@ -157,7 +157,7 @@ Example with notification opt-out:
 - `fs/writeFile` — write an absolute file path from base64-encoded `{ dataBase64 }`; returns `{}`.
 - `fs/createDirectory` — create an absolute directory path; `recursive` defaults to `true`.
 - `fs/getMetadata` — return metadata for an absolute path: `isDirectory`, `isFile`, `createdAtMs`, and `modifiedAtMs`.
-- `fs/readDirectory` — list direct child entries for an absolute directory path; each entry currently contains only `fileName`, which is just the child name, not a path.
+- `fs/readDirectory` — list direct child entries for an absolute directory path; each entry contains `fileName`, `isDirectory`, and `isFile`, and `fileName` is just the child name, not a path.
 - `fs/remove` — remove an absolute file or directory tree; `recursive` and `force` default to `true`.
 - `fs/copy` — copy between absolute paths; directory copies require `recursive: true`.
 - `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options, optional legacy `upgrade` model ids, optional `upgradeInfo` metadata (`model`, `upgradeCopy`, `modelLink`, `migrationMarkdown`), and optional `availabilityNux` metadata.

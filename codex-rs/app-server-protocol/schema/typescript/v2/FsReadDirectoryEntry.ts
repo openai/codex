@@ -9,4 +9,12 @@ export type FsReadDirectoryEntry = {
 /**
  * Direct child entry name only, not an absolute or relative path.
  */
-fileName: string, };
+fileName: string, 
+/**
+ * Whether this entry resolves to a directory.
+ */
+isDirectory: boolean, 
+/**
+ * Whether this entry resolves to a regular file.
+ */
+isFile: boolean, };

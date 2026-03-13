@@ -112,6 +112,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
     let codex_home = TempDir::new()?;
     let source_dir = codex_home.path().join("source");
     let nested_dir = source_dir.join("nested");
+    let source_file = source_dir.join("root.txt");
     let copied_dir = codex_home.path().join("copied");
     let copy_file_path = codex_home.path().join("copy.txt");
     let nested_file = nested_dir.join("note.txt");
@@ -139,6 +140,18 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(write_request_id)),
+    )
+    .await??;
+
+    let root_write_request_id = mcp
+        .send_fs_write_file_request(FsWriteFileParams {
+            path: absolute_path(source_file.clone()),
+            data_base64: STANDARD.encode("hello from source root"),
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(root_write_request_id)),
     )
     .await??;
 
@@ -205,14 +218,24 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(read_directory_request_id)),
     )
     .await??;
-    let entries =
+    let mut entries =
         to_response::<codex_app_server_protocol::FsReadDirectoryResponse>(readdir_response)?
             .entries;
+    entries.sort_by(|left, right| left.file_name.cmp(&right.file_name));
     assert_eq!(
         entries,
-        vec![FsReadDirectoryEntry {
-            file_name: "nested".to_string(),
-        }]
+        vec![
+            FsReadDirectoryEntry {
+                file_name: "nested".to_string(),
+                is_directory: true,
+                is_file: false,
+            },
+            FsReadDirectoryEntry {
+                file_name: "root.txt".to_string(),
+                is_directory: false,
+                is_file: true,
+            },
+        ]
     );
 
     let remove_request_id = mcp
