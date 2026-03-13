@@ -1743,6 +1743,7 @@ async fn helpers_are_available_and_do_not_panic() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
+        use_app_server: false,
     };
     let mut w = ChatWidget::new(init, thread_manager);
     // Basic construction sanity.
@@ -1768,6 +1769,17 @@ fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
 // --- Helpers for tests that need direct construction and event draining ---
 async fn make_chatwidget_manual(
     model_override: Option<&str>,
+) -> (
+    ChatWidget,
+    tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    tokio::sync::mpsc::UnboundedReceiver<Op>,
+) {
+    make_chatwidget_manual_with_use_app_server(model_override, false).await
+}
+
+async fn make_chatwidget_manual_with_use_app_server(
+    model_override: Option<&str>,
+    use_app_server: bool,
 ) -> (
     ChatWidget,
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
@@ -1901,6 +1913,7 @@ async fn make_chatwidget_manual(
         external_editor_state: ExternalEditorState::Closed,
         realtime_conversation: RealtimeConversationUiState::default(),
         last_rendered_user_message_event: None,
+        use_app_server,
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
@@ -1937,6 +1950,45 @@ fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
             "unexpected submit op: {op:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn list_skills_without_app_server_uses_core_op_channel() {
+    let (mut chat, mut app_rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "skills-update".into(),
+        msg: EventMsg::SkillsUpdateAvailable,
+    });
+
+    assert_matches!(
+        op_rx.try_recv(),
+        Ok(Op::ListSkills {
+            cwds,
+            force_reload: true,
+        }) if cwds.is_empty()
+    );
+    assert_matches!(app_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn list_skills_with_app_server_uses_app_event_channel() {
+    let (mut chat, mut app_rx, mut op_rx) =
+        make_chatwidget_manual_with_use_app_server(None, true).await;
+
+    chat.handle_codex_event(Event {
+        id: "skills-update".into(),
+        msg: EventMsg::SkillsUpdateAvailable,
+    });
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert_matches!(
+        app_rx.try_recv(),
+        Ok(AppEvent::CodexOp(Op::ListSkills {
+            cwds,
+            force_reload: true,
+        })) if cwds.is_empty()
+    );
 }
 
 pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
@@ -5600,6 +5652,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
+        use_app_server: false,
     };
 
     let chat = ChatWidget::new(init, thread_manager);
@@ -5650,6 +5703,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
+        use_app_server: false,
     };
 
     let chat = ChatWidget::new(init, thread_manager);

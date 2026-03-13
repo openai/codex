@@ -482,6 +482,7 @@ pub(crate) struct ChatWidgetInit {
     // Shared latch so we only warn once about invalid status-line item IDs.
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
     pub(crate) session_telemetry: SessionTelemetry,
+    pub(crate) use_app_server: bool,
 }
 
 #[derive(Default)]
@@ -708,6 +709,7 @@ pub(crate) struct ChatWidget {
     external_editor_state: ExternalEditorState,
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
+    use_app_server: bool,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -1301,10 +1303,7 @@ impl ChatWidget {
         }
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
-        self.submit_op(Op::ListSkills {
-            cwds: Vec::new(),
-            force_reload: true,
-        });
+        self.request_skills_list(Vec::new(), true);
         if self.connectors_enabled() {
             self.prefetch_connectors();
         }
@@ -3185,6 +3184,7 @@ impl ChatWidget {
             startup_tooltip_override,
             status_line_invalid_items_warned,
             session_telemetry,
+            use_app_server,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -3314,6 +3314,7 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
+            use_app_server,
         };
 
         widget.prefetch_rate_limits();
@@ -3371,6 +3372,7 @@ impl ChatWidget {
             startup_tooltip_override,
             status_line_invalid_items_warned,
             session_telemetry,
+            use_app_server,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -3499,6 +3501,7 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
+            use_app_server,
         };
 
         widget.prefetch_rate_limits();
@@ -3548,6 +3551,7 @@ impl ChatWidget {
             startup_tooltip_override: _,
             status_line_invalid_items_warned,
             session_telemetry,
+            use_app_server,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
@@ -3676,6 +3680,7 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
+            use_app_server,
         };
 
         widget.prefetch_rate_limits();
@@ -4988,10 +4993,7 @@ impl ChatWidget {
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
             EventMsg::ListRemoteSkillsResponse(_) | EventMsg::RemoteSkillDownloaded(_) => {}
             EventMsg::SkillsUpdateAvailable => {
-                self.submit_op(Op::ListSkills {
-                    cwds: Vec::new(),
-                    force_reload: true,
-                });
+                self.request_skills_list(Vec::new(), true);
             }
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
@@ -8360,6 +8362,15 @@ impl ChatWidget {
         true
     }
 
+    fn request_skills_list(&mut self, cwds: Vec<PathBuf>, force_reload: bool) {
+        let op = Op::ListSkills { cwds, force_reload };
+        if self.use_app_server {
+            self.app_event_tx.send(AppEvent::CodexOp(op));
+        } else {
+            self.submit_op(op);
+        }
+    }
+
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
         self.add_to_history(history_cell::new_mcp_tools_output(
             &self.config,
@@ -8476,7 +8487,7 @@ impl ChatWidget {
         self.bottom_pane.set_connectors_snapshot(Some(snapshot));
     }
 
-    fn refresh_plugin_mentions(&mut self) {
+    pub(crate) fn refresh_plugin_mentions(&mut self) {
         if !self.config.features.enabled(Feature::Plugins) {
             self.bottom_pane.set_plugin_mentions(None);
             return;
@@ -8707,6 +8718,10 @@ impl ChatWidget {
     /// runtime overrides applied via TUI, e.g., model or approval policy).
     pub(crate) fn config_ref(&self) -> &Config {
         &self.config
+    }
+
+    pub(crate) fn use_app_server(&self) -> bool {
+        self.use_app_server
     }
 
     #[cfg(test)]
