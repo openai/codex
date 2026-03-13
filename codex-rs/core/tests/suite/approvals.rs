@@ -127,7 +127,7 @@ impl ActionKind {
                 // command runs under approval flow + read-only policy; keep the timeout
                 // tight, but allow a small buffer for process/sandbox startup jitter.
                 let timeout_ms = match target {
-                    TargetPath::Workspace(name) if name.starts_with("ro_unless_trusted") => 2_000,
+                    TargetPath::Workspace(name) if name.starts_with("ro_unless_trusted") => 5_000,
                     _ => 1_000,
                 };
                 let event = shell_event(call_id, &command, timeout_ms, sandbox_permissions)?;
