@@ -483,10 +483,10 @@ impl DeveloperInstructions {
     pub fn from(
         approval_policy: AskForApproval,
         exec_policy: &Policy,
-        request_permission_enabled: bool,
+        exec_permission_approvals_enabled: bool,
     ) -> DeveloperInstructions {
         let on_request_instructions = || {
-            let on_request_rule = if request_permission_enabled {
+            let on_request_rule = if exec_permission_approvals_enabled {
                 APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION
             } else {
                 APPROVAL_POLICY_ON_REQUEST_RULE
@@ -506,22 +506,22 @@ impl DeveloperInstructions {
             AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.to_string(),
             AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.to_string(),
             AskForApproval::OnRequest => on_request_instructions(),
-            AskForApproval::Reject(reject_config) => {
+            AskForApproval::Granular(granular_config) => {
                 let on_request_instructions = on_request_instructions();
-                let sandbox_approval = reject_config.sandbox_approval;
-                let rules = reject_config.rules;
-                let skill_approval = reject_config.skill_approval;
-                let request_permissions = reject_config.request_permissions;
-                let mcp_elicitations = reject_config.mcp_elicitations;
+                let sandbox_approval = granular_config.sandbox_approval;
+                let rules = granular_config.rules;
+                let skill_approval = granular_config.skill_approval;
+                let request_permissions = granular_config.request_permissions;
+                let mcp_elicitations = granular_config.mcp_elicitations;
                 format!(
                     "{on_request_instructions}\n\n\
-                     Approval policy is `reject`.\n\
+                     Approval policy is `granular`.\n\
                      - `sandbox_approval`: {sandbox_approval}\n\
                      - `rules`: {rules}\n\
                      - `skill_approval`: {skill_approval}\n\
                      - `request_permissions`: {request_permissions}\n\
                      - `mcp_elicitations`: {mcp_elicitations}\n\
-                     When a category is `true`, requests in that category are auto-rejected instead of prompting the user."
+                     When a category is `true`, requests in that category are allowed. When it is `false`, they are auto-rejected instead of prompting the user."
                 )
             }
         };
@@ -577,7 +577,7 @@ impl DeveloperInstructions {
         approval_policy: AskForApproval,
         exec_policy: &Policy,
         cwd: &Path,
-        request_permission_enabled: bool,
+        exec_permission_approvals_enabled: bool,
     ) -> Self {
         let network_access = if sandbox_policy.has_full_network_access() {
             NetworkAccess::Enabled
@@ -601,7 +601,7 @@ impl DeveloperInstructions {
             approval_policy,
             exec_policy,
             writable_roots,
-            request_permission_enabled,
+            exec_permission_approvals_enabled,
         )
     }
 
@@ -625,7 +625,7 @@ impl DeveloperInstructions {
         approval_policy: AskForApproval,
         exec_policy: &Policy,
         writable_roots: Option<Vec<WritableRoot>>,
-        request_permission_enabled: bool,
+        exec_permission_approvals_enabled: bool,
     ) -> Self {
         let start_tag = DeveloperInstructions::new("<permissions instructions>");
         let end_tag = DeveloperInstructions::new("</permissions instructions>");
@@ -637,7 +637,7 @@ impl DeveloperInstructions {
             .concat(DeveloperInstructions::from(
                 approval_policy,
                 exec_policy,
-                request_permission_enabled,
+                exec_permission_approvals_enabled,
             ))
             .concat(DeveloperInstructions::from_writable_roots(writable_roots))
             .concat(end_tag)

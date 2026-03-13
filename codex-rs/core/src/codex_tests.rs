@@ -2231,18 +2231,18 @@ async fn notify_request_permissions_response_ignores_unmatched_call_id() {
 }
 
 #[tokio::test]
-async fn request_permissions_emits_event_when_reject_policy_allows_requests() {
+async fn request_permissions_emits_event_when_granular_policy_allows_requests() {
     let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     Arc::get_mut(&mut turn_context)
         .expect("single turn context ref")
         .approval_policy
-        .set(crate::protocol::AskForApproval::Reject(
-            crate::protocol::RejectConfig {
+        .set(crate::protocol::AskForApproval::Granular(
+            crate::protocol::GranularApprovalConfig {
                 sandbox_approval: true,
                 rules: true,
-                skill_approval: false,
-                request_permissions: false,
+                skill_approval: true,
+                request_permissions: true,
                 mcp_elicitations: true,
             },
         ))
@@ -2306,19 +2306,19 @@ async fn request_permissions_emits_event_when_reject_policy_allows_requests() {
 }
 
 #[tokio::test]
-async fn request_permissions_is_auto_denied_when_reject_policy_blocks_tool_requests() {
+async fn request_permissions_is_auto_denied_when_granular_policy_blocks_tool_requests() {
     let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
     Arc::get_mut(&mut turn_context)
         .expect("single turn context ref")
         .approval_policy
-        .set(crate::protocol::AskForApproval::Reject(
-            crate::protocol::RejectConfig {
-                sandbox_approval: false,
-                rules: false,
-                skill_approval: false,
-                request_permissions: true,
-                mcp_elicitations: false,
+        .set(crate::protocol::AskForApproval::Granular(
+            crate::protocol::GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: true,
+                request_permissions: false,
+                mcp_elicitations: true,
             },
         ))
         .expect("test setup should allow updating approval policy");
@@ -2355,7 +2355,7 @@ async fn request_permissions_is_auto_denied_when_reject_policy_blocks_tool_reque
         tokio::time::timeout(StdDuration::from_millis(100), rx.recv())
             .await
             .is_err(),
-        "request_permissions should not emit an event when reject.request_permissions is set"
+        "request_permissions should not emit an event when granular.request_permissions is false"
     );
 }
 
