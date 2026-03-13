@@ -9,6 +9,7 @@ use super::normalize_additional_permissions;
 use super::sandbox_policy_with_additional_permissions;
 use super::should_require_platform_sandbox;
 use crate::exec::SandboxType;
+use crate::exec::WindowsElevatedFilesystemOverrides;
 use crate::exec::WindowsRestrictedTokenFilesystemOverlay;
 use crate::protocol::NetworkAccess;
 use crate::protocol::ReadOnlyAccess;
@@ -224,7 +225,7 @@ fn transform_rejects_unsupported_windows_split_only_filesystem_policies() {
                     access: FileSystemAccessMode::Write,
                 },
                 FileSystemSandboxEntry {
-                    path: FileSystemPath::Path { path: docs },
+                    path: FileSystemPath::Path { path: docs.clone() },
                     access: FileSystemAccessMode::Read,
                 },
             ]),
@@ -315,12 +316,81 @@ fn transform_allows_supported_windows_split_write_read_carveouts() {
 }
 
 #[test]
-fn transform_rejects_windows_elevated_split_write_read_carveouts() {
+fn transform_allows_supported_windows_elevated_split_write_read_carveouts() {
     let manager = SandboxManager::new();
     let temp_dir = TempDir::new().expect("create temp dir");
     let docs = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("docs"))
         .expect("absolute docs path");
     std::fs::create_dir_all(docs.as_path()).expect("create docs");
+    let exec_request = manager
+        .transform(super::SandboxTransformRequest {
+            spec: super::CommandSpec {
+                program: "true".to_string(),
+                args: Vec::new(),
+                cwd: temp_dir.path().to_path_buf(),
+                env: HashMap::new(),
+                expiration: crate::exec::ExecExpiration::DefaultTimeout,
+                sandbox_permissions: super::SandboxPermissions::UseDefault,
+                additional_permissions: None,
+                justification: None,
+            },
+            policy: &SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                read_only_access: ReadOnlyAccess::FullAccess,
+                network_access: false,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            },
+            file_system_policy: &FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Root,
+                    },
+                    access: FileSystemAccessMode::Read,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path: docs.clone() },
+                    access: FileSystemAccessMode::Read,
+                },
+            ]),
+            network_policy: NetworkSandboxPolicy::Restricted,
+            sandbox: SandboxType::WindowsRestrictedToken,
+            enforce_managed_network: false,
+            network: None,
+            sandbox_policy_cwd: temp_dir.path(),
+            #[cfg(target_os = "macos")]
+            macos_seatbelt_profile_extensions: None,
+            codex_linux_sandbox_exe: None,
+            use_legacy_landlock: false,
+            windows_sandbox_level: WindowsSandboxLevel::Elevated,
+        })
+        .expect("supported elevated split write/read carveout should transform");
+
+    assert_eq!(
+        exec_request
+            .windows_elevated_filesystem_overrides
+            .expect("windows elevated overrides"),
+        WindowsElevatedFilesystemOverrides {
+            read_roots_override: None,
+            write_roots_override: None,
+            additional_deny_write_paths: vec![docs.to_path_buf()],
+        }
+    );
+}
+
+#[test]
+fn transform_rejects_windows_elevated_unreadable_carveouts() {
+    let manager = SandboxManager::new();
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let blocked = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("blocked"))
+        .expect("absolute blocked path");
+    std::fs::create_dir_all(blocked.as_path()).expect("create blocked");
     let err = manager
         .transform(super::SandboxTransformRequest {
             spec: super::CommandSpec {
@@ -337,8 +407,8 @@ fn transform_rejects_windows_elevated_split_write_read_carveouts() {
                 writable_roots: vec![],
                 read_only_access: ReadOnlyAccess::FullAccess,
                 network_access: false,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
             },
             file_system_policy: &FileSystemSandboxPolicy::restricted(vec![
                 FileSystemSandboxEntry {
@@ -354,8 +424,8 @@ fn transform_rejects_windows_elevated_split_write_read_carveouts() {
                     access: FileSystemAccessMode::Write,
                 },
                 FileSystemSandboxEntry {
-                    path: FileSystemPath::Path { path: docs },
-                    access: FileSystemAccessMode::Read,
+                    path: FileSystemPath::Path { path: blocked },
+                    access: FileSystemAccessMode::None,
                 },
             ]),
             network_policy: NetworkSandboxPolicy::Restricted,
@@ -369,7 +439,7 @@ fn transform_rejects_windows_elevated_split_write_read_carveouts() {
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Elevated,
         })
-        .expect_err("elevated split write/read carveout should fail closed");
+        .expect_err("unsupported elevated unreadable carveout should fail closed");
 
     assert!(matches!(
         err,

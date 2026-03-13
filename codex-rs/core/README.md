@@ -80,13 +80,15 @@ The unelevated restricted-token sandbox supports:
   legacy `WorkspaceWrite` root set, but need extra read-only carveouts under
   those writable roots
 
-The elevated Windows sandbox still supports only the legacy
-`SandboxPolicy`-equivalent path.
+The elevated Windows sandbox supports:
+
+- legacy `ReadOnly` and `WorkspaceWrite` behavior
+- split filesystem policies that need exact readable roots, exact writable
+  roots, or extra read-only carveouts under writable roots
 
 Windows still rejects split-only filesystem policies that would require direct
-read restriction, explicit unreadable carveouts, reopened writable descendants
-under read-only carveouts, or elevated setup/runner support, instead of running
-with a weaker sandbox.
+explicit unreadable carveouts (`none`) or reopened writable descendants under
+read-only carveouts, instead of running with a weaker sandbox.
 
 ### All Platforms
 

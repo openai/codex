@@ -1,7 +1,5 @@
 mod windows_impl {
     use crate::acl::allow_null_device;
-    use crate::allow::compute_allow_paths;
-    use crate::allow::AllowDenyPaths;
     use crate::cap::load_or_create_cap_sids;
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
@@ -211,21 +209,31 @@ mod windows_impl {
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
         use_private_desktop: bool,
+        read_roots_override: Option<&[PathBuf]>,
+        write_roots_override: Option<&[PathBuf]>,
+        deny_write_paths_override: &[PathBuf],
     ) -> Result<CaptureResult> {
         let policy = parse_policy(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
         inherit_path_env(&mut env_map);
         inject_git_safe_directory(&mut env_map, cwd, None);
-        let current_dir = cwd.to_path_buf();
         // Use a temp-based log dir that the sandbox user can write.
         let sandbox_base = codex_home.join(".sandbox");
         ensure_codex_home_exists(&sandbox_base)?;
 
         let logs_base_dir: Option<&Path> = Some(sandbox_base.as_path());
         log_start(&command, logs_base_dir);
-        let sandbox_creds =
-            require_logon_sandbox_creds(&policy, sandbox_policy_cwd, cwd, &env_map, codex_home)?;
+        let sandbox_creds = require_logon_sandbox_creds(
+            &policy,
+            sandbox_policy_cwd,
+            cwd,
+            &env_map,
+            codex_home,
+            read_roots_override,
+            write_roots_override,
+            deny_write_paths_override,
+        )?;
         let sandbox_sid = resolve_sid(&sandbox_creds.username).map_err(|err: anyhow::Error| {
             io::Error::new(io::ErrorKind::PermissionDenied, err.to_string())
         })?;
@@ -237,11 +245,6 @@ mod windows_impl {
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
         ) {
             anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
-        }
-        if !policy.has_full_disk_read_access() {
-            anyhow::bail!(
-                "Restricted read-only access is not yet supported by the Windows sandbox backend"
-            );
         }
         let caps = load_or_create_cap_sids(codex_home)?;
         let (psid_to_use, cap_sids) = match &policy {
@@ -261,9 +264,6 @@ mod windows_impl {
             }
         };
 
-        let AllowDenyPaths { allow: _, deny: _ } =
-            compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
-        // Deny/allow ACEs are now applied during setup; avoid per-command churn.
         unsafe {
             allow_null_device(psid_to_use);
         }
@@ -510,6 +510,9 @@ mod stub {
         _env_map: HashMap<String, String>,
         _timeout_ms: Option<u64>,
         _use_private_desktop: bool,
+        _read_roots_override: Option<&[PathBuf]>,
+        _write_roots_override: Option<&[PathBuf]>,
+        _deny_write_paths_override: &[PathBuf],
     ) -> Result<CaptureResult> {
         bail!("Windows sandbox is only available on Windows")
     }
