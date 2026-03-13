@@ -65,11 +65,20 @@ more specific writable child must reopen under a denied parent.
 Legacy `SandboxPolicy` / `sandbox_mode` configs are still the supported Windows
 baseline.
 
-The restricted-token sandbox currently enforces only the subset of filesystem
-and network restrictions that round-trip through the legacy `SandboxPolicy`
-model. Split-only filesystem carveouts that require direct
-`FileSystemSandboxPolicy` enforcement are rejected instead of running with a
-weaker sandbox.
+The unelevated restricted-token sandbox supports:
+
+- legacy `ReadOnly` and `WorkspaceWrite` behavior
+- full-read split filesystem policies whose writable roots still match the
+  legacy `WorkspaceWrite` root set, but need extra read-only carveouts under
+  those writable roots
+
+The elevated Windows sandbox still supports only the legacy
+`SandboxPolicy`-equivalent path.
+
+Windows still rejects split-only filesystem policies that would require direct
+read restriction, explicit unreadable carveouts, reopened writable descendants
+under read-only carveouts, or elevated setup/runner support, instead of running
+with a weaker sandbox.
 
 ### All Platforms
 

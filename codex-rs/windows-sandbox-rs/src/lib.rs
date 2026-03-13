@@ -248,8 +248,30 @@ mod windows_impl {
         codex_home: &Path,
         command: Vec<String>,
         cwd: &Path,
+        env_map: HashMap<String, String>,
+        timeout_ms: Option<u64>,
+    ) -> Result<CaptureResult> {
+        run_windows_sandbox_capture_with_extra_deny_write_paths(
+            policy_json_or_preset,
+            sandbox_policy_cwd,
+            codex_home,
+            command,
+            cwd,
+            env_map,
+            timeout_ms,
+            &[],
+        )
+    }
+
+    pub fn run_windows_sandbox_capture_with_extra_deny_write_paths(
+        policy_json_or_preset: &str,
+        sandbox_policy_cwd: &Path,
+        codex_home: &Path,
+        command: Vec<String>,
+        cwd: &Path,
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
+        additional_deny_write_paths: &[PathBuf],
     ) -> Result<CaptureResult> {
         let policy = parse_policy(policy_json_or_preset)?;
         let apply_network_block = should_apply_network_block(&policy);
@@ -318,8 +340,13 @@ mod windows_impl {
         }
 
         let persist_aces = is_workspace_write;
-        let AllowDenyPaths { allow, deny } =
+        let AllowDenyPaths { allow, mut deny } =
             compute_allow_paths(&policy, sandbox_policy_cwd, &current_dir, &env_map);
+        for path in additional_deny_write_paths {
+            if path.exists() {
+                deny.insert(path.clone());
+            }
+        }
         let canonical_cwd = canonicalize_path(&current_dir);
         let mut guards: Vec<(PathBuf, *mut c_void)> = Vec::new();
         unsafe {
