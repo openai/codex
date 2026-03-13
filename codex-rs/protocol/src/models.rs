@@ -723,12 +723,14 @@ fn granular_instructions(
     let prompted_categories = categories
         .iter()
         .flatten()
-        .filter_map(|&(is_allowed, category)| is_allowed.then(|| format!("- {category}")))
+        .filter(|&&(is_allowed, _)| is_allowed)
+        .map(|&(_, category)| format!("- {category}"))
         .collect::<Vec<_>>();
     let rejected_categories = categories
         .iter()
         .flatten()
-        .filter_map(|&(is_allowed, category)| (!is_allowed).then(|| format!("- {category}")))
+        .filter(|&&(is_allowed, _)| !is_allowed)
+        .map(|&(_, category)| format!("- {category}"))
         .collect::<Vec<_>>();
 
     let mut sections = vec![granular_prompt_intro_text().to_string()];
