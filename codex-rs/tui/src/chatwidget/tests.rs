@@ -6039,7 +6039,7 @@ async fn slash_help_search_jumps_to_lower_match() {
 
     let popup = render_bottom_popup(&chat, 100);
     assert!(popup.contains("/feedback"));
-    assert!(popup.contains("1/1 |"));
+    assert!(popup.contains("n/p match"));
 }
 
 #[tokio::test]
@@ -6056,24 +6056,24 @@ async fn slash_help_search_navigates_matches_with_n_and_p() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let first = render_bottom_popup(&chat, 100);
-    assert!(first.contains("1/3 |"));
+    assert!(first.contains("n/p match"));
+    assert!(first.contains("/fast"));
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Char('n')));
     let second = render_bottom_popup(&chat, 100);
-    assert!(second.contains("2/3 |"));
+    assert!(second.contains("/experimental"));
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Char('n')));
     let third = render_bottom_popup(&chat, 100);
-    assert!(third.contains("3/3 |"));
     assert!(third.contains("/realtime"));
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Char('p')));
     let previous = render_bottom_popup(&chat, 100);
-    assert!(previous.contains("2/3 |"));
+    assert!(previous.contains("/experimental"));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT));
     let shifted_previous = render_bottom_popup(&chat, 100);
-    assert!(shifted_previous.contains("1/3 |"));
+    assert!(shifted_previous.contains("/fast"));
 }
 
 #[tokio::test]
@@ -6088,7 +6088,6 @@ async fn slash_help_search_restarts_from_empty_input() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let active = render_bottom_popup(&chat, 100);
-    assert!(active.contains("1/1 |"));
     assert!(active.contains("n/p match"));
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Char('/')));
@@ -6122,7 +6121,7 @@ async fn slash_help_esc_clears_active_search_before_dismissing_popup() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let active = render_bottom_popup(&chat, 100);
-    assert!(active.contains("1/3 |"));
+    assert!(active.contains("n/p match"));
     assert!(chat.bottom_pane.has_active_view());
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Esc));

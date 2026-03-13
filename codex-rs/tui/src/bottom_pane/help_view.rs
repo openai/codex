@@ -204,9 +204,9 @@ impl SlashHelpView {
             return Line::from(vec![
                 "Search: ".dim(),
                 format!("/{input}").cyan(),
-                "  ".into(),
+                "  |  ".dim(),
                 key_hint::plain(KeyCode::Enter).into(),
-                " apply  ".dim(),
+                " apply  |  ".dim(),
                 key_hint::plain(KeyCode::Esc).into(),
                 " cancel".dim(),
             ]);
@@ -216,17 +216,22 @@ impl SlashHelpView {
             key_hint::plain(KeyCode::Up).into(),
             "/".into(),
             key_hint::plain(KeyCode::Down).into(),
-            " scroll  ".dim(),
+            " scroll  |  [".dim(),
             key_hint::ctrl(KeyCode::Char('p')).into(),
-            "/".into(),
+            " / ".dim(),
             key_hint::ctrl(KeyCode::Char('n')).into(),
-            " page  ".dim(),
-            "/ search  ".dim(),
+            "] page  |  ".dim(),
+            "/ search".dim(),
         ];
         if !self.search.active_query.is_empty() {
-            spans.push("n/p match  ".dim());
+            spans.push("  |  ".dim());
+            spans.push("n/p match".dim());
         }
-        spans.extend([key_hint::plain(KeyCode::Esc).into(), " close".dim()]);
+        spans.extend([
+            "  |  ".dim(),
+            key_hint::plain(KeyCode::Esc).into(),
+            " close".dim(),
+        ]);
         Line::from(spans)
     }
 
