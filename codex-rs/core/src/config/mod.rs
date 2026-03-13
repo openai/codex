@@ -1393,7 +1393,8 @@ pub struct RealtimeAudioConfig {
 #[serde(rename_all = "snake_case")]
 pub enum RealtimeWsMode {
     #[default]
-    DialIn,
+    #[serde(rename = "dial_in")]
+    Conversational,
     Transcription,
 }
 

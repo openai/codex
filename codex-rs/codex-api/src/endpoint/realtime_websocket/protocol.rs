@@ -16,7 +16,7 @@ pub enum RealtimeEventParser {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RealtimeSessionMode {
-    DialIn,
+    Conversational,
     Transcription,
 }
 

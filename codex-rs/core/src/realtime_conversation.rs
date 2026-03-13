@@ -300,7 +300,7 @@ pub(crate) async fn handle_start(
         RealtimeEventParser::V1
     };
     let session_mode = match config.experimental_realtime_ws_mode {
-        crate::config::RealtimeWsMode::DialIn => RealtimeSessionMode::DialIn,
+        crate::config::RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
         crate::config::RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
     };
     let requested_session_id = params

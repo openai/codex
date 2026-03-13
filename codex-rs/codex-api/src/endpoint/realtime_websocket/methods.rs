@@ -333,7 +333,7 @@ impl RealtimeWebsocketWriter {
         session_mode: RealtimeSessionMode,
     ) -> Result<(), ApiError> {
         let (session_kind, session_instructions, output_audio) = match session_mode {
-            RealtimeSessionMode::DialIn => {
+            RealtimeSessionMode::Conversational => {
                 let kind = match self.event_parser {
                     RealtimeEventParser::V1 => REALTIME_V1_SESSION_TYPE.to_string(),
                     RealtimeEventParser::RealtimeV2 => REALTIME_V2_SESSION_TYPE.to_string(),
@@ -349,7 +349,7 @@ impl RealtimeWebsocketWriter {
             RealtimeSessionMode::Transcription => ("transcription".to_string(), None, None),
         };
         let tools = match (self.event_parser, session_mode) {
-            (RealtimeEventParser::RealtimeV2, RealtimeSessionMode::DialIn) => {
+            (RealtimeEventParser::RealtimeV2, RealtimeSessionMode::Conversational) => {
                 Some(vec![SessionFunctionTool {
                     kind: "function".to_string(),
                     name: REALTIME_V2_CODEX_TOOL_NAME.to_string(),
@@ -367,7 +367,7 @@ impl RealtimeWebsocketWriter {
                     }),
                 }])
             }
-            (RealtimeEventParser::V1, RealtimeSessionMode::DialIn)
+            (RealtimeEventParser::V1, RealtimeSessionMode::Conversational)
             | (RealtimeEventParser::V1, RealtimeSessionMode::Transcription)
             | (RealtimeEventParser::RealtimeV2, RealtimeSessionMode::Transcription) => None,
         };
@@ -643,7 +643,7 @@ fn websocket_url_from_api_url(
     {
         let mut query = url.query_pairs_mut();
         let intent = match session_mode {
-            RealtimeSessionMode::DialIn => "quicksilver",
+            RealtimeSessionMode::Conversational => "quicksilver",
             RealtimeSessionMode::Transcription => "transcription",
         };
         query.append_pair("intent", intent);
@@ -931,7 +931,7 @@ mod tests {
             "http://127.0.0.1:8011",
             None,
             None,
-            RealtimeSessionMode::DialIn,
+            RealtimeSessionMode::Conversational,
         )
         .expect("build ws url");
         assert_eq!(
@@ -946,7 +946,7 @@ mod tests {
             "wss://example.com",
             None,
             Some("realtime-test-model"),
-            RealtimeSessionMode::DialIn,
+            RealtimeSessionMode::Conversational,
         )
         .expect("build ws url");
         assert_eq!(
@@ -961,7 +961,7 @@ mod tests {
             "https://api.openai.com/v1",
             None,
             Some("snapshot"),
-            RealtimeSessionMode::DialIn,
+            RealtimeSessionMode::Conversational,
         )
         .expect("build ws url");
         assert_eq!(
@@ -976,7 +976,7 @@ mod tests {
             "https://example.com/openai/v1",
             None,
             Some("snapshot"),
-            RealtimeSessionMode::DialIn,
+            RealtimeSessionMode::Conversational,
         )
         .expect("build ws url");
         assert_eq!(
@@ -994,7 +994,7 @@ mod tests {
                 ("intent".to_string(), "ignored".to_string()),
             ])),
             Some("snapshot"),
-            RealtimeSessionMode::DialIn,
+            RealtimeSessionMode::Conversational,
         )
         .expect("build ws url");
         assert_eq!(
@@ -1183,7 +1183,7 @@ mod tests {
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
-                    session_mode: RealtimeSessionMode::DialIn,
+                    session_mode: RealtimeSessionMode::Conversational,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -1395,7 +1395,7 @@ mod tests {
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::RealtimeV2,
-                    session_mode: RealtimeSessionMode::DialIn,
+                    session_mode: RealtimeSessionMode::Conversational,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
@@ -1592,7 +1592,7 @@ mod tests {
                     model: Some("realtime-test-model".to_string()),
                     session_id: Some("conv_1".to_string()),
                     event_parser: RealtimeEventParser::V1,
-                    session_mode: RealtimeSessionMode::DialIn,
+                    session_mode: RealtimeSessionMode::Conversational,
                 },
                 HeaderMap::new(),
                 HeaderMap::new(),
