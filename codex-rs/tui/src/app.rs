@@ -1712,7 +1712,7 @@ impl App {
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
-        mut embedded_app_server: EmbeddedAppServer,
+        mut app_server: EmbeddedAppServer,
         mut config: Config,
         cli_kv_overrides: Vec<(String, TomlValue)>,
         harness_overrides: ConfigOverrides,
@@ -1732,8 +1732,8 @@ impl App {
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
-        let auth_manager = embedded_app_server.auth_manager.clone();
-        let thread_manager = embedded_app_server.thread_manager.clone();
+        let auth_manager = app_server.auth_manager.clone();
+        let thread_manager = app_server.thread_manager.clone();
         let mut model = thread_manager
             .get_models_manager()
             .get_default_model(&config.model, RefreshStrategy::Offline)
@@ -1751,12 +1751,12 @@ impl App {
         )
         .await;
         if let Some(exit_info) = exit_info {
-            embedded_app_server
+            app_server
                 .client
                 .shutdown()
                 .await
                 .inspect_err(|err| {
-                    tracing::warn!("embedded app-server shutdown failed: {err}");
+                    tracing::warn!("app-server shutdown failed: {err}");
                 })
                 .ok();
             return Ok(exit_info);
@@ -2046,12 +2046,12 @@ impl App {
                             Err(err) => break Err(err),
                         }
                     }
-                    app_server_event = embedded_app_server.client.next_event(), if listen_for_app_server_events => {
+                    app_server_event = app_server.client.next_event(), if listen_for_app_server_events => {
                         match app_server_event {
-                            Some(event) => app.handle_embedded_app_server_event(&embedded_app_server.client, event).await,
+                            Some(event) => app.handle_app_server_event(&app_server.client, event).await,
                             None => {
                                 listen_for_app_server_events = false;
-                                tracing::warn!("embedded app-server event stream closed");
+                                tracing::warn!("app-server event stream closed");
                             }
                         }
                         AppRunControl::Continue
@@ -2086,7 +2086,7 @@ impl App {
                 }
             }
         };
-        if let Err(err) = embedded_app_server.client.shutdown().await {
+        if let Err(err) = app_server.client.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }
         let clear_result = tui.terminal.clear();

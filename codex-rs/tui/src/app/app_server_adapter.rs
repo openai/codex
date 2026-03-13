@@ -1,11 +1,11 @@
 /*
-This module holds the temporary adapter layer between the TUI and the embedded
-in-process app server during the hybrid migration period.
+This module holds the temporary adapter layer between the TUI and the app
+server during the hybrid migration period.
 
 For now, the TUI still owns its existing direct-core behavior, but startup
-allocates an embedded app server and drains its event stream. Keeping the
-app-server-specific wiring here keeps that transitional logic out of the main
-`app.rs` orchestration path.
+allocates a local in-process app server and drains its event stream. Keeping
+the app-server-specific wiring here keeps that transitional logic out of the
+main `app.rs` orchestration path.
 
 As more TUI flows move onto the app-server surface directly, this adapter
 should shrink and eventually disappear.
@@ -18,7 +18,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ServerRequest;
 
 impl App {
-    pub(super) async fn handle_embedded_app_server_event(
+    pub(super) async fn handle_app_server_event(
         &mut self,
         app_server_client: &InProcessAppServerClient,
         event: InProcessServerEvent,
@@ -27,23 +27,23 @@ impl App {
             InProcessServerEvent::Lagged { skipped } => {
                 tracing::warn!(
                     skipped,
-                    "embedded app-server event consumer lagged; dropping ignored events"
+                    "app-server event consumer lagged; dropping ignored events"
                 );
             }
             InProcessServerEvent::ServerNotification(notification) => {
-                self.handle_ignored_embedded_app_server_notification(notification);
+                self.handle_ignored_app_server_notification(notification);
             }
             InProcessServerEvent::LegacyNotification(notification) => {
-                self.handle_ignored_embedded_app_server_legacy_notification(notification);
+                self.handle_ignored_app_server_legacy_notification(notification);
             }
             InProcessServerEvent::ServerRequest(request) => {
-                self.handle_embedded_app_server_request(app_server_client, request)
+                self.handle_app_server_request(app_server_client, request)
                     .await;
             }
         }
     }
 
-    async fn handle_embedded_app_server_request(
+    async fn handle_app_server_request(
         &mut self,
         app_server_client: &InProcessAppServerClient,
         request: ServerRequest,
@@ -53,15 +53,14 @@ impl App {
         tracing::warn!(
             ?request_id,
             method,
-            "rejecting embedded app-server request while TUI still uses direct core APIs"
+            "rejecting app-server request while TUI still uses direct core APIs"
         );
         if let Err(err) = self
-            .reject_embedded_app_server_request(
+            .reject_app_server_request(
                 app_server_client,
                 request_id,
                 &method,
-                "embedded TUI client does not yet handle this app-server server request"
-                    .to_string(),
+                "TUI client does not yet handle this app-server server request".to_string(),
             )
             .await
         {
@@ -69,7 +68,7 @@ impl App {
         }
     }
 
-    async fn reject_embedded_app_server_request(
+    async fn reject_app_server_request(
         &self,
         app_server_client: &InProcessAppServerClient,
         request_id: codex_app_server_protocol::RequestId,
@@ -89,13 +88,13 @@ impl App {
             .map_err(|err| format!("failed to reject `{method}` server request: {err}"))
     }
 
-    fn handle_ignored_embedded_app_server_notification(
+    fn handle_ignored_app_server_notification(
         &mut self,
         _notification: codex_app_server_protocol::ServerNotification,
     ) {
     }
 
-    fn handle_ignored_embedded_app_server_legacy_notification(
+    fn handle_ignored_app_server_legacy_notification(
         &mut self,
         _notification: codex_app_server_protocol::JSONRPCNotification,
     ) {
