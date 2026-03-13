@@ -45,6 +45,13 @@ use tracing::trace;
 use tungstenite::protocol::WebSocketConfig;
 use url::Url;
 
+const REALTIME_AUDIO_SAMPLE_RATE: u32 = 24_000;
+const REALTIME_AUDIO_VOICE: &str = "fathom";
+const REALTIME_V1_SESSION_TYPE: &str = "quicksilver";
+const REALTIME_V2_SESSION_TYPE: &str = "realtime";
+const REALTIME_V2_CODEX_TOOL_NAME: &str = "codex";
+const REALTIME_V2_CODEX_TOOL_DESCRIPTION: &str = "Delegate work to Codex and return the result.";
+
 struct WsStream {
     tx_command: mpsc::Sender<WsCommand>,
     pump_task: tokio::task::JoinHandle<()>,
@@ -300,35 +307,34 @@ impl RealtimeWebsocketWriter {
         handoff_id: String,
         output_text: String,
     ) -> Result<(), ApiError> {
-        if self.event_parser == RealtimeEventParser::RealtimeV2 {
-            return self
-                .send_json(RealtimeOutboundMessage::ConversationItemCreate {
-                    item: ConversationItemPayload::FunctionCallOutput(
-                        ConversationFunctionCallOutputItem {
-                            kind: "function_call_output".to_string(),
-                            call_id: handoff_id,
-                            output: output_text,
-                        },
-                    ),
-                })
-                .await;
-        }
+        let message = match self.event_parser {
+            RealtimeEventParser::V1 => RealtimeOutboundMessage::ConversationHandoffAppend {
+                handoff_id,
+                output_text,
+            },
+            RealtimeEventParser::RealtimeV2 => RealtimeOutboundMessage::ConversationItemCreate {
+                item: ConversationItemPayload::FunctionCallOutput(
+                    ConversationFunctionCallOutputItem {
+                        kind: "function_call_output".to_string(),
+                        call_id: handoff_id,
+                        output: output_text,
+                    },
+                ),
+            },
+        };
 
-        self.send_json(RealtimeOutboundMessage::ConversationHandoffAppend {
-            handoff_id,
-            output_text,
-        })
-        .await
+        self.send_json(message).await
     }
 
     pub async fn send_session_update(&self, instructions: String) -> Result<(), ApiError> {
-        let (session_kind, tools) = if self.event_parser == RealtimeEventParser::RealtimeV2 {
-            (
-                "realtime".to_string(),
+        let (session_kind, tools) = match self.event_parser {
+            RealtimeEventParser::V1 => (REALTIME_V1_SESSION_TYPE.to_string(), None),
+            RealtimeEventParser::RealtimeV2 => (
+                REALTIME_V2_SESSION_TYPE.to_string(),
                 Some(vec![SessionFunctionTool {
                     kind: "function".to_string(),
-                    name: "codex".to_string(),
-                    description: "Delegate work to Codex and return the result.".to_string(),
+                    name: REALTIME_V2_CODEX_TOOL_NAME.to_string(),
+                    description: REALTIME_V2_CODEX_TOOL_DESCRIPTION.to_string(),
                     parameters: json!({
                         "type": "object",
                         "properties": {
@@ -341,9 +347,7 @@ impl RealtimeWebsocketWriter {
                         "additionalProperties": false
                     }),
                 }]),
-            )
-        } else {
-            ("quicksilver".to_string(), None)
+            ),
         };
 
         self.send_json(RealtimeOutboundMessage::SessionUpdate {
@@ -354,11 +358,11 @@ impl RealtimeWebsocketWriter {
                     input: SessionAudioInput {
                         format: SessionAudioFormat {
                             kind: "audio/pcm".to_string(),
-                            rate: 24_000,
+                            rate: REALTIME_AUDIO_SAMPLE_RATE,
                         },
                     },
                     output: SessionAudioOutput {
-                        voice: "fathom".to_string(),
+                        voice: REALTIME_AUDIO_VOICE.to_string(),
                     },
                 },
                 tools,
