@@ -1,6 +1,7 @@
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
@@ -34,6 +35,7 @@ use crate::spawn::spawn_child_async;
 use crate::text_encoding::bytes_to_string_smart;
 use crate::tools::sandboxing::SandboxablePreference;
 use codex_network_proxy::NetworkProxy;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -84,6 +86,17 @@ pub struct ExecParams {
     pub windows_sandbox_private_desktop: bool,
     pub justification: Option<String>,
     pub arg0: Option<String>,
+}
+
+/// Extra filesystem deny-write carveouts for the non-elevated Windows
+/// restricted-token backend.
+///
+/// These are applied on top of the legacy `WorkspaceWrite` allow set, so we
+/// can support a narrow split-policy subset without changing legacy Windows
+/// sandbox semantics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WindowsRestrictedTokenFilesystemOverlay {
+    pub(crate) additional_deny_write_paths: Vec<PathBuf>,
 }
 
 fn select_process_exec_tool_sandbox_type(
@@ -298,6 +311,7 @@ pub(crate) async fn execute_exec_request(
         sandbox_policy: _sandbox_policy_from_env,
         file_system_sandbox_policy,
         network_sandbox_policy,
+        windows_restricted_token_filesystem_overlay,
         justification,
         arg0,
     } = exec_request;
@@ -322,6 +336,7 @@ pub(crate) async fn execute_exec_request(
         sandbox,
         sandbox_policy,
         &file_system_sandbox_policy,
+        windows_restricted_token_filesystem_overlay.as_ref(),
         network_sandbox_policy,
         stdout_stream,
         after_spawn,
@@ -401,11 +416,11 @@ fn record_windows_sandbox_spawn_failure(
 async fn exec_windows_sandbox(
     params: ExecParams,
     sandbox_policy: &SandboxPolicy,
+    windows_restricted_token_filesystem_overlay: Option<&WindowsRestrictedTokenFilesystemOverlay>,
 ) -> Result<RawExecToolCallOutput> {
     use crate::config::find_codex_home;
-    use codex_protocol::config_types::WindowsSandboxLevel;
-    use codex_windows_sandbox::run_windows_sandbox_capture;
     use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
+    use codex_windows_sandbox::run_windows_sandbox_capture_with_extra_deny_write_paths;
 
     let ExecParams {
         command,
@@ -439,6 +454,9 @@ async fn exec_windows_sandbox(
     let command_path = command.first().cloned();
     let sandbox_level = windows_sandbox_level;
     let use_elevated = matches!(sandbox_level, WindowsSandboxLevel::Elevated);
+    let additional_deny_write_paths = windows_restricted_token_filesystem_overlay
+        .map(|overlay| overlay.additional_deny_write_paths.clone())
+        .unwrap_or_default();
     let spawn_res = tokio::task::spawn_blocking(move || {
         if use_elevated {
             run_windows_sandbox_capture_elevated(
@@ -452,7 +470,7 @@ async fn exec_windows_sandbox(
                 windows_sandbox_private_desktop,
             )
         } else {
-            run_windows_sandbox_capture(
+            run_windows_sandbox_capture_with_extra_deny_write_paths(
                 policy_str.as_str(),
                 &sandbox_cwd,
                 codex_home.as_ref(),
@@ -460,6 +478,7 @@ async fn exec_windows_sandbox(
                 &cwd,
                 env,
                 timeout_ms,
+                &additional_deny_write_paths,
                 windows_sandbox_private_desktop,
             )
         }
@@ -756,18 +775,25 @@ impl Default for ExecToolCallOutput {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn exec(
     params: ExecParams,
     _sandbox: SandboxType,
     _sandbox_policy: &SandboxPolicy,
     _file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    _windows_restricted_token_filesystem_overlay: Option<&WindowsRestrictedTokenFilesystemOverlay>,
     network_sandbox_policy: NetworkSandboxPolicy,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
     if _sandbox == SandboxType::WindowsRestrictedToken {
-        return exec_windows_sandbox(params, _sandbox_policy).await;
+        return exec_windows_sandbox(
+            params,
+            _sandbox_policy,
+            _windows_restricted_token_filesystem_overlay,
+        )
+        .await;
     }
     let ExecParams {
         command,
@@ -824,15 +850,36 @@ fn should_use_windows_restricted_token_sandbox(
         )
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn unsupported_windows_restricted_token_sandbox_reason(
     sandbox: SandboxType,
     sandbox_policy: &SandboxPolicy,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
     sandbox_policy_cwd: &Path,
+    windows_sandbox_level: WindowsSandboxLevel,
 ) -> Option<String> {
+    resolve_windows_restricted_token_filesystem_overlay(
+        sandbox,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        sandbox_policy_cwd,
+        windows_sandbox_level,
+    )
+    .err()
+}
+
+pub(crate) fn resolve_windows_restricted_token_filesystem_overlay(
+    sandbox: SandboxType,
+    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    sandbox_policy_cwd: &Path,
+    windows_sandbox_level: WindowsSandboxLevel,
+) -> std::result::Result<Option<WindowsRestrictedTokenFilesystemOverlay>, String> {
     if sandbox != SandboxType::WindowsRestrictedToken {
-        return None;
+        return Ok(None);
     }
 
     let needs_direct_runtime_enforcement = file_system_sandbox_policy
@@ -844,20 +891,110 @@ pub(crate) fn unsupported_windows_restricted_token_sandbox_reason(
         file_system_sandbox_policy,
     ) && !needs_direct_runtime_enforcement
     {
-        return None;
+        return Ok(None);
     }
 
-    let reason = if needs_direct_runtime_enforcement {
-        "windows sandbox backend cannot enforce split filesystem permissions directly; refusing to run unsandboxed"
-            .to_string()
-    } else {
-        format!(
+    if !should_use_windows_restricted_token_sandbox(
+        sandbox,
+        sandbox_policy,
+        file_system_sandbox_policy,
+    ) {
+        return Err(format!(
             "windows sandbox backend cannot enforce file_system={:?}, network={network_sandbox_policy:?}, legacy_policy={sandbox_policy:?}; refusing to run unsandboxed",
             file_system_sandbox_policy.kind,
-        )
-    };
+        ));
+    }
 
-    Some(reason)
+    if windows_sandbox_level != WindowsSandboxLevel::RestrictedToken {
+        return Err(
+            "windows elevated sandbox backend cannot enforce split filesystem permissions directly; refusing to run unsandboxed"
+                .to_string(),
+        );
+    }
+
+    if !file_system_sandbox_policy.has_full_disk_read_access() {
+        return Err(
+            "windows unelevated restricted-token sandbox cannot enforce split filesystem read restrictions directly; refusing to run unsandboxed"
+                .to_string(),
+        );
+    }
+
+    if !file_system_sandbox_policy
+        .get_unreadable_roots_with_cwd(sandbox_policy_cwd)
+        .is_empty()
+    {
+        return Err(
+            "windows unelevated restricted-token sandbox cannot enforce unreadable split filesystem carveouts directly; refusing to run unsandboxed"
+                .to_string(),
+        );
+    }
+
+    let legacy_writable_roots = sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
+    let split_writable_roots =
+        file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
+    let legacy_root_paths: BTreeSet<PathBuf> = legacy_writable_roots
+        .iter()
+        .map(|root| root.root.to_path_buf())
+        .collect();
+    let split_root_paths: BTreeSet<PathBuf> = split_writable_roots
+        .iter()
+        .map(|root| root.root.to_path_buf())
+        .collect();
+
+    if legacy_root_paths != split_root_paths {
+        return Err(
+            "windows unelevated restricted-token sandbox cannot enforce split writable root sets directly; refusing to run unsandboxed"
+                .to_string(),
+        );
+    }
+
+    for writable_root in &split_writable_roots {
+        for read_only_subpath in &writable_root.read_only_subpaths {
+            if split_writable_roots.iter().any(|candidate| {
+                candidate.root.as_path() != writable_root.root.as_path()
+                    && candidate
+                        .root
+                        .as_path()
+                        .starts_with(read_only_subpath.as_path())
+            }) {
+                return Err(
+                    "windows unelevated restricted-token sandbox cannot reopen writable descendants under read-only carveouts directly; refusing to run unsandboxed"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    let mut additional_deny_write_paths = BTreeSet::new();
+    for split_root in &split_writable_roots {
+        let Some(legacy_root) = legacy_writable_roots
+            .iter()
+            .find(|candidate| candidate.root == split_root.root)
+        else {
+            return Err(
+                "windows unelevated restricted-token sandbox cannot enforce split writable root sets directly; refusing to run unsandboxed"
+                    .to_string(),
+            );
+        };
+
+        for read_only_subpath in &split_root.read_only_subpaths {
+            if !legacy_root
+                .read_only_subpaths
+                .iter()
+                .any(|candidate| candidate == read_only_subpath)
+            {
+                additional_deny_write_paths.insert(read_only_subpath.to_path_buf());
+            }
+        }
+    }
+
+    if additional_deny_write_paths.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(WindowsRestrictedTokenFilesystemOverlay {
+        additional_deny_write_paths: additional_deny_write_paths.into_iter().collect(),
+    }))
 }
 /// Consumes the output of a child process, truncating it so it is suitable for
 /// use as the output of a `shell` tool call. Also enforces specified timeout.

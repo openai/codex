@@ -12,8 +12,9 @@ use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
+use crate::exec::WindowsRestrictedTokenFilesystemOverlay;
 use crate::exec::execute_exec_request;
-use crate::exec::unsupported_windows_restricted_token_sandbox_reason;
+use crate::exec::resolve_windows_restricted_token_filesystem_overlay;
 use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args_for_policies;
 use crate::protocol::SandboxPolicy;
@@ -75,6 +76,8 @@ pub struct ExecRequest {
     pub sandbox_policy: SandboxPolicy,
     pub file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub network_sandbox_policy: NetworkSandboxPolicy,
+    pub(crate) windows_restricted_token_filesystem_overlay:
+        Option<WindowsRestrictedTokenFilesystemOverlay>,
     pub justification: Option<String>,
     pub arg0: Option<String>,
 }
@@ -635,17 +638,16 @@ impl SandboxManager {
             } else {
                 (file_system_policy.clone(), network_policy)
             };
-        if let Some(reason) = unsupported_windows_restricted_token_sandbox_reason(
-            sandbox,
-            &effective_policy,
-            &effective_file_system_policy,
-            effective_network_policy,
-            sandbox_policy_cwd,
-        ) {
-            return Err(SandboxTransformError::UnsupportedWindowsRestrictedToken(
-                reason,
-            ));
-        }
+        let windows_restricted_token_filesystem_overlay =
+            resolve_windows_restricted_token_filesystem_overlay(
+                sandbox,
+                &effective_policy,
+                &effective_file_system_policy,
+                effective_network_policy,
+                sandbox_policy_cwd,
+                windows_sandbox_level,
+            )
+            .map_err(SandboxTransformError::UnsupportedWindowsRestrictedToken)?;
         let mut env = spec.env;
         if !effective_network_policy.is_enabled() {
             env.insert(
@@ -728,6 +730,7 @@ impl SandboxManager {
             sandbox_policy: effective_policy,
             file_system_sandbox_policy: effective_file_system_policy,
             network_sandbox_policy: effective_network_policy,
+            windows_restricted_token_filesystem_overlay,
             justification: spec.justification,
             arg0: arg0_override,
         })
