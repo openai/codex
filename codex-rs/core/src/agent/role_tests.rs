@@ -48,7 +48,7 @@ async fn apply_role_defaults_to_default_and_leaves_config_unchanged() {
     let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
     let before = config.clone();
 
-    apply_role_to_config(&mut config, None)
+    apply_role_to_config(&mut config)
         .await
         .expect("default role should apply");
 
@@ -357,7 +357,7 @@ model_provider = "base-provider"
         .await
         .expect("custom role should apply");
 
-    assert_eq!(config.active_profile, None);
+    assert_eq!(config.active_profile);
     assert_eq!(config.model_provider_id, "role-provider");
     assert_eq!(config.model_provider.name, "Role Provider");
 }
@@ -567,7 +567,7 @@ enabled = false
         .await
         .expect("custom role should apply");
 
-    let plugins_manager = Arc::new(PluginsManager::new(home.path().to_path_buf(), None));
+    let plugins_manager = Arc::new(PluginsManager::new(home.path().to_path_buf()));
     let skills_manager = SkillsManager::new(home.path().to_path_buf(), plugins_manager, true);
     let outcome = skills_manager.skills_for_config(&config);
     let skill = outcome

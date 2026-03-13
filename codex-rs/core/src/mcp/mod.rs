@@ -281,10 +281,7 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
         config.cli_auth_credentials_store_mode,
     );
     let auth = auth_manager.auth().await;
-    let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(
-        config.codex_home.clone(),
-        None,
-    )));
+    let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
     let mcp_servers = mcp_manager.effective_servers(config, auth.as_ref());
     let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config);
     if mcp_servers.is_empty() {

@@ -114,7 +114,7 @@ fn all_connectors_cache_key(config: &Config, token_data: &TokenData) -> AllConne
 }
 
 fn plugin_apps_for_config(config: &Config) -> Vec<codex_core::plugins::AppConnectorId> {
-    PluginsManager::new(config.codex_home.clone(), None)
+    PluginsManager::new(config.codex_home.clone())
         .plugins_for_config(config)
         .effective_apps()
 }

@@ -394,20 +394,25 @@ pub struct PluginsManager {
     codex_home: PathBuf,
     store: PluginStore,
     cache_by_cwd: RwLock<HashMap<PathBuf, PluginLoadOutcome>>,
-    analytics_events_client: Option<AnalyticsEventsClient>,
+    analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
 }
 
 impl PluginsManager {
-    pub fn new(
-        codex_home: PathBuf,
-        analytics_events_client: Option<AnalyticsEventsClient>,
-    ) -> Self {
+    pub fn new(codex_home: PathBuf) -> Self {
         Self {
             codex_home: codex_home.clone(),
             store: PluginStore::new(codex_home),
             cache_by_cwd: RwLock::new(HashMap::new()),
-            analytics_events_client,
+            analytics_events_client: RwLock::new(None),
         }
+    }
+
+    pub fn set_analytics_events_client(&self, analytics_events_client: AnalyticsEventsClient) {
+        let mut stored_client = match self.analytics_events_client.write() {
+            Ok(client_guard) => client_guard,
+            Err(err) => err.into_inner(),
+        };
+        *stored_client = Some(analytics_events_client);
     }
 
     pub fn plugins_for_config(&self, config: &Config) -> PluginLoadOutcome {
@@ -496,7 +501,11 @@ impl PluginsManager {
             .map(|_| ())
             .map_err(PluginInstallError::from)?;
 
-        if let Some(analytics_events_client) = self.analytics_events_client.as_ref() {
+        let analytics_events_client = match self.analytics_events_client.read() {
+            Ok(client) => client.clone(),
+            Err(err) => err.into_inner().clone(),
+        };
+        if let Some(analytics_events_client) = analytics_events_client {
             analytics_events_client.track_plugin_installed(plugin_telemetry_metadata_from_root(
                 &result.plugin_id,
                 result.installed_path.as_path(),
@@ -530,8 +539,12 @@ impl PluginsManager {
             .apply()
             .await?;
 
+        let analytics_events_client = match self.analytics_events_client.read() {
+            Ok(client) => client.clone(),
+            Err(err) => err.into_inner().clone(),
+        };
         if let Some(plugin_telemetry) = plugin_telemetry
-            && let Some(analytics_events_client) = self.analytics_events_client.as_ref()
+            && let Some(analytics_events_client) = analytics_events_client
         {
             analytics_events_client.track_plugin_uninstalled(plugin_telemetry);
         }

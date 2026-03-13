@@ -197,7 +197,6 @@ impl MessageProcessor {
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),
             auth_manager.clone(),
-            Some(analytics_events_client.clone()),
             session_source,
             CollaborationModesConfig {
                 default_mode_request_user_input: config
@@ -205,6 +204,9 @@ impl MessageProcessor {
                     .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
             },
         ));
+        thread_manager
+            .plugins_manager()
+            .set_analytics_events_client(analytics_events_client.clone());
         // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
         thread_manager
             .plugins_manager()
