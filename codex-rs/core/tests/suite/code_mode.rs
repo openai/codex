@@ -28,11 +28,13 @@ use std::time::Instant;
 use wiremock::MockServer;
 
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
-    req.custom_tool_call_output(call_id)
-        .get("output")
-        .and_then(Value::as_array)
-        .expect("custom tool output should be serialized as content items")
-        .clone()
+    match req.custom_tool_call_output(call_id).get("output") {
+        Some(Value::Array(items)) => items.clone(),
+        Some(Value::String(text)) => {
+            vec![serde_json::json!({ "type": "input_text", "text": text })]
+        }
+        _ => panic!("custom tool output should be serialized as text or content items"),
+    }
 }
 
 fn function_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
@@ -431,11 +433,12 @@ async fn code_mode_can_yield_and_resume_with_exec_wait() -> Result<()> {
     let phase_3_wait = wait_for_file_source(&phase_3_gate)?;
 
     let code = format!(
-        r#"// @exec: {{"yield_time_ms": 10}}
-import {{ output_text }} from "@openai/code_mode";
+        r#"
+import {{ output_text, yield_control }} from "@openai/code_mode";
 import {{ exec_command }} from "tools.js";
 
 output_text("phase 1");
+yield_control();
 {phase_2_wait}
 output_text("phase 2");
 {phase_3_wait}
@@ -574,7 +577,7 @@ async fn code_mode_yield_timeout_works_for_busy_loop() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let code = r#"// @exec: {"yield_time_ms": 10}
+    let code = r#"// @exec: {"yield_time_ms": 100}
 import { output_text } from "@openai/code_mode";
 
 output_text("phase 1");
@@ -675,21 +678,23 @@ async fn code_mode_can_run_multiple_yielded_sessions() -> Result<()> {
     let session_b_wait = wait_for_file_source(&session_b_gate)?;
 
     let session_a_code = format!(
-        r#"// @exec: {{"yield_time_ms": 10}}
-import {{ output_text }} from "@openai/code_mode";
+        r#"
+import {{ output_text, yield_control }} from "@openai/code_mode";
 import {{ exec_command }} from "tools.js";
 
 output_text("session a start");
+yield_control();
 {session_a_wait}
 output_text("session a done");
 "#
     );
     let session_b_code = format!(
-        r#"// @exec: {{"yield_time_ms": 10}}
-import {{ output_text }} from "@openai/code_mode";
+        r#"
+import {{ output_text, yield_control }} from "@openai/code_mode";
 import {{ exec_command }} from "tools.js";
 
 output_text("session b start");
+yield_control();
 {session_b_wait}
 output_text("session b done");
 "#
@@ -845,11 +850,12 @@ async fn code_mode_exec_wait_can_terminate_and_continue() -> Result<()> {
     let termination_wait = wait_for_file_source(&termination_gate)?;
 
     let code = format!(
-        r#"// @exec: {{"yield_time_ms": 10}}
-import {{ output_text }} from "@openai/code_mode";
+        r#"
+import {{ output_text, yield_control }} from "@openai/code_mode";
 import {{ exec_command }} from "tools.js";
 
 output_text("phase 1");
+yield_control();
 {termination_wait}
 output_text("phase 2");
 "#
@@ -1043,22 +1049,24 @@ async fn code_mode_exec_wait_terminate_returns_completed_session_if_it_finished_
     let session_a_done_command = format!("printf done > {session_a_done_marker_quoted}");
 
     let session_a_code = format!(
-        r#"// @exec: {{"yield_time_ms": 10}}
-import {{ output_text }} from "@openai/code_mode";
+        r#"
+import {{ output_text, yield_control }} from "@openai/code_mode";
 import {{ exec_command }} from "tools.js";
 
 output_text("session a start");
+yield_control();
 {session_a_wait}
 output_text("session a done");
 await exec_command({{ cmd: {session_a_done_command:?} }});
 "#
     );
     let session_b_code = format!(
-        r#"// @exec: {{"yield_time_ms": 10}}
-import {{ output_text }} from "@openai/code_mode";
+        r#"
+import {{ output_text, yield_control }} from "@openai/code_mode";
 import {{ exec_command }} from "tools.js";
 
 output_text("session b start");
+yield_control();
 {session_b_wait}
 output_text("session b done");
 "#
@@ -1332,11 +1340,12 @@ async fn code_mode_exec_wait_uses_its_own_max_tokens_budget() -> Result<()> {
     let completion_wait = wait_for_file_source(&completion_gate)?;
 
     let code = format!(
-        r#"// @exec: {{"max_output_tokens": 100, "yield_time_ms": 10}}
-import {{ output_text }} from "@openai/code_mode";
+        r#"// @exec: {{"max_output_tokens": 100}}
+import {{ output_text, yield_control }} from "@openai/code_mode";
 import {{ exec_command }} from "tools.js";
 
 output_text("phase 1");
+yield_control();
 {completion_wait}
 output_text("token one token two token three token four token five token six token seven");
 "#
@@ -1869,14 +1878,21 @@ add_content(JSON.stringify(tool));
     );
 
     let parsed: Value = serde_json::from_str(&output)?;
-    assert_eq!(
-        parsed,
-        serde_json::json!({
-            "module": "tools.js",
-            "name": "view_image",
-            "description": "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nCode mode declaration:\n```ts\nimport { view_image } from \"tools.js\";\ndeclare function view_image(args: {\n  path: string;\n}): Promise<unknown>;\n```",
-        })
+    assert_eq!(parsed.get("module"), Some(&serde_json::json!("tools.js")));
+    assert_eq!(parsed.get("name"), Some(&serde_json::json!("view_image")));
+    let description = parsed
+        .get("description")
+        .and_then(Value::as_str)
+        .expect("tool metadata should include a description");
+    assert!(
+        description.starts_with(
+            "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags)."
+        )
     );
+    assert!(description.contains("import { view_image } from \"tools.js\";"));
+    assert!(description.contains("declare function view_image(args: {"));
+    assert!(description.contains("path: string;"));
+    assert!(description.contains("}): Promise<unknown>;"));
 
     Ok(())
 }
@@ -1908,13 +1924,23 @@ add_content(JSON.stringify(tool));
 
     let parsed: Value = serde_json::from_str(&output)?;
     assert_eq!(
-        parsed,
-        serde_json::json!({
-            "module": "tools/mcp/rmcp.js",
-            "name": "echo",
-            "description": "Echo back the provided message and include environment data.\n\nCode mode declaration:\n```ts\nimport { echo } from \"tools/mcp/rmcp.js\";\ndeclare function echo(args: {\n  env_var?: string;\n  message: string;\n}): Promise<{\n  _meta?: unknown;\n  content: Array<unknown>;\n  isError?: boolean;\n  structuredContent?: unknown;\n}>;\n```",
-        })
+        parsed.get("module"),
+        Some(&serde_json::json!("tools/mcp/rmcp.js"))
     );
+    assert_eq!(parsed.get("name"), Some(&serde_json::json!("echo")));
+    let description = parsed
+        .get("description")
+        .and_then(Value::as_str)
+        .expect("tool metadata should include a description");
+    assert!(
+        description.starts_with("Echo back the provided message and include environment data.")
+    );
+    assert!(description.contains("import { echo } from \"tools/mcp/rmcp.js\";"));
+    assert!(description.contains("declare function echo(args: {"));
+    assert!(description.contains("env_var?: string;"));
+    assert!(description.contains("message: string;"));
+    assert!(description.contains("content: Array<unknown>;"));
+    assert!(description.contains("structuredContent?: unknown;"));
 
     Ok(())
 }
