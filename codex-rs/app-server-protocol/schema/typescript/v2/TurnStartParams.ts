@@ -19,8 +19,8 @@ cwd?: string | null, /**
  * Override the approval policy for this turn and subsequent turns.
  */
 approvalPolicy?: AskForApproval | null, /**
- * Override who adjudicates approval requests for this turn and
- * subsequent turns. This does not disable ARC.
+ * Override where approval requests are routed for review on this turn and
+ * subsequent turns.
  */
 approvalsReviewer?: ApprovalsReviewer | null, /**
  * Override the sandbox policy for this turn and subsequent turns.

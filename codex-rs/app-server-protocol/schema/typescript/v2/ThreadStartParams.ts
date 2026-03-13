@@ -9,8 +9,8 @@ import type { AskForApproval } from "./AskForApproval";
 import type { SandboxMode } from "./SandboxMode";
 
 export type ThreadStartParams = {model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier | null | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, /**
- * Override who adjudicates approval requests for this thread and
- * subsequent turns. This does not disable ARC.
+ * Override where approval requests are routed for review on this thread
+ * and subsequent turns.
  */
 approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, serviceName?: string | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, ephemeral?: boolean | null, /**
  * If true, opt into emitting raw Responses API items on the event stream.

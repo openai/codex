@@ -13,8 +13,7 @@ import type { ToolsV2 } from "./ToolsV2";
 
 export type ProfileV2 = { model: string | null, model_provider: string | null, approval_policy: AskForApproval | null, 
 /**
- * Optional override for who adjudicates approval requests in this profile.
- * Use `user` for direct user prompts or `guardian_subagent` to route
- * eligible approvals through guardian. This does not disable ARC.
+ * Optional profile-level override for where approval requests are routed
+ * for review. If omitted, the enclosing config default is used.
  */
 approvals_reviewer: ApprovalsReviewer | null, service_tier: ServiceTier | null, model_reasoning_effort: ReasoningEffort | null, model_reasoning_summary: ReasoningSummary | null, model_verbosity: Verbosity | null, web_search: WebSearchMode | null, tools: ToolsV2 | null, chatgpt_base_url: string | null, } & ({ [key in string]?: number | string | boolean | Array<JsonValue> | { [key in string]?: JsonValue } | null });

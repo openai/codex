@@ -17,8 +17,6 @@ import type { SandboxWorkspaceWrite } from "./SandboxWorkspaceWrite";
 import type { ToolsV2 } from "./ToolsV2";
 
 export type Config = {model: string | null, review_model: string | null, model_context_window: bigint | null, model_auto_compact_token_limit: bigint | null, model_provider: string | null, approval_policy: AskForApproval | null, /**
- * Optional default for who adjudicates approval requests. Use `user` for
- * direct user prompts or `guardian_subagent` to route eligible approvals
- * through guardian. This does not disable ARC.
+ * Optional default for where approval requests are routed for review.
  */
 approvals_reviewer: ApprovalsReviewer | null, sandbox_mode: SandboxMode | null, sandbox_workspace_write: SandboxWorkspaceWrite | null, forced_chatgpt_workspace_id: string | null, forced_login_method: ForcedLoginMethod | null, web_search: WebSearchMode | null, tools: ToolsV2 | null, profile: string | null, profiles: { [key in string]?: ProfileV2 }, instructions: string | null, developer_instructions: string | null, compact_prompt: string | null, model_reasoning_effort: ReasoningEffort | null, model_reasoning_summary: ReasoningSummary | null, model_verbosity: Verbosity | null, service_tier: ServiceTier | null, analytics: AnalyticsConfig | null} & ({ [key in string]?: number | string | boolean | Array<JsonValue> | { [key in string]?: JsonValue } | null });

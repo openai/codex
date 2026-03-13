@@ -10,7 +10,6 @@ import type { Thread } from "./Thread";
 
 export type ThreadResumeResponse = { thread: Thread, model: string, modelProvider: string, serviceTier: ServiceTier | null, cwd: string, approvalPolicy: AskForApproval, 
 /**
- * Who adjudicates approval requests for this thread. This does not
- * disable ARC.
+ * Reviewer currently used for approval requests on this thread.
  */
 approvalsReviewer: ApprovalsReviewer, sandbox: SandboxPolicy, reasoningEffort: ReasoningEffort | null, };

@@ -260,9 +260,11 @@ impl From<CoreAskForApproval> for AskForApproval {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case", export_to = "v2/")]
-/// Selects who adjudicates approval requests once an action has already been
-/// escalated for review. This does not disable separate safety checks such as
-/// ARC.
+/// Configures who approval requests are routed to for review. Examples
+/// include sandbox escapes, blocked network access, MCP approval prompts, and
+/// ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully
+/// prompted subagent to gather relevant context and apply a risk-based
+/// decision framework before approving or denying the request.
 pub enum ApprovalsReviewer {
     #[serde(rename = "user", alias = "manual-only")]
     User,
@@ -555,9 +557,8 @@ pub struct ProfileV2 {
     pub model_provider: Option<String>,
     #[experimental(nested)]
     pub approval_policy: Option<AskForApproval>,
-    /// Optional override for who adjudicates approval requests in this profile.
-    /// Use `user` for direct user prompts or `guardian_subagent` to route
-    /// eligible approvals through guardian. This does not disable ARC.
+    /// Optional profile-level override for where approval requests are routed
+    /// for review. If omitted, the enclosing config default is used.
     #[serde(alias = "approval_review_policy")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub service_tier: Option<ServiceTier>,
@@ -659,9 +660,7 @@ pub struct Config {
     pub model_provider: Option<String>,
     #[experimental(nested)]
     pub approval_policy: Option<AskForApproval>,
-    /// Optional default for who adjudicates approval requests. Use `user` for
-    /// direct user prompts or `guardian_subagent` to route eligible approvals
-    /// through guardian. This does not disable ARC.
+    /// Optional default for where approval requests are routed for review.
     #[serde(alias = "approval_review_policy")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
@@ -2468,8 +2467,8 @@ pub struct ThreadStartParams {
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
-    /// Override who adjudicates approval requests for this thread and
-    /// subsequent turns. This does not disable ARC.
+    /// Override where approval requests are routed for review on this thread
+    /// and subsequent turns.
     #[ts(optional = nullable)]
     #[serde(alias = "approvalReviewPolicy")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
@@ -2535,8 +2534,7 @@ pub struct ThreadStartResponse {
     pub cwd: PathBuf,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
-    /// Who adjudicates approval requests for this thread. This does not
-    /// disable ARC.
+    /// Reviewer currently used for approval requests on this thread.
     #[serde(alias = "approvalReviewPolicy")]
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
@@ -2591,8 +2589,8 @@ pub struct ThreadResumeParams {
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
-    /// Override who adjudicates approval requests for this thread and
-    /// subsequent turns. This does not disable ARC.
+    /// Override where approval requests are routed for review on this thread
+    /// and subsequent turns.
     #[ts(optional = nullable)]
     #[serde(alias = "approvalReviewPolicy")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
@@ -2624,8 +2622,7 @@ pub struct ThreadResumeResponse {
     pub cwd: PathBuf,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
-    /// Who adjudicates approval requests for this thread. This does not
-    /// disable ARC.
+    /// Reviewer currently used for approval requests on this thread.
     #[serde(alias = "approvalReviewPolicy")]
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
@@ -2671,8 +2668,8 @@ pub struct ThreadForkParams {
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
-    /// Override who adjudicates approval requests for this thread and
-    /// subsequent turns. This does not disable ARC.
+    /// Override where approval requests are routed for review on this thread
+    /// and subsequent turns.
     #[ts(optional = nullable)]
     #[serde(alias = "approvalReviewPolicy")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
@@ -2704,8 +2701,7 @@ pub struct ThreadForkResponse {
     pub cwd: PathBuf,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
-    /// Who adjudicates approval requests for this thread. This does not
-    /// disable ARC.
+    /// Reviewer currently used for approval requests on this thread.
     #[serde(alias = "approvalReviewPolicy")]
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
@@ -3831,8 +3827,8 @@ pub struct TurnStartParams {
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
-    /// Override who adjudicates approval requests for this turn and
-    /// subsequent turns. This does not disable ARC.
+    /// Override where approval requests are routed for review on this turn and
+    /// subsequent turns.
     #[ts(optional = nullable)]
     #[serde(alias = "approvalReviewPolicy")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,

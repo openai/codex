@@ -533,7 +533,7 @@
       "type": "object"
     },
     "ApprovalsReviewer": {
-      "description": "Selects who adjudicates approval requests once an action has already been escalated for review. This does not disable separate safety checks such as ARC.",
+      "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
       "enum": [
         "user",
         "guardian_subagent"
@@ -2842,7 +2842,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional default for who adjudicates approval requests. Use `user` for direct user prompts or `guardian_subagent` to route eligible approvals through guardian. This does not disable ARC."
+          "description": "Optional default for where approval requests are routed for review."
         },
         "compact_prompt": {
           "type": [
@@ -6317,7 +6317,7 @@
               "type": "null"
             }
           ],
-          "description": "Optional override for who adjudicates approval requests in this profile. Use `user` for direct user prompts or `guardian_subagent` to route eligible approvals through guardian. This does not disable ARC."
+          "description": "Optional profile-level override for where approval requests are routed for review. If omitted, the enclosing config default is used."
         },
         "chatgpt_base_url": {
           "type": [
@@ -9555,7 +9555,7 @@
               "type": "null"
             }
           ],
-          "description": "Override who adjudicates approval requests for this thread and subsequent turns. This does not disable ARC."
+          "description": "Override where approval requests are routed for review on this thread and subsequent turns."
         },
         "baseInstructions": {
           "type": [
@@ -9647,7 +9647,7 @@
               "$ref": "#/definitions/ApprovalsReviewer"
             }
           ],
-          "description": "Who adjudicates approval requests for this thread. This does not disable ARC."
+          "description": "Reviewer currently used for approval requests on this thread."
         },
         "cwd": {
           "type": "string"
@@ -10693,7 +10693,7 @@
               "type": "null"
             }
           ],
-          "description": "Override who adjudicates approval requests for this thread and subsequent turns. This does not disable ARC."
+          "description": "Override where approval requests are routed for review on this thread and subsequent turns."
         },
         "baseInstructions": {
           "type": [
@@ -10792,7 +10792,7 @@
               "$ref": "#/definitions/ApprovalsReviewer"
             }
           ],
-          "description": "Who adjudicates approval requests for this thread. This does not disable ARC."
+          "description": "Reviewer currently used for approval requests on this thread."
         },
         "cwd": {
           "type": "string"
@@ -10946,7 +10946,7 @@
               "type": "null"
             }
           ],
-          "description": "Override who adjudicates approval requests for this thread and subsequent turns. This does not disable ARC."
+          "description": "Override where approval requests are routed for review on this thread and subsequent turns."
         },
         "baseInstructions": {
           "type": [
@@ -11050,7 +11050,7 @@
               "$ref": "#/definitions/ApprovalsReviewer"
             }
           ],
-          "description": "Who adjudicates approval requests for this thread. This does not disable ARC."
+          "description": "Reviewer currently used for approval requests on this thread."
         },
         "cwd": {
           "type": "string"
@@ -11609,7 +11609,7 @@
               "type": "null"
             }
           ],
-          "description": "Override who adjudicates approval requests for this turn and subsequent turns. This does not disable ARC."
+          "description": "Override where approval requests are routed for review on this turn and subsequent turns."
         },
         "cwd": {
           "description": "Override the working directory for this turn and subsequent turns.",
