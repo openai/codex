@@ -81,6 +81,7 @@ pub(crate) async fn run_codex_thread_interactive(
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
         file_watcher: Arc::clone(&parent_session.services.file_watcher),
+        skill_network_proxy_cache: Arc::clone(&parent_session.services.skill_network_proxy_cache),
         conversation_history: initial_history.unwrap_or(InitialHistory::New),
         session_source: SessionSource::SubAgent(subagent_source),
         agent_control: parent_session.services.agent_control.clone(),
