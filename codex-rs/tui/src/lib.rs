@@ -998,6 +998,7 @@ async fn run_ratatui_app(
         prompt,
         images,
         no_alt_screen,
+        app_server,
         ..
     } = cli;
 
@@ -1034,6 +1035,7 @@ async fn run_ratatui_app(
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
         should_prompt_windows_sandbox_nux_at_startup,
+        app_server,
     )
     .await;
 

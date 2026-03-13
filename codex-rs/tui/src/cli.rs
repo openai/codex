@@ -110,6 +110,21 @@ pub struct Cli {
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
 
+    #[arg(long = "app-server", default_value_t = false)]
+    pub app_server: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::Parser;
+
+    #[test]
+    fn parses_app_server_flag() {
+        let cli = Cli::parse_from(["codex", "--app-server"]);
+        assert!(cli.app_server);
+    }
 }

@@ -40,7 +40,13 @@ use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::InProcessAppServerClient;
+use codex_app_server_client::InProcessServerEvent;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SkillsListParams;
+use codex_app_server_protocol::SkillsListResponse;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
@@ -210,6 +216,99 @@ fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillEr
         .find(|entry| entry.cwd.as_path() == cwd)
         .map(|entry| entry.errors.clone())
         .unwrap_or_default()
+}
+
+fn into_core_skills_list_entry(
+    entry: codex_app_server_protocol::SkillsListEntry,
+) -> codex_protocol::protocol::SkillsListEntry {
+    codex_protocol::protocol::SkillsListEntry {
+        cwd: entry.cwd,
+        skills: entry
+            .skills
+            .into_iter()
+            .map(into_core_skill_metadata)
+            .collect(),
+        errors: entry
+            .errors
+            .into_iter()
+            .map(into_core_skill_error_info)
+            .collect(),
+    }
+}
+
+fn into_core_skill_metadata(
+    skill: codex_app_server_protocol::SkillMetadata,
+) -> codex_protocol::protocol::SkillMetadata {
+    codex_protocol::protocol::SkillMetadata {
+        name: skill.name,
+        description: skill.description,
+        short_description: skill.short_description,
+        interface: skill.interface.map(into_core_skill_interface),
+        dependencies: skill.dependencies.map(into_core_skill_dependencies),
+        path: skill.path,
+        scope: into_core_skill_scope(skill.scope),
+        enabled: skill.enabled,
+    }
+}
+
+fn into_core_skill_scope(
+    scope: codex_app_server_protocol::SkillScope,
+) -> codex_protocol::protocol::SkillScope {
+    match scope {
+        codex_app_server_protocol::SkillScope::User => codex_protocol::protocol::SkillScope::User,
+        codex_app_server_protocol::SkillScope::Repo => codex_protocol::protocol::SkillScope::Repo,
+        codex_app_server_protocol::SkillScope::System => {
+            codex_protocol::protocol::SkillScope::System
+        }
+        codex_app_server_protocol::SkillScope::Admin => codex_protocol::protocol::SkillScope::Admin,
+    }
+}
+
+fn into_core_skill_interface(
+    interface: codex_app_server_protocol::SkillInterface,
+) -> codex_protocol::protocol::SkillInterface {
+    codex_protocol::protocol::SkillInterface {
+        display_name: interface.display_name,
+        short_description: interface.short_description,
+        icon_small: interface.icon_small,
+        icon_large: interface.icon_large,
+        brand_color: interface.brand_color,
+        default_prompt: interface.default_prompt,
+    }
+}
+
+fn into_core_skill_dependencies(
+    deps: codex_app_server_protocol::SkillDependencies,
+) -> codex_protocol::protocol::SkillDependencies {
+    codex_protocol::protocol::SkillDependencies {
+        tools: deps
+            .tools
+            .into_iter()
+            .map(into_core_skill_tool_dependency)
+            .collect(),
+    }
+}
+
+fn into_core_skill_tool_dependency(
+    tool: codex_app_server_protocol::SkillToolDependency,
+) -> codex_protocol::protocol::SkillToolDependency {
+    codex_protocol::protocol::SkillToolDependency {
+        r#type: tool.r#type,
+        value: tool.value,
+        description: tool.description,
+        transport: tool.transport,
+        command: tool.command,
+        url: tool.url,
+    }
+}
+
+fn into_core_skill_error_info(
+    error: codex_app_server_protocol::SkillErrorInfo,
+) -> codex_protocol::protocol::SkillErrorInfo {
+    codex_protocol::protocol::SkillErrorInfo {
+        path: error.path,
+        message: error.message,
+    }
 }
 
 fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorInfo]) {
@@ -776,6 +875,7 @@ impl App {
             startup_tooltip_override: None,
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             session_telemetry: self.session_telemetry.clone(),
+            use_app_server: self.chat_widget.use_app_server(),
         }
     }
 
@@ -1824,6 +1924,7 @@ impl App {
             startup_tooltip_override: None,
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             session_telemetry: self.session_telemetry.clone(),
+            use_app_server: self.chat_widget.use_app_server(),
         };
         self.chat_widget = ChatWidget::new(init, self.server.clone());
         self.reset_thread_event_state();
@@ -1952,6 +2053,7 @@ impl App {
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
+        use_app_server: bool,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -2058,6 +2160,7 @@ impl App {
                     startup_tooltip_override,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
+                    use_app_server,
                 };
                 ChatWidget::new(init, thread_manager.clone())
             }
@@ -2094,6 +2197,7 @@ impl App {
                     startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
+                    use_app_server,
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
@@ -2132,6 +2236,7 @@ impl App {
                     startup_tooltip_override: None,
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
+                    use_app_server,
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
             }
@@ -2244,10 +2349,52 @@ impl App {
             loop {
                 let control = select! {
                     Some(event) = app_event_rx.recv() => {
-                        match app.handle_event(tui, event).await {
-                            Ok(control) => control,
-                            Err(err) => break Err(err),
-                        }
+                        let control = match event {
+                            AppEvent::CodexOp(Op::ListSkills { cwds, force_reload })
+                                if app.chat_widget.use_app_server() =>
+                            {
+                                let response: SkillsListResponse = app_server
+                                    .request_typed(ClientRequest::SkillsList {
+                                        request_id: RequestId::Integer(1),
+                                        params: SkillsListParams {
+                                            cwds,
+                                            force_reload,
+                                            per_cwd_extra_user_roots: None,
+                                        },
+                                    })
+                                    .await
+                                    .map_err(|err| {
+                                        color_eyre::eyre::eyre!("skills/list failed: {err}")
+                                    });
+
+                                match response {
+                                    Ok(response) => {
+                                        let event = ListSkillsResponseEvent {
+                                            skills: response
+                                                .data
+                                                .into_iter()
+                                                .map(into_core_skills_list_entry)
+                                                .collect(),
+                                        };
+
+                                        emit_skill_load_warnings(
+                                            &app.app_event_tx,
+                                            &errors_for_cwd(&app.config.cwd, &event),
+                                        );
+                                        app.chat_widget.set_skills_from_response(&event);
+                                        app.chat_widget.refresh_plugin_mentions();
+
+                                        AppRunControl::Continue
+                                    }
+                                    Err(err) => break Err(err),
+                                }
+                            }
+                            event => match app.handle_event(tui, event).await {
+                                Ok(control) => control,
+                                Err(err) => break Err(err),
+                            },
+                        };
+                        control
                     }
                     active = async {
                         if let Some(rx) = app.active_thread_rx.as_mut() {
