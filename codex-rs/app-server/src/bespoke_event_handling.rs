@@ -193,6 +193,8 @@ fn guardian_auto_approval_review_notification(
     event_turn_id: &str,
     assessment: &GuardianAssessmentEvent,
 ) -> ServerNotification {
+    // TODO(ccunningham): Attach guardian review state to the reviewed tool
+    // item's lifecycle instead of sending standalone review notifications.
     let turn_id = if assessment.turn_id.is_empty() {
         event_turn_id.to_string()
     } else {
@@ -225,6 +227,7 @@ fn guardian_auto_approval_review_notification(
                     turn_id,
                     target_item_id: assessment.id.clone(),
                     review,
+                    action: assessment.action.clone(),
                 },
             )
         }
@@ -237,6 +240,7 @@ fn guardian_auto_approval_review_notification(
                     turn_id,
                     target_item_id: assessment.id.clone(),
                     review,
+                    action: assessment.action.clone(),
                 },
             )
         }
@@ -2735,6 +2739,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rmcp::model::Content;
     use serde_json::Value as JsonValue;
+    use serde_json::json;
     use std::time::Duration;
     use tokio::sync::Mutex;
     use tokio::sync::mpsc;
@@ -2759,6 +2764,10 @@ mod tests {
     #[test]
     fn guardian_assessment_started_uses_event_turn_id_fallback() {
         let conversation_id = ThreadId::new();
+        let action = json!({
+            "tool": "shell",
+            "command": "rm -rf /tmp/example.sqlite",
+        });
         let notification = guardian_auto_approval_review_notification(
             &conversation_id,
             "turn-from-event",
@@ -2769,7 +2778,7 @@ mod tests {
                 risk_score: None,
                 risk_level: None,
                 rationale: None,
-                action: None,
+                action: Some(action.clone()),
             },
         );
 
@@ -2785,6 +2794,7 @@ mod tests {
                 assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
                 assert_eq!(payload.review.rationale, None);
+                assert_eq!(payload.action, Some(action));
             }
             other => panic!("unexpected notification: {other:?}"),
         }
@@ -2793,6 +2803,10 @@ mod tests {
     #[test]
     fn guardian_assessment_completed_emits_review_payload() {
         let conversation_id = ThreadId::new();
+        let action = json!({
+            "tool": "shell",
+            "command": "rm -rf /tmp/example.sqlite",
+        });
         let notification = guardian_auto_approval_review_notification(
             &conversation_id,
             "turn-from-event",
@@ -2803,7 +2817,7 @@ mod tests {
                 risk_score: Some(91),
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
                 rationale: Some("too risky".to_string()),
-                action: None,
+                action: Some(action.clone()),
             },
         );
 
@@ -2819,6 +2833,7 @@ mod tests {
                     Some(codex_app_server_protocol::GuardianRiskLevel::High)
                 );
                 assert_eq!(payload.review.rationale.as_deref(), Some("too risky"));
+                assert_eq!(payload.action, Some(action));
             }
             other => panic!("unexpected notification: {other:?}"),
         }
@@ -2827,6 +2842,10 @@ mod tests {
     #[test]
     fn guardian_assessment_aborted_emits_completed_review_payload() {
         let conversation_id = ThreadId::new();
+        let action = json!({
+            "tool": "network_access",
+            "target": "api.openai.com:443",
+        });
         let notification = guardian_auto_approval_review_notification(
             &conversation_id,
             "turn-from-event",
@@ -2837,7 +2856,7 @@ mod tests {
                 risk_score: None,
                 risk_level: None,
                 rationale: None,
-                action: None,
+                action: Some(action.clone()),
             },
         );
 
@@ -2850,6 +2869,7 @@ mod tests {
                 assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
                 assert_eq!(payload.review.rationale, None);
+                assert_eq!(payload.action, Some(action));
             }
             other => panic!("unexpected notification: {other:?}"),
         }
