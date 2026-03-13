@@ -8,6 +8,8 @@
 
 use crate::helper_materialization::HelperExecutable;
 use crate::helper_materialization::resolve_helper_for_launch;
+use crate::sandbox_users::resolve_sid;
+use crate::winutil::string_from_sid_bytes;
 use crate::winutil::to_wide;
 use rand::Rng;
 use rand::SeedableRng;
@@ -45,10 +47,13 @@ pub fn pipe_pair() -> (String, String) {
     (format!("{base}-in"), format!("{base}-out"))
 }
 
-/// Creates a named pipe with permissive ACLs so the sandbox user can connect.
-pub fn create_named_pipe(name: &str, access: u32) -> io::Result<HANDLE> {
-    // Allow sandbox users to connect by granting Everyone full access on the pipe.
-    let sddl = to_wide("D:(A;;GA;;;WD)");
+/// Creates a named pipe whose DACL only allows the sandbox user to connect.
+pub fn create_named_pipe(name: &str, access: u32, sandbox_username: &str) -> io::Result<HANDLE> {
+    let sandbox_sid = resolve_sid(sandbox_username)
+        .map_err(|err| io::Error::new(io::ErrorKind::PermissionDenied, err.to_string()))?;
+    let sandbox_sid = string_from_sid_bytes(&sandbox_sid)
+        .map_err(|err| io::Error::new(io::ErrorKind::PermissionDenied, err))?;
+    let sddl = to_wide(&format!("D:(A;;GA;;;{sandbox_sid})"));
     let mut sd: PSECURITY_DESCRIPTOR = ptr::null_mut();
     let ok = unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
