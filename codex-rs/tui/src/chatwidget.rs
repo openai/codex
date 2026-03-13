@@ -2392,6 +2392,45 @@ impl ChatWidget {
             self.set_status_header(String::from("Working"));
         }
 
+        if ev.status == GuardianAssessmentStatus::Approved {
+            let Some(action) = ev.action else {
+                return;
+            };
+
+            let command = match action.get("command") {
+                Some(serde_json::Value::Array(command)) => Some(
+                    command
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>(),
+                )
+                .filter(|command| !command.is_empty()),
+                Some(serde_json::Value::String(command)) => shlex::split(command)
+                    .filter(|command| !command.is_empty())
+                    .or_else(|| Some(vec![command.clone()])),
+                _ => None,
+            };
+
+            let cell = if let Some(command) = command {
+                history_cell::new_approval_decision_cell(
+                    command,
+                    codex_protocol::protocol::ReviewDecision::Approved,
+                    history_cell::ApprovalDecisionActor::Guardian,
+                )
+            } else if let Some(summary) = guardian_action_summary(&action) {
+                history_cell::new_guardian_approved_action_request(summary)
+            } else {
+                let summary = serde_json::to_string(&action)
+                    .unwrap_or_else(|_| "<unrenderable guardian action>".to_string());
+                history_cell::new_guardian_approved_action_request(summary)
+            };
+
+            self.add_boxed_history(cell);
+            self.request_redraw();
+            return;
+        }
+
         if ev.status != GuardianAssessmentStatus::Denied {
             return;
         }
