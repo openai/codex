@@ -447,6 +447,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
     for spec in [
         create_exec_command_tool(true, false),
+        create_wait_tool(),
         create_write_stdin_tool(),
         PLAN_TOOL.clone(),
         create_request_user_input_tool(CollaborationModesConfig::default()),
