@@ -5074,6 +5074,7 @@ mod tests {
     #[tokio::test]
     async fn open_agent_picker_prompts_to_enable_multi_agent_when_disabled() -> Result<()> {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let _ = app.config.features.disable(Feature::Collab);
 
         app.open_agent_picker().await;
         app.chat_widget

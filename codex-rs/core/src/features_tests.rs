@@ -136,6 +136,12 @@ fn collab_is_legacy_alias_for_multi_agent() {
 }
 
 #[test]
+fn multi_agent_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::Collab.stage(), Stage::Stable);
+    assert_eq!(Feature::Collab.default_enabled(), true);
+}
+
+#[test]
 fn enable_fanout_is_under_development() {
     assert_eq!(Feature::SpawnCsv.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::SpawnCsv.default_enabled(), false);
