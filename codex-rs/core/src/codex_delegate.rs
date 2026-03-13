@@ -410,7 +410,7 @@ async fn handle_exec_approval(
             Arc::clone(parent_session),
             Arc::clone(parent_ctx),
             GuardianApprovalRequest::Shell {
-                id: approval_id_for_op.clone(),
+                id: call_id.clone(),
                 command,
                 cwd,
                 sandbox_permissions: if additional_permissions.is_some() {
