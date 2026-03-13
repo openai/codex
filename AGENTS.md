@@ -26,6 +26,9 @@ In the codex-rs folder where the rust code lives:
   watch `MemAvailable` from `/proc/meminfo`, `df -P /data`, and top RSS processes via
   `ps -eo rss,pcpu,comm --sort=-rss`, and stop or scale back if memory or disk pressure approaches
   instability.
+- On Termux/Android, use `scripts/termux/build-safe.sh` for Codex builds. It forces serialized rustc
+  work (`CARGO_BUILD_JOBS=1`) and disables Cargo pipelining to avoid overlapping compiler/linker
+  pressure.
 
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 

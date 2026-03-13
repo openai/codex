@@ -256,14 +256,19 @@ pub struct Tui {
     notification_backend: Option<DesktopNotificationBackend>,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
+    // Avoid scroll-region ANSI sequences in tmux panes to prevent pane boundary artifacts.
+    disable_scroll_region_up: bool,
 }
 
 impl Tui {
     pub fn new(terminal: Terminal) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
-        let min_frame_interval = match codex_core::terminal::terminal_info().multiplexer {
-            Some(Multiplexer::Tmux { .. }) => Duration::from_millis(100),
-            _ => frame_rate_limiter::MIN_FRAME_INTERVAL,
+        let terminal_info = codex_core::terminal::terminal_info();
+        let is_tmux = matches!(terminal_info.multiplexer, Some(Multiplexer::Tmux { .. }));
+        let min_frame_interval = if is_tmux {
+            Duration::from_millis(100)
+        } else {
+            frame_rate_limiter::MIN_FRAME_INTERVAL
         };
         let frame_requester = FrameRequester::new(draw_tx.clone(), min_frame_interval);
 
@@ -288,6 +293,7 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             alt_screen_enabled: true,
+            disable_scroll_region_up: is_tmux,
         }
     }
 
@@ -489,9 +495,11 @@ impl Tui {
             area.width = size.width;
             // If the viewport has expanded, scroll everything else up to make room.
             if area.bottom() > size.height {
-                terminal
-                    .backend_mut()
-                    .scroll_region_up(0..area.top(), area.bottom() - size.height)?;
+                if !self.disable_scroll_region_up {
+                    terminal
+                        .backend_mut()
+                        .scroll_region_up(0..area.top(), area.bottom() - size.height)?;
+                }
                 area.y = size.height - area.height;
             }
             if area != terminal.viewport_area {

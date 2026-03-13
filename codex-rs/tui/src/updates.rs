@@ -201,7 +201,7 @@ mod tests {
             "token": "codex",
             "full_token": "codex",
             "tap": "homebrew/cask",
-            "version": "0.96.0",
+            "version": "0.96.0"
         }"#;
         let HomebrewCaskInfo { version } = serde_json::from_str::<HomebrewCaskInfo>(cask_json)
             .expect("failed to parse version from cask json");

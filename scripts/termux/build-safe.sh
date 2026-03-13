@@ -3,6 +3,11 @@ set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 TARGET="aarch64-linux-android"
+PROFILE="release"
+
+if [ "${1:-}" = "--debug" ] || [ "${1:-}" = "debug" ]; then
+  PROFILE="debug"
+fi
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -27,6 +32,8 @@ else
   [ "$jobs" -lt 2 ] && jobs=2
   [ "$jobs" -gt 4 ] && jobs=4
 fi
+# Enforce serialized rustc/linker work to avoid parallel compiler pressure.
+jobs=1
 
 data_use_pct=$(df -P /data 2>/dev/null | awk 'NR==2 { gsub(/%/, "", $5); print $5 }')
 if [ -n "${data_use_pct:-}" ] && [ "${data_use_pct:-0}" -ge 92 ]; then
@@ -36,21 +43,45 @@ fi
 echo "[termux-build-safe] target: $TARGET"
 echo "[termux-build-safe] cores: $cores"
 echo "[termux-build-safe] MemAvailable: ${mem_kb} kB"
-echo "[termux-build-safe] CARGO_BUILD_JOBS=$jobs"
-echo "[termux-build-safe] release overrides: opt-level=2, LTO=off, codegen-units=2, debug=0"
-echo "[termux-build-safe] rustflags: -C llvm-args=--threads=1"
+echo "[termux-build-safe] CARGO_BUILD_JOBS=$jobs (forced serial rustc/link)"
+if [ "$PROFILE" = "release" ]; then
+  echo "[termux-build-safe] release overrides: opt-level=2, LTO=off, codegen-units=2, debug=0"
+fi
+RUSTFLAGS_BASE="-C llvm-args=--threads=1"
+if [ "$PROFILE" = "release" ]; then
+  RUSTFLAGS="$RUSTFLAGS_BASE"
+else
+  RUSTFLAGS="$RUSTFLAGS_BASE -C codegen-units=1 -C debuginfo=0 -C opt-level=0 -C panic=abort -C embed-bitcode=no"
+fi
+
+echo "[termux-build-safe] profile: $PROFILE"
+echo "[termux-build-safe] rustflags: $RUSTFLAGS"
 
 cd "$ROOT_DIR/codex-rs"
 
-CARGO_BUILD_JOBS="$jobs" \
-RUSTFLAGS="-C llvm-args=--threads=1" \
-CARGO_PROFILE_RELEASE_OPT_LEVEL=2 \
-CARGO_PROFILE_RELEASE_LTO=off \
-CARGO_PROFILE_RELEASE_CODEGEN_UNITS=2 \
-CARGO_PROFILE_RELEASE_DEBUG=0 \
-cargo build --release -p codex-cli -p codex-exec --target "$TARGET"
+if [ "$PROFILE" = "release" ]; then
+  CARGO_BUILD_JOBS="$jobs" \
+  CARGO_BUILD_PIPELINING=false \
+  RUSTFLAGS="$RUSTFLAGS" \
+  CARGO_PROFILE_RELEASE_OPT_LEVEL=2 \
+  CARGO_PROFILE_RELEASE_LTO=off \
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS=2 \
+  CARGO_PROFILE_RELEASE_DEBUG=0 \
+  cargo build --release -p codex-cli -p codex-exec --target "$TARGET"
+else
+  CARGO_BUILD_JOBS="$jobs" \
+  CARGO_BUILD_PIPELINING=false \
+  RUSTFLAGS="$RUSTFLAGS" \
+  CARGO_PROFILE_DEV_DEBUG=0 \
+  CARGO_PROFILE_DEV_INCREMENTAL=false \
+  CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false \
+  CARGO_PROFILE_DEV_OVERFLOW_CHECKS=false \
+  CARGO_PROFILE_DEV_PANIC=abort \
+  CARGO_PROFILE_DEV_CODEGEN_UNITS=1 \
+  cargo build -p codex-cli -p codex-exec --target "$TARGET"
+fi
 
 echo "[termux-build-safe] done"
 echo "[termux-build-safe] binaries:"
-echo "  $ROOT_DIR/codex-rs/target/$TARGET/release/codex"
-echo "  $ROOT_DIR/codex-rs/target/$TARGET/release/codex-exec"
+echo "  $ROOT_DIR/codex-rs/target/$TARGET/$PROFILE/codex"
+echo "  $ROOT_DIR/codex-rs/target/$TARGET/$PROFILE/codex-exec"

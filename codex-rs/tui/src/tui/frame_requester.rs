@@ -20,6 +20,8 @@ use tokio::sync::mpsc;
 
 use super::frame_rate_limiter::FrameRateLimiter;
 
+const DEFERRED_FRAMES_DISABLED_INTERVAL: Duration = Duration::from_millis(100);
+
 /// A requester for scheduling future frame draws on the TUI event loop.
 ///
 /// This is the handler side of an actor/handler pair with `FrameScheduler`, which coalesces
@@ -30,6 +32,7 @@ use super::frame_rate_limiter::FrameRateLimiter;
 #[derive(Clone, Debug)]
 pub struct FrameRequester {
     frame_schedule_tx: mpsc::UnboundedSender<Instant>,
+    allow_deferred_frames: bool,
 }
 
 impl FrameRequester {
@@ -40,8 +43,10 @@ impl FrameRequester {
         let (tx, rx) = mpsc::unbounded_channel();
         let scheduler = FrameScheduler::new(rx, draw_tx, min_frame_interval);
         tokio::spawn(scheduler.run());
+        let allow_deferred_frames = min_frame_interval < DEFERRED_FRAMES_DISABLED_INTERVAL;
         Self {
             frame_schedule_tx: tx,
+            allow_deferred_frames,
         }
     }
 
@@ -52,6 +57,9 @@ impl FrameRequester {
 
     /// Schedule a frame draw to occur after the specified duration.
     pub fn schedule_frame_in(&self, dur: Duration) {
+        if !self.allow_deferred_frames {
+            return;
+        }
         let _ = self.frame_schedule_tx.send(Instant::now() + dur);
     }
 }
@@ -63,6 +71,7 @@ impl FrameRequester {
         let (tx, _rx) = mpsc::unbounded_channel();
         FrameRequester {
             frame_schedule_tx: tx,
+            allow_deferred_frames: true,
         }
     }
 }
@@ -190,6 +199,30 @@ mod tests {
         // No second draw should arrive.
         let second = draw_rx.recv().timeout(Duration::from_millis(20)).await;
         assert!(second.is_err(), "unexpected extra draw received");
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn test_schedule_frame_in_ignored_when_interval_is_large() {
+        let (draw_tx, mut draw_rx) = broadcast::channel(16);
+        let requester = FrameRequester::new(draw_tx, Duration::from_millis(100));
+
+        requester.schedule_frame_in(Duration::from_millis(50));
+
+        time::advance(Duration::from_millis(60)).await;
+        let deferred = draw_rx.recv().timeout(Duration::from_millis(10)).await;
+        assert!(
+            deferred.is_err(),
+            "unexpected deferred draw when deferred frames are disabled"
+        );
+
+        requester.schedule_frame();
+        time::advance(Duration::from_millis(1)).await;
+        let immediate = draw_rx
+            .recv()
+            .timeout(Duration::from_millis(50))
+            .await
+            .expect("timed out waiting for immediate draw");
+        assert!(immediate.is_ok(), "broadcast closed unexpectedly");
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
