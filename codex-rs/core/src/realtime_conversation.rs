@@ -299,7 +299,7 @@ pub(crate) async fn handle_start(
         RealtimeWsVersion::V1 => RealtimeEventParser::V1,
         RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
     };
-    let session_mode = match config.realtime.r#type {
+    let session_mode = match config.realtime.session_type {
         RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
         RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
     };
