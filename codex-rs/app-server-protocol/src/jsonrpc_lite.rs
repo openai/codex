@@ -5,6 +5,7 @@ use codex_protocol::protocol::W3cTraceContext;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use std::fmt;
 use ts_rs::TS;
 
 pub const JSONRPC_VERSION: &str = "2.0";
@@ -17,6 +18,15 @@ pub enum RequestId {
     String(String),
     #[ts(type = "number")]
     Integer(i64),
+}
+
+impl fmt::Display for RequestId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::String(value) => f.write_str(value),
+            Self::Integer(value) => write!(f, "{value}"),
+        }
+    }
 }
 
 pub type Result = serde_json::Value;

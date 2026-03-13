@@ -2491,6 +2491,34 @@ fn submission_dispatch_span_uses_debug_for_realtime_audio() {
     );
 }
 
+#[test]
+fn op_kind_distinguishes_turn_ops() {
+    assert_eq!(
+        Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        }
+        .kind(),
+        "override_turn_context"
+    );
+    assert_eq!(
+        Op::UserInput {
+            items: vec![],
+            final_output_json_schema: None,
+        }
+        .kind(),
+        "user_input"
+    );
+}
+
 #[tokio::test]
 async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
     struct TraceCaptureTask {

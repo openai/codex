@@ -805,6 +805,7 @@ mod tests {
     use codex_protocol::protocol::AskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::collections::BTreeMap;
     use std::collections::VecDeque;
     use std::future::pending;
     use std::path::Path;
@@ -1104,6 +1105,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1147,9 +1149,35 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_cloud_requirements_parses_apps_requirements_toml() {
+        let result = parse_for_fetch(Some(
+            r#"
+[apps.connector_5f3c8c41a1e54ad7a76272c89e2554fa]
+enabled = false
+"#,
+        ));
+
+        assert_eq!(
+            result,
+            Some(ConfigRequirementsToml {
+                apps: Some(codex_core::config_loader::AppsRequirementsToml {
+                    apps: BTreeMap::from([(
+                        "connector_5f3c8c41a1e54ad7a76272c89e2554fa".to_string(),
+                        codex_core::config_loader::AppRequirementToml {
+                            enabled: Some(false),
+                        },
+                    )]),
+                }),
+                ..Default::default()
             })
         );
     }
@@ -1201,6 +1229,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1251,6 +1280,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1301,6 +1331,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1461,6 +1492,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1489,6 +1521,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1537,6 +1570,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1584,6 +1618,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1635,6 +1670,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1687,6 +1723,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1739,6 +1776,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1824,6 +1862,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
@@ -1848,6 +1887,7 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,

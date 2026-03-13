@@ -34,9 +34,14 @@ const CODE_MODE_BRIDGE_SOURCE: &str = include_str!("bridge.js");
 const CODE_MODE_DESCRIPTION_TEMPLATE: &str = include_str!("description.md");
 const CODE_MODE_WAIT_DESCRIPTION_TEMPLATE: &str = include_str!("wait_description.md");
 const CODE_MODE_PRAGMA_PREFIX: &str = "// @exec:";
+const CODE_MODE_ONLY_PREFACE: &str = "Use `exec/exec_wait` tool to run all other tools, do not attempt to use any other tools directly";
 
 pub(crate) const PUBLIC_TOOL_NAME: &str = "exec";
 pub(crate) const WAIT_TOOL_NAME: &str = "exec_wait";
+
+pub(crate) fn is_code_mode_nested_tool(tool_name: &str) -> bool {
+    tool_name != PUBLIC_TOOL_NAME && tool_name != WAIT_TOOL_NAME
+}
 pub(crate) const DEFAULT_EXEC_YIELD_TIME_MS: u64 = 10_000;
 pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 = 10_000;
 
@@ -62,16 +67,33 @@ enum CodeModeExecutionStatus {
     Terminated,
 }
 
-pub(crate) fn tool_description(enabled_tool_names: &[String]) -> String {
-    let enabled_list = if enabled_tool_names.is_empty() {
-        "none".to_string()
-    } else {
-        enabled_tool_names.join(", ")
-    };
-    format!(
-        "{}\n- Enabled nested tools: {enabled_list}.",
-        CODE_MODE_DESCRIPTION_TEMPLATE.trim_end()
-    )
+pub(crate) fn tool_description(enabled_tools: &[(String, String)], code_mode_only: bool) -> String {
+    let description_template = CODE_MODE_DESCRIPTION_TEMPLATE.trim_end();
+    if !code_mode_only {
+        return description_template.to_string();
+    }
+
+    let mut sections = vec![
+        CODE_MODE_ONLY_PREFACE.to_string(),
+        description_template.to_string(),
+    ];
+
+    if !enabled_tools.is_empty() {
+        let nested_tool_reference = enabled_tools
+            .iter()
+            .map(|(name, nested_description)| {
+                let global_name = normalize_code_mode_identifier(name);
+                format!(
+                    "### `{global_name}` (`{name}`)\n{}",
+                    nested_description.trim()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        sections.push(nested_tool_reference);
+    }
+
+    sections.join("\n\n")
 }
 
 pub(crate) fn wait_tool_description() -> &'static str {
@@ -218,7 +240,7 @@ async fn build_enabled_tools(exec: &ExecContext) -> Vec<protocol::EnabledTool> {
 
 fn enabled_tool_from_spec(spec: ToolSpec) -> Option<protocol::EnabledTool> {
     let tool_name = spec.name().to_string();
-    if tool_name == PUBLIC_TOOL_NAME || tool_name == WAIT_TOOL_NAME {
+    if !is_code_mode_nested_tool(&tool_name) {
         return None;
     }
 

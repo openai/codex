@@ -31,6 +31,7 @@ use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
 use toml::Value as TomlValue;
 use tracing::error;
+use tracing::instrument;
 
 pub(crate) const HIERARCHICAL_AGENTS_MESSAGE: &str =
     include_str!("../hierarchical_agents_message.md");
@@ -80,6 +81,7 @@ fn render_js_repl_instructions(config: &Config) -> Option<String> {
 
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
+#[instrument(level = "info", skip_all)]
 pub(crate) async fn get_user_instructions(
     config: &Config,
     skills: Option<&[SkillMetadata]>,
