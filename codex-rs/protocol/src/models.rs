@@ -231,6 +231,7 @@ pub enum ResponseInputItem {
     },
     FunctionCallOutput {
         call_id: String,
+        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     McpToolCallOutput {
@@ -239,6 +240,7 @@ pub enum ResponseInputItem {
     },
     CustomToolCallOutput {
         call_id: String,
+        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     ToolSearchOutput {
@@ -306,6 +308,7 @@ pub enum ResponseItem {
     Reasoning {
         #[serde(default, skip_serializing)]
         #[ts(skip)]
+        #[schemars(skip)]
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
         #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
@@ -356,6 +359,7 @@ pub enum ResponseItem {
     // We keep this behavior centralized in `FunctionCallOutputPayload`.
     FunctionCallOutput {
         call_id: String,
+        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     CustomToolCall {
@@ -375,6 +379,7 @@ pub enum ResponseItem {
     // text or structured content items.
     CustomToolCallOutput {
         call_id: String,
+        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     ToolSearchOutput {
