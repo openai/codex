@@ -982,18 +982,6 @@ fn local_time_context() -> (String, String) {
     }
 }
 
-fn mirrored_guardian_review_event_for_ancestors(msg: &EventMsg) -> Option<EventMsg> {
-    match msg {
-        EventMsg::GuardianAssessment(event) => Some(EventMsg::GuardianAssessment(event.clone())),
-        EventMsg::Warning(codex_protocol::protocol::WarningEvent { message }) => {
-            Some(EventMsg::Warning(codex_protocol::protocol::WarningEvent {
-                message: message.clone(),
-            }))
-        }
-        _ => None,
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
     /// Provider identifier ("openai", "openrouter", ...).
@@ -2588,73 +2576,6 @@ impl Session {
                 msg: legacy,
             };
             self.send_event_raw(legacy_event).await;
-        }
-    }
-
-    /// Emit a guardian review event in the current thread and mirror it into
-    /// every ancestor `ThreadSpawn` thread so collab parents can surface the
-    /// same review lifecycle without hiding it from the originating worker.
-    pub(crate) async fn send_guardian_review_event(
-        &self,
-        turn_context: &TurnContext,
-        msg: EventMsg,
-    ) {
-        let mirrored_ancestor_event = mirrored_guardian_review_event_for_ancestors(&msg);
-        self.send_event(turn_context, msg).await;
-        if let Some(mirrored_ancestor_event) = mirrored_ancestor_event {
-            self.mirror_event_to_thread_spawn_ancestors(turn_context, mirrored_ancestor_event)
-                .await;
-        }
-    }
-
-    async fn mirror_event_to_thread_spawn_ancestors(
-        &self,
-        turn_context: &TurnContext,
-        msg: EventMsg,
-    ) {
-        let mut next_parent_thread_id = match &turn_context.session_source {
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id, ..
-            }) => Some(*parent_thread_id),
-            _ => None,
-        };
-        while let Some(parent_thread_id) = next_parent_thread_id {
-            let Some(parent_thread) = self
-                .services
-                .agent_control
-                .get_thread_handle(parent_thread_id)
-                .await
-            else {
-                break;
-            };
-            let parent_turn_context: Arc<TurnContext> = match parent_thread
-                .codex
-                .session
-                .active_turn_context_and_cancellation_token()
-                .await
-            {
-                Some((turn_context, _)) => turn_context,
-                None => parent_thread.codex.session.new_default_turn().await,
-            };
-            parent_thread
-                .codex
-                .session
-                .send_event_raw(Event {
-                    id: parent_turn_context.sub_id.clone(),
-                    msg: msg.clone(),
-                })
-                .await;
-            parent_thread
-                .codex
-                .session
-                .maybe_mirror_event_text_to_realtime(&msg)
-                .await;
-            next_parent_thread_id = match &parent_turn_context.session_source {
-                SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                    parent_thread_id, ..
-                }) => Some(*parent_thread_id),
-                _ => None,
-            };
         }
     }
 
