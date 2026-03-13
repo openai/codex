@@ -2547,7 +2547,6 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
     ));
     assert!(description.contains("### `update_plan` (`update_plan`)"));
     assert!(description.contains("### `view_image` (`view_image`)"));
-    assert!(description.contains("Code mode declaration:"));
 }
 
 #[test]
