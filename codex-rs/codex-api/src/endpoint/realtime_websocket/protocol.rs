@@ -35,7 +35,7 @@ pub(super) enum RealtimeOutboundMessage {
     #[serde(rename = "session.update")]
     SessionUpdate { session: SessionUpdateSession },
     #[serde(rename = "conversation.item.create")]
-    ConversationItemCreate { item: ConversationItem },
+    ConversationItemCreate { item: ConversationItemPayload },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -44,6 +44,8 @@ pub(super) struct SessionUpdateSession {
     pub(super) kind: String,
     pub(super) instructions: String,
     pub(super) audio: SessionAudio,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) tools: Option<Vec<SessionFunctionTool>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -70,7 +72,7 @@ pub(super) struct SessionAudioOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(super) struct ConversationItem {
+pub(super) struct ConversationMessageItem {
     #[serde(rename = "type")]
     pub(super) kind: String,
     pub(super) role: String,
@@ -78,10 +80,34 @@ pub(super) struct ConversationItem {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub(super) enum ConversationItemPayload {
+    Message(ConversationMessageItem),
+    FunctionCallOutput(ConversationFunctionCallOutputItem),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ConversationFunctionCallOutputItem {
+    #[serde(rename = "type")]
+    pub(super) kind: String,
+    pub(super) call_id: String,
+    pub(super) output: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub(super) struct ConversationItemContent {
     #[serde(rename = "type")]
     pub(super) kind: String,
     pub(super) text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct SessionFunctionTool {
+    #[serde(rename = "type")]
+    pub(super) kind: String,
+    pub(super) name: String,
+    pub(super) description: String,
+    pub(super) parameters: Value,
 }
 
 pub(super) fn parse_realtime_event(
