@@ -919,11 +919,12 @@ impl App {
         // Smart Approvals owns `approvals_reviewer`, but disabling the feature
         // from inside a profile should not silently clear a value configured at
         // the root scope.
-        let (root_approvals_reviewer_configured, profile_approvals_reviewer_configured) = {
+        let (root_approvals_reviewer_blocks_profile_disable, profile_approvals_reviewer_configured) = {
             let effective_config = next_config.config_layer_stack.effective_config();
-            let root_configured = effective_config
+            let root_blocks_disable = effective_config
                 .as_table()
-                .is_some_and(|table| table.contains_key("approvals_reviewer"));
+                .and_then(|table| table.get("approvals_reviewer"))
+                .is_some_and(|value| value != &TomlValue::String("user".to_string()));
             let profile_configured = active_profile.as_deref().is_some_and(|profile| {
                 effective_config
                     .as_table()
@@ -933,7 +934,7 @@ impl App {
                     .and_then(TomlValue::as_table)
                     .is_some_and(|profile_config| profile_config.contains_key("approvals_reviewer"))
             });
-            (root_configured, profile_configured)
+            (root_blocks_disable, profile_configured)
         };
         let mut permissions_history_label: Option<&'static str> = None;
         let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
@@ -945,7 +946,7 @@ impl App {
             if feature == Feature::GuardianApproval
                 && !enabled
                 && self.active_profile.is_some()
-                && root_approvals_reviewer_configured
+                && root_approvals_reviewer_blocks_profile_disable
             {
                 self.chat_widget.add_error_message(
                         "Cannot disable Smart Approvals in this profile because `approvals_reviewer` is configured outside the active profile.".to_string(),
@@ -5747,14 +5748,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_feature_flags_disabling_guardian_in_profile_keeps_inherited_feature_enabled()
+    async fn update_feature_flags_disabling_guardian_in_profile_allows_inherited_user_reviewer()
     -> Result<()> {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         app.active_profile = Some("guardian".to_string());
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
-        let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"user\"\n\n[features]\nsmart_approvals = true\n";
+        let config_toml = r#"
+profile = "guardian"
+approvals_reviewer = "user"
+
+[profiles.guardian]
+approvals_reviewer = "guardian_subagent"
+
+[profiles.guardian.features]
+smart_approvals = true
+"#;
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
         app.config.config_layer_stack = app
@@ -5766,9 +5776,88 @@ mod tests {
             .set_enabled(Feature::GuardianApproval, true)?;
         app.chat_widget
             .set_feature_enabled(Feature::GuardianApproval, true);
-        app.config.approvals_reviewer = ApprovalsReviewer::User;
+        app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
         app.chat_widget
-            .set_approvals_reviewer(ApprovalsReviewer::User);
+            .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
+
+        app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
+            .await;
+
+        assert!(!app.config.features.enabled(Feature::GuardianApproval));
+        assert!(
+            !app.chat_widget
+                .config_ref()
+                .features
+                .enabled(Feature::GuardianApproval)
+        );
+        assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::User);
+        assert_eq!(
+            app.chat_widget.config_ref().approvals_reviewer,
+            ApprovalsReviewer::User
+        );
+        assert_eq!(
+            op_rx.try_recv(),
+            Ok(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox_policy: None,
+                windows_sandbox_level: None,
+                model: None,
+                effort: None,
+                summary: None,
+                service_tier: None,
+                collaboration_mode: None,
+                personality: None,
+            })
+        );
+        let cell = match app_event_rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+            other => panic!("expected InsertHistoryCell event, got {other:?}"),
+        };
+        let rendered = cell
+            .display_lines(120)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Permissions updated to Default"));
+
+        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        assert!(!config.contains("smart_approvals = true"));
+        assert!(!config.contains("guardian_subagent"));
+        assert_eq!(
+            toml::from_str::<TomlValue>(&config)?
+                .as_table()
+                .and_then(|table| table.get("approvals_reviewer")),
+            Some(&TomlValue::String("user".to_string()))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn update_feature_flags_disabling_guardian_in_profile_keeps_inherited_non_user_reviewer_enabled()
+    -> Result<()> {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        app.config.codex_home = codex_home.path().to_path_buf();
+        app.active_profile = Some("guardian".to_string());
+        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"guardian_subagent\"\n\n[features]\nsmart_approvals = true\n";
+        std::fs::write(config_toml_path.as_path(), config_toml)?;
+        let user_config = toml::from_str::<TomlValue>(config_toml)?;
+        app.config.config_layer_stack = app
+            .config
+            .config_layer_stack
+            .with_user_config(&config_toml_path, user_config);
+        app.config
+            .features
+            .set_enabled(Feature::GuardianApproval, true)?;
+        app.chat_widget
+            .set_feature_enabled(Feature::GuardianApproval, true);
+        app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+        app.chat_widget
+            .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
             .await;
@@ -5780,14 +5869,17 @@ mod tests {
                 .features
                 .enabled(Feature::GuardianApproval)
         );
-        assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::User);
+        assert_eq!(
+            app.config.approvals_reviewer,
+            ApprovalsReviewer::GuardianSubagent
+        );
         assert_eq!(
             app.chat_widget.config_ref().approvals_reviewer,
-            ApprovalsReviewer::User
+            ApprovalsReviewer::GuardianSubagent
         );
         assert!(
             op_rx.try_recv().is_err(),
-            "disabling an inherited feature should not patch the active session"
+            "disabling an inherited non-user reviewer should not patch the active session"
         );
         let app_events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
         assert!(
@@ -5798,7 +5890,7 @@ mod tests {
                     .any(|line| line.to_string().contains("Permissions updated to")),
                 _ => false,
             }),
-            "disabling with inherited manual review should not emit a permissions history update: {app_events:?}"
+            "blocking disable with inherited guardian review should not emit a permissions history update: {app_events:?}"
         );
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
@@ -5807,7 +5899,7 @@ mod tests {
             toml::from_str::<TomlValue>(&config)?
                 .as_table()
                 .and_then(|table| table.get("approvals_reviewer")),
-            Some(&TomlValue::String("user".to_string()))
+            Some(&TomlValue::String("guardian_subagent".to_string()))
         );
         Ok(())
     }
