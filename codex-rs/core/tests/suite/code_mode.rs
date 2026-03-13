@@ -101,7 +101,7 @@ fn custom_tool_output_body_and_success(
     req: &ResponsesRequest,
     call_id: &str,
 ) -> (String, Option<bool>) {
-    let (_, success) = req
+    let (content, success) = req
         .custom_tool_call_output_content_and_success(call_id)
         .expect("custom tool output should be present");
     let items = custom_tool_output_items(req, call_id);
@@ -109,7 +109,12 @@ fn custom_tool_output_body_and_success(
         .iter()
         .skip(1)
         .filter_map(|item| item.get("text").and_then(Value::as_str))
-        .collect();
+        .collect::<String>();
+    let output = if output.is_empty() {
+        content.unwrap_or_default()
+    } else {
+        output
+    };
     (output, success)
 }
 
