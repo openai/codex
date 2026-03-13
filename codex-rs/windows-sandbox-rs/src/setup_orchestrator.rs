@@ -79,7 +79,7 @@ pub fn run_setup_refresh(
     env_map: &HashMap<String, String>,
     codex_home: &Path,
 ) -> Result<()> {
-    run_setup_refresh_inner(
+    run_setup_refresh_with_overrides(
         policy,
         policy_cwd,
         command_cwd,
@@ -87,6 +87,29 @@ pub fn run_setup_refresh(
         codex_home,
         None,
         None,
+        None,
+    )
+}
+
+pub fn run_setup_refresh_with_overrides(
+    policy: &SandboxPolicy,
+    policy_cwd: &Path,
+    command_cwd: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+    read_roots_override: Option<Vec<PathBuf>>,
+    write_roots_override: Option<Vec<PathBuf>>,
+    deny_write_paths_override: Option<Vec<PathBuf>>,
+) -> Result<()> {
+    run_setup_refresh_inner(
+        policy,
+        policy_cwd,
+        command_cwd,
+        env_map,
+        codex_home,
+        read_roots_override,
+        write_roots_override,
+        deny_write_paths_override,
     )
 }
 
@@ -108,6 +131,7 @@ pub fn run_setup_refresh_with_extra_read_roots(
         codex_home,
         Some(read_roots),
         Some(Vec::new()),
+        None,
     )
 }
 
@@ -119,6 +143,7 @@ fn run_setup_refresh_inner(
     codex_home: &Path,
     read_roots_override: Option<Vec<PathBuf>>,
     write_roots_override: Option<Vec<PathBuf>>,
+    deny_write_paths_override: Option<Vec<PathBuf>>,
 ) -> Result<()> {
     // Skip in danger-full-access.
     if matches!(
@@ -144,6 +169,7 @@ fn run_setup_refresh_inner(
         command_cwd: command_cwd.to_path_buf(),
         read_roots,
         write_roots,
+        deny_write_paths: deny_write_paths_override.unwrap_or_default(),
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         refresh_only: true,
     };
@@ -348,6 +374,8 @@ struct ElevationPayload {
     command_cwd: PathBuf,
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
+    #[serde(default)]
+    deny_write_paths: Vec<PathBuf>,
     real_user: String,
     #[serde(default)]
     refresh_only: bool,
@@ -540,6 +568,28 @@ pub fn run_elevated_setup(
     read_roots_override: Option<Vec<PathBuf>>,
     write_roots_override: Option<Vec<PathBuf>>,
 ) -> Result<()> {
+    run_elevated_setup_with_overrides(
+        policy,
+        policy_cwd,
+        command_cwd,
+        env_map,
+        codex_home,
+        read_roots_override,
+        write_roots_override,
+        None,
+    )
+}
+
+pub fn run_elevated_setup_with_overrides(
+    policy: &SandboxPolicy,
+    policy_cwd: &Path,
+    command_cwd: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+    read_roots_override: Option<Vec<PathBuf>>,
+    write_roots_override: Option<Vec<PathBuf>>,
+    deny_write_paths_override: Option<Vec<PathBuf>>,
+) -> Result<()> {
     // Ensure the shared sandbox directory exists before we send it to the elevated helper.
     let sbx_dir = sandbox_dir(codex_home);
     std::fs::create_dir_all(&sbx_dir).map_err(|err| {
@@ -565,6 +615,7 @@ pub fn run_elevated_setup(
         command_cwd: command_cwd.to_path_buf(),
         read_roots,
         write_roots,
+        deny_write_paths: deny_write_paths_override.unwrap_or_default(),
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         refresh_only: false,
     };
