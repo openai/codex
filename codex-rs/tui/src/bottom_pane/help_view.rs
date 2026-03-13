@@ -363,6 +363,13 @@ impl BottomPaneView for SlashHelpView {
                 ..
             } => self.scroll_by(MAX_POPUP_ROWS as isize),
             KeyEvent {
+                code: KeyCode::Esc, ..
+            } if !self.search.active_query.is_empty() => {
+                self.search.active_query.clear();
+                self.search.selected_match = 0;
+                self.follow_selected_match.set(false);
+            }
+            KeyEvent {
                 code: KeyCode::Char('q'),
                 modifiers: KeyModifiers::NONE,
                 ..
@@ -393,7 +400,7 @@ impl BottomPaneView for SlashHelpView {
     }
 
     fn prefer_esc_to_handle_key_event(&self) -> bool {
-        self.search.input.is_some()
+        self.search.input.is_some() || !self.search.active_query.is_empty()
     }
 }
 

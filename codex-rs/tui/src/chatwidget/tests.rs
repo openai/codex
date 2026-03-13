@@ -6111,6 +6111,33 @@ async fn slash_help_esc_dismisses_popup() {
 }
 
 #[tokio::test]
+async fn slash_help_esc_clears_active_search_before_dismissing_popup() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Help);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char('/')));
+    for ch in "toggle".chars() {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+    }
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let active = render_bottom_popup(&chat, 100);
+    assert!(active.contains("1/3 |"));
+    assert!(chat.bottom_pane.has_active_view());
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+    let cleared = render_bottom_popup(&chat, 100);
+    assert!(chat.bottom_pane.has_active_view());
+    assert!(!cleared.contains("1/3 |"));
+    assert!(!cleared.contains("n/p match"));
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+    assert!(!chat.bottom_pane.has_active_view());
+}
+
+#[tokio::test]
 async fn slash_help_q_dismisses_popup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
