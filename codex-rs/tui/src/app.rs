@@ -1164,6 +1164,12 @@ impl App {
         self.sync_btw_footer_hint();
     }
 
+    /// Shows or clears the BTW footer hint based on the currently displayed thread.
+    ///
+    /// BTW threads are tracked as a parent-pointer chain in `btw_parent_threads`. When the active
+    /// transcript belongs to that chain, this computes the visible nesting depth and disables
+    /// rename actions for the ephemeral BTW session. When the displayed thread is not BTW-backed,
+    /// it removes the BTW footer override and restores normal rename behavior.
     fn sync_btw_footer_hint(&mut self) {
         let Some(active_thread_id) = self.current_displayed_thread_id() else {
             self.chat_widget.set_footer_hint_override(None);
@@ -1200,6 +1206,12 @@ impl App {
             .and_then(|thread_id| self.btw_parent_threads.get(&thread_id).copied())
     }
 
+    /// Registers an already-running thread with the TUI without replacing the current session.
+    ///
+    /// Unlike `/fork` and `/resume`, which swap the active `ChatWidget`, this is for parallel live
+    /// threads such as BTW children and background agent threads. It seeds the thread's replay
+    /// channel with a `SessionConfigured` event, starts the event-listener task, and optionally
+    /// exposes the thread in agent navigation.
     async fn attach_live_thread(
         &mut self,
         thread_id: ThreadId,
@@ -1244,6 +1256,12 @@ impl App {
         Ok(())
     }
 
+    /// Shuts down and forgets one ephemeral BTW thread.
+    ///
+    /// This removes the thread from the core thread manager, aborts its listener task, clears any
+    /// TUI bookkeeping for replay/navigation, and recomputes the footer state. Callers that are
+    /// leaving a nested BTW stack are responsible for discarding the whole hidden chain in the
+    /// correct order.
     async fn discard_btw_thread(&mut self, thread_id: ThreadId) {
         if self.chat_widget.thread_id() == Some(thread_id) {
             self.backtrack.pending_rollback = None;
