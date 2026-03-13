@@ -2916,6 +2916,54 @@ impl App {
                     let _ = preset;
                 }
             }
+            AppEvent::BeginWindowsSandboxLegacySetup { preset } => {
+                #[cfg(target_os = "windows")]
+                {
+                    let policy = preset.sandbox.clone();
+                    let policy_cwd = self.config.cwd.clone();
+                    let command_cwd = policy_cwd.clone();
+                    let env_map: std::collections::HashMap<String, String> =
+                        std::env::vars().collect();
+                    let codex_home = self.config.codex_home.clone();
+
+                    let result = tokio::task::spawn_blocking(move || {
+                        codex_core::windows_sandbox::run_legacy_setup_preflight(
+                            &policy,
+                            policy_cwd.as_path(),
+                            command_cwd.as_path(),
+                            &env_map,
+                            codex_home.as_path(),
+                        )
+                    })
+                    .await
+                    .map_err(|join_err| {
+                        anyhow::anyhow!("legacy Windows sandbox setup task failed: {join_err}")
+                    })?;
+
+                    match result {
+                        Ok(()) => {
+                            self.app_event_tx
+                                .send(AppEvent::EnableWindowsSandboxForAgentMode {
+                                    preset,
+                                    mode: WindowsSandboxEnableMode::Legacy,
+                                });
+                        }
+                        Err(err) => {
+                            tracing::error!(
+                                error = %err,
+                                "failed to run legacy Windows sandbox setup preflight"
+                            );
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to enable the Windows sandbox feature: {err}"
+                            ));
+                        }
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = preset;
+                }
+            }
             AppEvent::BeginWindowsSandboxGrantReadRoot { path } => {
                 #[cfg(target_os = "windows")]
                 {

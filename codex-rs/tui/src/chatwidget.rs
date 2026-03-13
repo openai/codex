@@ -4921,9 +4921,8 @@ impl ChatWidget {
                                     .send(AppEvent::BeginWindowsSandboxElevatedSetup { preset });
                             }
                             WindowsSandboxEnableMode::Legacy => {
-                                self.app_event_tx.send(
-                                    AppEvent::EnableWindowsSandboxForAgentMode { preset, mode },
-                                );
+                                self.app_event_tx
+                                    .send(AppEvent::BeginWindowsSandboxLegacySetup { preset });
                             }
                         }
                         return QueueReplayControl::Stop;
@@ -8782,9 +8781,8 @@ impl ChatWidget {
                     name: "Enable experimental sandbox".to_string(),
                     description: None,
                     actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
+                        tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
                             preset: preset_clone.clone(),
-                            mode: WindowsSandboxEnableMode::Legacy,
                         });
                     })],
                     dismiss_on_select: true,
