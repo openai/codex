@@ -682,10 +682,10 @@ pub(crate) struct App {
 
     /// One-shot guard used while switching threads.
     ///
-    /// We set this when intentionally stopping the current thread before moving
-    /// to another one, then ignore exactly one `ShutdownComplete` so it is not
-    /// misclassified as an unexpected sub-agent death.
-    suppress_shutdown_complete: bool,
+    /// We set this to the specific thread we are intentionally stopping before
+    /// moving to another one, then ignore that thread's `ShutdownComplete` so
+    /// it is not misclassified as an unexpected sub-agent death.
+    suppress_shutdown_complete_thread_id: Option<ThreadId>,
     /// Tracks the thread we intentionally shut down while exiting the app.
     ///
     /// When this matches the active thread, its `ShutdownComplete` should lead to
@@ -987,7 +987,7 @@ impl App {
         if let Some(thread_id) = self.chat_widget.thread_id() {
             // Clear any in-flight rollback guard when switching threads.
             self.backtrack.pending_rollback = None;
-            self.suppress_shutdown_complete = true;
+            self.suppress_shutdown_complete_thread_id = Some(thread_id);
             self.chat_widget.submit_op(Op::Shutdown);
             self.server.remove_thread(&thread_id).await;
             self.abort_thread_event_listener(thread_id);
@@ -1214,7 +1214,7 @@ impl App {
     async fn discard_btw_thread(&mut self, thread_id: ThreadId) {
         if self.chat_widget.thread_id() == Some(thread_id) {
             self.backtrack.pending_rollback = None;
-            self.suppress_shutdown_complete = true;
+            self.suppress_shutdown_complete_thread_id = Some(thread_id);
             self.chat_widget.submit_op(Op::Shutdown);
         } else if let Ok(thread) = self.server.get_thread(thread_id).await {
             let _ = thread.submit(Op::Shutdown).await;
@@ -1460,6 +1460,9 @@ impl App {
     async fn open_agent_picker(&mut self) {
         let thread_ids: Vec<ThreadId> = self.thread_event_channels.keys().cloned().collect();
         for thread_id in thread_ids {
+            if self.btw_parent_threads.contains_key(&thread_id) {
+                continue;
+            }
             match self.server.get_thread(thread_id).await {
                 Ok(thread) => {
                     let session_source = thread.config_snapshot().await.session_source;
@@ -2043,7 +2046,7 @@ impl App {
             feedback: feedback.clone(),
             feedback_audience,
             pending_update_action: None,
-            suppress_shutdown_complete: false,
+            suppress_shutdown_complete_thread_id: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
@@ -2129,7 +2132,11 @@ impl App {
                     app.active_thread_rx.is_some()
                 ) => {
                     if let Some(event) = active {
-                        app.handle_active_thread_event(tui, event).await?;
+                        if let AppRunControl::Exit(reason) =
+                            app.handle_active_thread_event(tui, event).await?
+                        {
+                            break reason;
+                        }
                     } else {
                         app.clear_active_thread().await;
                     }
@@ -3347,9 +3354,6 @@ Answer the user's side question directly and concisely.\n\
                 self.chat_widget.open_approvals_popup();
             }
             AppEvent::OpenAgentPicker => {
-                if let Some(parent_thread_id) = self.active_btw_parent_thread() {
-                    self.select_agent_thread(tui, parent_thread_id).await?;
-                }
                 self.open_agent_picker().await;
             }
             AppEvent::SelectAgentThread(thread_id) => {
@@ -3622,8 +3626,10 @@ Answer the user's side question directly and concisely.\n\
         // This guard is only for intentional thread-switch shutdowns.
         // App-exit shutdowns are tracked by `pending_shutdown_exit_thread_id`
         // and resolved in `handle_active_thread_event`.
-        if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
-            self.suppress_shutdown_complete = false;
+        if matches!(event.msg, EventMsg::ShutdownComplete)
+            && self.suppress_shutdown_complete_thread_id == self.current_displayed_thread_id()
+        {
+            self.suppress_shutdown_complete_thread_id = None;
             return;
         }
         if let EventMsg::ListSkillsResponse(response) = &event.msg {
@@ -3648,7 +3654,11 @@ Answer the user's side question directly and concisely.\n\
     /// This function enforces shutdown intent routing: unexpected non-primary
     /// thread shutdowns fail over to the primary thread, while user-requested
     /// app exits consume only the tracked shutdown completion and then proceed.
-    async fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
+    async fn handle_active_thread_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        event: Event,
+    ) -> Result<AppRunControl> {
         // Capture this before any potential thread switch: we only want to clear
         // the exit marker when the currently active thread acknowledges shutdown.
         let pending_shutdown_exit_completed = matches!(&event.msg, EventMsg::ShutdownComplete)
@@ -3680,7 +3690,7 @@ Answer the user's side question directly and concisely.\n\
                     "Agent thread {closed_thread_id} closed. Failed to switch back to main thread {primary_thread_id}.",
                 ));
             }
-            return Ok(());
+            return Ok(AppRunControl::Continue);
         }
 
         if pending_shutdown_exit_completed {
@@ -3689,10 +3699,13 @@ Answer the user's side question directly and concisely.\n\
             self.pending_shutdown_exit_thread_id = None;
         }
         self.handle_codex_event_now(event);
+        if pending_shutdown_exit_completed {
+            return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+        }
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
         }
-        Ok(())
+        Ok(AppRunControl::Continue)
     }
 
     async fn handle_thread_created(&mut self, thread_id: ThreadId) -> Result<()> {
@@ -5320,6 +5333,16 @@ mod tests {
             found_user_prompt,
             "expected BTW user prompt cell, got {rendered_cells:?}"
         );
+        let forked_idx = rendered_cells
+            .iter()
+            .position(|rendered| rendered.contains("Thread forked from"));
+        let user_prompt_idx = rendered_cells
+            .iter()
+            .position(|rendered| rendered.contains("explore the codebase"));
+        assert!(
+            matches!((forked_idx, user_prompt_idx), (Some(forked), Some(prompt)) if forked < prompt),
+            "expected fork banner before BTW prompt, got {rendered_cells:?}"
+        );
 
         app.handle_key_event(&mut tui, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
             .await;
@@ -5351,7 +5374,71 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_agent_picker_discards_active_btw_thread() -> Result<()> {
+    async fn idle_main_thread_ctrl_c_requests_shutdown_exit() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut tui = make_test_tui();
+
+        let parent_thread_id = setup_btw_parent_thread(&mut app, None).await?;
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.handle_key_event(
+            &mut tui,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        )
+        .await;
+
+        let mut exit_mode = None;
+        while let Ok(app_event) = app_event_rx.try_recv() {
+            if let AppEvent::Exit(mode) = app_event {
+                exit_mode = Some(mode);
+                break;
+            }
+        }
+        assert_eq!(app.active_thread_id, Some(parent_thread_id));
+        assert_eq!(app.active_btw_parent_thread(), None);
+        assert_eq!(exit_mode, Some(ExitMode::ShutdownFirst));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ctrl_c_after_returning_from_btw_requests_shutdown_exit() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut tui = make_test_tui();
+
+        let parent_thread_id = setup_btw_parent_thread(&mut app, None).await?;
+        let child_thread_id = start_btw_thread(&mut app, &mut tui, parent_thread_id).await?;
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.handle_key_event(
+            &mut tui,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        )
+        .await;
+
+        assert_eq!(app.active_thread_id, Some(parent_thread_id));
+        assert_eq!(app.active_btw_parent_thread(), None);
+        assert!(!app.thread_event_channels.contains_key(&child_thread_id));
+        while app_event_rx.try_recv().is_ok() {}
+
+        app.handle_key_event(
+            &mut tui,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        )
+        .await;
+
+        let mut exit_mode = None;
+        while let Ok(app_event) = app_event_rx.try_recv() {
+            if let AppEvent::Exit(mode) = app_event {
+                exit_mode = Some(mode);
+                break;
+            }
+        }
+        assert_eq!(exit_mode, Some(ExitMode::ShutdownFirst));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn open_agent_picker_keeps_active_btw_thread_until_selection() -> Result<()> {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let mut tui = make_test_tui();
 
@@ -5362,10 +5449,18 @@ mod tests {
             .handle_event(&mut tui, AppEvent::OpenAgentPicker)
             .await?;
         assert!(matches!(control, AppRunControl::Continue));
+        assert_eq!(app.active_thread_id, Some(child_thread_id));
+        assert_eq!(app.active_btw_parent_thread(), Some(parent_thread_id));
+        assert!(app.thread_event_channels.contains_key(&child_thread_id));
+        assert_eq!(app.agent_navigation.get(&child_thread_id), None);
+
+        let control = app
+            .handle_event(&mut tui, AppEvent::SelectAgentThread(parent_thread_id))
+            .await?;
+        assert!(matches!(control, AppRunControl::Continue));
         assert_eq!(app.active_thread_id, Some(parent_thread_id));
         assert_eq!(app.active_btw_parent_thread(), None);
         assert!(!app.thread_event_channels.contains_key(&child_thread_id));
-        assert_eq!(app.agent_navigation.get(&child_thread_id), None);
         Ok(())
     }
 
@@ -5916,7 +6011,7 @@ mod tests {
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
             pending_update_action: None,
-            suppress_shutdown_complete: false,
+            suppress_shutdown_complete_thread_id: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
@@ -5977,7 +6072,7 @@ mod tests {
                 feedback: codex_feedback::CodexFeedback::new(),
                 feedback_audience: FeedbackAudience::External,
                 pending_update_action: None,
-                suppress_shutdown_complete: false,
+                suppress_shutdown_complete_thread_id: None,
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
                 thread_event_channels: HashMap::new(),
@@ -7122,6 +7217,35 @@ mod tests {
         assert_eq!(app.pending_shutdown_exit_thread_id, Some(thread_id));
         assert!(matches!(control, AppRunControl::Continue));
         assert_eq!(op_rx.try_recv(), Ok(Op::Shutdown));
+    }
+
+    #[tokio::test]
+    async fn shutdown_first_exit_matching_shutdown_complete_exits() -> Result<()> {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let mut tui = make_test_tui();
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+        app.primary_thread_id = Some(thread_id);
+
+        let control = app.handle_exit_mode(ExitMode::ShutdownFirst);
+        assert!(matches!(control, AppRunControl::Continue));
+        assert_eq!(op_rx.try_recv(), Ok(Op::Shutdown));
+
+        let control = app
+            .handle_active_thread_event(
+                &mut tui,
+                Event {
+                    id: "shutdown-complete".to_string(),
+                    msg: EventMsg::ShutdownComplete,
+                },
+            )
+            .await?;
+        assert!(matches!(
+            control,
+            AppRunControl::Exit(ExitReason::UserRequested)
+        ));
+        assert_eq!(app.pending_shutdown_exit_thread_id, None);
+        Ok(())
     }
 
     #[tokio::test]

@@ -536,20 +536,12 @@ async fn replayed_user_message_with_only_local_images_does_not_render_history_ce
 }
 
 #[tokio::test]
-async fn forked_thread_history_line_includes_name_and_id_snapshot() {
+async fn forked_thread_history_line_snapshot() {
     let (chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let mut chat = chat;
-    let temp = tempdir().expect("tempdir");
-    chat.config.codex_home = temp.path().to_path_buf();
+    let chat = chat;
 
     let forked_from_id =
         ThreadId::from_string("e9f18a88-8081-4e51-9d4e-8af5cde2d8dd").expect("forked id");
-    let session_index_entry = format!(
-        "{{\"id\":\"{forked_from_id}\",\"thread_name\":\"named-thread\",\"updated_at\":\"2024-01-02T00:00:00Z\"}}\n"
-    );
-    std::fs::write(temp.path().join("session_index.jsonl"), session_index_entry)
-        .expect("write session index");
-
     chat.emit_forked_thread_event(forked_from_id);
 
     let history_cell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
@@ -575,9 +567,7 @@ async fn forked_thread_history_line_includes_name_and_id_snapshot() {
 #[tokio::test]
 async fn forked_thread_history_line_without_name_shows_id_once_snapshot() {
     let (chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let mut chat = chat;
-    let temp = tempdir().expect("tempdir");
-    chat.config.codex_home = temp.path().to_path_buf();
+    let chat = chat;
 
     let forked_from_id =
         ThreadId::from_string("019c2d47-4935-7423-a190-05691f566092").expect("forked id");
