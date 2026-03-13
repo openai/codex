@@ -8906,6 +8906,28 @@ async fn serialized_disabled_fast_slash_draft_is_rejected_immediately() {
 }
 
 #[tokio::test]
+async fn queued_disabled_fast_slash_draft_is_rejected_on_replay() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::FastMode, false);
+    chat.on_task_started();
+    chat.queued_user_messages.push_back("/fast on".into());
+
+    chat.bottom_pane.set_task_running(false);
+    chat.drain_queued_inputs_until_blocked();
+
+    assert_no_submit_op(&mut op_rx);
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(chat.bottom_pane.composer_text(), "/fast on");
+
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(
+        lines_to_single_string(&inserted[0]).contains("/fast is not available in this session.")
+    );
+}
+
+#[tokio::test]
 async fn user_turn_carries_service_tier_after_fast_toggle() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.thread_id = Some(ThreadId::new());

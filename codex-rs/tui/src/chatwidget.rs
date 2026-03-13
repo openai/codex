@@ -5811,8 +5811,11 @@ impl ChatWidget {
         Some((cmd, rest, rest_offset))
     }
 
-    fn is_builtin_slash_draft(&self, draft: &UserMessage) -> bool {
-        self.parse_builtin_slash_command(&draft.text).is_some()
+    fn is_known_slash_draft(&self, draft: &UserMessage) -> bool {
+        let Some((name, _, _)) = parse_slash_name(&draft.text) else {
+            return false;
+        };
+        !name.contains('/') && SlashCommand::from_str(name).is_ok()
     }
 
     fn reject_unavailable_builtin_slash_command(&mut self, user_message: &UserMessage) -> bool {
@@ -6920,7 +6923,7 @@ impl ChatWidget {
             let Some(queued_message) = self.queued_user_messages.pop_front() else {
                 break;
             };
-            let replay_control = if self.is_builtin_slash_draft(&queued_message) {
+            let replay_control = if self.is_known_slash_draft(&queued_message) {
                 self.execute_serialized_slash_command(queued_message)
             } else {
                 self.submit_user_message(queued_message);
