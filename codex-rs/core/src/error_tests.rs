@@ -427,7 +427,7 @@ fn unexpected_status_includes_identity_auth_details() {
         status: StatusCode::UNAUTHORIZED,
         body: "plain text error".to_string(),
         url: Some("https://chatgpt.com/backend-api/codex/models".to_string()),
-        cf_ray: Some("9daa94119a96d1e1-ICN".to_string()),
+        cf_ray: Some("cf-ray-auth-401-test".to_string()),
         request_id: Some("req-auth".to_string()),
         identity_authorization_error: Some("missing_authorization_header".to_string()),
         identity_error_code: Some("token_expired".to_string()),
@@ -436,7 +436,7 @@ fn unexpected_status_includes_identity_auth_details() {
     assert_eq!(
         err.to_string(),
         format!(
-            "unexpected status {status}: plain text error, url: https://chatgpt.com/backend-api/codex/models, cf-ray: 9daa94119a96d1e1-ICN, request id: req-auth, auth error: missing_authorization_header, auth error code: token_expired"
+            "unexpected status {status}: plain text error, url: https://chatgpt.com/backend-api/codex/models, cf-ray: cf-ray-auth-401-test, request id: req-auth, auth error: missing_authorization_header, auth error code: token_expired"
         )
     );
 }
