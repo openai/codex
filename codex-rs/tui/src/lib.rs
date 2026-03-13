@@ -1002,7 +1002,7 @@ async fn run_ratatui_app(
 
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
-    let app_server = match start_embedded_app_server(
+    let embedded_app_server = match start_embedded_app_server(
         arg0_paths,
         config.clone(),
         cli_kv_overrides.clone(),
@@ -1022,7 +1022,7 @@ async fn run_ratatui_app(
 
     let app_result = App::run(
         &mut tui,
-        app_server,
+        embedded_app_server,
         config,
         cli_kv_overrides.clone(),
         overrides.clone(),
