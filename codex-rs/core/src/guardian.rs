@@ -321,7 +321,7 @@ async fn run_guardian_review(
         )
         .await;
 
-    let denied_action = action_summary.clone();
+    let terminal_action = action_summary.clone();
     let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, request).await;
     let schema = guardian_output_schema();
     let cancel_token = CancellationToken::new();
@@ -412,7 +412,6 @@ async fn run_guardian_review(
     } else {
         GuardianAssessmentStatus::Denied
     };
-    let action = (!approved).then_some(denied_action);
     session
         .send_event(
             turn.as_ref(),
@@ -423,7 +422,7 @@ async fn run_guardian_review(
                 risk_score: Some(assessment.risk_score),
                 risk_level: Some(assessment.risk_level),
                 rationale: Some(assessment.rationale.clone()),
-                action,
+                action: Some(terminal_action),
             }),
         )
         .await;
