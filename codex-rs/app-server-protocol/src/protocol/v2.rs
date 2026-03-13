@@ -4739,7 +4739,8 @@ pub struct ItemStartedNotification {
 /// review. This shape is expected to change soon.
 ///
 /// TODO(ccunningham): Attach guardian review state to the reviewed tool item's
-/// lifecycle instead of sending separate standalone review notifications.
+/// lifecycle instead of sending separate standalone review notifications so the
+/// app-server API can persist and replay review state via `thread/read`.
 pub struct ItemGuardianApprovalReviewStartedNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -4755,7 +4756,8 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
 /// review. This shape is expected to change soon.
 ///
 /// TODO(ccunningham): Attach guardian review state to the reviewed tool item's
-/// lifecycle instead of sending separate standalone review notifications.
+/// lifecycle instead of sending separate standalone review notifications so the
+/// app-server API can persist and replay review state via `thread/read`.
 pub struct ItemGuardianApprovalReviewCompletedNotification {
     pub thread_id: String,
     pub turn_id: String,

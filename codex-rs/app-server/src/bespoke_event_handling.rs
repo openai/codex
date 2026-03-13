@@ -194,7 +194,8 @@ fn guardian_auto_approval_review_notification(
     assessment: &GuardianAssessmentEvent,
 ) -> ServerNotification {
     // TODO(ccunningham): Attach guardian review state to the reviewed tool
-    // item's lifecycle instead of sending standalone review notifications.
+    // item's lifecycle instead of sending standalone review notifications so
+    // the app-server API can persist and replay review state via `thread/read`.
     let turn_id = if assessment.turn_id.is_empty() {
         event_turn_id.to_string()
     } else {

@@ -9,6 +9,7 @@ import type { GuardianApprovalReview } from "./GuardianApprovalReview";
  * review. This shape is expected to change soon.
  *
  * TODO(ccunningham): Attach guardian review state to the reviewed tool item's
- * lifecycle instead of sending separate standalone review notifications.
+ * lifecycle instead of sending separate standalone review notifications so the
+ * app-server API can persist and replay review state via `thread/read`.
  */
 export type ItemGuardianApprovalReviewStartedNotification = { threadId: string, turnId: string, targetItemId: string, review: GuardianApprovalReview, action: JsonValue | null, };
