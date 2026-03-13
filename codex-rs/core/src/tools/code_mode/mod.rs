@@ -62,14 +62,27 @@ enum CodeModeExecutionStatus {
     Terminated,
 }
 
-pub(crate) fn tool_description(enabled_tool_names: &[String]) -> String {
-    let enabled_list = if enabled_tool_names.is_empty() {
-        "none".to_string()
-    } else {
-        enabled_tool_names.join(", ")
-    };
+pub(crate) fn tool_description(enabled_tools: &[(String, String)]) -> String {
+    if enabled_tools.is_empty() {
+        return format!(
+            "{}\n- Enabled nested tools: none.",
+            CODE_MODE_DESCRIPTION_TEMPLATE.trim_end()
+        );
+    }
+
+    let nested_tool_reference = enabled_tools
+        .iter()
+        .map(|(name, nested_description)| {
+            let global_name = normalize_code_mode_identifier(name);
+            format!(
+                "### `{global_name}` (`{name}`)\n{}",
+                nested_description.trim()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
     format!(
-        "{}\n- Enabled nested tools: {enabled_list}.",
+        "{}\n\n{nested_tool_reference}",
         CODE_MODE_DESCRIPTION_TEMPLATE.trim_end()
     )
 }

@@ -226,6 +226,7 @@ pub(crate) struct ToolsConfig {
     pub exec_permission_approvals_enabled: bool,
     pub request_permissions_tool_enabled: bool,
     pub code_mode_enabled: bool,
+    pub code_mode_only_enabled: bool,
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
     pub can_request_original_image_detail: bool,
@@ -274,6 +275,7 @@ impl ToolsConfig {
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_code_mode = features.enabled(Feature::CodeMode);
+        let include_code_mode_only = include_code_mode && features.enabled(Feature::CodeModeOnly);
         let include_js_repl = features.enabled(Feature::JsRepl);
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
@@ -363,6 +365,7 @@ impl ToolsConfig {
             exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
             code_mode_enabled: include_code_mode,
+            code_mode_only_enabled: include_code_mode_only,
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
             can_request_original_image_detail: include_original_image_detail,
@@ -394,6 +397,7 @@ impl ToolsConfig {
     pub fn for_code_mode_nested_tools(&self) -> Self {
         let mut nested = self.clone();
         nested.code_mode_enabled = false;
+        nested.code_mode_only_enabled = false;
         nested
     }
 }
@@ -1995,7 +1999,7 @@ fn create_js_repl_reset_tool() -> ToolSpec {
     })
 }
 
-fn create_code_mode_tool(enabled_tool_names: &[String]) -> ToolSpec {
+fn create_code_mode_tool(enabled_tools: &[(String, String)]) -> ToolSpec {
     const CODE_MODE_FREEFORM_GRAMMAR: &str = r#"
 start: pragma_source | plain_source
 pragma_source: PRAGMA_LINE NEWLINE SOURCE
@@ -2008,7 +2012,7 @@ SOURCE: /[\s\S]+/
 
     ToolSpec::Freeform(FreeformTool {
         name: PUBLIC_TOOL_NAME.to_string(),
-        description: code_mode_tool_description(enabled_tool_names),
+        description: code_mode_tool_description(enabled_tools),
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
             syntax: "lark".to_string(),
@@ -2017,10 +2021,20 @@ SOURCE: /[\s\S]+/
     })
 }
 
-fn is_code_mode_nested_tool(spec: &ToolSpec) -> bool {
-    spec.name() != PUBLIC_TOOL_NAME
-        && spec.name() != WAIT_TOOL_NAME
-        && matches!(spec, ToolSpec::Function(_) | ToolSpec::Freeform(_))
+fn code_mode_nested_tool_details(spec: ToolSpec) -> Option<(String, String)> {
+    match spec {
+        ToolSpec::Function(tool)
+            if tool.name != PUBLIC_TOOL_NAME && tool.name != WAIT_TOOL_NAME =>
+        {
+            Some((tool.name, tool.description))
+        }
+        ToolSpec::Freeform(tool)
+            if tool.name != PUBLIC_TOOL_NAME && tool.name != WAIT_TOOL_NAME =>
+        {
+            Some((tool.name, tool.description))
+        }
+        _ => None,
+    }
 }
 
 fn create_list_mcp_resources_tool() -> ToolSpec {
@@ -2475,17 +2489,16 @@ pub(crate) fn build_specs_with_discoverable_tools(
             dynamic_tools,
         )
         .build();
-        let mut enabled_tool_names = nested_specs
+        let mut enabled_tools = nested_specs
             .into_iter()
-            .map(|spec| spec.spec)
-            .filter(is_code_mode_nested_tool)
-            .map(|spec| spec.name().to_string())
+            .map(|spec| augment_tool_spec_for_code_mode(spec.spec, true))
+            .filter_map(code_mode_nested_tool_details)
             .collect::<Vec<_>>();
-        enabled_tool_names.sort();
-        enabled_tool_names.dedup();
+        enabled_tools.sort_by(|left, right| left.0.cmp(&right.0));
+        enabled_tools.dedup_by(|left, right| left.0 == right.0);
         push_tool_spec(
             &mut builder,
-            create_code_mode_tool(&enabled_tool_names),
+            create_code_mode_tool(&enabled_tools),
             false,
             config.code_mode_enabled,
         );
@@ -2497,6 +2510,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
             config.code_mode_enabled,
         );
         builder.register_handler(WAIT_TOOL_NAME, code_mode_wait_handler);
+
+        if config.code_mode_only_enabled {
+            return builder;
+        }
     }
 
     match &config.shell_type {

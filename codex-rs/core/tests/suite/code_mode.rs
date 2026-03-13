@@ -37,6 +37,23 @@ fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value>
     }
 }
 
+fn tool_names(body: &Value) -> Vec<String> {
+    body.get("tools")
+        .and_then(Value::as_array)
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| {
+                    tool.get("name")
+                        .or_else(|| tool.get("type"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn function_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
     match req.function_call_output(call_id).get("output") {
         Some(Value::Array(items)) => items.clone(),
@@ -229,6 +246,36 @@ text(JSON.stringify(await tools.exec_command({ cmd: "printf code_mode_exec_marke
     assert_eq!(parsed.get("exit_code").and_then(Value::as_i64), Some(0));
     assert!(parsed.get("wall_time_seconds").is_some());
     assert!(parsed.get("session_id").is_none());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let resp_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        let _ = config.features.enable(Feature::CodeModeOnly);
+    });
+    let test = builder.build(&server).await?;
+    test.submit_turn("list tools in code mode only").await?;
+
+    let first_body = resp_mock.single_request().body_json();
+    assert_eq!(
+        tool_names(&first_body),
+        vec!["exec".to_string(), "exec_wait".to_string()]
+    );
 
     Ok(())
 }
