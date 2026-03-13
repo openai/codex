@@ -662,6 +662,9 @@ impl ConfigBuilder {
 ///
 /// If the old key is present and enabled, this preserves the enabled state by
 /// setting `smart_approvals = true` when the new key is not already present.
+/// Because the deprecated flag historically meant "turn guardian review on",
+/// this migration also backfills `approvals_reviewer = "guardian_subagent"`
+/// in the same scope when that reviewer is not already configured there.
 /// In all cases it removes the deprecated `guardian_approval` entry so future
 /// loads only see the canonical feature flag name.
 async fn maybe_migrate_guardian_approval_alias(codex_home: &Path) -> std::io::Result<bool> {
@@ -686,6 +689,12 @@ async fn maybe_migrate_guardian_approval_alias(codex_home: &Path) -> std::io::Re
                 value: value(true),
             });
         }
+        if enabled && config_toml.approvals_reviewer.is_none() {
+            edits.push(ConfigEdit::SetPath {
+                segments: vec!["approvals_reviewer".to_string()],
+                value: value(ApprovalsReviewer::GuardianSubagent.to_string()),
+            });
+        }
         edits.push(ConfigEdit::ClearPath {
             segments: vec!["features".to_string(), "guardian_approval".to_string()],
         });
@@ -704,6 +713,16 @@ async fn maybe_migrate_guardian_approval_alias(codex_home: &Path) -> std::io::Re
                         "smart_approvals".to_string(),
                     ],
                     value: value(true),
+                });
+            }
+            if enabled && profile.approvals_reviewer.is_none() {
+                edits.push(ConfigEdit::SetPath {
+                    segments: vec![
+                        "profiles".to_string(),
+                        profile_name.clone(),
+                        "approvals_reviewer".to_string(),
+                    ],
+                    value: value(ApprovalsReviewer::GuardianSubagent.to_string()),
                 });
             }
             edits.push(ConfigEdit::ClearPath {

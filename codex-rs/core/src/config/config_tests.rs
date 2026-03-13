@@ -5594,9 +5594,14 @@ guardian_approval = true
 
     assert!(config.features.enabled(Feature::GuardianApproval));
     assert_eq!(config.features.legacy_feature_usages().count(), 0);
+    assert_eq!(
+        config.approvals_reviewer,
+        ApprovalsReviewer::GuardianSubagent
+    );
 
     let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
     assert!(serialized.contains("smart_approvals = true"));
+    assert!(serialized.contains("approvals_reviewer = \"guardian_subagent\""));
     assert!(!serialized.contains("guardian_approval"));
 
     Ok(())
@@ -5622,10 +5627,45 @@ guardian_approval = true
 
     assert!(config.features.enabled(Feature::GuardianApproval));
     assert_eq!(config.features.legacy_feature_usages().count(), 0);
+    assert_eq!(
+        config.approvals_reviewer,
+        ApprovalsReviewer::GuardianSubagent
+    );
 
     let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
     assert!(serialized.contains("[profiles.guardian.features]"));
     assert!(serialized.contains("smart_approvals = true"));
+    assert!(serialized.contains("approvals_reviewer = \"guardian_subagent\""));
+    assert!(!serialized.contains("guardian_approval"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn guardian_approval_alias_migration_preserves_existing_approvals_reviewer()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"approvals_reviewer = "user"
+
+[features]
+guardian_approval = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(config.features.enabled(Feature::GuardianApproval));
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    assert!(serialized.contains("smart_approvals = true"));
+    assert!(serialized.contains("approvals_reviewer = \"user\""));
     assert!(!serialized.contains("guardian_approval"));
 
     Ok(())
