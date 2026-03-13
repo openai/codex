@@ -78,13 +78,7 @@ pub enum SandboxMode {
 /// decision framework before approving or denying the request.
 pub enum ApprovalsReviewer {
     #[default]
-    #[serde(rename = "user", alias = "manual-only")]
     User,
-    #[serde(
-        rename = "guardian_subagent",
-        alias = "auto-only",
-        alias = "guardian-subagent"
-    )]
     GuardianSubagent,
 }
 

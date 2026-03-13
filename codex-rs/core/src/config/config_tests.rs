@@ -5577,27 +5577,6 @@ approvals_reviewer = "guardian_subagent"
 }
 
 #[tokio::test]
-async fn legacy_approval_review_policy_alias_and_values_still_deserialize() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        "approval_review_policy = \"auto-only\"\n",
-    )?;
-
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
-
-    assert_eq!(
-        config.approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn guardian_approval_alias_is_migrated_to_smart_approvals() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(

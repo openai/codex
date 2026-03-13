@@ -857,10 +857,9 @@ impl App {
         let mut sandbox_policy_override = None;
         let approvals_reviewer_config_scope = || {
             let effective_config = self.config.config_layer_stack.effective_config();
-            let root_configured = effective_config.as_table().is_some_and(|table| {
-                table.contains_key("approvals_reviewer")
-                    || table.contains_key("approval_review_policy")
-            });
+            let root_configured = effective_config
+                .as_table()
+                .is_some_and(|table| table.contains_key("approvals_reviewer"));
             let profile_configured = self.active_profile.as_deref().is_some_and(|profile| {
                 effective_config
                     .as_table()
@@ -868,10 +867,7 @@ impl App {
                     .and_then(TomlValue::as_table)
                     .and_then(|profiles| profiles.get(profile))
                     .and_then(TomlValue::as_table)
-                    .is_some_and(|profile_config| {
-                        profile_config.contains_key("approvals_reviewer")
-                            || profile_config.contains_key("approval_review_policy")
-                    })
+                    .is_some_and(|profile_config| profile_config.contains_key("approvals_reviewer"))
             });
             (root_configured, profile_configured)
         };
@@ -940,15 +936,10 @@ impl App {
                     self.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
                     self.chat_widget
                         .set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
-                    builder = builder.with_edits([
-                        ConfigEdit::SetPath {
-                            segments: scoped_segments("approvals_reviewer"),
-                            value: ApprovalsReviewer::GuardianSubagent.to_string().into(),
-                        },
-                        ConfigEdit::ClearPath {
-                            segments: scoped_segments("approval_review_policy"),
-                        },
-                    ]);
+                    builder = builder.with_edits([ConfigEdit::SetPath {
+                        segments: scoped_segments("approvals_reviewer"),
+                        value: ApprovalsReviewer::GuardianSubagent.to_string().into(),
+                    }]);
                     if previous_approvals_reviewer != ApprovalsReviewer::GuardianSubagent {
                         permissions_history_label = Some("Smart Approvals");
                     }
@@ -958,14 +949,9 @@ impl App {
                         profile_approvals_reviewer_configured,
                     ) = approvals_reviewer_config_scope();
                     if profile_approvals_reviewer_configured || self.active_profile.is_none() {
-                        builder = builder.with_edits([
-                            ConfigEdit::ClearPath {
-                                segments: scoped_segments("approvals_reviewer"),
-                            },
-                            ConfigEdit::ClearPath {
-                                segments: scoped_segments("approval_review_policy"),
-                            },
-                        ]);
+                        builder = builder.with_edits([ConfigEdit::ClearPath {
+                            segments: scoped_segments("approvals_reviewer"),
+                        }]);
                     }
                     self.config.approvals_reviewer = ApprovalsReviewer::User;
                     self.chat_widget

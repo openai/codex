@@ -266,13 +266,7 @@ impl From<CoreAskForApproval> for AskForApproval {
 /// prompted subagent to gather relevant context and apply a risk-based
 /// decision framework before approving or denying the request.
 pub enum ApprovalsReviewer {
-    #[serde(rename = "user", alias = "manual-only")]
     User,
-    #[serde(
-        rename = "guardian_subagent",
-        alias = "auto-only",
-        alias = "guardian-subagent"
-    )]
     GuardianSubagent,
 }
 
@@ -559,7 +553,6 @@ pub struct ProfileV2 {
     pub approval_policy: Option<AskForApproval>,
     /// Optional profile-level override for where approval requests are routed
     /// for review. If omitted, the enclosing config default is used.
-    #[serde(alias = "approval_review_policy")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub service_tier: Option<ServiceTier>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
@@ -661,7 +654,6 @@ pub struct Config {
     #[experimental(nested)]
     pub approval_policy: Option<AskForApproval>,
     /// Optional default for where approval requests are routed for review.
-    #[serde(alias = "approval_review_policy")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
@@ -2470,7 +2462,6 @@ pub struct ThreadStartParams {
     /// Override where approval requests are routed for review on this thread
     /// and subsequent turns.
     #[ts(optional = nullable)]
-    #[serde(alias = "approvalReviewPolicy")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
@@ -2535,7 +2526,6 @@ pub struct ThreadStartResponse {
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
-    #[serde(alias = "approvalReviewPolicy")]
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -2592,7 +2582,6 @@ pub struct ThreadResumeParams {
     /// Override where approval requests are routed for review on this thread
     /// and subsequent turns.
     #[ts(optional = nullable)]
-    #[serde(alias = "approvalReviewPolicy")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
@@ -2623,7 +2612,6 @@ pub struct ThreadResumeResponse {
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
-    #[serde(alias = "approvalReviewPolicy")]
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -2671,7 +2659,6 @@ pub struct ThreadForkParams {
     /// Override where approval requests are routed for review on this thread
     /// and subsequent turns.
     #[ts(optional = nullable)]
-    #[serde(alias = "approvalReviewPolicy")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
@@ -2702,7 +2689,6 @@ pub struct ThreadForkResponse {
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
     /// Reviewer currently used for approval requests on this thread.
-    #[serde(alias = "approvalReviewPolicy")]
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -3830,7 +3816,6 @@ pub struct TurnStartParams {
     /// Override where approval requests are routed for review on this turn and
     /// subsequent turns.
     #[ts(optional = nullable)]
-    #[serde(alias = "approvalReviewPolicy")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
     /// Override the sandbox policy for this turn and subsequent turns.
     #[ts(optional = nullable)]
@@ -7279,19 +7264,6 @@ mod tests {
                 risk_level: Some(GuardianRiskLevel::High),
                 rationale: Some("too risky".to_string()),
             }
-        );
-    }
-
-    #[test]
-    fn thread_start_params_deserialize_legacy_approval_review_policy_field_and_values() {
-        let params: ThreadStartParams = serde_json::from_value(json!({
-            "input": [],
-            "approvalReviewPolicy": "auto-only",
-        }))
-        .expect("legacy approval review policy should deserialize");
-        assert_eq!(
-            params.approvals_reviewer,
-            Some(ApprovalsReviewer::GuardianSubagent)
         );
     }
 

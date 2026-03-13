@@ -287,7 +287,6 @@ pub enum Op {
 
         /// Updated approval reviewer for future approval prompts.
         #[serde(skip_serializing_if = "Option::is_none")]
-        #[serde(alias = "approval_review_policy")]
         approvals_reviewer: Option<ApprovalsReviewer>,
 
         /// Updated sandbox policy for tool calls.
@@ -3051,7 +3050,6 @@ pub struct SessionConfiguredEvent {
     /// been escalated for review. This does not disable separate safety checks
     /// such as ARC.
     #[serde(default)]
-    #[serde(alias = "approval_review_policy")]
     pub approvals_reviewer: ApprovalsReviewer,
 
     /// How to sandbox commands executed in the system

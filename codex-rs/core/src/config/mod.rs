@@ -1142,7 +1142,6 @@ pub struct ConfigToml {
     /// Selects who adjudicates approval requests once an action has already
     /// been escalated for review. This does not disable separate safety checks
     /// such as ARC.
-    #[serde(alias = "approval_review_policy")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
 
     #[serde(default)]
