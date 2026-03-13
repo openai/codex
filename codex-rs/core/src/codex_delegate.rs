@@ -617,6 +617,13 @@ async fn handle_request_user_input(
     let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
 }
 
+/// Intercepts delegated legacy MCP approval prompts on the RequestUserInput
+/// compatibility path and, when guardian is active, answers them
+/// programmatically after running the guardian review.
+///
+/// The RequestUserInput event only carries `call_id` plus approval question
+/// metadata, so this helper joins it back to the cached `McpToolCallBegin`
+/// invocation in order to rebuild the full guardian review request.
 async fn maybe_auto_review_mcp_request_user_input(
     parent_session: &Arc<Session>,
     parent_ctx: &Arc<TurnContext>,
