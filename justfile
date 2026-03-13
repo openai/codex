@@ -78,10 +78,6 @@ mcp-server-run *args:
 write-config-schema:
     cargo run -p codex-core --bin codex-write-config-schema
 
-# Generate RolloutLine schema artifacts.
-write-rollout-line-schema *args:
-    cargo run -p codex-protocol --bin codex-write-rollout-line-schema -- "$@"
-
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema *args:
     cargo run -p codex-app-server-protocol --bin write_schema_fixtures -- "$@"
