@@ -8485,6 +8485,72 @@ async fn theme_slash_command_while_task_running_opens_popup_instead_of_queueing(
 }
 
 #[tokio::test]
+async fn queued_followup_waits_for_popup_opened_during_running_turn() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.handle_codex_event(Event {
+        id: "configured".into(),
+        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: "test-model".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: PathBuf::from("/home/user/project"),
+            reasoning_effort: Some(ReasoningEffortConfig::default()),
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: None,
+        }),
+    });
+    drain_insert_history(&mut rx);
+    chat.on_task_started();
+    chat.dispatch_command(SlashCommand::Theme);
+    assert!(chat.has_active_view(), "expected /theme popup to stay open");
+
+    chat.queued_user_messages
+        .push_back(UserMessage::from("followup".to_string()));
+
+    chat.on_task_complete(None, false);
+
+    assert!(
+        chat.has_active_view(),
+        "expected theme popup to remain open"
+    );
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["followup".to_string()]
+    );
+    assert!(chat.resume_queued_inputs_when_idle);
+    assert_no_submit_op(&mut op_rx);
+
+    let _ = chat
+        .bottom_pane
+        .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::BottomPaneViewCompleted));
+    assert!(!chat.has_active_view(), "expected popup to dismiss");
+
+    chat.maybe_resume_queued_inputs_when_idle();
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "followup".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(!chat.resume_queued_inputs_when_idle);
+}
+
+#[tokio::test]
 async fn model_selection_queues_selected_action_while_task_running() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex")).await;
     chat.on_task_started();

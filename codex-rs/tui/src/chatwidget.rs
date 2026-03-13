@@ -6875,6 +6875,11 @@ impl ChatWidget {
         if self.bottom_pane.is_task_running() {
             return;
         }
+        if !self.bottom_pane.no_modal_or_popup_active() {
+            self.resume_queued_inputs_when_idle = !self.queued_user_messages.is_empty();
+            self.refresh_pending_input_preview();
+            return;
+        }
         let mut resume_when_idle = false;
         while !self.bottom_pane.is_task_running() {
             let Some(queued_message) = self.queued_user_messages.pop_front() else {
