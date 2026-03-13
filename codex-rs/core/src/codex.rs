@@ -5482,6 +5482,10 @@ pub(crate) async fn run_turn(
 
     let plugin_items =
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
+    let mentioned_plugin_metadata = mentioned_plugins
+        .iter()
+        .filter_map(crate::plugins::PluginCapabilitySummary::telemetry_metadata)
+        .collect::<Vec<_>>();
 
     let mut explicitly_enabled_connectors = collect_explicit_app_ids(&input);
     explicitly_enabled_connectors.extend(collect_explicit_app_ids_from_skill_items(
@@ -5520,6 +5524,11 @@ pub(crate) async fn run_turn(
     sess.services
         .analytics_events_client
         .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
+    for plugin in mentioned_plugin_metadata {
+        sess.services
+            .analytics_events_client
+            .track_plugin_used(tracking.clone(), plugin);
+    }
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
 
