@@ -23,7 +23,6 @@ use insta::Settings;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -165,7 +164,6 @@ fn format_guardian_action_pretty_truncates_large_string_fields() {
         id: "patch-1".to_string(),
         cwd: PathBuf::from("/tmp"),
         files: Vec::new(),
-        changes: HashMap::new(),
         change_count: 1usize,
         patch: patch.clone(),
     };
@@ -243,7 +241,6 @@ fn guardian_assessment_action_value_redacts_apply_patch_patch_text() {
         id: "patch-1".to_string(),
         cwd: PathBuf::from("/tmp"),
         files: vec![AbsolutePathBuf::try_from("/tmp/guardian.txt").expect("absolute path")],
-        changes: HashMap::new(),
         change_count: 1usize,
         patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+secret\n*** End Patch"
             .to_string(),

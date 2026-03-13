@@ -61,7 +61,6 @@ impl ApplyPatchRuntime {
             id: call_id.to_string(),
             cwd: req.action.cwd.clone(),
             files: req.file_paths.clone(),
-            changes: req.changes.clone(),
             change_count: req.changes.len(),
             patch: req.action.patch.clone(),
         }

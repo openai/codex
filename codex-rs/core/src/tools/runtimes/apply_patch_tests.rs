@@ -28,7 +28,7 @@ fn wants_no_sandbox_approval_granular_respects_sandbox_flag() {
 }
 
 #[test]
-fn guardian_review_request_includes_full_patch_without_duplicate_changes() {
+fn guardian_review_request_includes_patch_context() {
     let path = std::env::temp_dir().join("guardian-apply-patch-test.txt");
     let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
     let expected_cwd = action.cwd.clone();
@@ -63,7 +63,6 @@ fn guardian_review_request_includes_full_patch_without_duplicate_changes() {
             id: "call-1".to_string(),
             cwd: expected_cwd,
             files: request.file_paths,
-            changes: request.changes,
             change_count: 1usize,
             patch: expected_patch,
         }

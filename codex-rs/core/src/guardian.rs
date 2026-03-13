@@ -217,7 +217,6 @@ pub(crate) enum GuardianApprovalRequest {
         id: String,
         cwd: PathBuf,
         files: Vec<AbsolutePathBuf>,
-        changes: HashMap<PathBuf, codex_protocol::protocol::FileChange>,
         change_count: usize,
         patch: String,
     },
@@ -976,7 +975,6 @@ pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest
             id: _,
             cwd,
             files,
-            changes: _,
             change_count,
             patch,
         } => serde_json::json!({

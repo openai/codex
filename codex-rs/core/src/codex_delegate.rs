@@ -524,7 +524,6 @@ async fn handle_patch_approval(
                     id: approval_id.clone(),
                     cwd: parent_ctx.cwd.clone(),
                     files,
-                    changes,
                     change_count,
                     patch,
                 },
