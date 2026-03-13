@@ -246,6 +246,8 @@ pub struct ModelInfo {
     pub upgrade: Option<ModelInfoUpgrade>,
     pub base_instructions: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guardian_developer_instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_messages: Option<ModelMessages>,
     pub supports_reasoning_summaries: bool,
     #[serde(default)]
@@ -523,6 +525,7 @@ mod tests {
             availability_nux: None,
             upgrade: None,
             base_instructions: "base".to_string(),
+            guardian_developer_instructions: None,
             model_messages: spec,
             supports_reasoning_summaries: false,
             default_reasoning_summary: ReasoningSummary::Auto,

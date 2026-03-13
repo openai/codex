@@ -73,6 +73,7 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
         availability_nux: None,
         upgrade: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),
+        guardian_developer_instructions: None,
         model_messages: local_personality_messages_for_slug(slug),
         supports_reasoning_summaries: false,
         default_reasoning_summary: ReasoningSummary::Auto,

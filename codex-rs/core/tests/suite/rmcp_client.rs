@@ -403,6 +403,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 priority: 1,
                 upgrade: None,
                 base_instructions: "base instructions".to_string(),
+                guardian_developer_instructions: None,
                 model_messages: None,
                 supports_reasoning_summaries: false,
                 default_reasoning_summary: ReasoningSummary::Auto,

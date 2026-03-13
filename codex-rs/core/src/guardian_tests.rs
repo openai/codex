@@ -412,6 +412,7 @@ fn guardian_subagent_config_preserves_parent_network_proxy() {
         None,
         "parent-active-model",
         Some(codex_protocol::openai_models::ReasoningEffort::Low),
+        None,
     )
     .expect("guardian config");
 
@@ -458,6 +459,7 @@ fn guardian_subagent_config_uses_live_network_proxy_state() {
         Some(live_network.clone()),
         "active-model",
         None,
+        None,
     )
     .expect("guardian config");
 
@@ -488,7 +490,7 @@ fn guardian_subagent_config_rejects_pinned_collab_feature() {
     )
     .expect("managed features");
 
-    let err = build_guardian_subagent_config(&parent_config, None, "active-model", None)
+    let err = build_guardian_subagent_config(&parent_config, None, "active-model", None, None)
         .expect_err("guardian config should fail when collab is pinned on");
 
     assert!(
@@ -503,8 +505,27 @@ fn guardian_subagent_config_uses_parent_active_model_instead_of_hardcoded_slug()
     parent_config.model = Some("configured-model".to_string());
 
     let guardian_config =
-        build_guardian_subagent_config(&parent_config, None, "active-model", None)
+        build_guardian_subagent_config(&parent_config, None, "active-model", None, None)
             .expect("guardian config");
 
     assert_eq!(guardian_config.model, Some("active-model".to_string()));
+}
+
+#[test]
+fn guardian_subagent_config_prefers_model_prompt_override() {
+    let guardian_config = build_guardian_subagent_config(
+        &test_config(),
+        None,
+        "active-model",
+        None,
+        Some("override prompt"),
+    )
+    .expect("guardian config");
+
+    let instructions = guardian_config
+        .developer_instructions
+        .expect("guardian instructions");
+
+    assert!(instructions.starts_with("override prompt"));
+    assert!(instructions.contains("\"risk_level\": \"low\" | \"medium\" | \"high\""));
 }

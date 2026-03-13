@@ -335,6 +335,7 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         priority,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
+        guardian_developer_instructions: None,
         model_messages: None,
         supports_reasoning_summaries: false,
         default_reasoning_summary: ReasoningSummary::Auto,

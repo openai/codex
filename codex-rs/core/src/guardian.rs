@@ -593,11 +593,19 @@ async fn run_guardian_subagent(
         );
         (turn.model_info.slug.clone(), reasoning_effort)
     };
+    let guardian_model_info = session
+        .services
+        .models_manager
+        .get_model_info(&guardian_model, turn.config.as_ref())
+        .await;
     let guardian_config = build_guardian_subagent_config(
         turn.config.as_ref(),
         live_network_config,
         guardian_model.as_str(),
         guardian_reasoning_effort,
+        guardian_model_info
+            .guardian_developer_instructions
+            .as_deref(),
     )?;
 
     // Reuse the standard interactive subagent runner so we can seed inherited
@@ -663,11 +671,12 @@ fn build_guardian_subagent_config(
     live_network_config: Option<codex_network_proxy::NetworkProxyConfig>,
     active_model: &str,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    guardian_prompt_override: Option<&str>,
 ) -> anyhow::Result<Config> {
     let mut guardian_config = parent_config.clone();
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
-    guardian_config.developer_instructions = Some(guardian_policy_prompt());
+    guardian_config.developer_instructions = Some(guardian_policy_prompt(guardian_prompt_override));
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     guardian_config.permissions.sandbox_policy =
         Constrained::allow_only(SandboxPolicy::new_read_only_policy());
@@ -1022,8 +1031,10 @@ fn guardian_output_contract_prompt() -> &'static str {
 /// Keep the prompt in a dedicated markdown file so reviewers can audit prompt
 /// changes directly without diffing through code. The output contract is
 /// appended from code so it stays near `guardian_output_schema()`.
-fn guardian_policy_prompt() -> String {
-    let prompt = include_str!("guardian_prompt.md").trim_end();
+fn guardian_policy_prompt(prompt_override: Option<&str>) -> String {
+    let prompt = prompt_override
+        .unwrap_or(include_str!("guardian_prompt.md"))
+        .trim_end();
     format!("{prompt}\n\n{}\n", guardian_output_contract_prompt())
 }
 
