@@ -462,7 +462,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         create_spawn_agent_tool(&config),
         create_send_input_tool(),
         create_resume_agent_tool(),
-        create_wait_tool(),
+        create_exec_wait_tool(),
         create_close_agent_tool(),
     ] {
         expected.insert(tool_name(&spec).to_string(), spec);

@@ -2502,6 +2502,7 @@ fn op_kind_distinguishes_turn_ops() {
         Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
