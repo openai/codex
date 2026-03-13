@@ -10,7 +10,7 @@ use std::sync::Arc;
 fn serialize_tool_search_output_tools_groups_results_by_namespace() {
     let entries = [
         (
-            "mcp__codex_apps__calendar-create-event".to_string(),
+            "mcp__codex_apps__calendar_create_event".to_string(),
             ToolInfo {
                 server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 tool_name: "-create-event".to_string(),
@@ -36,7 +36,7 @@ fn serialize_tool_search_output_tools_groups_results_by_namespace() {
             },
         ),
         (
-            "mcp__codex_apps__gmail-read-email".to_string(),
+            "mcp__codex_apps__gmail_read_email".to_string(),
             ToolInfo {
                 server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 tool_name: "-read-email".to_string(),
@@ -62,7 +62,7 @@ fn serialize_tool_search_output_tools_groups_results_by_namespace() {
             },
         ),
         (
-            "mcp__codex_apps__calendar-list-events".to_string(),
+            "mcp__codex_apps__calendar_list_events".to_string(),
             ToolInfo {
                 server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 tool_name: "-list-events".to_string(),
@@ -148,7 +148,7 @@ fn serialize_tool_search_output_tools_groups_results_by_namespace() {
 #[test]
 fn serialize_tool_search_output_tools_falls_back_to_connector_name_description() {
     let entries = [(
-        "mcp__codex_apps__gmail-batch-read-email".to_string(),
+        "mcp__codex_apps__gmail_batch_read_email".to_string(),
         ToolInfo {
             server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
             tool_name: "-batch-read-email".to_string(),

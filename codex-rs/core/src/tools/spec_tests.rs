@@ -1622,7 +1622,7 @@ fn search_tool_description_includes_only_codex_apps_connector_names() {
         ])),
         Some(HashMap::from([
             (
-                "mcp__codex_apps__calendar-create-event".to_string(),
+                "mcp__codex_apps__calendar_create_event".to_string(),
                 ToolInfo {
                     server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
                     tool_name: "-create-event".to_string(),
@@ -1798,7 +1798,7 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
         None,
         Some(HashMap::from([
             (
-                "mcp__codex_apps__calendar-create-event".to_string(),
+                "mcp__codex_apps__calendar_create_event".to_string(),
                 ToolInfo {
                     server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
                     tool_name: "-create-event".to_string(),
@@ -1815,7 +1815,7 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
                 },
             ),
             (
-                "mcp__codex_apps__calendar-list-events".to_string(),
+                "mcp__codex_apps__calendar_list_events".to_string(),
                 ToolInfo {
                     server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
                     tool_name: "-list-events".to_string(),

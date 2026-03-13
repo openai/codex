@@ -110,7 +110,7 @@ const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str = "codex.mcp.tools.cache_write
 fn sanitize_responses_api_tool_name(name: &str) -> String {
     let mut sanitized = String::with_capacity(name.len());
     for c in name.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+        if c.is_ascii_alphanumeric() || c == '_' {
             sanitized.push(c);
         } else {
             sanitized.push('_');
