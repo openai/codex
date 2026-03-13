@@ -1018,8 +1018,11 @@ fn guardian_assessment_action_value(action: &GuardianApprovalRequest) -> Value {
             ..
         } => serde_json::json!({
             "tool": "apply_patch",
-            "cwd": cwd,
-            "files": files,
+            "cwd": cwd.to_string_lossy().replace('\\', "/"),
+            "files": files
+                .iter()
+                .map(|path| path.to_string_lossy().replace('\\', "/"))
+                .collect::<Vec<_>>(),
             "change_count": change_count,
         }),
         GuardianApprovalRequest::NetworkAccess {
