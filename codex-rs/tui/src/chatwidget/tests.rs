@@ -537,8 +537,8 @@ async fn replayed_user_message_with_only_local_images_does_not_render_history_ce
 
 #[tokio::test]
 async fn forked_thread_history_line_snapshot() {
-    let (chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let chat = chat;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.forked_from_label_override = Some("named parent".to_string());
 
     let forked_from_id =
         ThreadId::from_string("e9f18a88-8081-4e51-9d4e-8af5cde2d8dd").expect("forked id");
@@ -566,8 +566,7 @@ async fn forked_thread_history_line_snapshot() {
 
 #[tokio::test]
 async fn forked_thread_history_line_without_name_shows_id_once_snapshot() {
-    let (chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let chat = chat;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     let forked_from_id =
         ThreadId::from_string("019c2d47-4935-7423-a190-05691f566092").expect("forked id");
@@ -1723,6 +1722,7 @@ async fn helpers_are_available_and_do_not_panic() {
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: tx,
         initial_user_message: None,
+        forked_from_label_override: None,
         enhanced_keys_supported: false,
         auth_manager,
         models_manager: thread_manager.get_models_manager(),
@@ -1857,6 +1857,7 @@ async fn make_chatwidget_manual(
         thread_name: None,
         thread_rename_enabled: true,
         forked_from: None,
+        forked_from_label_override: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         startup_tooltip_override: None,
@@ -5609,6 +5610,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
         initial_user_message: None,
+        forked_from_label_override: None,
         enhanced_keys_supported: false,
         auth_manager,
         models_manager: thread_manager.get_models_manager(),
@@ -5659,6 +5661,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
         initial_user_message: None,
+        forked_from_label_override: None,
         enhanced_keys_supported: false,
         auth_manager,
         models_manager: thread_manager.get_models_manager(),
