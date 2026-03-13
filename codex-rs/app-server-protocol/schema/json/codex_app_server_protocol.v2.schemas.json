@@ -4648,7 +4648,8 @@
       "enum": [
         "inProgress",
         "approved",
-        "denied"
+        "denied",
+        "aborted"
       ],
       "type": "string"
     },

@@ -209,6 +209,9 @@ fn guardian_auto_approval_review_notification(
             codex_protocol::protocol::GuardianAssessmentStatus::Denied => {
                 GuardianApprovalReviewStatus::Denied
             }
+            codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
+                GuardianApprovalReviewStatus::Aborted
+            }
         },
         risk_score: assessment.risk_score,
         risk_level: assessment.risk_level.map(Into::into),
@@ -226,7 +229,8 @@ fn guardian_auto_approval_review_notification(
             )
         }
         codex_protocol::protocol::GuardianAssessmentStatus::Approved
-        | codex_protocol::protocol::GuardianAssessmentStatus::Denied => {
+        | codex_protocol::protocol::GuardianAssessmentStatus::Denied
+        | codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
             ServerNotification::ItemGuardianApprovalReviewCompleted(
                 ItemGuardianApprovalReviewCompletedNotification {
                     thread_id: conversation_id.to_string(),
@@ -2715,10 +2719,8 @@ mod tests {
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_protocol::mcp::CallToolResult;
-    use codex_protocol::models::MacOsAutomationPermission;
-    use codex_protocol::models::MacOsContactsPermission;
-    use codex_protocol::models::MacOsPreferencesPermission;
-    use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+    use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
+    use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
     use codex_protocol::protocol::CollabResumeBeginEvent;
@@ -2729,6 +2731,7 @@ mod tests {
     use codex_protocol::protocol::RateLimitWindow;
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use rmcp::model::Content;
     use serde_json::Value as JsonValue;
@@ -2816,6 +2819,37 @@ mod tests {
                     Some(codex_app_server_protocol::GuardianRiskLevel::High)
                 );
                 assert_eq!(payload.review.rationale.as_deref(), Some("too risky"));
+            }
+            other => panic!("unexpected notification: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn guardian_assessment_aborted_emits_completed_review_payload() {
+        let conversation_id = ThreadId::new();
+        let notification = guardian_auto_approval_review_notification(
+            &conversation_id,
+            "turn-from-event",
+            &GuardianAssessmentEvent {
+                id: "item-3".to_string(),
+                turn_id: "turn-from-assessment".to_string(),
+                status: codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
+                risk_score: None,
+                risk_level: None,
+                rationale: None,
+                action: None,
+            },
+        );
+
+        match notification {
+            ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
+                assert_eq!(payload.thread_id, conversation_id.to_string());
+                assert_eq!(payload.turn_id, "turn-from-assessment");
+                assert_eq!(payload.target_item_id, "item-3");
+                assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
+                assert_eq!(payload.review.risk_score, None);
+                assert_eq!(payload.review.risk_level, None);
+                assert_eq!(payload.review.rationale, None);
             }
             other => panic!("unexpected notification: {other:?}"),
         }

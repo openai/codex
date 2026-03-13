@@ -4262,6 +4262,7 @@ pub enum GuardianApprovalReviewStatus {
     InProgress,
     Approved,
     Denied,
+    Aborted,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -7264,6 +7265,26 @@ mod tests {
                 risk_score: Some(91),
                 risk_level: Some(GuardianRiskLevel::High),
                 rationale: Some("too risky".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn automatic_approval_review_deserializes_aborted_status() {
+        let review: GuardianApprovalReview = serde_json::from_value(json!({
+            "status": "aborted",
+            "riskScore": null,
+            "riskLevel": null,
+            "rationale": null
+        }))
+        .expect("aborted automatic review should deserialize");
+        assert_eq!(
+            review,
+            GuardianApprovalReview {
+                status: GuardianApprovalReviewStatus::Aborted,
+                risk_score: None,
+                risk_level: None,
+                rationale: None,
             }
         );
     }

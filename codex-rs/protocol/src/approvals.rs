@@ -98,6 +98,7 @@ pub enum GuardianAssessmentStatus {
     InProgress,
     Approved,
     Denied,
+    Aborted,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

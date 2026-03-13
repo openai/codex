@@ -290,7 +290,7 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
 }
 
 #[tokio::test]
-async fn cancelled_guardian_review_does_not_emit_terminal_denial() {
+async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
     let (session, turn, rx) = crate::codex::make_session_and_context_with_rx().await;
     let cancel_token = CancellationToken::new();
     cancel_token.cancel();
@@ -325,7 +325,10 @@ async fn cancelled_guardian_review_does_not_emit_terminal_denial() {
 
     assert_eq!(
         guardian_statuses,
-        vec![GuardianAssessmentStatus::InProgress]
+        vec![
+            GuardianAssessmentStatus::InProgress,
+            GuardianAssessmentStatus::Aborted,
+        ]
     );
     assert!(warnings.is_empty());
 }

@@ -321,7 +321,7 @@ async fn run_guardian_review(
         )
         .await;
 
-    let denied_action = action_summary;
+    let denied_action = action_summary.clone();
     let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, request).await;
     let schema = guardian_output_schema();
     let cancel_token = CancellationToken::new();
@@ -373,7 +373,23 @@ async fn run_guardian_review(
                     .to_string(),
             evidence: vec![],
         },
-        GuardianReviewOutcome::Aborted => return ReviewDecision::Abort,
+        GuardianReviewOutcome::Aborted => {
+            session
+                .send_guardian_review_event(
+                    turn.as_ref(),
+                    EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+                        id: assessment_id,
+                        turn_id: assessment_turn_id,
+                        status: GuardianAssessmentStatus::Aborted,
+                        risk_score: None,
+                        risk_level: None,
+                        rationale: None,
+                        action: Some(action_summary),
+                    }),
+                )
+                .await;
+            return ReviewDecision::Abort;
+        }
     };
 
     let approved = assessment.risk_score < GUARDIAN_APPROVAL_RISK_THRESHOLD;
