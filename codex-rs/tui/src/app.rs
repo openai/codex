@@ -2925,43 +2925,60 @@ impl App {
                     let env_map: std::collections::HashMap<String, String> =
                         std::env::vars().collect();
                     let codex_home = self.config.codex_home.clone();
+                    let tx = self.app_event_tx.clone();
 
-                    let result = tokio::task::spawn_blocking(move || {
-                        codex_core::windows_sandbox::run_legacy_setup_preflight(
+                    tokio::task::spawn_blocking(move || {
+                        let preset_for_error = preset.clone();
+                        let result = codex_core::windows_sandbox::run_legacy_setup_preflight(
                             &policy,
                             policy_cwd.as_path(),
                             command_cwd.as_path(),
                             &env_map,
                             codex_home.as_path(),
-                        )
-                    })
-                    .await
-                    .map_err(|join_err| {
-                        anyhow::anyhow!("legacy Windows sandbox setup task failed: {join_err}")
-                    })?;
-
-                    match result {
-                        Ok(()) => {
-                            self.app_event_tx
-                                .send(AppEvent::EnableWindowsSandboxForAgentMode {
-                                    preset,
-                                    mode: WindowsSandboxEnableMode::Legacy,
-                                });
-                        }
-                        Err(err) => {
-                            tracing::error!(
-                                error = %err,
-                                "failed to run legacy Windows sandbox setup preflight"
-                            );
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to enable the Windows sandbox feature: {err}"
-                            ));
-                        }
-                    }
+                        );
+                        let event = match result {
+                            Ok(()) => AppEvent::WindowsSandboxLegacySetupCompleted {
+                                preset,
+                                error: None,
+                            },
+                            Err(err) => {
+                                tracing::error!(
+                                    error = %err,
+                                    "failed to run legacy Windows sandbox setup preflight"
+                                );
+                                AppEvent::WindowsSandboxLegacySetupCompleted {
+                                    preset: preset_for_error,
+                                    error: Some(err.to_string()),
+                                }
+                            }
+                        };
+                        tx.send(event);
+                    });
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
                     let _ = preset;
+                }
+            }
+            AppEvent::WindowsSandboxLegacySetupCompleted { preset, error } => {
+                #[cfg(target_os = "windows")]
+                match error {
+                    None => {
+                        self.app_event_tx
+                            .send(AppEvent::EnableWindowsSandboxForAgentMode {
+                                preset,
+                                mode: WindowsSandboxEnableMode::Legacy,
+                            });
+                    }
+                    Some(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to enable the Windows sandbox feature: {err}"
+                        ));
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = (preset, error);
                 }
             }
             AppEvent::BeginWindowsSandboxGrantReadRoot { path } => {

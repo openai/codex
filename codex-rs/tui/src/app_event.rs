@@ -300,6 +300,13 @@ pub(crate) enum AppEvent {
         preset: ApprovalPreset,
     },
 
+    /// Result of the non-elevated Windows sandbox setup flow.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    WindowsSandboxLegacySetupCompleted {
+        preset: ApprovalPreset,
+        error: Option<String>,
+    },
+
     /// Begin a non-elevated grant of read access for an additional directory.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     BeginWindowsSandboxGrantReadRoot {
