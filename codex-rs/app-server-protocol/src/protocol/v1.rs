@@ -56,7 +56,11 @@ pub struct InitializeCapabilities {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
     pub user_agent: String,
+    /// Platform family for the running app-server target, for example
+    /// `"unix"` or `"windows"`.
     pub platform_family: String,
+    /// Operating system for the running app-server target, for example
+    /// `"macos"`, `"linux"`, or `"windows"`.
     pub platform_os: String,
 }
 
