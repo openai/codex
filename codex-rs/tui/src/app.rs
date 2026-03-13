@@ -21,6 +21,9 @@ use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::SubagentPanelAgent;
+use crate::history_cell::SubagentPanelState;
+use crate::history_cell::SubagentStatusCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::model_migration::ModelMigrationOutcome;
@@ -34,6 +37,8 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
+use crate::text_formatting::extract_first_bold;
+use crate::text_formatting::truncate_text;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -68,7 +73,15 @@ use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::AgentMessageDeltaEvent;
+use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::AgentSpawnMode;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::CollabCloseEndEvent;
+use codex_protocol::protocol::CollabWaitingEndEvent;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FinalOutput;
@@ -79,6 +92,9 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnStartedEvent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -96,6 +112,7 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
@@ -117,6 +134,7 @@ mod pending_interactive_replay;
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
+use crate::multi_agents::AgentPickerThreadEntry;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
@@ -406,6 +424,518 @@ impl ThreadEventChannel {
     }
 }
 
+const SUBAGENT_PROMPT_PREVIEW_BUDGET: usize = 120;
+const SUBAGENT_UPDATE_PREVIEW_BUDGET: usize = 160;
+const SUBAGENT_PENDING_EVENT_CAPACITY: usize = 12;
+const SUBAGENT_ANIMATION_TICK: Duration = Duration::from_millis(100);
+const SUBAGENT_SHIMMER_WINDOW: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Clone)]
+struct SubagentInfo {
+    ordinal: i32,
+    name: String,
+    prompt_preview: String,
+    spawn_mode: AgentSpawnMode,
+    status: AgentStatus,
+    spawned_at: Instant,
+    started_at: Option<Instant>,
+    latest_summary: String,
+    latest_preview: String,
+    latest_update_at: Instant,
+    inflight_message: String,
+    reasoning_buffer: String,
+    notified_terminal: bool,
+}
+
+impl SubagentInfo {
+    fn new(ordinal: i32, name: String, prompt_preview: String, spawn_mode: AgentSpawnMode) -> Self {
+        let now = Instant::now();
+        Self {
+            ordinal,
+            name,
+            prompt_preview: prompt_preview.clone(),
+            spawn_mode,
+            status: AgentStatus::PendingInit,
+            spawned_at: now,
+            started_at: None,
+            latest_summary: String::new(),
+            latest_preview: prompt_preview,
+            latest_update_at: now,
+            inflight_message: String::new(),
+            reasoning_buffer: String::new(),
+            notified_terminal: false,
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        matches!(self.status, AgentStatus::PendingInit | AgentStatus::Running)
+    }
+
+    fn is_watchdog(&self) -> bool {
+        self.spawn_mode == AgentSpawnMode::Watchdog
+    }
+
+    fn is_visible_in_panel(&self) -> bool {
+        if self.is_watchdog() {
+            return matches!(self.status, AgentStatus::PendingInit | AgentStatus::Running);
+        }
+        self.is_running()
+    }
+
+    fn is_running_for_panel(&self) -> bool {
+        if self.is_watchdog() {
+            return matches!(self.status, AgentStatus::Running);
+        }
+        self.is_running()
+    }
+
+    fn running_started_at(&self) -> Instant {
+        self.started_at.unwrap_or(self.spawned_at)
+    }
+
+    fn update_preview(&mut self, preview: String) {
+        self.latest_preview = preview;
+        self.latest_update_at = Instant::now();
+    }
+
+    fn update_reasoning_summary(&mut self, delta: &str) {
+        self.reasoning_buffer.push_str(delta);
+        if let Some(summary) = extract_first_bold(&self.reasoning_buffer) {
+            self.latest_summary = truncate_text(summary.trim(), SUBAGENT_UPDATE_PREVIEW_BUDGET);
+            self.latest_update_at = Instant::now();
+        }
+    }
+
+    fn clear_turn_buffers(&mut self) {
+        self.inflight_message.clear();
+        self.reasoning_buffer.clear();
+        self.latest_summary.clear();
+    }
+
+    fn should_shimmer(&self, now: Instant) -> bool {
+        if self.is_watchdog() && matches!(self.status, AgentStatus::PendingInit) {
+            return false;
+        }
+        self.is_running()
+            && now.saturating_duration_since(self.latest_update_at) <= SUBAGENT_SHIMMER_WINDOW
+    }
+}
+
+#[derive(Debug, Default)]
+struct SubagentRegistry {
+    root_thread_id: Option<ThreadId>,
+    agents: HashMap<ThreadId, SubagentInfo>,
+    order: Vec<ThreadId>,
+    pending_events: HashMap<ThreadId, Vec<EventMsg>>,
+    pending_history: Vec<Box<dyn HistoryCell>>,
+    panel_state: Option<Arc<StdMutex<SubagentPanelState>>>,
+    panel_cell: Option<Arc<SubagentStatusCell>>,
+    animations_enabled: bool,
+}
+
+impl SubagentRegistry {
+    fn new(animations_enabled: bool) -> Self {
+        Self {
+            animations_enabled,
+            ..Self::default()
+        }
+    }
+
+    fn set_root_thread(&mut self, thread_id: ThreadId) {
+        self.root_thread_id = Some(thread_id);
+    }
+
+    fn is_root_thread(&self, thread_id: ThreadId) -> bool {
+        self.root_thread_id == Some(thread_id)
+    }
+
+    fn contains(&self, thread_id: ThreadId) -> bool {
+        self.agents.contains_key(&thread_id)
+    }
+
+    fn on_spawn_end(&mut self, event: &CollabAgentSpawnEndEvent) -> Option<Box<dyn HistoryCell>> {
+        let new_thread_id = event.new_thread_id?;
+        if event.spawn_mode == AgentSpawnMode::Watchdog {
+            self.prune_superseded_watchdogs(new_thread_id);
+        }
+        if self.contains(new_thread_id) {
+            return None;
+        }
+
+        let ordinal = i32::try_from(self.order.len())
+            .unwrap_or(i32::MAX - 1)
+            .saturating_add(1);
+        let prompt_preview = prompt_preview(&event.prompt);
+        let name = derive_subagent_name(&event.prompt, ordinal);
+
+        let mut info = SubagentInfo::new(ordinal, name.clone(), prompt_preview, event.spawn_mode);
+        info.status = event.status.clone();
+        info.latest_preview = info.prompt_preview.clone();
+        info.latest_update_at = Instant::now();
+
+        self.order.push(new_thread_id);
+        self.agents.insert(new_thread_id, info);
+
+        let early_events = self
+            .pending_events
+            .remove(&new_thread_id)
+            .unwrap_or_default();
+        let mut follow_up = Vec::new();
+        for msg in early_events {
+            follow_up.extend(self.on_agent_event(new_thread_id, &msg));
+        }
+        for cell in follow_up {
+            self.queue_history(cell);
+        }
+
+        let prompt_line = prompt_first_line(&event.prompt);
+        Some(Box::new(history_cell::new_subagent_spawned_cell(
+            &name,
+            &prompt_line,
+        )))
+    }
+
+    fn prune_superseded_watchdogs(&mut self, keep_thread_id: ThreadId) {
+        let superseded: HashSet<ThreadId> = self
+            .agents
+            .iter()
+            .filter_map(|(thread_id, info)| {
+                (info.spawn_mode == AgentSpawnMode::Watchdog && *thread_id != keep_thread_id)
+                    .then_some(*thread_id)
+            })
+            .collect();
+        if superseded.is_empty() {
+            return;
+        }
+
+        self.order
+            .retain(|thread_id| !superseded.contains(thread_id));
+        self.agents
+            .retain(|thread_id, _| !superseded.contains(thread_id));
+        self.pending_events
+            .retain(|thread_id, _| !superseded.contains(thread_id));
+    }
+
+    fn on_close_end(&mut self, event: &CollabCloseEndEvent) -> Option<Box<dyn HistoryCell>> {
+        let receiver_id = event.receiver_thread_id;
+        let info = self.agents.get_mut(&receiver_id)?;
+        info.status = event.status.clone();
+        info.latest_update_at = Instant::now();
+
+        if is_terminal_status(&info.status) && !info.notified_terminal {
+            info.notified_terminal = true;
+            let summary = terminal_summary(&info.status);
+            return Some(Box::new(history_cell::new_subagent_update_cell(
+                &info.name,
+                &info.status,
+                summary.as_str(),
+            )));
+        }
+        None
+    }
+
+    fn on_wait_end(&mut self, event: &CollabWaitingEndEvent) {
+        for (thread_id, status) in &event.statuses {
+            let Some(info) = self.agents.get_mut(thread_id) else {
+                continue;
+            };
+            info.status = status.clone();
+            info.latest_update_at = Instant::now();
+        }
+    }
+
+    fn on_agent_event(&mut self, thread_id: ThreadId, msg: &EventMsg) -> Vec<Box<dyn HistoryCell>> {
+        let Some(info) = self.agents.get_mut(&thread_id) else {
+            self.buffer_pending_event(thread_id, msg.clone());
+            return Vec::new();
+        };
+
+        let mut history = Vec::new();
+        match msg {
+            EventMsg::TurnStarted(TurnStartedEvent { .. }) => {
+                info.clear_turn_buffers();
+                info.status = AgentStatus::Running;
+                if info.started_at.is_none() {
+                    info.started_at = Some(Instant::now());
+                }
+            }
+            EventMsg::AgentReasoningDelta(ev) => {
+                info.update_reasoning_summary(ev.delta.as_str());
+            }
+            EventMsg::AgentReasoningRawContentDelta(ev) => {
+                info.update_reasoning_summary(ev.delta.as_str());
+            }
+            EventMsg::AgentReasoningRawContent(ev) => {
+                info.update_reasoning_summary(ev.text.as_str());
+                info.reasoning_buffer.clear();
+            }
+            EventMsg::AgentReasoning(_) | EventMsg::AgentReasoningSectionBreak(_) => {
+                info.reasoning_buffer.clear();
+            }
+            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
+                info.inflight_message.push_str(delta);
+                let preview =
+                    truncate_text(info.inflight_message.trim(), SUBAGENT_UPDATE_PREVIEW_BUDGET);
+                info.update_preview(preview);
+            }
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
+                info.inflight_message.clear();
+                let preview = truncate_text(message.trim(), SUBAGENT_UPDATE_PREVIEW_BUDGET);
+                info.update_preview(preview);
+            }
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                last_agent_message, ..
+            }) => {
+                info.inflight_message.clear();
+                info.status = AgentStatus::Completed(last_agent_message.clone());
+                if !info.notified_terminal {
+                    info.notified_terminal = true;
+                    let summary = last_agent_message
+                        .as_deref()
+                        .map(|message| {
+                            truncate_text(message.trim(), SUBAGENT_UPDATE_PREVIEW_BUDGET)
+                        })
+                        .unwrap_or_else(|| "completed".to_string());
+                    history.push(Box::new(history_cell::new_subagent_update_cell(
+                        &info.name,
+                        &info.status,
+                        summary.as_str(),
+                    )) as Box<dyn HistoryCell>);
+                }
+            }
+            EventMsg::TurnAborted(TurnAbortedEvent { reason, .. }) => {
+                info.inflight_message.clear();
+                let reason_text = format!("{reason:?}").to_lowercase();
+                info.status = AgentStatus::Errored(reason_text.clone());
+                if !info.notified_terminal {
+                    info.notified_terminal = true;
+                    history.push(Box::new(history_cell::new_subagent_update_cell(
+                        &info.name,
+                        &info.status,
+                        reason_text.as_str(),
+                    )) as Box<dyn HistoryCell>);
+                }
+            }
+            EventMsg::Error(ErrorEvent { message, .. }) => {
+                info.inflight_message.clear();
+                let summary = truncate_text(message.trim(), SUBAGENT_UPDATE_PREVIEW_BUDGET);
+                info.status = AgentStatus::Errored(summary.clone());
+                if !info.notified_terminal {
+                    info.notified_terminal = true;
+                    history.push(Box::new(history_cell::new_subagent_update_cell(
+                        &info.name,
+                        &info.status,
+                        summary.as_str(),
+                    )) as Box<dyn HistoryCell>);
+                }
+            }
+            EventMsg::ShutdownComplete => {
+                info.inflight_message.clear();
+                info.status = AgentStatus::Shutdown;
+                if !info.notified_terminal {
+                    info.notified_terminal = true;
+                    history.push(Box::new(history_cell::new_subagent_update_cell(
+                        &info.name,
+                        &info.status,
+                        "shutdown",
+                    )) as Box<dyn HistoryCell>);
+                }
+            }
+            _ => {}
+        }
+
+        if history.is_empty() && matches!(msg, EventMsg::TurnStarted(_)) {
+            info.latest_update_at = Instant::now();
+        }
+
+        history
+    }
+
+    fn buffer_pending_event(&mut self, thread_id: ThreadId, msg: EventMsg) {
+        if self.is_root_thread(thread_id) {
+            return;
+        }
+        let entry = self.pending_events.entry(thread_id).or_default();
+        entry.push(msg);
+        if entry.len() > SUBAGENT_PENDING_EVENT_CAPACITY {
+            let excess = entry.len() - SUBAGENT_PENDING_EVENT_CAPACITY;
+            entry.drain(0..excess);
+        }
+    }
+
+    fn queue_history(&mut self, cell: Box<dyn HistoryCell>) {
+        self.pending_history.push(cell);
+    }
+
+    fn take_pending_history(&mut self) -> Vec<Box<dyn HistoryCell>> {
+        std::mem::take(&mut self.pending_history)
+    }
+
+    fn has_animating_agents(&self) -> bool {
+        let now = Instant::now();
+        self.agents.values().any(|info| info.should_shimmer(now))
+    }
+
+    fn rebuild_panel_state(&mut self) {
+        let mut running_infos: Vec<&SubagentInfo> = self
+            .agents
+            .values()
+            .filter(|info| info.is_visible_in_panel())
+            .collect();
+        running_infos.sort_by_key(|info| info.ordinal);
+
+        if running_infos.is_empty() {
+            self.panel_state = None;
+            self.panel_cell = None;
+            return;
+        }
+
+        let started_at = running_infos
+            .iter()
+            .map(|info| info.running_started_at())
+            .min()
+            .unwrap_or_else(Instant::now);
+        let running_count = i32::try_from(
+            running_infos
+                .iter()
+                .filter(|info| info.is_running_for_panel())
+                .count(),
+        )
+        .unwrap_or(i32::MAX);
+        let total_agents = i32::try_from(running_infos.len()).unwrap_or(i32::MAX);
+        let running_agents = running_infos
+            .into_iter()
+            .map(|info| SubagentPanelAgent {
+                ordinal: info.ordinal,
+                name: info.name.clone(),
+                status: info.status.clone(),
+                is_watchdog: info.is_watchdog(),
+                preview: running_preview(info),
+                latest_update_at: info.latest_update_at,
+            })
+            .collect();
+
+        let state = SubagentPanelState {
+            started_at,
+            total_agents,
+            running_count,
+            running_agents,
+        };
+
+        match &self.panel_state {
+            Some(existing) => {
+                let mut guard = existing
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                *guard = state;
+            }
+            None => {
+                self.panel_state = Some(Arc::new(StdMutex::new(state)));
+            }
+        }
+
+        if let Some(panel_state) = &self.panel_state {
+            self.panel_cell = Some(Arc::new(SubagentStatusCell::new(
+                Arc::clone(panel_state),
+                self.animations_enabled,
+            )));
+        }
+    }
+
+    fn panel_cell(&self) -> Option<Arc<SubagentStatusCell>> {
+        self.panel_cell.clone()
+    }
+}
+
+fn is_terminal_status(status: &AgentStatus) -> bool {
+    matches!(
+        status,
+        AgentStatus::Completed(_)
+            | AgentStatus::Errored(_)
+            | AgentStatus::Shutdown
+            | AgentStatus::NotFound
+    )
+}
+
+fn terminal_summary(status: &AgentStatus) -> String {
+    match status {
+        AgentStatus::Completed(Some(message)) => {
+            truncate_text(message.trim(), SUBAGENT_UPDATE_PREVIEW_BUDGET)
+        }
+        AgentStatus::Completed(None) => "completed".to_string(),
+        AgentStatus::Errored(message) => {
+            truncate_text(message.trim(), SUBAGENT_UPDATE_PREVIEW_BUDGET)
+        }
+        AgentStatus::Shutdown => "shutdown".to_string(),
+        AgentStatus::NotFound => "not found".to_string(),
+        AgentStatus::PendingInit | AgentStatus::Running => "running".to_string(),
+    }
+}
+
+fn prompt_first_line(prompt: &str) -> String {
+    prompt
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn prompt_preview(prompt: &str) -> String {
+    let first_line = prompt_first_line(prompt);
+    truncate_text(first_line.trim(), SUBAGENT_PROMPT_PREVIEW_BUDGET)
+}
+
+fn running_preview(info: &SubagentInfo) -> String {
+    if !info.latest_summary.trim().is_empty() {
+        return truncate_text(info.latest_summary.trim(), SUBAGENT_UPDATE_PREVIEW_BUDGET);
+    }
+    if !info.inflight_message.trim().is_empty() {
+        return truncate_text(info.inflight_message.trim(), SUBAGENT_UPDATE_PREVIEW_BUDGET);
+    }
+    if !info.latest_preview.trim().is_empty() {
+        return truncate_text(info.latest_preview.trim(), SUBAGENT_UPDATE_PREVIEW_BUDGET);
+    }
+    truncate_text(info.prompt_preview.trim(), SUBAGENT_PROMPT_PREVIEW_BUDGET)
+}
+
+fn derive_subagent_name(prompt: &str, ordinal: i32) -> String {
+    let first_line = prompt_first_line(prompt);
+    let stripped = first_line
+        .strip_prefix("Task:")
+        .or_else(|| first_line.strip_prefix("task:"))
+        .unwrap_or(&first_line)
+        .trim();
+
+    let stopwords = [
+        "the", "a", "an", "to", "and", "or", "of", "for", "from", "in", "on", "with", "read",
+        "file", "task",
+    ];
+
+    let tokens: Vec<String> = stripped
+        .split_whitespace()
+        .map(clean_token)
+        .filter(|token| !token.is_empty())
+        .filter(|token| !stopwords.contains(&token.as_str()))
+        .take(4)
+        .collect();
+
+    if tokens.is_empty() {
+        return format!("agent-{ordinal}");
+    }
+
+    let joined = tokens.join("-");
+    truncate_text(&joined, 40)
+}
+
+fn clean_token(token: &str) -> String {
+    token
+        .chars()
+        .map(|ch| ch.to_ascii_lowercase())
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-')
+        .collect()
+}
+
 fn should_show_model_migration_prompt(
     current_model: &str,
     target_model: &str,
@@ -665,6 +1195,8 @@ pub(crate) struct App {
 
     /// Controls the animation thread that sends CommitTick events.
     pub(crate) commit_anim_running: Arc<AtomicBool>,
+    /// Controls the animation thread that updates the live subagent panel.
+    pub(crate) subagent_anim_running: Arc<AtomicBool>,
     // Shared across ChatWidget instances so invalid status-line config warnings only emit once.
     status_line_invalid_items_warned: Arc<AtomicBool>,
 
@@ -701,6 +1233,8 @@ pub(crate) struct App {
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
+    subagents: SubagentRegistry,
+    agent_picker_threads: HashMap<ThreadId, AgentPickerThreadEntry>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<Event>>,
     primary_thread_id: Option<ThreadId>,
@@ -1035,6 +1569,7 @@ impl App {
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = receiver;
         self.refresh_pending_thread_approvals().await;
+        self.sync_subagent_panel_state();
     }
 
     async fn store_active_thread_receiver(&mut self) {
@@ -1071,6 +1606,85 @@ impl App {
         }
         self.active_thread_rx = None;
         self.refresh_pending_thread_approvals().await;
+        self.sync_subagent_panel_state();
+    }
+
+    fn subagents_root_active(&self) -> bool {
+        self.primary_thread_id.is_some() && self.active_thread_id == self.primary_thread_id
+    }
+
+    fn emit_or_queue_subagent_history(&mut self, cell: Box<dyn HistoryCell>) {
+        if self.subagents_root_active() {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+        } else {
+            self.subagents.queue_history(cell);
+        }
+    }
+
+    fn flush_subagent_history_if_root_active(&mut self) {
+        if !self.subagents_root_active() {
+            return;
+        }
+        let pending = self.subagents.take_pending_history();
+        for cell in pending {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+        }
+    }
+
+    fn update_subagent_animation(&mut self, root_active: bool) {
+        let should_run = root_active && self.subagents.has_animating_agents();
+        let is_running = self.subagent_anim_running.load(Ordering::Relaxed);
+        if should_run && !is_running {
+            self.app_event_tx.send(AppEvent::StartSubagentAnimation);
+        } else if !should_run && is_running {
+            self.app_event_tx.send(AppEvent::StopSubagentAnimation);
+        }
+    }
+
+    fn sync_subagent_panel_state(&mut self) {
+        let root_active = self.subagents_root_active();
+        self.subagents.rebuild_panel_state();
+
+        if root_active {
+            self.flush_subagent_history_if_root_active();
+            if let Some(panel) = self.subagents.panel_cell() {
+                self.app_event_tx.send(AppEvent::UpdateSubagentPanel(panel));
+            } else {
+                self.app_event_tx.send(AppEvent::ClearSubagentPanel);
+            }
+        } else {
+            self.app_event_tx.send(AppEvent::ClearSubagentPanel);
+        }
+
+        self.update_subagent_animation(root_active);
+    }
+
+    fn process_subagent_side_effects(&mut self, thread_id: ThreadId, event: &Event) {
+        if self.primary_thread_id == Some(thread_id) {
+            self.subagents.set_root_thread(thread_id);
+        }
+
+        if self.subagents.is_root_thread(thread_id) {
+            match &event.msg {
+                EventMsg::CollabAgentSpawnEnd(ev) => {
+                    let _ = self.subagents.on_spawn_end(ev);
+                }
+                EventMsg::CollabWaitingEnd(ev) => {
+                    self.subagents.on_wait_end(ev);
+                }
+                EventMsg::CollabCloseEnd(ev) => {
+                    let _ = self.subagents.on_close_end(ev);
+                }
+                _ => {}
+            }
+        } else {
+            let updates = self.subagents.on_agent_event(thread_id, &event.msg);
+            for cell in updates {
+                self.emit_or_queue_subagent_history(cell);
+            }
+        }
+
+        self.sync_subagent_panel_state();
     }
 
     async fn note_thread_outbound_op(&mut self, thread_id: ThreadId, op: &Op) {
@@ -1273,6 +1887,8 @@ impl App {
     }
 
     async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
+        self.process_subagent_side_effects(thread_id, &event);
+
         let refresh_pending_thread_approvals =
             ThreadEventStore::event_can_change_pending_thread_approvals(&event);
         let inactive_interactive_request = if self.active_thread_id != Some(thread_id) {
@@ -1505,6 +2121,7 @@ impl App {
 
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = Some(receiver);
+        self.sync_subagent_panel_state();
 
         let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
         let codex_op_tx = if let Some(thread) = live_thread {
@@ -1544,12 +2161,16 @@ impl App {
 
     fn reset_thread_event_state(&mut self) {
         self.abort_all_thread_event_listeners();
+        self.subagent_anim_running.store(false, Ordering::Release);
         self.thread_event_channels.clear();
         self.agent_navigation.clear();
+        self.agent_picker_threads.clear();
+        self.subagents = SubagentRegistry::new(self.config.animations);
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
         self.pending_primary_events.clear();
+        self.chat_widget.clear_subagent_panel();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
     }
@@ -1918,6 +2539,7 @@ impl App {
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
+        let animations_enabled = config.animations;
 
         let mut app = Self {
             server: thread_manager.clone(),
@@ -1938,6 +2560,7 @@ impl App {
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            subagent_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
@@ -1950,6 +2573,8 @@ impl App {
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
+            subagents: SubagentRegistry::new(animations_enabled),
+            agent_picker_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -2363,6 +2988,38 @@ impl App {
             }
             AppEvent::CommitTick => {
                 self.chat_widget.on_commit_tick();
+            }
+            AppEvent::StartSubagentAnimation => {
+                if self
+                    .subagent_anim_running
+                    .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    let tx = self.app_event_tx.clone();
+                    let running = self.subagent_anim_running.clone();
+                    thread::spawn(move || {
+                        while running.load(Ordering::Relaxed) {
+                            thread::sleep(SUBAGENT_ANIMATION_TICK);
+                            tx.send(AppEvent::SubagentTick);
+                        }
+                    });
+                }
+            }
+            AppEvent::StopSubagentAnimation => {
+                self.subagent_anim_running.store(false, Ordering::Release);
+            }
+            AppEvent::SubagentTick => {
+                let root_active = self.subagents_root_active();
+                self.update_subagent_animation(root_active);
+                if root_active && self.subagents.has_animating_agents() {
+                    self.chat_widget.on_subagent_tick();
+                }
+            }
+            AppEvent::UpdateSubagentPanel(panel) => {
+                self.chat_widget.on_subagent_panel_updated(panel);
+            }
+            AppEvent::ClearSubagentPanel => {
+                self.chat_widget.clear_subagent_panel();
             }
             AppEvent::CodexEvent(event) => {
                 self.enqueue_primary_event(event).await?;
@@ -4705,6 +5362,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn queued_subagent_panel_update_mounts_on_fresh_chat_widget_after_thread_switch() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let root_thread_id = ThreadId::new();
+        let subagent_thread_id = ThreadId::new();
+
+        app.primary_thread_id = Some(root_thread_id);
+        app.active_thread_id = Some(root_thread_id);
+        app.subagents.set_root_thread(root_thread_id);
+
+        let mut info = SubagentInfo::new(
+            1,
+            "watchdog-agent".to_string(),
+            "watchdog idle".to_string(),
+            AgentSpawnMode::Watchdog,
+        );
+        info.status = AgentStatus::PendingInit;
+        info.latest_preview = "watchdog idle".to_string();
+        info.latest_update_at = Instant::now();
+        app.subagents.order.push(subagent_thread_id);
+        app.subagents.agents.insert(subagent_thread_id, info);
+
+        app.sync_subagent_panel_state();
+
+        let queued_panel = match app_event_rx.try_recv() {
+            Ok(AppEvent::UpdateSubagentPanel(panel)) => panel,
+            other => panic!("expected queued subagent panel update, got {other:?}"),
+        };
+
+        let (fresh_chat_widget, _fresh_app_event_tx, _fresh_rx, _fresh_op_rx) =
+            make_chatwidget_manual_with_sender().await;
+        app.chat_widget = fresh_chat_widget;
+        app.chat_widget.set_composer_text(
+            "back on the root thread".to_string(),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        app.chat_widget.on_subagent_panel_updated(queued_panel);
+
+        let width = 80;
+        let height = app.chat_widget.desired_height(width);
+        let mut terminal =
+            ratatui::Terminal::new(crate::test_backend::VT100Backend::new(width, height))
+                .expect("create terminal");
+        terminal.set_viewport_area(ratatui::prelude::Rect::new(0, 0, width, height));
+        terminal
+            .draw(|f| app.chat_widget.render(f.area(), f.buffer_mut()))
+            .expect("render fresh widget with queued subagent panel");
+        let screen = terminal.backend().vt100().screen().contents();
+
+        assert!(
+            screen.contains("Subagents"),
+            "queued subagent panel update should mount on the fresh widget"
+        );
+        assert!(screen.contains("watchdog-agent"));
+    }
+
+    #[tokio::test]
     async fn replay_thread_snapshot_restores_collaboration_mode_for_draft_submit() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
@@ -5583,6 +6298,7 @@ mod tests {
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
+        let animations_enabled = config.animations;
 
         App {
             server,
@@ -5603,6 +6319,7 @@ mod tests {
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            subagent_anim_running: Arc::new(AtomicBool::new(false)),
             status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
@@ -5615,6 +6332,8 @@ mod tests {
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
+            subagents: SubagentRegistry::new(animations_enabled),
+            agent_picker_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -5642,6 +6361,7 @@ mod tests {
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
+        let animations_enabled = config.animations;
 
         (
             App {
@@ -5663,6 +6383,7 @@ mod tests {
                 has_emitted_history_lines: false,
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
+                subagent_anim_running: Arc::new(AtomicBool::new(false)),
                 status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
                 backtrack_render_pending: false,
@@ -5675,6 +6396,8 @@ mod tests {
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),
+                subagents: SubagentRegistry::new(animations_enabled),
+                agent_picker_threads: HashMap::new(),
                 active_thread_id: None,
                 active_thread_rx: None,
                 primary_thread_id: None,
