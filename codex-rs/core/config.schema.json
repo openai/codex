@@ -1344,7 +1344,7 @@
     },
     "RealtimeWsMode": {
       "enum": [
-        "dial_in",
+        "conversational",
         "transcription"
       ],
       "type": "string"
@@ -1829,7 +1829,7 @@
           "$ref": "#/definitions/RealtimeWsMode"
         }
       ],
-      "description": "Experimental / do not use. Selects the realtime websocket intent mode. `dial_in` is conversational while `transcription` is transcript-only."
+      "description": "Experimental / do not use. Selects the realtime websocket intent mode. `conversational` is speech-to-speech while `transcription` is transcript-only."
     },
     "experimental_realtime_ws_model": {
       "description": "Experimental / do not use. Selects the realtime websocket model/snapshot used for the `Op::RealtimeConversation` connection.",

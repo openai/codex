@@ -464,7 +464,7 @@ pub struct Config {
     /// used for the `Op::RealtimeConversation` connection.
     pub experimental_realtime_ws_model: Option<String>,
     /// Experimental / do not use. Selects the realtime websocket intent mode.
-    /// `dial_in` is conversational while `transcription` is transcript-only.
+    /// `conversational` is speech-to-speech while `transcription` is transcript-only.
     pub experimental_realtime_ws_mode: RealtimeWsMode,
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport instructions (the `Op::RealtimeConversation`
@@ -1242,7 +1242,7 @@ pub struct ConfigToml {
     /// used for the `Op::RealtimeConversation` connection.
     pub experimental_realtime_ws_model: Option<String>,
     /// Experimental / do not use. Selects the realtime websocket intent mode.
-    /// `dial_in` is conversational while `transcription` is transcript-only.
+    /// `conversational` is speech-to-speech while `transcription` is transcript-only.
     pub experimental_realtime_ws_mode: Option<RealtimeWsMode>,
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport instructions (the `Op::RealtimeConversation`
@@ -1393,7 +1393,6 @@ pub struct RealtimeAudioConfig {
 #[serde(rename_all = "snake_case")]
 pub enum RealtimeWsMode {
     #[default]
-    #[serde(rename = "dial_in")]
     Conversational,
     Transcription,
 }
