@@ -186,7 +186,7 @@ fn build_token_limited_compacted_history_appends_summary_message() {
 }
 
 #[test]
-fn merge_appended_history_items_appends_concurrent_tail() {
+fn append_concurrent_history_tail_if_append_only_appends_concurrent_tail() {
     let base_history = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -215,10 +215,13 @@ fn merge_appended_history_items_appends_concurrent_tail() {
         phase: None,
     }];
 
-    let merged =
-        merge_appended_history_items(&mut compacted_history, &base_history, &latest_history);
+    let merged = append_concurrent_history_tail_if_append_only(
+        &mut compacted_history,
+        &base_history,
+        &latest_history,
+    );
 
-    assert_eq!(merged, Some(1));
+    assert!(merged);
     assert_eq!(
         compacted_history,
         vec![
@@ -237,7 +240,7 @@ fn merge_appended_history_items_appends_concurrent_tail() {
 }
 
 #[test]
-fn merge_appended_history_items_rejects_non_append_only_changes() {
+fn append_concurrent_history_tail_if_append_only_rejects_non_append_only_changes() {
     let base_history = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -266,10 +269,13 @@ fn merge_appended_history_items_rejects_non_append_only_changes() {
         phase: None,
     }];
 
-    let merged =
-        merge_appended_history_items(&mut compacted_history, &base_history, &latest_history);
+    let merged = append_concurrent_history_tail_if_append_only(
+        &mut compacted_history,
+        &base_history,
+        &latest_history,
+    );
 
-    assert_eq!(merged, None);
+    assert!(!merged);
     assert_eq!(
         compacted_history,
         vec![ResponseItem::Message {

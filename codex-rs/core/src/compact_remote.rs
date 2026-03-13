@@ -4,8 +4,8 @@ use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::compact::InitialContextInjection;
+use crate::compact::append_concurrent_history_tail_if_append_only;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
-use crate::compact::merge_appended_history_items;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
@@ -137,13 +137,11 @@ async fn run_remote_compact_task_inner_impl(
         new_history.extend(ghost_snapshots);
     }
     let latest_history_snapshot = sess.clone_history().await;
-    if merge_appended_history_items(
+    if !append_concurrent_history_tail_if_append_only(
         &mut new_history,
         history_snapshot.raw_items(),
         latest_history_snapshot.raw_items(),
-    )
-    .is_none()
-    {
+    ) {
         warn!(
             turn_id = %turn_context.sub_id,
             "session history changed non-append-only during remote compaction; skipping concurrent tail merge"
