@@ -1851,7 +1851,7 @@ async fn js_repl_emit_image_rejects_mixed_content() -> anyhow::Result<()> {
                 "properties": {},
                 "additionalProperties": false
             }),
-            expose_to_context: true,
+            defer_loading: false,
         }])
         .await;
     if !turn
@@ -1950,7 +1950,7 @@ async fn js_repl_dynamic_tool_response_preserves_js_line_separator_text() -> any
                     "properties": {},
                     "additionalProperties": false
                 }),
-                expose_to_context: true,
+                defer_loading: false,
             }])
             .await;
 
@@ -2028,7 +2028,7 @@ async fn js_repl_can_call_hidden_dynamic_tools() -> anyhow::Result<()> {
                 "required": ["city"],
                 "additionalProperties": false
             }),
-            expose_to_context: false,
+            defer_loading: true,
         }])
         .await;
 

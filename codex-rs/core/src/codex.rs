@@ -6219,19 +6219,19 @@ fn build_prompt(
     turn_context: &TurnContext,
     base_instructions: BaseInstructions,
 ) -> Prompt {
-    let hidden_dynamic_tools = turn_context
+    let deferred_dynamic_tools = turn_context
         .dynamic_tools
         .iter()
-        .filter(|tool| !tool.expose_to_context)
+        .filter(|tool| tool.defer_loading)
         .map(|tool| tool.name.as_str())
         .collect::<HashSet<_>>();
-    let tools = if hidden_dynamic_tools.is_empty() {
+    let tools = if deferred_dynamic_tools.is_empty() {
         router.model_visible_specs()
     } else {
         router
             .model_visible_specs()
             .into_iter()
-            .filter(|spec| !hidden_dynamic_tools.contains(spec.name()))
+            .filter(|spec| !deferred_dynamic_tools.contains(spec.name()))
             .collect()
     };
 

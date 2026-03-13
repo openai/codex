@@ -61,7 +61,7 @@ async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> 
         name: "demo_tool".to_string(),
         description: "Demo dynamic tool".to_string(),
         input_schema: input_schema.clone(),
-        expose_to_context: true,
+        defer_loading: false,
     };
 
     // Thread start injects dynamic tools into the thread's tool registry.
@@ -141,7 +141,7 @@ async fn thread_start_keeps_hidden_dynamic_tools_out_of_model_requests() -> Resu
             "required": ["city"],
             "additionalProperties": false,
         }),
-        expose_to_context: false,
+        defer_loading: true,
     };
 
     let thread_req = mcp
@@ -227,7 +227,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
             "required": ["city"],
             "additionalProperties": false,
         }),
-        expose_to_context: true,
+        defer_loading: false,
     };
 
     let thread_req = mcp
@@ -396,7 +396,7 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
             "required": ["city"],
             "additionalProperties": false,
         }),
-        expose_to_context: true,
+        defer_loading: false,
     };
 
     let thread_req = mcp
