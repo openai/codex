@@ -6070,6 +6070,10 @@ async fn slash_help_search_navigates_matches_with_n_and_p() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Char('p')));
     let previous = render_bottom_popup(&chat, 100);
     assert!(previous.contains("2/3 |"));
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT));
+    let shifted_previous = render_bottom_popup(&chat, 100);
+    assert!(shifted_previous.contains("1/3 |"));
 }
 
 #[tokio::test]
