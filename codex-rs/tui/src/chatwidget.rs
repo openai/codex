@@ -1155,10 +1155,6 @@ impl ChatWidget {
         self.pending_status_indicator_restore = false;
     }
 
-    fn current_status_is_guardian_review(&self) -> bool {
-        self.current_status.is_guardian_review()
-    }
-
     /// Update the status indicator header and details.
     ///
     /// Passing `None` clears any existing details.
@@ -2481,11 +2477,11 @@ impl ChatWidget {
                     StatusDetailsCapitalization::Preserve,
                     status.details_max_lines,
                 );
-            } else if self.current_status_is_guardian_review() {
+            } else if self.current_status.is_guardian_review() {
                 self.set_status_header(String::from("Working"));
             }
         } else if self.pending_guardian_review_status.is_empty()
-            && self.current_status_is_guardian_review()
+            && self.current_status.is_guardian_review()
         {
             self.set_status_header(String::from("Working"));
         }
