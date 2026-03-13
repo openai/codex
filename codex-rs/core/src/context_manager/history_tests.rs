@@ -440,7 +440,7 @@ fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
 }
 
 #[test]
-fn for_prompt_preserves_image_generation_calls_when_images_are_unsupported() {
+fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
     let history = create_history_with_items(vec![
         ResponseItem::Message {
             id: None,
@@ -475,7 +475,7 @@ fn for_prompt_preserves_image_generation_calls_when_images_are_unsupported() {
                 id: "ig_123".to_string(),
                 status: "completed".to_string(),
                 revised_prompt: Some("lobster".to_string()),
-                result: "Zm9v".to_string(),
+                result: String::new(),
             },
         ]
     );

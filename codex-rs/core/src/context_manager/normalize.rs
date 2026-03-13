@@ -335,6 +335,9 @@ pub(crate) fn strip_images_when_unsupported(
                     *content_items = normalized_content_items;
                 }
             }
+            ResponseItem::ImageGenerationCall { result, .. } => {
+                result.clear();
+            }
             _ => {}
         }
     }
