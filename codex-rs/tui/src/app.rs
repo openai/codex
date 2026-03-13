@@ -7056,7 +7056,7 @@ guardian_approval = true
         });
 
         app.chat_widget
-            .set_skills_from_response(&test_skill_response(current_cwd.clone(), "current-skill"));
+            .set_skills_from_response(&test_skill_response(current_cwd, "current-skill"));
         assert_eq!(app.chat_widget.loaded_skill_names(), vec!["current-skill"]);
 
         app.handle_skills_list_loaded(
