@@ -33,6 +33,10 @@ async fn user_prompt_submit_hook_injects_context_before_model_request() -> Resul
 
     let server = start_mock_server().await;
     let hook_context = "Follow the team checklist.";
+    let hook_command = serde_json::to_string(&format!(
+        "printf '%s' '{{\"hookSpecificOutput\":{{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"{hook_context}\"}}}}'"
+    ))
+    .expect("serialize hook command");
     let hook_json = format!(
         r#"{{
   "hooks": {{
@@ -41,7 +45,7 @@ async fn user_prompt_submit_hook_injects_context_before_model_request() -> Resul
         "hooks": [
           {{
             "type": "command",
-            "command": "printf '{hook_context}'",
+            "command": {hook_command},
             "statusMessage": "checking prompt"
           }}
         ]
@@ -141,6 +145,14 @@ async fn session_start_runs_before_user_prompt_submit_on_first_turn() -> Result<
     let server = start_mock_server().await;
     let session_context = "Warm the observatory.";
     let user_prompt_context = "Check the prompt parchment.";
+    let session_start_command = serde_json::to_string(&format!(
+        "printf '%s' '{{\"hookSpecificOutput\":{{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"{session_context}\"}}}}'"
+    ))
+    .expect("serialize session start hook command");
+    let user_prompt_submit_command = serde_json::to_string(&format!(
+        "printf '%s' '{{\"hookSpecificOutput\":{{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"{user_prompt_context}\"}}}}'"
+    ))
+    .expect("serialize user prompt submit hook command");
     let hook_json = format!(
         r#"{{
   "hooks": {{
@@ -150,7 +162,7 @@ async fn session_start_runs_before_user_prompt_submit_on_first_turn() -> Result<
         "hooks": [
           {{
             "type": "command",
-            "command": "printf '{session_context}'",
+            "command": {session_start_command},
             "statusMessage": "warming session"
           }}
         ]
@@ -161,7 +173,7 @@ async fn session_start_runs_before_user_prompt_submit_on_first_turn() -> Result<
         "hooks": [
           {{
             "type": "command",
-            "command": "printf '{user_prompt_context}'",
+            "command": {user_prompt_submit_command},
             "statusMessage": "checking prompt"
           }}
         ]
