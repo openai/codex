@@ -2430,7 +2430,17 @@ async fn on_command_execution_request_approval_response(
             let (decision, completion_status) = match decision {
                 CommandExecutionApprovalDecision::Accept => (ReviewDecision::Approved, None),
                 CommandExecutionApprovalDecision::AcceptWithOverrideCommand { command } => {
-                    if command.is_empty() {
+                    // Network-only approval prompts omit the command, so they
+                    // must not allow clients to steer execution via override.
+                    if completion_item.is_none() {
+                        error!(
+                            "failed to deserialize CommandExecutionRequestApprovalResponse: override command is not allowed for network-only approvals"
+                        );
+                        (
+                            ReviewDecision::Denied,
+                            Some(CommandExecutionStatus::Declined),
+                        )
+                    } else if command.is_empty() {
                         error!(
                             "failed to deserialize CommandExecutionRequestApprovalResponse: override command cannot be empty"
                         );
