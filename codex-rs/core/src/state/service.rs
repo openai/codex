@@ -6,6 +6,7 @@ use crate::RolloutRecorder;
 use crate::agent::AgentControl;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::client::ModelClient;
+use crate::config::NetworkProxySpec;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
 use crate::file_watcher::FileWatcher;
@@ -13,6 +14,7 @@ use crate::mcp::McpManager;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
 use crate::plugins::PluginsManager;
+use crate::skill_network_proxy_cache::SkillNetworkProxyCache;
 use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
 use crate::tools::code_mode::CodeModeService;
@@ -55,7 +57,9 @@ pub(crate) struct SessionServices {
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) file_watcher: Arc<FileWatcher>,
     pub(crate) agent_control: AgentControl,
+    pub(crate) network_proxy_spec: Option<Arc<NetworkProxySpec>>,
     pub(crate) network_proxy: Option<StartedNetworkProxy>,
+    pub(crate) skill_network_proxy_cache: Arc<SkillNetworkProxyCache>,
     pub(crate) network_approval: Arc<NetworkApprovalService>,
     pub(crate) state_db: Option<StateDbHandle>,
     /// Session-scoped model client shared across turns.

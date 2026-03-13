@@ -376,6 +376,9 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         plugins_manager,
         mcp_manager,
         file_watcher,
+        skill_network_proxy_cache: Arc::new(
+            crate::skill_network_proxy_cache::SkillNetworkProxyCache::new(),
+        ),
         conversation_history: InitialHistory::New,
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
             GUARDIAN_SUBAGENT_NAME.to_string(),

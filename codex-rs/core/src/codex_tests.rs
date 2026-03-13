@@ -2025,6 +2025,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         plugins_manager,
         mcp_manager,
         Arc::new(FileWatcher::noop()),
+        Arc::new(crate::skill_network_proxy_cache::SkillNetworkProxyCache::new()),
         AgentControl::default(),
     )
     .await;
@@ -2152,7 +2153,11 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         mcp_manager,
         file_watcher,
         agent_control,
+        network_proxy_spec: None,
         network_proxy: None,
+        skill_network_proxy_cache: Arc::new(
+            crate::skill_network_proxy_cache::SkillNetworkProxyCache::new(),
+        ),
         network_approval: Arc::clone(&network_approval),
         state_db: None,
         model_client: ModelClient::new(
@@ -2794,7 +2799,11 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         mcp_manager,
         file_watcher,
         agent_control,
+        network_proxy_spec: None,
         network_proxy: None,
+        skill_network_proxy_cache: Arc::new(
+            crate::skill_network_proxy_cache::SkillNetworkProxyCache::new(),
+        ),
         network_approval: Arc::clone(&network_approval),
         state_db: None,
         model_client: ModelClient::new(

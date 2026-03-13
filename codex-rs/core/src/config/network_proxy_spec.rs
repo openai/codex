@@ -1,4 +1,5 @@
 use crate::config_loader::NetworkConstraints;
+use crate::skills::model::SkillManagedNetworkOverride;
 use async_trait::async_trait;
 use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::ConfigReloader;
@@ -16,6 +17,9 @@ use codex_network_proxy::host_and_port_from_network_addr;
 use codex_network_proxy::validate_policy_against_constraints;
 use codex_protocol::protocol::SandboxPolicy;
 use std::sync::Arc;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct SkillNetworkProxyKey(String);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkProxySpec {
@@ -79,6 +83,33 @@ impl NetworkProxySpec {
 
     pub fn socks_enabled(&self) -> bool {
         self.config.network.enable_socks5
+    }
+
+    pub(crate) fn with_skill_managed_network_override(
+        &self,
+        managed_network_override: &SkillManagedNetworkOverride,
+    ) -> Self {
+        let mut spec = self.clone();
+        if let Some(allowed_domains) = managed_network_override.allowed_domains.as_ref() {
+            spec.config.network.allowed_domains = allowed_domains.clone();
+            spec.constraints.allowed_domains = Some(allowed_domains.clone());
+        }
+        if let Some(denied_domains) = managed_network_override.denied_domains.as_ref() {
+            spec.config.network.denied_domains = denied_domains.clone();
+            spec.constraints.denied_domains = Some(denied_domains.clone());
+        }
+        spec
+    }
+
+    pub(crate) fn shared_skill_proxy_key(&self) -> SkillNetworkProxyKey {
+        let mut normalized = self.clone();
+        sort_string_list(&mut normalized.config.network.allowed_domains);
+        sort_string_list(&mut normalized.config.network.denied_domains);
+        sort_string_list(&mut normalized.config.network.allow_unix_sockets);
+        sort_option_string_list(&mut normalized.constraints.allowed_domains);
+        sort_option_string_list(&mut normalized.constraints.denied_domains);
+        sort_option_string_list(&mut normalized.constraints.allow_unix_sockets);
+        SkillNetworkProxyKey(format!("{normalized:?}"))
     }
 
     pub(crate) fn from_config_and_constraints(
@@ -276,6 +307,16 @@ impl NetworkProxySpec {
             }
         }
         managed
+    }
+}
+
+fn sort_string_list(values: &mut [String]) {
+    values.sort_unstable();
+}
+
+fn sort_option_string_list(values: &mut Option<Vec<String>>) {
+    if let Some(values) = values.as_mut() {
+        sort_string_list(values);
     }
 }
 

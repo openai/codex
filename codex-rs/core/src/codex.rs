@@ -41,6 +41,7 @@ use crate::realtime_conversation::handle_close as handle_realtime_conversation_c
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::rollout::session_index;
+use crate::skill_network_proxy_cache::SkillNetworkProxyCache;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -360,6 +361,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) file_watcher: Arc<FileWatcher>,
+    pub(crate) skill_network_proxy_cache: Arc<SkillNetworkProxyCache>,
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
     pub(crate) agent_control: AgentControl,
@@ -410,6 +412,7 @@ impl Codex {
             plugins_manager,
             mcp_manager,
             file_watcher,
+            skill_network_proxy_cache,
             conversation_history,
             session_source,
             agent_control,
@@ -599,6 +602,7 @@ impl Codex {
             plugins_manager,
             mcp_manager.clone(),
             file_watcher,
+            skill_network_proxy_cache,
             agent_control,
         )
         .instrument(session_init_span)
@@ -1182,6 +1186,50 @@ impl Session {
         Ok((network_proxy, session_network_proxy))
     }
 
+    fn shared_skill_network_proxy_spec(
+        &self,
+        skill: &SkillMetadata,
+    ) -> Option<crate::config::NetworkProxySpec> {
+        let managed_network_override = skill.managed_network_override.as_ref()?;
+        let base_spec = self.services.network_proxy_spec.as_ref()?;
+        Some(base_spec.with_skill_managed_network_override(managed_network_override))
+    }
+
+    pub(crate) async fn get_or_start_skill_network_proxy(
+        self: &Arc<Self>,
+        skill: &SkillMetadata,
+    ) -> anyhow::Result<Option<NetworkProxy>> {
+        let Some(spec) = self.shared_skill_network_proxy_spec(skill) else {
+            return Ok(None);
+        };
+        let key = spec.shared_skill_proxy_key();
+        let sandbox_policy = {
+            let state = self.state.lock().await;
+            state.session_configuration.sandbox_policy.get().clone()
+        };
+        let proxy = self
+            .services
+            .skill_network_proxy_cache
+            .get_or_start(key, || async move {
+                // Shared skill proxies are cached by spec and reused across commands, so this
+                // startup path must not capture turn-specific approval callbacks or per-command
+                // audit context. The proxy should enforce the precomputed skill override in
+                // `spec` only, which is why the optional hooks stay `None`, approval flow is
+                // disabled, and audit metadata falls back to the empty default.
+                spec.start_proxy(
+                    &sandbox_policy,
+                    None,
+                    None,
+                    false,
+                    NetworkProxyAuditMetadata::default(),
+                )
+                .await
+                .map_err(|err| anyhow::anyhow!("failed to start shared skill network proxy: {err}"))
+            })
+            .await?;
+        Ok(Some(proxy.proxy()))
+    }
+
     /// Don't expand the number of mutated arguments on config. We are in the process of getting rid of it.
     pub(crate) fn build_per_turn_config(session_configuration: &SessionConfiguration) -> Config {
         // todo(aibrahim): store this state somewhere else so we don't need to mut config
@@ -1355,6 +1403,7 @@ impl Session {
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
         file_watcher: Arc<FileWatcher>,
+        skill_network_proxy_cache: Arc<SkillNetworkProxyCache>,
         agent_control: AgentControl,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -1725,7 +1774,9 @@ impl Session {
             mcp_manager: Arc::clone(&mcp_manager),
             file_watcher,
             agent_control,
+            network_proxy_spec: config.permissions.network.clone().map(Arc::new),
             network_proxy,
+            skill_network_proxy_cache,
             network_approval: Arc::clone(&network_approval),
             state_db: state_db_ctx.clone(),
             model_client: ModelClient::new(
