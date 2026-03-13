@@ -43,6 +43,8 @@ use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::GrantedPermissionProfile as V2GrantedPermissionProfile;
+use codex_app_server_protocol::HookCompletedNotification;
+use codex_app_server_protocol::HookStartedNotification;
 use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -120,6 +122,8 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TurnDiffEvent;
+use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
@@ -272,6 +276,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             if let ApiVersion::V2 = api_version {
                 match event.payload {
                     RealtimeEvent::SessionUpdated { .. } => {}
+                    RealtimeEvent::InputTranscriptDelta(_) => {}
+                    RealtimeEvent::OutputTranscriptDelta(_) => {}
                     RealtimeEvent::AudioOut(audio) => {
                         let notification = ThreadRealtimeOutputAudioDeltaNotification {
                             thread_id: conversation_id.to_string(),
@@ -303,7 +309,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                                 "handoff_id": handoff.handoff_id,
                                 "item_id": handoff.item_id,
                                 "input_transcript": handoff.input_transcript,
-                                "messages": handoff.messages,
+                                "active_transcript": handoff.active_transcript,
                             }),
                         };
                         outgoing
@@ -694,7 +700,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     turn_id: request.turn_id.clone(),
                     item_id: request.call_id.clone(),
                     reason: request.reason,
-                    permissions: request.permissions.into(),
+                    permissions: CorePermissionProfile::from(request.permissions).into(),
                 };
                 let (pending_request_id, rx) = outgoing
                     .send_request(ServerRequestPayload::PermissionsRequestApproval(params))
@@ -718,6 +724,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 );
                 let empty = CoreRequestPermissionsResponse {
                     permissions: Default::default(),
+                    scope: CorePermissionGrantScope::Turn,
                 };
                 if let Err(err) = conversation
                     .submit(Op::RequestPermissionsResponse {
@@ -856,6 +863,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_ids: Vec::new(),
                 prompt: Some(begin_event.prompt),
+                model: Some(begin_event.model),
+                reasoning_effort: Some(begin_event.reasoning_effort),
                 agents_states: HashMap::new(),
             };
             let notification = ItemStartedNotification {
@@ -893,6 +902,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_ids,
                 prompt: Some(end_event.prompt),
+                model: Some(end_event.model),
+                reasoning_effort: Some(end_event.reasoning_effort),
                 agents_states,
             };
             let notification = ItemCompletedNotification {
@@ -913,6 +924,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_ids,
                 prompt: Some(begin_event.prompt),
+                model: None,
+                reasoning_effort: None,
                 agents_states: HashMap::new(),
             };
             let notification = ItemStartedNotification {
@@ -939,6 +952,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_ids: vec![receiver_id.clone()],
                 prompt: Some(end_event.prompt),
+                model: None,
+                reasoning_effort: None,
                 agents_states: [(receiver_id, received_status)].into_iter().collect(),
             };
             let notification = ItemCompletedNotification {
@@ -963,6 +978,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_ids,
                 prompt: None,
+                model: None,
+                reasoning_effort: None,
                 agents_states: HashMap::new(),
             };
             let notification = ItemStartedNotification {
@@ -999,6 +1016,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_ids,
                 prompt: None,
+                model: None,
+                reasoning_effort: None,
                 agents_states,
             };
             let notification = ItemCompletedNotification {
@@ -1018,6 +1037,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_ids: vec![begin_event.receiver_thread_id.to_string()],
                 prompt: None,
+                model: None,
+                reasoning_effort: None,
                 agents_states: HashMap::new(),
             };
             let notification = ItemStartedNotification {
@@ -1058,6 +1079,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_ids: vec![receiver_id],
                 prompt: None,
+                model: None,
+                reasoning_effort: None,
                 agents_states,
             };
             let notification = ItemCompletedNotification {
@@ -1305,6 +1328,30 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
+        }
+        EventMsg::HookStarted(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = HookStartedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event.turn_id,
+                    run: event.run.into(),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::HookStarted(notification))
+                    .await;
+            }
+        }
+        EventMsg::HookCompleted(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = HookCompletedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event.turn_id,
+                    run: event.run.into(),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::HookCompleted(notification))
+                    .await;
+            }
         }
         EventMsg::ExitedReviewMode(review_event) => {
             let review = match review_event.review_output {
@@ -2181,7 +2228,7 @@ fn mcp_server_elicitation_response_from_client_result(
 
 async fn on_request_permissions_response(
     call_id: String,
-    requested_permissions: CorePermissionProfile,
+    requested_permissions: CoreRequestPermissionProfile,
     pending_request_id: RequestId,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
@@ -2209,7 +2256,7 @@ async fn on_request_permissions_response(
 }
 
 fn request_permissions_response_from_client_result(
-    requested_permissions: CorePermissionProfile,
+    requested_permissions: CoreRequestPermissionProfile,
     response: std::result::Result<ClientRequestResult, oneshot::error::RecvError>,
 ) -> Option<CoreRequestPermissionsResponse> {
     let value = match response {
@@ -2219,12 +2266,14 @@ fn request_permissions_response_from_client_result(
             error!("request failed with client error: {err:?}");
             return Some(CoreRequestPermissionsResponse {
                 permissions: Default::default(),
+                scope: CorePermissionGrantScope::Turn,
             });
         }
         Err(err) => {
             error!("request failed: {err:?}");
             return Some(CoreRequestPermissionsResponse {
                 permissions: Default::default(),
+                scope: CorePermissionGrantScope::Turn,
             });
         }
     };
@@ -2234,13 +2283,16 @@ fn request_permissions_response_from_client_result(
             error!("failed to deserialize PermissionsRequestApprovalResponse: {err}");
             PermissionsRequestApprovalResponse {
                 permissions: V2GrantedPermissionProfile::default(),
+                scope: codex_app_server_protocol::PermissionGrantScope::Turn,
             }
         });
     Some(CoreRequestPermissionsResponse {
         permissions: intersect_permission_profiles(
-            requested_permissions,
+            requested_permissions.into(),
             response.permissions.into(),
-        ),
+        )
+        .into(),
+        scope: response.scope.to_core(),
     })
 }
 
@@ -2481,6 +2533,8 @@ fn collab_resume_begin_item(
         sender_thread_id: begin_event.sender_thread_id.to_string(),
         receiver_thread_ids: vec![begin_event.receiver_thread_id.to_string()],
         prompt: None,
+        model: None,
+        reasoning_effort: None,
         agents_states: HashMap::new(),
     }
 }
@@ -2505,6 +2559,8 @@ fn collab_resume_end_item(end_event: codex_protocol::protocol::CollabResumeEndEv
         sender_thread_id: end_event.sender_thread_id.to_string(),
         receiver_thread_ids: vec![receiver_id],
         prompt: None,
+        model: None,
+        reasoning_effort: None,
         agents_states,
     }
 }
@@ -2592,9 +2648,8 @@ mod tests {
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_protocol::mcp::CallToolResult;
-    use codex_protocol::models::MacOsAutomationPermission;
-    use codex_protocol::models::MacOsPreferencesPermission;
-    use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+    use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
+    use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
     use codex_protocol::protocol::CollabResumeBeginEvent;
@@ -2605,6 +2660,7 @@ mod tests {
     use codex_protocol::protocol::RateLimitWindow;
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use rmcp::model::Content;
     use serde_json::Value as JsonValue;
@@ -2666,7 +2722,7 @@ mod tests {
         };
 
         let response = request_permissions_response_from_client_result(
-            CorePermissionProfile::default(),
+            CoreRequestPermissionProfile::default(),
             Ok(Err(error)),
         );
 
@@ -2674,90 +2730,91 @@ mod tests {
     }
 
     #[test]
-    fn request_permissions_response_accepts_partial_macos_grants() {
-        let requested_permissions = CorePermissionProfile {
-            macos: Some(MacOsSeatbeltProfileExtensions {
-                macos_preferences: MacOsPreferencesPermission::ReadWrite,
-                macos_automation: MacOsAutomationPermission::BundleIds(vec![
-                    "com.apple.Notes".to_string(),
-                    "com.apple.Reminders".to_string(),
-                ]),
-                macos_accessibility: true,
-                macos_calendar: true,
+    fn request_permissions_response_accepts_partial_network_and_file_system_grants() {
+        let input_path = if cfg!(target_os = "windows") {
+            r"C:\tmp\input"
+        } else {
+            "/tmp/input"
+        };
+        let output_path = if cfg!(target_os = "windows") {
+            r"C:\tmp\output"
+        } else {
+            "/tmp/output"
+        };
+        let ignored_path = if cfg!(target_os = "windows") {
+            r"C:\tmp\ignored"
+        } else {
+            "/tmp/ignored"
+        };
+        let absolute_path = |path: &str| {
+            AbsolutePathBuf::try_from(std::path::PathBuf::from(path)).expect("absolute path")
+        };
+        let requested_permissions = CoreRequestPermissionProfile {
+            network: Some(CoreNetworkPermissions {
+                enabled: Some(true),
             }),
-            ..Default::default()
+            file_system: Some(CoreFileSystemPermissions {
+                read: Some(vec![absolute_path(input_path)]),
+                write: Some(vec![absolute_path(output_path)]),
+            }),
         };
         let cases = vec![
-            (serde_json::json!({}), CorePermissionProfile::default()),
             (
-                serde_json::json!({
-                    "preferences": "read_only",
-                }),
-                CorePermissionProfile {
-                    macos: Some(MacOsSeatbeltProfileExtensions {
-                        macos_preferences: MacOsPreferencesPermission::ReadOnly,
-                        macos_automation: MacOsAutomationPermission::None,
-                        macos_accessibility: false,
-                        macos_calendar: false,
-                    }),
-                    ..Default::default()
-                },
+                serde_json::json!({}),
+                CoreRequestPermissionProfile::default(),
             ),
             (
                 serde_json::json!({
-                    "automations": {
-                        "bundle_ids": ["com.apple.Notes"],
+                    "network": {
+                        "enabled": true,
                     },
                 }),
-                CorePermissionProfile {
-                    macos: Some(MacOsSeatbeltProfileExtensions {
-                        macos_preferences: MacOsPreferencesPermission::None,
-                        macos_automation: MacOsAutomationPermission::BundleIds(vec![
-                            "com.apple.Notes".to_string(),
-                        ]),
-                        macos_accessibility: false,
-                        macos_calendar: false,
+                CoreRequestPermissionProfile {
+                    network: Some(CoreNetworkPermissions {
+                        enabled: Some(true),
                     }),
-                    ..Default::default()
+                    ..CoreRequestPermissionProfile::default()
                 },
             ),
             (
                 serde_json::json!({
-                    "accessibility": true,
+                    "fileSystem": {
+                        "write": [output_path],
+                    },
                 }),
-                CorePermissionProfile {
-                    macos: Some(MacOsSeatbeltProfileExtensions {
-                        macos_preferences: MacOsPreferencesPermission::None,
-                        macos_automation: MacOsAutomationPermission::None,
-                        macos_accessibility: true,
-                        macos_calendar: false,
+                CoreRequestPermissionProfile {
+                    file_system: Some(CoreFileSystemPermissions {
+                        read: None,
+                        write: Some(vec![absolute_path(output_path)]),
                     }),
-                    ..Default::default()
+                    ..CoreRequestPermissionProfile::default()
                 },
             ),
             (
                 serde_json::json!({
-                    "calendar": true,
+                    "fileSystem": {
+                        "read": [input_path],
+                        "write": [output_path, ignored_path],
+                    },
+                    "macos": {
+                        "calendar": true,
+                    },
                 }),
-                CorePermissionProfile {
-                    macos: Some(MacOsSeatbeltProfileExtensions {
-                        macos_preferences: MacOsPreferencesPermission::None,
-                        macos_automation: MacOsAutomationPermission::None,
-                        macos_accessibility: false,
-                        macos_calendar: true,
+                CoreRequestPermissionProfile {
+                    file_system: Some(CoreFileSystemPermissions {
+                        read: Some(vec![absolute_path(input_path)]),
+                        write: Some(vec![absolute_path(output_path)]),
                     }),
-                    ..Default::default()
+                    ..CoreRequestPermissionProfile::default()
                 },
             ),
         ];
 
-        for (granted_macos, expected_permissions) in cases {
+        for (granted_permissions, expected_permissions) in cases {
             let response = request_permissions_response_from_client_result(
                 requested_permissions.clone(),
                 Ok(Ok(serde_json::json!({
-                    "permissions": {
-                        "macos": granted_macos,
-                    },
+                    "permissions": granted_permissions,
                 }))),
             )
             .expect("response should be accepted");
@@ -2766,9 +2823,30 @@ mod tests {
                 response,
                 CoreRequestPermissionsResponse {
                     permissions: expected_permissions,
+                    scope: CorePermissionGrantScope::Turn,
                 }
             );
         }
+    }
+
+    #[test]
+    fn request_permissions_response_preserves_session_scope() {
+        let response = request_permissions_response_from_client_result(
+            CoreRequestPermissionProfile::default(),
+            Ok(Ok(serde_json::json!({
+                "scope": "session",
+                "permissions": {},
+            }))),
+        )
+        .expect("response should be accepted");
+
+        assert_eq!(
+            response,
+            CoreRequestPermissionsResponse {
+                permissions: CoreRequestPermissionProfile::default(),
+                scope: CorePermissionGrantScope::Session,
+            }
+        );
     }
 
     #[test]
@@ -2789,6 +2867,8 @@ mod tests {
             sender_thread_id: event.sender_thread_id.to_string(),
             receiver_thread_ids: vec![event.receiver_thread_id.to_string()],
             prompt: None,
+            model: None,
+            reasoning_effort: None,
             agents_states: HashMap::new(),
         };
         assert_eq!(item, expected);
@@ -2814,6 +2894,8 @@ mod tests {
             sender_thread_id: event.sender_thread_id.to_string(),
             receiver_thread_ids: vec![receiver_id.clone()],
             prompt: None,
+            model: None,
+            reasoning_effort: None,
             agents_states: [(
                 receiver_id,
                 V2CollabAgentStatus::from(codex_protocol::protocol::AgentStatus::NotFound),

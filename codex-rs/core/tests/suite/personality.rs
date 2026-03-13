@@ -658,6 +658,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         input_modalities: default_input_modalities(),
         prefer_websockets: false,
         used_fallback_model_metadata: false,
+        supports_search_tool: false,
     };
 
     let _models_mock = mount_models_once(
@@ -773,6 +774,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         input_modalities: default_input_modalities(),
         prefer_websockets: false,
         used_fallback_model_metadata: false,
+        supports_search_tool: false,
     };
 
     let _models_mock = mount_models_once(
@@ -867,7 +869,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
     let developer_texts = request.message_input_texts("developer");
     let personality_text = developer_texts
         .iter()
-        .find(|text| text.contains("<personality_spec>"))
+        .find(|text| text.contains(remote_friendly_message))
         .expect("expected personality update message in developer input");
 
     assert!(

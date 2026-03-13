@@ -22,6 +22,7 @@ pub const RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC: &str =
 pub const TURN_E2E_DURATION_METRIC: &str = "codex.turn.e2e_duration_ms";
 pub const TURN_TTFT_DURATION_METRIC: &str = "codex.turn.ttft.duration_ms";
 pub const TURN_TTFM_DURATION_METRIC: &str = "codex.turn.ttfm.duration_ms";
+pub const TURN_NETWORK_PROXY_METRIC: &str = "codex.turn.network_proxy";
 pub const TURN_TOOL_CALL_METRIC: &str = "codex.turn.tool.call";
 pub const TURN_TOKEN_USAGE_METRIC: &str = "codex.turn.token_usage";
 pub const THREAD_STARTED_METRIC: &str = "codex.thread.started";

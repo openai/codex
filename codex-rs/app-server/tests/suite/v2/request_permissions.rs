@@ -6,6 +6,7 @@ use app_test_support::create_request_permissions_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::PermissionGrantScope;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
@@ -95,6 +96,7 @@ async fn request_permissions_round_trip() -> Result<()> {
                 }),
                 macos: None,
             },
+            scope: PermissionGrantScope::Turn,
         })?,
     )
     .await?;

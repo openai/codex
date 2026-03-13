@@ -105,6 +105,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
         ResponseItem::FunctionCall {
             id: None,
             name: "read_file".to_string(),
+            namespace: None,
             arguments: "{\"path\":\"README.md\"}".to_string(),
             call_id: "call-1".to_string(),
         },
@@ -169,6 +170,45 @@ fn format_guardian_action_pretty_truncates_large_string_fields() {
 
     assert!(rendered.contains("\"tool\": \"apply_patch\""));
     assert!(rendered.len() < patch.len());
+}
+
+#[test]
+fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() {
+    let action = GuardianApprovalRequest::McpToolCall {
+        server: "mcp_server".to_string(),
+        tool_name: "browser_navigate".to_string(),
+        arguments: Some(serde_json::json!({
+            "url": "https://example.com",
+        })),
+        connector_id: None,
+        connector_name: Some("Playwright".to_string()),
+        connector_description: None,
+        tool_title: Some("Navigate".to_string()),
+        tool_description: None,
+        annotations: Some(GuardianMcpAnnotations {
+            destructive_hint: Some(true),
+            open_world_hint: None,
+            read_only_hint: Some(false),
+        }),
+    };
+
+    assert_eq!(
+        guardian_approval_request_to_json(&action),
+        serde_json::json!({
+            "tool": "mcp_tool_call",
+            "server": "mcp_server",
+            "tool_name": "browser_navigate",
+            "arguments": {
+                "url": "https://example.com",
+            },
+            "connector_name": "Playwright",
+            "tool_title": "Navigate",
+            "annotations": {
+                "destructive_hint": true,
+                "read_only_hint": false,
+            },
+        })
+    );
 }
 
 #[test]
@@ -280,6 +320,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
                 ResponseItem::FunctionCall {
                     id: None,
                     name: "gh_repo_view".to_string(),
+                    namespace: None,
                     arguments: "{\"repo\":\"openai/codex\"}".to_string(),
                     call_id: "call-1".to_string(),
                 },

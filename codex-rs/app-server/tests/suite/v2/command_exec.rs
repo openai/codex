@@ -29,7 +29,6 @@ use super::connection_handling_websocket::assert_no_message;
 use super::connection_handling_websocket::connect_websocket;
 use super::connection_handling_websocket::create_config_toml;
 use super::connection_handling_websocket::read_jsonrpc_message;
-use super::connection_handling_websocket::reserve_local_addr;
 use super::connection_handling_websocket::send_initialize_request;
 use super::connection_handling_websocket::send_request;
 use super::connection_handling_websocket::spawn_websocket_server;
@@ -711,9 +710,14 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let marker = format!(
+        "codex-command-exec-marker-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    );
 
-    let bind_addr = reserve_local_addr()?;
-    let mut process = spawn_websocket_server(codex_home.path(), bind_addr).await?;
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
 
     let mut ws1 = connect_websocket(bind_addr).await?;
     let mut ws2 = connect_websocket(bind_addr).await?;
@@ -728,7 +732,12 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
         "command/exec",
         101,
         Some(serde_json::json!({
-            "command": ["sh", "-lc", "printf 'ready\\n%s\\n' $$; sleep 30"],
+            "command": [
+                "python3",
+                "-c",
+                "import time; print('ready', flush=True); time.sleep(30)",
+                marker,
+            ],
             "processId": "shared-process",
             "streamStdoutStderr": true,
         })),
@@ -739,12 +748,8 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
     assert_eq!(delta.process_id, "shared-process");
     assert_eq!(delta.stream, CommandExecOutputStream::Stdout);
     let delta_text = String::from_utf8(STANDARD.decode(&delta.delta_base64)?)?;
-    let pid = delta_text
-        .lines()
-        .last()
-        .context("delta should include shell pid")?
-        .parse::<u32>()
-        .context("parse shell pid")?;
+    assert!(delta_text.contains("ready"));
+    wait_for_process_marker(&marker, true).await?;
 
     send_request(
         &mut ws2,
@@ -768,12 +773,12 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
         terminate_error.error.message,
         "no active command/exec for process id \"shared-process\""
     );
-    assert!(process_is_alive(pid)?);
+    wait_for_process_marker(&marker, true).await?;
 
     assert_no_message(&mut ws2, Duration::from_millis(250)).await?;
     ws1.close(None).await?;
 
-    wait_for_process_exit(pid).await?;
+    wait_for_process_marker(&marker, false).await?;
 
     process
         .kill()
@@ -857,24 +862,25 @@ async fn read_initialize_response(
     }
 }
 
-async fn wait_for_process_exit(pid: u32) -> Result<()> {
+async fn wait_for_process_marker(marker: &str, should_exist: bool) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if !process_is_alive(pid)? {
+        if process_with_marker_exists(marker)? == should_exist {
             return Ok(());
         }
         if Instant::now() >= deadline {
-            anyhow::bail!("process {pid} was still alive after websocket disconnect");
+            let expectation = if should_exist { "appear" } else { "exit" };
+            anyhow::bail!("process marker {marker:?} did not {expectation} before timeout");
         }
         sleep(Duration::from_millis(50)).await;
     }
 }
 
-fn process_is_alive(pid: u32) -> Result<bool> {
-    let status = std::process::Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .status()
-        .context("spawn kill -0")?;
-    Ok(status.success())
+fn process_with_marker_exists(marker: &str) -> Result<bool> {
+    let output = std::process::Command::new("ps")
+        .args(["-axo", "command"])
+        .output()
+        .context("spawn ps -axo command")?;
+    let stdout = String::from_utf8(output.stdout).context("decode ps output")?;
+    Ok(stdout.lines().any(|line| line.contains(marker)))
 }

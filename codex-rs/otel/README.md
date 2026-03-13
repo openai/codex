@@ -2,8 +2,8 @@
 
 `codex-otel` is the OpenTelemetry integration crate for Codex. It provides:
 
-- Provider wiring for log/trace/metric exporters (`codex_otel::OtelProvider`,
-  `codex_otel::provider`, and the compatibility shim `codex_otel::otel_provider`).
+- Provider wiring for log/trace/metric exporters (`codex_otel::OtelProvider`
+  and `codex_otel::provider`).
 - Session-scoped business event emission via `codex_otel::SessionTelemetry`.
 - Low-level metrics APIs via `codex_otel::metrics`.
 - Trace-context helpers via `codex_otel::trace_context` and crate-root re-exports.

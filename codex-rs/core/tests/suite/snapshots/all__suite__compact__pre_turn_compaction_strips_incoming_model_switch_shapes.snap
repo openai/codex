@@ -1,6 +1,6 @@
 ---
 source: core/tests/suite/compact.rs
-assertion_line: 3188
+assertion_line: 3195
 expression: "format_labeled_requests_snapshot(\"Pre-turn compaction during model switch (without pre-sampling model-switch compaction): current behavior strips incoming <model_switch> from the compact request and restores it in the post-compaction follow-up request.\",\n&[(\"Initial Request (Previous Model)\", &requests[0]),\n(\"Local Compaction Request\", &requests[1]),\n(\"Local Post-Compaction History Layout\", &requests[2]),])"
 ---
 Scenario: Pre-turn compaction during model switch (without pre-sampling model-switch compaction): current behavior strips incoming <model_switch> from the compact request and restores it in the post-compaction follow-up request.
@@ -10,18 +10,16 @@ Scenario: Pre-turn compaction during model switch (without pre-sampling model-sw
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/developer:<PERMISSIONS_INSTRUCTIONS>
-03:message/user:BEFORE_SWITCH_USER
+02:message/user:BEFORE_SWITCH_USER
 
 ## Local Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/developer:<PERMISSIONS_INSTRUCTIONS>
-03:message/user:BEFORE_SWITCH_USER
-04:message/assistant:BEFORE_SWITCH_REPLY
-05:message/user:<SUMMARIZATION_PROMPT>
+02:message/user:BEFORE_SWITCH_USER
+03:message/assistant:BEFORE_SWITCH_REPLY
+04:message/user:<SUMMARIZATION_PROMPT>
 
 ## Local Post-Compaction History Layout
 00:message/user:BEFORE_SWITCH_USER

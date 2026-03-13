@@ -41,6 +41,7 @@ use codex_app_server_protocol::MockExperimentalMethodParams;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginListParams;
+use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
@@ -473,6 +474,15 @@ impl McpProcess {
         self.send_request("plugin/list", params).await
     }
 
+    /// Send a `plugin/read` JSON-RPC request.
+    pub async fn send_plugin_read_request(
+        &mut self,
+        params: PluginReadParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("plugin/read", params).await
+    }
+
     /// Send a JSON-RPC request with raw params for protocol-level validation tests.
     pub async fn send_raw_request(
         &mut self,
@@ -594,7 +604,7 @@ impl McpProcess {
     /// Deterministically clean up an intentionally in-flight turn.
     ///
     /// Some tests assert behavior while a turn is still running. Returning from those tests
-    /// without an explicit interrupt + `codex/event/turn_aborted` wait can leave in-flight work
+    /// without an explicit interrupt + terminal turn notification wait can leave in-flight work
     /// racing teardown and intermittently show up as `LEAK` in nextest.
     ///
     /// In rare races, the turn can also fail or complete on its own after we send
@@ -631,18 +641,19 @@ impl McpProcess {
         }
         match tokio::time::timeout(
             read_timeout,
-            self.read_stream_until_notification_message("codex/event/turn_aborted"),
+            self.read_stream_until_notification_message("turn/completed"),
         )
         .await
         {
             Ok(result) => {
-                result.with_context(|| "failed while waiting for turn aborted notification")?;
+                result.with_context(|| "failed while waiting for terminal turn notification")?;
             }
             Err(err) => {
                 if self.pending_turn_completed_notification(&thread_id, &turn_id) {
                     return Ok(());
                 }
-                return Err(err).with_context(|| "timed out waiting for turn aborted notification");
+                return Err(err)
+                    .with_context(|| "timed out waiting for terminal turn notification");
             }
         }
         Ok(())

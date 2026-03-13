@@ -16,7 +16,7 @@ const FAST_TOOLTIP: &str = "*New* Use **/fast** to enable our fastest inference 
 const OTHER_TOOLTIP: &str = "*New* Build faster with the **Codex App**. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true";
 const OTHER_TOOLTIP_NON_MAC: &str = "*New* Build faster with Codex.";
 const FREE_GO_TOOLTIP: &str =
-    "*New* Codex is included in your plan for free through *March 2nd* – let’s build together.";
+    "*New* For a limited time, Codex is included in your plan for free – let’s build together.";
 
 const RAW_TOOLTIPS: &str = include_str!("../tooltips.txt");
 

@@ -11,6 +11,7 @@ mod state;
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
 pub use cloud_requirements::CloudRequirementsLoadError;
+pub use cloud_requirements::CloudRequirementsLoadErrorCode;
 pub use cloud_requirements::CloudRequirementsLoader;
 pub use config_requirements::ConfigRequirements;
 pub use config_requirements::ConfigRequirementsToml;

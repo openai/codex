@@ -16,6 +16,7 @@ members = [
     "cloud-tasks",
     "cloud-tasks-client",
     "cli",
+    "connectors",
     "config",
     "shell-command",
     "shell-escalation",
@@ -98,6 +99,7 @@ codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }
 codex-cloud-requirements = { path = "cloud-requirements" }
+codex-connectors = { path = "connectors" }
 codex-config = { path = "config" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
@@ -238,6 +240,8 @@ rustls = { version = "0.23", default-features = false, features = [
     "ring",
     "std",
 ] }
+rustls-native-certs = "0.8.3"
+rustls-pki-types = "1.14.0"
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 semver = "1.0"

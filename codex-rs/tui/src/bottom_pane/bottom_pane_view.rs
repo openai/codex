@@ -22,6 +22,12 @@ pub(crate) trait BottomPaneView: Renderable {
         None
     }
 
+    /// Actual item index for list-based views that want to preserve selection
+    /// across external refreshes.
+    fn selected_index(&self) -> Option<usize> {
+        None
+    }
+
     /// Handle Ctrl-C while this view is active.
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         CancellationEvent::NotHandled

@@ -8,14 +8,15 @@ use crate::features::Feature;
 use crate::guardian::GUARDIAN_SUBAGENT_NAME;
 use crate::protocol::AskForApproval;
 use crate::sandboxing::SandboxPermissions;
+use crate::tools::context::FunctionToolOutput;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::RuleMatch;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -32,6 +33,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use tempfile::tempdir;
+
+fn expect_text_output(output: &FunctionToolOutput) -> String {
+    function_call_output_content_items_to_text(&output.body).unwrap_or_default()
+}
 
 #[tokio::test]
 async fn guardian_allows_shell_additional_permissions_requests_past_policy_validation() {
@@ -70,7 +75,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
         .expect("test setup should allow enabling guardian approvals");
     session
         .features
-        .enable(Feature::RequestPermissions)
+        .enable(Feature::ExecPermissionApprovals)
         .expect("test setup should allow enabling request permissions");
     turn_context_raw
         .sandbox_policy
@@ -120,6 +125,10 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
         network: None,
         sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
         windows_sandbox_level: turn_context.windows_sandbox_level,
+        windows_sandbox_private_desktop: turn_context
+            .config
+            .permissions
+            .windows_sandbox_private_desktop,
         justification: Some("test".to_string()),
         arg0: None,
     };
@@ -132,6 +141,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "test-call".to_string(),
             tool_name: "shell".to_string(),
+            tool_namespace: None,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": params.command.clone(),
@@ -152,13 +162,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
         })
         .await;
 
-    let output = match resp.expect("expected Ok result") {
-        ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            ..
-        } => content,
-        _ => panic!("unexpected tool output"),
-    };
+    let output = expect_text_output(&resp.expect("expected Ok result"));
 
     #[derive(Deserialize, PartialEq, Eq, Debug)]
     struct ResponseExecMetadata {
@@ -191,7 +195,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
         .expect("test setup should allow enabling guardian approvals");
     session
         .features
-        .enable(Feature::RequestPermissions)
+        .enable(Feature::ExecPermissionApprovals)
         .expect("test setup should allow enabling request permissions");
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
@@ -205,6 +209,7 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),
             tool_name: "exec_command".to_string(),
+            tool_namespace: None,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "cmd": "echo hi",
@@ -224,6 +229,85 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
         output,
         "missing `additional_permissions`; provide at least one of `network`, `file_system`, or `macos` when using `with_additional_permissions`"
     );
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_permissions_feature() {
+    let (mut session, turn_context_raw) = make_session_and_context().await;
+    session
+        .features
+        .enable(Feature::RequestPermissionsTool)
+        .expect("test setup should allow enabling request permissions tool");
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    {
+        let mut active_turn = session.active_turn.lock().await;
+        let active_turn = active_turn.as_mut().expect("active turn");
+        let mut turn_state = active_turn.turn_state.lock().await;
+        turn_state.record_granted_permissions(PermissionProfile {
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
+            }),
+            ..Default::default()
+        });
+    }
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context_raw);
+
+    let handler = ShellHandler;
+    let resp = handler
+        .handle(ToolInvocation {
+            session: Arc::clone(&session),
+            turn: Arc::clone(&turn_context),
+            tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            call_id: "sticky-turn-grant".to_string(),
+            tool_name: "shell".to_string(),
+            tool_namespace: None,
+            payload: ToolPayload::Function {
+                arguments: serde_json::json!({
+                    "command": [
+                        "/bin/sh",
+                        "-c",
+                        "echo hi",
+                    ],
+                    "timeout_ms": 1_000_u64,
+                    "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                })
+                .to_string(),
+            },
+        })
+        .await;
+
+    match resp {
+        Ok(output) => {
+            let output = expect_text_output(&output);
+
+            #[derive(Deserialize, PartialEq, Eq, Debug)]
+            struct ResponseExecMetadata {
+                exit_code: i32,
+            }
+
+            #[derive(Deserialize)]
+            struct ResponseExecOutput {
+                output: String,
+                metadata: ResponseExecMetadata,
+            }
+
+            let exec_output: ResponseExecOutput =
+                serde_json::from_str(&output).expect("valid exec output json");
+
+            assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
+            assert!(exec_output.output.contains("hi"));
+        }
+        Err(FunctionCallError::RespondToModel(output)) => {
+            assert!(
+                !output.contains("additional permissions are disabled"),
+                "sticky turn permissions should bypass inline validation: {output}"
+            );
+        }
+        Err(err) => panic!("unexpected error: {err:?}"),
+    }
 }
 
 #[tokio::test]
@@ -283,11 +367,12 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     let skills_manager = Arc::new(SkillsManager::new(
         config.codex_home.clone(),
         Arc::clone(&plugins_manager),
+        true,
     ));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let file_watcher = Arc::new(FileWatcher::noop());
 
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
+    let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
         models_manager,
@@ -295,14 +380,17 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         plugins_manager,
         mcp_manager,
         file_watcher,
-        InitialHistory::New,
-        SessionSource::SubAgent(SubAgentSource::Other(GUARDIAN_SUBAGENT_NAME.to_string())),
-        AgentControl::default(),
-        Vec::new(),
-        false,
-        None,
-        None,
-    )
+        conversation_history: InitialHistory::New,
+        session_source: SessionSource::SubAgent(SubAgentSource::Other(
+            GUARDIAN_SUBAGENT_NAME.to_string(),
+        )),
+        agent_control: AgentControl::default(),
+        dynamic_tools: Vec::new(),
+        persist_extended_history: false,
+        metrics_service_name: None,
+        inherited_shell_snapshot: None,
+        parent_trace: None,
+    })
     .await
     .expect("spawn guardian subagent");
 

@@ -63,6 +63,22 @@
             "null"
           ]
         },
+        "contacts": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacOsContactsPermission"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "launchServices": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "preferences": {
           "anyOf": [
             {
@@ -71,6 +87,12 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "reminders": {
+          "type": [
+            "boolean",
+            "null"
           ]
         }
       },
@@ -138,6 +160,14 @@
         }
       ]
     },
+    "MacOsContactsPermission": {
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ],
+      "type": "string"
+    },
     "MacOsPreferencesPermission": {
       "enum": [
         "none",
@@ -145,11 +175,26 @@
         "read_write"
       ],
       "type": "string"
+    },
+    "PermissionGrantScope": {
+      "enum": [
+        "turn",
+        "session"
+      ],
+      "type": "string"
     }
   },
   "properties": {
     "permissions": {
       "$ref": "#/definitions/GrantedPermissionProfile"
+    },
+    "scope": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/PermissionGrantScope"
+        }
+      ],
+      "default": "turn"
     }
   },
   "required": [

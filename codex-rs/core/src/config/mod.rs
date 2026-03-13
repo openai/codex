@@ -58,6 +58,7 @@ use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
+use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::AltScreenMode;
@@ -82,10 +83,10 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -98,6 +99,7 @@ use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
+pub(crate) mod agent_roles;
 pub mod edit;
 mod managed_features;
 mod network_proxy_spec;
@@ -188,6 +190,8 @@ pub struct Permissions {
     /// Effective Windows sandbox mode derived from `[windows].sandbox` or
     /// legacy feature keys.
     pub windows_sandbox_mode: Option<WindowsSandboxModeToml>,
+    /// Whether the final Windows sandboxed child should run on a private desktop.
+    pub windows_sandbox_private_desktop: bool,
     /// Optional macOS seatbelt extension profile used to extend default
     /// seatbelt permissions when running under seatbelt.
     pub macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
@@ -462,6 +466,9 @@ pub struct Config {
     /// Experimental / do not use. Selects the realtime websocket model/snapshot
     /// used for the `Op::RealtimeConversation` connection.
     pub experimental_realtime_ws_model: Option<String>,
+    /// Experimental / do not use. Selects the realtime websocket intent mode.
+    /// `conversational` is speech-to-speech while `transcription` is transcript-only.
+    pub experimental_realtime_ws_mode: RealtimeWsMode,
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport instructions (the `Op::RealtimeConversation`
     /// `/ws` session.update instructions) without changing normal prompts.
@@ -470,6 +477,10 @@ pub struct Config {
     /// context appended to websocket session instructions. An empty string
     /// disables startup context injection entirely.
     pub experimental_realtime_ws_startup_context: Option<String>,
+    /// Experimental / do not use. Replaces the built-in realtime start
+    /// instructions inserted into developer messages when realtime becomes
+    /// active.
+    pub experimental_realtime_start_instructions: Option<String>,
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     pub forced_chatgpt_workspace_id: Option<String>,
 
@@ -1233,6 +1244,9 @@ pub struct ConfigToml {
     /// Experimental / do not use. Selects the realtime websocket model/snapshot
     /// used for the `Op::RealtimeConversation` connection.
     pub experimental_realtime_ws_model: Option<String>,
+    /// Experimental / do not use. Selects the realtime websocket intent mode.
+    /// `conversational` is speech-to-speech while `transcription` is transcript-only.
+    pub experimental_realtime_ws_mode: Option<RealtimeWsMode>,
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport instructions (the `Op::RealtimeConversation`
     /// `/ws` session.update instructions) without changing normal prompts.
@@ -1241,6 +1255,10 @@ pub struct ConfigToml {
     /// context appended to websocket session instructions. An empty string
     /// disables startup context injection entirely.
     pub experimental_realtime_ws_startup_context: Option<String>,
+    /// Experimental / do not use. Replaces the built-in realtime start
+    /// instructions inserted into developer messages when realtime becomes
+    /// active.
+    pub experimental_realtime_start_instructions: Option<String>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, or live.
@@ -1374,6 +1392,14 @@ pub struct RealtimeAudioConfig {
     pub speaker: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RealtimeWsMode {
+    #[default]
+    Conversational,
+    Transcription,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeAudioToml {
@@ -1384,12 +1410,40 @@ pub struct RealtimeAudioToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ToolsToml {
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_web_search_tool_config"
+    )]
     pub web_search: Option<WebSearchToolConfig>,
 
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum WebSearchToolConfigInput {
+    Enabled(bool),
+    Config(WebSearchToolConfig),
+}
+
+fn deserialize_optional_web_search_tool_config<'de, D>(
+    deserializer: D,
+) -> Result<Option<WebSearchToolConfig>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<WebSearchToolConfigInput>::deserialize(deserializer)?;
+
+    Ok(match value {
+        None => None,
+        Some(WebSearchToolConfigInput::Enabled(enabled)) => {
+            let _ = enabled;
+            None
+        }
+        Some(WebSearchToolConfigInput::Config(config)) => Some(config),
+    })
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -1423,6 +1477,7 @@ pub struct AgentsToml {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentRoleConfig {
     /// Human-facing role documentation used in spawn tool guidance.
+    /// Required for loaded user-defined roles after deprecated/new metadata precedence resolves.
     pub description: Option<String>,
     /// Path to a role-specific config layer.
     pub config_file: Option<PathBuf>,
@@ -1434,6 +1489,7 @@ pub struct AgentRoleConfig {
 #[schemars(deny_unknown_fields)]
 pub struct AgentRoleToml {
     /// Human-facing role documentation used in spawn tool guidance.
+    /// Required unless supplied by the referenced agent role file.
     pub description: Option<String>,
 
     /// Path to a role-specific config layer.
@@ -1881,6 +1937,8 @@ impl Config {
         let configured_features = Features::from_config(&cfg, &config_profile, feature_overrides);
         let features = ManagedFeatures::from_configured(configured_features, feature_requirements)?;
         let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
+        let windows_sandbox_private_desktop =
+            resolve_windows_sandbox_private_desktop(&cfg, &config_profile);
         let resolved_cwd = normalize_for_native_workdir({
             use std::env;
 
@@ -1971,7 +2029,11 @@ impl Config {
             let configured_network_proxy_config =
                 network_proxy_config_from_profile_network(profile.network.as_ref());
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
-                compile_permission_profile(permissions, default_permissions)?;
+                compile_permission_profile(
+                    permissions,
+                    default_permissions,
+                    &mut startup_warnings,
+                )?;
             let mut sandbox_policy = file_system_sandbox_policy
                 .to_legacy_sandbox_policy(network_sandbox_policy, &resolved_cwd)?;
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
@@ -2004,7 +2066,8 @@ impl Config {
                     }
                 }
             }
-            let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
+            let file_system_sandbox_policy =
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, &resolved_cwd);
             let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
             (
                 configured_network_proxy_config,
@@ -2040,6 +2103,9 @@ impl Config {
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
+
+        let agent_roles =
+            agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
@@ -2090,34 +2156,6 @@ impl Config {
                 "agents.max_depth must be at least 1",
             ));
         }
-        let agent_roles = cfg
-            .agents
-            .as_ref()
-            .map(|agents| {
-                agents
-                    .roles
-                    .iter()
-                    .map(|(name, role)| {
-                        let config_file =
-                            role.config_file.as_ref().map(AbsolutePathBuf::to_path_buf);
-                        Self::validate_agent_role_config_file(name, config_file.as_deref())?;
-                        let nickname_candidates = Self::normalize_agent_role_nickname_candidates(
-                            name,
-                            role.nickname_candidates.as_deref(),
-                        )?;
-                        Ok((
-                            name.clone(),
-                            AgentRoleConfig {
-                                description: role.description.clone(),
-                                config_file,
-                                nickname_candidates,
-                            },
-                        ))
-                    })
-                    .collect::<std::io::Result<BTreeMap<_, _>>>()
-            })
-            .transpose()?
-            .unwrap_or_default();
         let agent_job_max_runtime_seconds = cfg
             .agents
             .as_ref()
@@ -2330,7 +2368,10 @@ impl Config {
             if effective_sandbox_policy == original_sandbox_policy {
                 file_system_sandbox_policy
             } else {
-                FileSystemSandboxPolicy::from(&effective_sandbox_policy)
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                    &effective_sandbox_policy,
+                    &resolved_cwd,
+                )
             };
         let effective_network_sandbox_policy =
             if effective_sandbox_policy == original_sandbox_policy {
@@ -2358,6 +2399,7 @@ impl Config {
                 allow_login_shell,
                 shell_environment_policy,
                 windows_sandbox_mode,
+                windows_sandbox_private_desktop,
                 macos_seatbelt_profile_extensions: None,
             },
             enforce_residency: enforce_residency.value,
@@ -2440,8 +2482,10 @@ impl Config {
                 }),
             experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
             experimental_realtime_ws_model: cfg.experimental_realtime_ws_model,
+            experimental_realtime_ws_mode: cfg.experimental_realtime_ws_mode.unwrap_or_default(),
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
+            experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
@@ -2559,88 +2603,6 @@ impl Config {
         }
     }
 
-    fn validate_agent_role_config_file(
-        role_name: &str,
-        config_file: Option<&Path>,
-    ) -> std::io::Result<()> {
-        let Some(config_file) = config_file else {
-            return Ok(());
-        };
-
-        let metadata = std::fs::metadata(config_file).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "agents.{role_name}.config_file must point to an existing file at {}: {e}",
-                    config_file.display()
-                ),
-            )
-        })?;
-        if metadata.is_file() {
-            Ok(())
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "agents.{role_name}.config_file must point to a file: {}",
-                    config_file.display()
-                ),
-            ))
-        }
-    }
-
-    fn normalize_agent_role_nickname_candidates(
-        role_name: &str,
-        nickname_candidates: Option<&[String]>,
-    ) -> std::io::Result<Option<Vec<String>>> {
-        let Some(nickname_candidates) = nickname_candidates else {
-            return Ok(None);
-        };
-
-        if nickname_candidates.is_empty() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("agents.{role_name}.nickname_candidates must contain at least one name"),
-            ));
-        }
-
-        let mut normalized_candidates = Vec::with_capacity(nickname_candidates.len());
-        let mut seen_candidates = BTreeSet::new();
-
-        for nickname in nickname_candidates {
-            let normalized_nickname = nickname.trim();
-            if normalized_nickname.is_empty() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("agents.{role_name}.nickname_candidates cannot contain blank names"),
-                ));
-            }
-
-            if !seen_candidates.insert(normalized_nickname.to_owned()) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("agents.{role_name}.nickname_candidates cannot contain duplicates"),
-                ));
-            }
-
-            if !normalized_nickname
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_'))
-            {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!(
-                        "agents.{role_name}.nickname_candidates may only contain ASCII letters, digits, spaces, hyphens, and underscores"
-                    ),
-                ));
-            }
-
-            normalized_candidates.push(normalized_nickname.to_owned());
-        }
-
-        Ok(Some(normalized_candidates))
-    }
-
     pub fn set_windows_sandbox_enabled(&mut self, value: bool) {
         self.permissions.windows_sandbox_mode = if value {
             Some(WindowsSandboxModeToml::Unelevated)
@@ -2672,6 +2634,10 @@ impl Config {
             .requirements_toml()
             .network
             .is_some()
+    }
+
+    pub fn bundled_skills_enabled(&self) -> bool {
+        crate::skills::manager::bundled_skills_enabled_from_stack(&self.config_layer_stack)
     }
 }
 

@@ -75,6 +75,9 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         }
 
         let mut headers = extra_headers;
+        if let Some(ref conv_id) = conversation_id {
+            insert_header(&mut headers, "x-client-request-id", conv_id);
+        }
         headers.extend(build_conversation_headers(conversation_id));
         if let Some(subagent) = subagent_header(&session_source) {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
