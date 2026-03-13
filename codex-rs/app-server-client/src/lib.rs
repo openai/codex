@@ -329,6 +329,8 @@ pub enum AppServerClient {
     Remote(RemoteAppServerClient),
 }
 
+pub type InProcessAppServerRequester = InProcessAppServerRequestHandle;
+
 impl InProcessAppServerClient {
     /// Starts the in-process runtime and facade worker task.
     ///
@@ -511,30 +513,17 @@ impl InProcessAppServerClient {
         }
     }
 
+    /// Compatibility helper for callers that still use the older requester name.
+    pub fn requester(&self) -> InProcessAppServerRequester {
+        self.request_handle()
+    }
+
     /// Sends a typed client request and returns raw JSON-RPC result.
     ///
     /// Callers that expect a concrete response type should usually prefer
     /// [`request_typed`](Self::request_typed).
     pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.command_tx
-            .send(ClientCommand::Request {
-                request: Box::new(request),
-                response_tx,
-            })
-            .await
-            .map_err(|_| {
-                IoError::new(
-                    ErrorKind::BrokenPipe,
-                    "in-process app-server worker channel is closed",
-                )
-            })?;
-        response_rx.await.map_err(|_| {
-            IoError::new(
-                ErrorKind::BrokenPipe,
-                "in-process app-server request channel is closed",
-            )
-        })?
+        send_request(&self.command_tx, request).await
     }
 
     /// Sends a typed client request and decodes the successful response body.
@@ -547,20 +536,7 @@ impl InProcessAppServerClient {
     where
         T: DeserializeOwned,
     {
-        let method = request_method_name(&request);
-        let response =
-            self.request(request)
-                .await
-                .map_err(|source| TypedRequestError::Transport {
-                    method: method.clone(),
-                    source,
-                })?;
-        let result = response.map_err(|source| TypedRequestError::Server {
-            method: method.clone(),
-            source,
-        })?;
-        serde_json::from_value(result)
-            .map_err(|source| TypedRequestError::Deserialize { method, source })
+        request_typed(&self.command_tx, request).await
     }
 
     /// Sends a typed client notification.
@@ -697,45 +673,14 @@ impl InProcessAppServerClient {
 
 impl InProcessAppServerRequestHandle {
     pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.command_tx
-            .send(ClientCommand::Request {
-                request: Box::new(request),
-                response_tx,
-            })
-            .await
-            .map_err(|_| {
-                IoError::new(
-                    ErrorKind::BrokenPipe,
-                    "in-process app-server worker channel is closed",
-                )
-            })?;
-        response_rx.await.map_err(|_| {
-            IoError::new(
-                ErrorKind::BrokenPipe,
-                "in-process app-server request channel is closed",
-            )
-        })?
+        send_request(&self.command_tx, request).await
     }
 
     pub async fn request_typed<T>(&self, request: ClientRequest) -> Result<T, TypedRequestError>
     where
         T: DeserializeOwned,
     {
-        let method = request_method_name(&request);
-        let response =
-            self.request(request)
-                .await
-                .map_err(|source| TypedRequestError::Transport {
-                    method: method.clone(),
-                    source,
-                })?;
-        let result = response.map_err(|source| TypedRequestError::Server {
-            method: method.clone(),
-            source,
-        })?;
-        serde_json::from_value(result)
-            .map_err(|source| TypedRequestError::Deserialize { method, source })
+        request_typed(&self.command_tx, request).await
     }
 }
 
@@ -825,6 +770,54 @@ impl AppServerClient {
             Self::Remote(client) => AppServerRequestHandle::Remote(client.request_handle()),
         }
     }
+}
+
+async fn send_request(
+    command_tx: &mpsc::Sender<ClientCommand>,
+    request: ClientRequest,
+) -> IoResult<RequestResult> {
+    let (response_tx, response_rx) = oneshot::channel();
+    command_tx
+        .send(ClientCommand::Request {
+            request: Box::new(request),
+            response_tx,
+        })
+        .await
+        .map_err(|_| {
+            IoError::new(
+                ErrorKind::BrokenPipe,
+                "in-process app-server worker channel is closed",
+            )
+        })?;
+    response_rx.await.map_err(|_| {
+        IoError::new(
+            ErrorKind::BrokenPipe,
+            "in-process app-server request channel is closed",
+        )
+    })?
+}
+
+async fn request_typed<T>(
+    command_tx: &mpsc::Sender<ClientCommand>,
+    request: ClientRequest,
+) -> Result<T, TypedRequestError>
+where
+    T: DeserializeOwned,
+{
+    let method = request_method_name(&request);
+    let response =
+        send_request(command_tx, request)
+            .await
+            .map_err(|source| TypedRequestError::Transport {
+                method: method.clone(),
+                source,
+            })?;
+    let result = response.map_err(|source| TypedRequestError::Server {
+        method: method.clone(),
+        source,
+    })?;
+    serde_json::from_value(result)
+        .map_err(|source| TypedRequestError::Deserialize { method, source })
 }
 
 /// Extracts the JSON-RPC method name for diagnostics without extending the
