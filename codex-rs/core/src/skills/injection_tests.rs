@@ -12,6 +12,7 @@ fn make_skill(name: &str, path: &str) -> SkillMetadata {
         dependencies: None,
         policy: None,
         permission_profile: None,
+        managed_network_override: None,
         path_to_skills_md: PathBuf::from(path),
         scope: codex_protocol::protocol::SkillScope::User,
     }

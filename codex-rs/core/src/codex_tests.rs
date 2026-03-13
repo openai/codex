@@ -25,6 +25,7 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionProfile;
 use tracing::Span;
 
 use crate::protocol::CompactedItem;
@@ -58,6 +59,7 @@ use codex_app_server_protocol::AppInfo;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
@@ -151,15 +153,6 @@ fn developer_input_texts(items: &[ResponseItem]) -> Vec<&str> {
             _ => None,
         })
         .collect()
-}
-
-fn default_image_save_developer_message_text() -> String {
-    let image_output_dir = crate::stream_events_utils::default_image_generation_output_dir();
-    format!(
-        "Generated images are saved to {} as {} by default.",
-        image_output_dir.display(),
-        image_output_dir.join("<image_id>.png").display(),
-    )
 }
 
 fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
@@ -2216,11 +2209,11 @@ async fn notify_request_permissions_response_ignores_unmatched_call_id() {
         .notify_request_permissions_response(
             "missing",
             codex_protocol::request_permissions::RequestPermissionsResponse {
-                permissions: codex_protocol::models::PermissionProfile {
+                permissions: RequestPermissionProfile {
                     network: Some(codex_protocol::models::NetworkPermissions {
                         enabled: Some(true),
                     }),
-                    ..Default::default()
+                    ..RequestPermissionProfile::default()
                 },
                 scope: PermissionGrantScope::Turn,
             },
@@ -2252,11 +2245,11 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
     let turn_context = Arc::new(turn_context);
     let call_id = "call-1".to_string();
     let expected_response = codex_protocol::request_permissions::RequestPermissionsResponse {
-        permissions: codex_protocol::models::PermissionProfile {
+        permissions: RequestPermissionProfile {
             network: Some(codex_protocol::models::NetworkPermissions {
                 enabled: Some(true),
             }),
-            ..Default::default()
+            ..RequestPermissionProfile::default()
         },
         scope: PermissionGrantScope::Turn,
     };
@@ -2272,11 +2265,11 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
                     call_id,
                     codex_protocol::request_permissions::RequestPermissionsArgs {
                         reason: Some("need network".to_string()),
-                        permissions: codex_protocol::models::PermissionProfile {
+                        permissions: RequestPermissionProfile {
                             network: Some(codex_protocol::models::NetworkPermissions {
                                 enabled: Some(true),
                             }),
-                            ..Default::default()
+                            ..RequestPermissionProfile::default()
                         },
                     },
                 )
@@ -2332,11 +2325,11 @@ async fn request_permissions_is_auto_denied_when_granular_policy_blocks_tool_req
             call_id,
             codex_protocol::request_permissions::RequestPermissionsArgs {
                 reason: Some("need network".to_string()),
-                permissions: codex_protocol::models::PermissionProfile {
+                permissions: RequestPermissionProfile {
                     network: Some(codex_protocol::models::NetworkPermissions {
                         enabled: Some(true),
                     }),
-                    ..Default::default()
+                    ..RequestPermissionProfile::default()
                 },
             },
         )
@@ -2346,7 +2339,7 @@ async fn request_permissions_is_auto_denied_when_granular_policy_blocks_tool_req
         response,
         Some(
             codex_protocol::request_permissions::RequestPermissionsResponse {
-                permissions: codex_protocol::models::PermissionProfile::default(),
+                permissions: RequestPermissionProfile::default(),
                 scope: PermissionGrantScope::Turn,
             }
         )
@@ -3202,13 +3195,12 @@ async fn build_initial_context_omits_default_image_save_location_without_image_h
 }
 
 #[tokio::test]
-async fn handle_output_item_done_records_image_save_message_after_successful_save() {
+async fn handle_output_item_done_records_image_save_history_message() {
     let (session, turn_context) = make_session_and_context().await;
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_records_message";
-    let expected_saved_path = crate::stream_events_utils::default_image_generation_output_dir()
-        .join(format!("{call_id}.png"));
+    let expected_saved_path = std::env::temp_dir().join(format!("{call_id}.png"));
     let _ = std::fs::remove_file(&expected_saved_path);
     let item = ResponseItem::ImageGenerationCall {
         id: call_id.to_string(),
@@ -3228,9 +3220,13 @@ async fn handle_output_item_done_records_image_save_message_after_successful_sav
         .expect("image generation item should succeed");
 
     let history = session.clone_history().await;
-    let expected_message: ResponseItem =
-        DeveloperInstructions::new(default_image_save_developer_message_text()).into();
-    assert_eq!(history.raw_items(), &[expected_message, item]);
+    let save_message: ResponseItem = DeveloperInstructions::new(format!(
+        "Generated images are saved to {} as {} by default.",
+        std::env::temp_dir().display(),
+        std::env::temp_dir().join("<image_id>.png").display(),
+    ))
+    .into();
+    assert_eq!(history.raw_items(), &[save_message, item]);
     assert_eq!(
         std::fs::read(&expected_saved_path).expect("saved file"),
         b"foo"
@@ -3244,8 +3240,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_no_message";
-    let expected_saved_path = crate::stream_events_utils::default_image_generation_output_dir()
-        .join(format!("{call_id}.png"));
+    let expected_saved_path = std::env::temp_dir().join(format!("{call_id}.png"));
     let _ = std::fs::remove_file(&expected_saved_path);
     let item = ResponseItem::ImageGenerationCall {
         id: call_id.to_string(),
@@ -4213,6 +4208,10 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         network: None,
         sandbox_permissions,
         windows_sandbox_level: turn_context.windows_sandbox_level,
+        windows_sandbox_private_desktop: turn_context
+            .config
+            .permissions
+            .windows_sandbox_private_desktop,
         justification: Some("test".to_string()),
         arg0: None,
     };
@@ -4225,6 +4224,10 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         env: HashMap::new(),
         network: None,
         windows_sandbox_level: turn_context.windows_sandbox_level,
+        windows_sandbox_private_desktop: turn_context
+            .config
+            .permissions
+            .windows_sandbox_private_desktop,
         justification: params.justification.clone(),
         arg0: None,
     };

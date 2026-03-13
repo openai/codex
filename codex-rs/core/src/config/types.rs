@@ -41,6 +41,9 @@ pub enum WindowsSandboxModeToml {
 #[schemars(deny_unknown_fields)]
 pub struct WindowsToml {
     pub sandbox: Option<WindowsSandboxModeToml>,
+    /// Defaults to `true`. Set to `false` to launch the final sandboxed child
+    /// process on `Winsta0\\Default` instead of a private desktop.
+    pub sandbox_private_desktop: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

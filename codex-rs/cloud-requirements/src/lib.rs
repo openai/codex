@@ -19,6 +19,7 @@ use codex_core::AuthManager;
 use codex_core::auth::CodexAuth;
 use codex_core::auth::RefreshTokenError;
 use codex_core::config_loader::CloudRequirementsLoadError;
+use codex_core::config_loader::CloudRequirementsLoadErrorCode;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::util::backoff;
@@ -82,7 +83,7 @@ enum FetchAttemptError {
     Retryable(RetryableFailureKind),
     Unauthorized {
         status_code: Option<u16>,
-        error: CloudRequirementsLoadError,
+        message: String,
     },
 }
 
@@ -224,7 +225,7 @@ impl RequirementsFetcher for BackendRequirementsFetcher {
                 if err.is_unauthorized() {
                     FetchAttemptError::Unauthorized {
                         status_code,
-                        error: CloudRequirementsLoadError::new(err.to_string()),
+                        message: err.to_string(),
                     }
                 } else {
                     FetchAttemptError::Retryable(RetryableFailureKind::Request { status_code })
@@ -282,10 +283,14 @@ impl CloudRequirementsService {
                 emit_load_metric("startup", "error");
             })
             .map_err(|_| {
-                CloudRequirementsLoadError::new(format!(
-                    "timed out waiting for cloud requirements after {}s",
-                    self.timeout.as_secs()
-                ))
+                CloudRequirementsLoadError::new(
+                    CloudRequirementsLoadErrorCode::Timeout,
+                    None,
+                    format!(
+                        "timed out waiting for cloud requirements after {}s",
+                        self.timeout.as_secs()
+                    ),
+                )
             })?;
 
         let result = match fetch_result {
@@ -381,7 +386,10 @@ impl CloudRequirementsService {
                     attempt += 1;
                     continue;
                 }
-                Err(FetchAttemptError::Unauthorized { status_code, error }) => {
+                Err(FetchAttemptError::Unauthorized {
+                    status_code,
+                    message,
+                }) => {
                     last_status_code = status_code;
                     emit_fetch_attempt_metric(trigger, attempt, "unauthorized", status_code);
                     if auth_recovery.has_next() {
@@ -404,6 +412,8 @@ impl CloudRequirementsService {
                                         status_code,
                                     );
                                     return Err(CloudRequirementsLoadError::new(
+                                        CloudRequirementsLoadErrorCode::Auth,
+                                        status_code,
                                         CLOUD_REQUIREMENTS_AUTH_RECOVERY_FAILED_MESSAGE,
                                     ));
                                 };
@@ -422,7 +432,11 @@ impl CloudRequirementsService {
                                     attempt,
                                     status_code,
                                 );
-                                return Err(CloudRequirementsLoadError::new(failed.message));
+                                return Err(CloudRequirementsLoadError::new(
+                                    CloudRequirementsLoadErrorCode::Auth,
+                                    status_code,
+                                    failed.message,
+                                ));
                             }
                             Err(RefreshTokenError::Transient(recovery_err)) => {
                                 if attempt < CLOUD_REQUIREMENTS_MAX_ATTEMPTS {
@@ -441,7 +455,7 @@ impl CloudRequirementsService {
                     }
 
                     tracing::warn!(
-                        error = %error,
+                        error = %message,
                         "Cloud requirements request was unauthorized and no auth recovery is available"
                     );
                     emit_fetch_final_metric(
@@ -452,6 +466,8 @@ impl CloudRequirementsService {
                         status_code,
                     );
                     return Err(CloudRequirementsLoadError::new(
+                        CloudRequirementsLoadErrorCode::Auth,
+                        status_code,
                         CLOUD_REQUIREMENTS_AUTH_RECOVERY_FAILED_MESSAGE,
                     ));
                 }
@@ -470,6 +486,8 @@ impl CloudRequirementsService {
                             last_status_code,
                         );
                         return Err(CloudRequirementsLoadError::new(
+                            CloudRequirementsLoadErrorCode::Parse,
+                            None,
                             CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE,
                         ));
                     }
@@ -498,6 +516,8 @@ impl CloudRequirementsService {
             "{CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE}"
         );
         Err(CloudRequirementsLoadError::new(
+            CloudRequirementsLoadErrorCode::RequestFailed,
+            last_status_code,
             CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE,
         ))
     }
@@ -686,7 +706,11 @@ pub fn cloud_requirements_loader(
     CloudRequirementsLoader::new(async move {
         task.await.map_err(|err| {
             tracing::error!(error = %err, "Cloud requirements task failed");
-            CloudRequirementsLoadError::new(format!("cloud requirements load failed: {err}"))
+            CloudRequirementsLoadError::new(
+                CloudRequirementsLoadErrorCode::Internal,
+                None,
+                format!("cloud requirements load failed: {err}"),
+            )
         })?
     })
 }
@@ -1009,7 +1033,7 @@ mod tests {
             } else {
                 Err(FetchAttemptError::Unauthorized {
                     status_code: Some(401),
-                    error: CloudRequirementsLoadError::new("GET /config/requirements failed: 401"),
+                    message: "GET /config/requirements failed: 401".to_string(),
                 })
             }
         }
@@ -1029,7 +1053,7 @@ mod tests {
             self.request_count.fetch_add(1, Ordering::SeqCst);
             Err(FetchAttemptError::Unauthorized {
                 status_code: Some(401),
-                error: CloudRequirementsLoadError::new(self.message.clone()),
+                message: self.message.clone(),
             })
         }
     }
@@ -1385,6 +1409,8 @@ mod tests {
             err.to_string(),
             CLOUD_REQUIREMENTS_AUTH_RECOVERY_FAILED_MESSAGE
         );
+        assert_eq!(err.code(), CloudRequirementsLoadErrorCode::Auth);
+        assert_eq!(err.status_code(), Some(401));
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     }
 
@@ -1767,6 +1793,7 @@ mod tests {
             err.to_string(),
             "failed to load your workspace-managed config"
         );
+        assert_eq!(err.code(), CloudRequirementsLoadErrorCode::RequestFailed);
         assert_eq!(
             fetcher.request_count.load(Ordering::SeqCst),
             CLOUD_REQUIREMENTS_MAX_ATTEMPTS

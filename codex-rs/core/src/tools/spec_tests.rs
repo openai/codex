@@ -2205,7 +2205,7 @@ fn shell_tool_with_request_permission_includes_additional_permissions() {
         panic!("expected sandbox_permissions description");
     };
     assert!(description.contains("with_additional_permissions"));
-    assert!(description.contains("macOS permissions"));
+    assert!(description.contains("filesystem or network permissions"));
 
     let Some(JsonSchema::Object {
         properties: additional_properties,
@@ -2216,7 +2216,7 @@ fn shell_tool_with_request_permission_includes_additional_permissions() {
     };
     assert!(additional_properties.contains_key("network"));
     assert!(additional_properties.contains_key("file_system"));
-    assert!(additional_properties.contains_key("macos"));
+    assert!(!additional_properties.contains_key("macos"));
 }
 
 #[test]
@@ -2240,7 +2240,7 @@ fn request_permissions_tool_includes_full_permission_schema() {
     assert_eq!(additional_properties, &Some(false.into()));
     assert!(permission_properties.contains_key("network"));
     assert!(permission_properties.contains_key("file_system"));
-    assert!(permission_properties.contains_key("macos"));
+    assert!(!permission_properties.contains_key("macos"));
 
     let Some(JsonSchema::Object {
         properties: network_properties,
@@ -2264,20 +2264,6 @@ fn request_permissions_tool_includes_full_permission_schema() {
     assert_eq!(additional_properties, &Some(false.into()));
     assert!(file_system_properties.contains_key("read"));
     assert!(file_system_properties.contains_key("write"));
-
-    let Some(JsonSchema::Object {
-        properties: macos_properties,
-        additional_properties,
-        ..
-    }) = permission_properties.get("macos")
-    else {
-        panic!("expected macos object");
-    };
-    assert_eq!(additional_properties, &Some(false.into()));
-    assert!(macos_properties.contains_key("preferences"));
-    assert!(macos_properties.contains_key("automations"));
-    assert!(macos_properties.contains_key("accessibility"));
-    assert!(macos_properties.contains_key("calendar"));
 }
 
 #[test]
@@ -2446,7 +2432,7 @@ fn code_mode_augments_builtin_tool_descriptions_with_typed_sample() {
 
     assert_eq!(
         description,
-        "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nCode mode declaration:\n```ts\ndeclare const tools: {\n  view_image(args: {\n    path: string;\n  }): Promise<unknown>;\n};\n```"
+        "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: { path: string; }): Promise<unknown>; };\n```"
     );
 }
 
@@ -2498,7 +2484,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
 
     assert_eq!(
         description,
-        "Echo text\n\nCode mode declaration:\n```ts\ndeclare const tools: {\n  mcp__sample__echo(args: {\n    message: string;\n  }): Promise<{\n    _meta?: unknown;\n    content: Array<unknown>;\n    isError?: boolean;\n    structuredContent?: unknown;\n  }>;\n};\n```"
+        "Echo text\n\nexec tool declaration:\n```ts\ndeclare const tools: { mcp__sample__echo(args: { message: string; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };\n```"
     );
 }
 

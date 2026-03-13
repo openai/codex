@@ -4082,6 +4082,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
                 allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
+                windows_sandbox_private_desktop: true,
                 macos_seatbelt_profile_extensions: None,
             },
             enforce_residency: Constrained::allow_any(None),
@@ -4129,6 +4130,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             experimental_realtime_start_instructions: None,
             experimental_realtime_ws_base_url: None,
             experimental_realtime_ws_model: None,
+            experimental_realtime_ws_mode: RealtimeWsMode::Conversational,
             experimental_realtime_ws_backend_prompt: None,
             experimental_realtime_ws_startup_context: None,
             base_instructions: None,
@@ -4218,6 +4220,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
+            windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
         enforce_residency: Constrained::allow_any(None),
@@ -4265,6 +4268,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
+        experimental_realtime_ws_mode: RealtimeWsMode::Conversational,
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
@@ -4352,6 +4356,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
+            windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
         enforce_residency: Constrained::allow_any(None),
@@ -4399,6 +4404,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
+        experimental_realtime_ws_mode: RealtimeWsMode::Conversational,
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
@@ -4472,6 +4478,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
+            windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
         enforce_residency: Constrained::allow_any(None),
@@ -4519,6 +4526,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
+        experimental_realtime_ws_mode: RealtimeWsMode::Conversational,
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
@@ -5562,6 +5570,34 @@ experimental_realtime_ws_model = "realtime-test-model"
     assert_eq!(
         config.experimental_realtime_ws_model.as_deref(),
         Some("realtime-test-model")
+    );
+    Ok(())
+}
+
+#[test]
+fn experimental_realtime_ws_mode_loads_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+experimental_realtime_ws_mode = "transcription"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.experimental_realtime_ws_mode,
+        Some(RealtimeWsMode::Transcription)
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.experimental_realtime_ws_mode,
+        RealtimeWsMode::Transcription
     );
     Ok(())
 }

@@ -46,6 +46,7 @@ fn build_permissions_update_item(
         exec_policy,
         &next.cwd,
         next.features.enabled(Feature::ExecPermissionApprovals),
+        next.features.enabled(Feature::RequestPermissionsTool),
     ))
 }
 

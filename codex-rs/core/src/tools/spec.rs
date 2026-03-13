@@ -494,44 +494,7 @@ fn create_file_system_permissions_schema() -> JsonSchema {
     }
 }
 
-fn create_macos_permissions_schema() -> JsonSchema {
-    JsonSchema::Object {
-        properties: BTreeMap::from([
-            (
-                "preferences".to_string(),
-                JsonSchema::String {
-                    description: Some(
-                        "macOS preferences access. Supported values: `none`, `read_only`, or `read_write`."
-                            .to_string(),
-                    ),
-                },
-            ),
-            (
-                "automations".to_string(),
-                JsonSchema::Array {
-                    items: Box::new(JsonSchema::String { description: None }),
-                    description: Some("macOS automation access as app bundle identifiers.".to_string()),
-                },
-            ),
-            (
-                "accessibility".to_string(),
-                JsonSchema::Boolean {
-                    description: Some("Whether to request macOS accessibility access.".to_string()),
-                },
-            ),
-            (
-                "calendar".to_string(),
-                JsonSchema::Boolean {
-                    description: Some("Whether to request macOS calendar access.".to_string()),
-                },
-            ),
-        ]),
-        required: None,
-        additional_properties: Some(false.into()),
-    }
-}
-
-fn create_permissions_schema() -> JsonSchema {
+fn create_additional_permissions_schema() -> JsonSchema {
     JsonSchema::Object {
         properties: BTreeMap::from([
             ("network".to_string(), create_network_permissions_schema()),
@@ -539,7 +502,20 @@ fn create_permissions_schema() -> JsonSchema {
                 "file_system".to_string(),
                 create_file_system_permissions_schema(),
             ),
-            ("macos".to_string(), create_macos_permissions_schema()),
+        ]),
+        required: None,
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn create_request_permissions_schema() -> JsonSchema {
+    JsonSchema::Object {
+        properties: BTreeMap::from([
+            ("network".to_string(), create_network_permissions_schema()),
+            (
+                "file_system".to_string(),
+                create_file_system_permissions_schema(),
+            ),
         ]),
         required: None,
         additional_properties: Some(false.into()),
@@ -555,7 +531,7 @@ fn create_approval_parameters(
             JsonSchema::String {
                 description: Some(
                     if exec_permission_approvals_enabled {
-                        "Sandbox permissions for the command. Use \"with_additional_permissions\" to request additional sandboxed filesystem, network, or macOS permissions (preferred), or \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
+                        "Sandbox permissions for the command. Use \"with_additional_permissions\" to request additional sandboxed filesystem or network permissions (preferred), or \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
                     } else {
                         "Sandbox permissions for the command. Set to \"require_escalated\" to request running without sandbox restrictions; defaults to \"use_default\"."
                     }
@@ -592,7 +568,7 @@ fn create_approval_parameters(
     if exec_permission_approvals_enabled {
         properties.insert(
             "additional_permissions".to_string(),
-            create_permissions_schema(),
+            create_additional_permissions_schema(),
         );
     }
 
@@ -1455,7 +1431,10 @@ fn create_request_permissions_tool() -> ToolSpec {
             ),
         },
     );
-    properties.insert("permissions".to_string(), create_permissions_schema());
+    properties.insert(
+        "permissions".to_string(),
+        create_request_permissions_schema(),
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "request_permissions".to_string(),
@@ -2018,8 +1997,13 @@ fn create_js_repl_reset_tool() -> ToolSpec {
 
 fn create_code_mode_tool(enabled_tool_names: &[String]) -> ToolSpec {
     const CODE_MODE_FREEFORM_GRAMMAR: &str = r#"
-start: source
-source: /[\s\S]+/
+start: pragma_source | plain_source
+pragma_source: PRAGMA_LINE NEWLINE SOURCE
+plain_source: SOURCE
+
+PRAGMA_LINE: /[ \t]*\/\/ @exec:[^\r\n]*/
+NEWLINE: /\r?\n/
+SOURCE: /[\s\S]+/
 "#;
 
     ToolSpec::Freeform(FreeformTool {

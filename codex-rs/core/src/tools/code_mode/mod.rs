@@ -33,6 +33,7 @@ const CODE_MODE_RUNNER_SOURCE: &str = include_str!("runner.cjs");
 const CODE_MODE_BRIDGE_SOURCE: &str = include_str!("bridge.js");
 const CODE_MODE_DESCRIPTION_TEMPLATE: &str = include_str!("description.md");
 const CODE_MODE_WAIT_DESCRIPTION_TEMPLATE: &str = include_str!("wait_description.md");
+const CODE_MODE_PRAGMA_PREFIX: &str = "// @exec:";
 
 pub(crate) const PUBLIC_TOOL_NAME: &str = "exec";
 pub(crate) const WAIT_TOOL_NAME: &str = "exec_wait";
@@ -222,6 +223,7 @@ fn enabled_tool_from_spec(spec: ToolSpec) -> Option<protocol::EnabledTool> {
     }
 
     let reference = code_mode_tool_reference(&tool_name);
+    let global_name = normalize_code_mode_identifier(&tool_name);
     let (description, kind) = match spec {
         ToolSpec::Function(tool) => (tool.description, protocol::CodeModeToolKind::Function),
         ToolSpec::Freeform(tool) => (tool.description, protocol::CodeModeToolKind::Freeform),
@@ -234,8 +236,8 @@ fn enabled_tool_from_spec(spec: ToolSpec) -> Option<protocol::EnabledTool> {
     };
 
     Some(protocol::EnabledTool {
-        global_name: normalize_code_mode_identifier(&tool_name),
         tool_name,
+        global_name,
         module_path: reference.module_path,
         namespace: reference.namespace,
         name: normalize_code_mode_identifier(&reference.tool_key),

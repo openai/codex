@@ -69,6 +69,7 @@ pub struct ExecRequest {
     pub expiration: ExecExpiration,
     pub sandbox: SandboxType,
     pub windows_sandbox_level: WindowsSandboxLevel,
+    pub windows_sandbox_private_desktop: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub sandbox_policy: SandboxPolicy,
     pub file_system_sandbox_policy: FileSystemSandboxPolicy,
@@ -96,6 +97,7 @@ pub(crate) struct SandboxTransformRequest<'a> {
     pub codex_linux_sandbox_exe: Option<&'a PathBuf>,
     pub use_legacy_landlock: bool,
     pub windows_sandbox_level: WindowsSandboxLevel,
+    pub windows_sandbox_private_desktop: bool,
 }
 
 pub enum SandboxPreference {
@@ -593,6 +595,7 @@ impl SandboxManager {
             codex_linux_sandbox_exe,
             use_legacy_landlock,
             windows_sandbox_level,
+            windows_sandbox_private_desktop,
         } = request;
         #[cfg(not(target_os = "macos"))]
         let macos_seatbelt_profile_extensions = None;
@@ -705,6 +708,7 @@ impl SandboxManager {
             expiration: spec.expiration,
             sandbox,
             windows_sandbox_level,
+            windows_sandbox_private_desktop,
             sandbox_permissions: spec.sandbox_permissions,
             sandbox_policy: effective_policy,
             file_system_sandbox_policy: effective_file_system_policy,

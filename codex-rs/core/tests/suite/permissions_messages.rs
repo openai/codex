@@ -493,6 +493,7 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
         &Policy::empty(),
         test.config.cwd.as_path(),
         false,
+        false,
     )
     .into_text();
     // Normalize line endings to handle Windows vs Unix differences
