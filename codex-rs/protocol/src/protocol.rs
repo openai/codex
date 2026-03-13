@@ -2501,7 +2501,7 @@ pub enum TruncationPolicy {
     Tokens(usize),
 }
 
-#[derive(Serialize, Deserialize, Clone, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Clone, JsonSchema)]
 pub struct RolloutLine {
     pub timestamp: String,
     #[serde(flatten)]
