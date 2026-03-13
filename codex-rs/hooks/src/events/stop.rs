@@ -34,16 +34,16 @@ pub struct StopOutcome {
     pub stop_reason: Option<String>,
     pub should_block: bool,
     pub block_reason: Option<String>,
-    pub block_message_for_model: Option<String>,
+    pub continuation_prompt: Option<String>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct StopHandlerData {
     should_stop: bool,
     stop_reason: Option<String>,
     should_block: bool,
     block_reason: Option<String>,
-    block_message_for_model: Option<String>,
+    continuation_prompt: Option<String>,
 }
 
 pub(crate) fn preview(
@@ -69,7 +69,7 @@ pub(crate) async fn run(
             stop_reason: None,
             should_block: false,
             block_reason: None,
-            block_message_for_model: None,
+            continuation_prompt: None,
         };
     }
 
@@ -102,34 +102,15 @@ pub(crate) async fn run(
     )
     .await;
 
-    let should_stop = results.iter().any(|result| result.data.should_stop);
-    let stop_reason = results
-        .iter()
-        .find_map(|result| result.data.stop_reason.clone());
-
-    let should_block = !should_stop && results.iter().any(|result| result.data.should_block);
-    let block_reason = if should_block {
-        results
-            .iter()
-            .find_map(|result| result.data.block_reason.clone())
-    } else {
-        None
-    };
-    let block_message_for_model = if should_block {
-        results
-            .iter()
-            .find_map(|result| result.data.block_message_for_model.clone())
-    } else {
-        None
-    };
+    let aggregate = aggregate_results(results.iter().map(|result| &result.data));
 
     StopOutcome {
         hook_events: results.into_iter().map(|result| result.completed).collect(),
-        should_stop,
-        stop_reason,
-        should_block,
-        block_reason,
-        block_message_for_model,
+        should_stop: aggregate.should_stop,
+        stop_reason: aggregate.stop_reason,
+        should_block: aggregate.should_block,
+        block_reason: aggregate.block_reason,
+        continuation_prompt: aggregate.continuation_prompt,
     }
 }
 
@@ -144,7 +125,7 @@ fn parse_completed(
     let mut stop_reason = None;
     let mut should_block = false;
     let mut block_reason = None;
-    let mut block_message_for_model = None;
+    let mut continuation_prompt = None;
 
     match run_result.error.as_deref() {
         Some(error) => {
@@ -176,12 +157,18 @@ fn parse_completed(
                                 text: stop_reason_text,
                             });
                         }
+                    } else if let Some(invalid_block_reason) = parsed.invalid_block_reason {
+                        status = HookRunStatus::Failed;
+                        entries.push(HookOutputEntry {
+                            kind: HookOutputEntryKind::Error,
+                            text: invalid_block_reason,
+                        });
                     } else if parsed.should_block {
                         if let Some(reason) = parsed.reason.as_deref().and_then(trimmed_non_empty) {
                             status = HookRunStatus::Blocked;
                             should_block = true;
                             block_reason = Some(reason.clone());
-                            block_message_for_model = Some(reason.clone());
+                            continuation_prompt = Some(reason.clone());
                             entries.push(HookOutputEntry {
                                 kind: HookOutputEntryKind::Feedback,
                                 text: reason,
@@ -190,8 +177,9 @@ fn parse_completed(
                             status = HookRunStatus::Failed;
                             entries.push(HookOutputEntry {
                                 kind: HookOutputEntryKind::Error,
-                                text: "hook returned decision \"block\" without a non-empty reason"
-                                    .to_string(),
+                                text:
+                                    "Stop hook returned decision:block without a non-empty reason"
+                                        .to_string(),
                             });
                         }
                     }
@@ -208,7 +196,7 @@ fn parse_completed(
                     status = HookRunStatus::Blocked;
                     should_block = true;
                     block_reason = Some(reason.clone());
-                    block_message_for_model = Some(reason.clone());
+                    continuation_prompt = Some(reason.clone());
                     entries.push(HookOutputEntry {
                         kind: HookOutputEntryKind::Feedback,
                         text: reason,
@@ -217,7 +205,9 @@ fn parse_completed(
                     status = HookRunStatus::Failed;
                     entries.push(HookOutputEntry {
                         kind: HookOutputEntryKind::Error,
-                        text: "hook exited with code 2 without stderr feedback".to_string(),
+                        text:
+                            "Stop hook exited with code 2 but did not write a continuation prompt to stderr"
+                                .to_string(),
                     });
                 }
             }
@@ -250,9 +240,55 @@ fn parse_completed(
             stop_reason,
             should_block,
             block_reason,
-            block_message_for_model,
+            continuation_prompt,
         },
     }
+}
+
+fn aggregate_results<'a>(
+    results: impl IntoIterator<Item = &'a StopHandlerData>,
+) -> StopHandlerData {
+    let results = results.into_iter().collect::<Vec<_>>();
+    let should_stop = results.iter().any(|result| result.should_stop);
+    let stop_reason = results.iter().find_map(|result| result.stop_reason.clone());
+    let should_block = !should_stop && results.iter().any(|result| result.should_block);
+    let block_reason = if should_block {
+        join_block_text(results.iter().copied(), |result| {
+            result.block_reason.as_deref()
+        })
+    } else {
+        None
+    };
+    let continuation_prompt = if should_block {
+        join_block_text(results.iter().copied(), |result| {
+            result.continuation_prompt.as_deref()
+        })
+    } else {
+        None
+    };
+
+    StopHandlerData {
+        should_stop,
+        stop_reason,
+        should_block,
+        block_reason,
+        continuation_prompt,
+    }
+}
+
+fn join_block_text<'a>(
+    results: impl IntoIterator<Item = &'a StopHandlerData>,
+    select: impl Fn(&'a StopHandlerData) -> Option<&'a str>,
+) -> Option<String> {
+    let parts = results
+        .into_iter()
+        .filter_map(select)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join("\n\n"))
 }
 
 fn trimmed_non_empty(text: &str) -> Option<String> {
@@ -292,7 +328,7 @@ fn serialization_failure_outcome(
         stop_reason: None,
         should_block: false,
         block_reason: None,
-        block_message_for_model: None,
+        continuation_prompt: None,
     }
 }
 
@@ -307,9 +343,54 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::StopHandlerData;
+    use super::aggregate_results;
     use super::parse_completed;
     use crate::engine::ConfiguredHandler;
     use crate::engine::command_runner::CommandRunResult;
+
+    #[test]
+    fn block_decision_with_reason_sets_continuation_prompt() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(
+                Some(0),
+                r#"{"decision":"block","reason":"retry with tests"}"#,
+                "",
+            ),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            StopHandlerData {
+                should_stop: false,
+                stop_reason: None,
+                should_block: true,
+                block_reason: Some("retry with tests".to_string()),
+                continuation_prompt: Some("retry with tests".to_string()),
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
+    }
+
+    #[test]
+    fn block_decision_without_reason_is_invalid() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(Some(0), r#"{"decision":"block"}"#, ""),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(parsed.data, StopHandlerData::default());
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Error,
+                text: "Stop hook returned decision:block without a non-empty reason".to_string(),
+            }]
+        );
+    }
 
     #[test]
     fn continue_false_overrides_block_decision() {
@@ -330,7 +411,7 @@ mod tests {
                 stop_reason: Some("done".to_string()),
                 should_block: false,
                 block_reason: None,
-                block_message_for_model: None,
+                continuation_prompt: None,
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
@@ -351,36 +432,25 @@ mod tests {
                 stop_reason: None,
                 should_block: true,
                 block_reason: Some("retry with tests".to_string()),
-                block_message_for_model: Some("retry with tests".to_string()),
+                continuation_prompt: Some("retry with tests".to_string()),
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
     }
 
     #[test]
-    fn block_decision_without_reason_fails_instead_of_blocking() {
-        let parsed = parse_completed(
-            &handler(),
-            run_result(Some(0), r#"{"decision":"block"}"#, ""),
-            Some("turn-1".to_string()),
-        );
+    fn exit_code_two_without_stderr_does_not_block() {
+        let parsed = parse_completed(&handler(), run_result(Some(2), "", "   "), None);
 
-        assert_eq!(
-            parsed.data,
-            StopHandlerData {
-                should_stop: false,
-                stop_reason: None,
-                should_block: false,
-                block_reason: None,
-                block_message_for_model: None,
-            }
-        );
+        assert_eq!(parsed.data, StopHandlerData::default());
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
         assert_eq!(
             parsed.completed.run.entries,
             vec![HookOutputEntry {
                 kind: HookOutputEntryKind::Error,
-                text: "hook returned decision \"block\" without a non-empty reason".to_string(),
+                text:
+                    "Stop hook exited with code 2 but did not write a continuation prompt to stderr"
+                        .to_string(),
             }]
         );
     }
@@ -393,50 +463,13 @@ mod tests {
             Some("turn-1".to_string()),
         );
 
-        assert_eq!(
-            parsed.data,
-            StopHandlerData {
-                should_stop: false,
-                stop_reason: None,
-                should_block: false,
-                block_reason: None,
-                block_message_for_model: None,
-            }
-        );
+        assert_eq!(parsed.data, StopHandlerData::default());
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
         assert_eq!(
             parsed.completed.run.entries,
             vec![HookOutputEntry {
                 kind: HookOutputEntryKind::Error,
-                text: "hook returned decision \"block\" without a non-empty reason".to_string(),
-            }]
-        );
-    }
-
-    #[test]
-    fn exit_code_two_without_stderr_feedback_fails_instead_of_blocking() {
-        let parsed = parse_completed(
-            &handler(),
-            run_result(Some(2), "ignored stdout", "  "),
-            Some("turn-1".to_string()),
-        );
-
-        assert_eq!(
-            parsed.data,
-            StopHandlerData {
-                should_stop: false,
-                stop_reason: None,
-                should_block: false,
-                block_reason: None,
-                block_message_for_model: None,
-            }
-        );
-        assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
-        assert_eq!(
-            parsed.completed.run.entries,
-            vec![HookOutputEntry {
-                kind: HookOutputEntryKind::Error,
-                text: "hook exited with code 2 without stderr feedback".to_string(),
+                text: "Stop hook returned decision:block without a non-empty reason".to_string(),
             }]
         );
     }
@@ -449,16 +482,7 @@ mod tests {
             Some("turn-1".to_string()),
         );
 
-        assert_eq!(
-            parsed.data,
-            StopHandlerData {
-                should_stop: false,
-                stop_reason: None,
-                should_block: false,
-                block_reason: None,
-                block_message_for_model: None,
-            }
-        );
+        assert_eq!(parsed.data, StopHandlerData::default());
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
         assert_eq!(
             parsed.completed.run.entries,
@@ -466,6 +490,37 @@ mod tests {
                 kind: HookOutputEntryKind::Error,
                 text: "hook returned invalid stop hook JSON output".to_string(),
             }]
+        );
+    }
+
+    #[test]
+    fn aggregate_results_concatenates_blocking_reasons_in_declaration_order() {
+        let aggregate = aggregate_results([
+            &StopHandlerData {
+                should_stop: false,
+                stop_reason: None,
+                should_block: true,
+                block_reason: Some("first".to_string()),
+                continuation_prompt: Some("first".to_string()),
+            },
+            &StopHandlerData {
+                should_stop: false,
+                stop_reason: None,
+                should_block: true,
+                block_reason: Some("second".to_string()),
+                continuation_prompt: Some("second".to_string()),
+            },
+        ]);
+
+        assert_eq!(
+            aggregate,
+            StopHandlerData {
+                should_stop: false,
+                stop_reason: None,
+                should_block: true,
+                block_reason: Some("first\n\nsecond".to_string()),
+                continuation_prompt: Some("first\n\nsecond".to_string()),
+            }
         );
     }
 

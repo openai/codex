@@ -5547,7 +5547,6 @@ pub(crate) async fn run_turn(
         .await;
     let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
-    let mut pending_stop_hook_message: Option<String> = None;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -5639,14 +5638,11 @@ pub(crate) async fn run_turn(
         }
 
         // Construct the input that we will send to the model.
-        let mut sampling_request_input: Vec<ResponseItem> = {
+        let sampling_request_input: Vec<ResponseItem> = {
             sess.clone_history()
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
-        if let Some(stop_hook_message) = pending_stop_hook_message.take() {
-            sampling_request_input.push(DeveloperInstructions::new(stop_hook_message).into());
-        }
 
         let sampling_request_input_messages = sampling_request_input
             .iter()
@@ -5743,18 +5739,25 @@ pub(crate) async fn run_turn(
                             .await;
                     }
                     if stop_outcome.should_block {
-                        if stop_hook_active {
+                        if let Some(continuation_prompt) = stop_outcome.continuation_prompt.clone()
+                        {
+                            let developer_message: ResponseItem =
+                                DeveloperInstructions::new(continuation_prompt).into();
+                            sess.record_conversation_items(
+                                &turn_context,
+                                std::slice::from_ref(&developer_message),
+                            )
+                            .await;
+                            stop_hook_active = true;
+                            continue;
+                        } else {
                             sess.send_event(
                                 &turn_context,
                                 EventMsg::Warning(WarningEvent {
-                                    message: "Stop hook blocked twice in the same turn; ignoring the second block to avoid an infinite loop.".to_string(),
+                                    message: "Stop hook requested continuation without a prompt; ignoring the block.".to_string(),
                                 }),
                             )
                             .await;
-                        } else {
-                            stop_hook_active = true;
-                            pending_stop_hook_message = stop_outcome.block_message_for_model;
-                            continue;
                         }
                     }
                     if stop_outcome.should_stop {

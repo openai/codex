@@ -96,6 +96,8 @@ pub(crate) struct StopCommandOutputWire {
     pub universal: HookUniversalOutputWire,
     #[serde(default)]
     pub decision: Option<StopDecisionWire>,
+    /// Claude requires `reason` when `decision` is `block`; we enforce that
+    /// semantic rule during output parsing rather than in the JSON schema.
     #[serde(default)]
     pub reason: Option<String>,
 }
