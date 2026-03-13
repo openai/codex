@@ -1230,11 +1230,12 @@ fn normalize_codex_apps_tool_name(
         return tool_name.to_string();
     }
 
-    let tool_name = sanitize_name(tool_name);
+    let tool_name = sanitize_name(tool_name).replace('-', "_");
 
     if let Some(connector_name) = connector_name
         .map(str::trim)
         .map(sanitize_name)
+        .map(|name| name.replace('-', "_"))
         .filter(|name| !name.is_empty())
         && let Some(stripped) = tool_name.strip_prefix(&connector_name)
         && !stripped.is_empty()
@@ -1245,6 +1246,7 @@ fn normalize_codex_apps_tool_name(
     if let Some(connector_id) = connector_id
         .map(str::trim)
         .map(sanitize_name)
+        .map(|name| name.replace('-', "_"))
         .filter(|name| !name.is_empty())
         && let Some(stripped) = tool_name.strip_prefix(&connector_id)
         && !stripped.is_empty()
