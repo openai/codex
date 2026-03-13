@@ -570,6 +570,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn clear_composer(&mut self) {
+        self.composer.clear();
+        self.request_redraw();
+    }
+
     /// Get the current composer text (for tests and programmatic checks).
     pub(crate) fn composer_text(&self) -> String {
         self.composer.current_text()
