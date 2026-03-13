@@ -14,7 +14,6 @@ use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::SandboxMode;
 use codex_core::AnalyticsEventsClient;
 use codex_core::ThreadManager;
-use codex_core::config::CONFIG_TOML_FILE;
 use codex_core::config::ConfigService;
 use codex_core::config::ConfigServiceError;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -124,16 +123,23 @@ impl ConfigApi {
         &self,
         params: ConfigValueWriteParams,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
-        let target_path = config_write_target_path(&self.codex_home, params.file_path.as_deref());
+        let config_service = self.config_service();
         let pending_changes =
             collect_plugin_enabled_candidates([(&params.key_path, &params.value)].into_iter());
-        let previous_states = read_plugin_enabled_states(target_path.as_path(), &pending_changes);
-        let response = self
-            .config_service()
+        let validated_path = config_service
+            .resolve_user_config_path(params.file_path.as_deref())
+            .map_err(map_error)?;
+        let previous_states =
+            read_plugin_enabled_states(validated_path.as_path(), &pending_changes);
+        let response = config_service
             .write_value(params)
             .await
             .map_err(map_error)?;
-        self.emit_plugin_toggle_events(target_path.as_path(), previous_states, pending_changes);
+        self.emit_plugin_toggle_events(
+            response.file_path.as_path(),
+            previous_states,
+            pending_changes,
+        );
         Ok(response)
     }
 
@@ -142,20 +148,27 @@ impl ConfigApi {
         params: ConfigBatchWriteParams,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
         let reload_user_config = params.reload_user_config;
-        let target_path = config_write_target_path(&self.codex_home, params.file_path.as_deref());
+        let config_service = self.config_service();
         let pending_changes = collect_plugin_enabled_candidates(
             params
                 .edits
                 .iter()
                 .map(|edit| (&edit.key_path, &edit.value)),
         );
-        let previous_states = read_plugin_enabled_states(target_path.as_path(), &pending_changes);
-        let response = self
-            .config_service()
+        let validated_path = config_service
+            .resolve_user_config_path(params.file_path.as_deref())
+            .map_err(map_error)?;
+        let previous_states =
+            read_plugin_enabled_states(validated_path.as_path(), &pending_changes);
+        let response = config_service
             .batch_write(params)
             .await
             .map_err(map_error)?;
-        self.emit_plugin_toggle_events(target_path.as_path(), previous_states, pending_changes);
+        self.emit_plugin_toggle_events(
+            response.file_path.as_path(),
+            previous_states,
+            pending_changes,
+        );
         if reload_user_config {
             self.user_config_reloader.reload_user_config().await;
         }
@@ -188,12 +201,6 @@ impl ConfigApi {
             }
         }
     }
-}
-
-fn config_write_target_path(codex_home: &std::path::Path, file_path: Option<&str>) -> PathBuf {
-    file_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| codex_home.join(CONFIG_TOML_FILE))
 }
 
 fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigRequirements {
