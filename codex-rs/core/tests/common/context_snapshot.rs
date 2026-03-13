@@ -1,6 +1,11 @@
+use regex_lite::Regex;
 use serde_json::Value;
+use std::sync::OnceLock;
 
 use crate::responses::ResponsesRequest;
+use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;
+use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
+use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ContextSnapshotRenderMode {
@@ -241,6 +246,15 @@ fn canonicalize_snapshot_text(text: &str) -> String {
     if text.starts_with("<permissions instructions>") {
         return "<PERMISSIONS_INSTRUCTIONS>".to_string();
     }
+    if text.starts_with(APPS_INSTRUCTIONS_OPEN_TAG) {
+        return "<APPS_INSTRUCTIONS>".to_string();
+    }
+    if text.starts_with(SKILLS_INSTRUCTIONS_OPEN_TAG) {
+        return "<SKILLS_INSTRUCTIONS>".to_string();
+    }
+    if text.starts_with(PLUGINS_INSTRUCTIONS_OPEN_TAG) {
+        return "<PLUGINS_INSTRUCTIONS>".to_string();
+    }
     if text.starts_with("# AGENTS.md instructions for ") {
         return "<AGENTS_MD>".to_string();
     }
@@ -282,7 +296,18 @@ fn canonicalize_snapshot_text(text: &str) -> String {
     {
         return format!("<COMPACTION_SUMMARY>\n{summary}");
     }
-    text.to_string()
+    normalize_dynamic_snapshot_paths(text)
+}
+
+fn normalize_dynamic_snapshot_paths(text: &str) -> String {
+    static SYSTEM_SKILL_PATH_RE: OnceLock<Regex> = OnceLock::new();
+    let system_skill_path_re = SYSTEM_SKILL_PATH_RE.get_or_init(|| {
+        Regex::new(r"/[^)\n]*/skills/\.system/([^/\n]+)/SKILL\.md")
+            .expect("system skill path regex should compile")
+    });
+    system_skill_path_re
+        .replace_all(text, "<SYSTEM_SKILLS_ROOT>/$1/SKILL.md")
+        .into_owned()
 }
 
 #[cfg(test)]
@@ -351,6 +376,38 @@ mod tests {
         );
 
         assert_eq!(rendered, "00:message/user:<AGENTS_MD>");
+    }
+
+    #[test]
+    fn redacted_text_mode_keeps_capability_instruction_placeholders() {
+        let items = vec![json!({
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "<apps_instructions>\n## Apps\nbody\n</apps_instructions>"
+                },
+                {
+                    "type": "input_text",
+                    "text": "<skills_instructions>\n## Skills\nbody\n</skills_instructions>"
+                },
+                {
+                    "type": "input_text",
+                    "text": "<plugins_instructions>\n## Plugins\nbody\n</plugins_instructions>"
+                }
+            ]
+        })];
+
+        let rendered = format_response_items_snapshot(
+            &items,
+            &ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::RedactedText),
+        );
+
+        assert_eq!(
+            rendered,
+            "00:message/developer[3]:\n    [01] <APPS_INSTRUCTIONS>\n    [02] <SKILLS_INSTRUCTIONS>\n    [03] <PLUGINS_INSTRUCTIONS>"
+        );
     }
 
     #[test]
@@ -440,6 +497,25 @@ mod tests {
         assert_eq!(
             rendered,
             "00:message/user[3]:\n    [01] <image>\n    [02] <input_image:image_url>\n    [03] </image>"
+        );
+    }
+
+    #[test]
+    fn redacted_text_mode_normalizes_system_skill_temp_paths() {
+        let items = vec![json!({
+            "type": "message",
+            "role": "developer",
+            "content": [{
+                "type": "input_text",
+                "text": "## Skills\n- openai-docs: helper (file: /private/var/folders/yk/p4jp9nzs79s5q84csslkgqtm0000gn/T/.tmpAnGVww/skills/.system/openai-docs/SKILL.md)"
+            }]
+        })];
+
+        let rendered = format_response_items_snapshot(&items, &ContextSnapshotOptions::default());
+
+        assert_eq!(
+            rendered,
+            "00:message/developer:## Skills\\n- openai-docs: helper (file: <SYSTEM_SKILLS_ROOT>/openai-docs/SKILL.md)"
         );
     }
 }

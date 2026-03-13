@@ -41,6 +41,7 @@ use crate::realtime_conversation::handle_close as handle_realtime_conversation_c
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::rollout::session_index;
+use crate::skills::render_skills_section;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -221,6 +222,7 @@ use crate::mentions::collect_tool_mentions_from_messages;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
 use crate::plugins::build_plugin_injections;
+use crate::plugins::render_plugins_section;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
@@ -423,7 +425,6 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let loaded_plugins = plugins_manager.plugins_for_config(&config);
         let loaded_skills = skills_manager.skills_for_config(&config);
 
         for err in &loaded_skills.errors {
@@ -469,14 +470,7 @@ impl Codex {
             config.startup_warnings.push(message);
         }
 
-        let allowed_skills_for_implicit_invocation =
-            loaded_skills.allowed_skills_for_implicit_invocation();
-        let user_instructions = get_user_instructions(
-            &config,
-            Some(&allowed_skills_for_implicit_invocation),
-            Some(loaded_plugins.capability_summaries()),
-        )
-        .await;
+        let user_instructions = get_user_instructions(&config).await;
 
         let exec_policy = if crate::guardian::is_guardian_subagent_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -3500,6 +3494,21 @@ impl Session {
         }
         if turn_context.apps_enabled() {
             developer_sections.push(render_apps_section());
+        }
+        let implicit_skills = turn_context
+            .turn_skills
+            .outcome
+            .allowed_skills_for_implicit_invocation();
+        if let Some(skills_section) = render_skills_section(&implicit_skills) {
+            developer_sections.push(skills_section);
+        }
+        let loaded_plugins = self
+            .services
+            .plugins_manager
+            .plugins_for_config(&turn_context.config);
+        if let Some(plugin_section) = render_plugins_section(loaded_plugins.capability_summaries())
+        {
+            developer_sections.push(plugin_section);
         }
         if turn_context.features.enabled(Feature::CodexGitCommit)
             && let Some(commit_message_instruction) = commit_message_trailer_instruction(

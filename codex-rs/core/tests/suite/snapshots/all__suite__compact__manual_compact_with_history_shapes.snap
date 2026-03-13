@@ -5,10 +5,10 @@ expression: "format_labeled_requests_snapshot(\"Manual /compact with prior user 
 Scenario: Manual /compact with prior user history compacts existing history and the follow-up turn includes the compact summary plus new user message.
 
 ## Local Compaction Request
-00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <SKILLS_INSTRUCTIONS>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:first manual turn
 03:message/assistant:FIRST_REPLY
 04:message/user:<SUMMARIZATION_PROMPT>
@@ -16,8 +16,8 @@ Scenario: Manual /compact with prior user history compacts existing history and 
 ## Local Post-Compaction History Layout
 00:message/user:first manual turn
 01:message/user:<COMPACTION_SUMMARY>\nFIRST_MANUAL_SUMMARY
-02:message/developer:<PERMISSIONS_INSTRUCTIONS>
-03:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <SKILLS_INSTRUCTIONS>
+03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 04:message/user:second manual turn

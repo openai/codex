@@ -1083,7 +1083,7 @@ async fn omits_apps_guidance_for_api_key_auth_even_when_feature_enabled() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn skills_append_to_instructions() {
+async fn skills_append_to_developer_message() {
     skip_if_no_network!();
     let server = MockServer::start().await;
 
@@ -1129,27 +1129,21 @@ async fn skills_append_to_instructions() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
-    let request_body = request.body_json();
-
-    assert_message_role(&request_body["input"][0], "developer");
-
-    assert_message_role(&request_body["input"][1], "user");
-    let instructions_text = request_body["input"][1]["content"][0]["text"]
-        .as_str()
-        .expect("instructions text");
+    let developer_messages = request.message_input_texts("developer");
+    let developer_text = developer_messages.join("\n\n");
     assert!(
-        instructions_text.contains("## Skills"),
-        "expected skills section present"
+        developer_text.contains("## Skills"),
+        "expected skills section present: {developer_messages:?}"
     );
     assert!(
-        instructions_text.contains("demo: build charts"),
-        "expected skill summary"
+        developer_text.contains("demo: build charts"),
+        "expected skill summary: {developer_messages:?}"
     );
     let expected_path = normalize_path(skill_dir.join("SKILL.md")).unwrap();
     let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
     assert!(
-        instructions_text.contains(&expected_path_str),
-        "expected path {expected_path_str} in instructions"
+        developer_text.contains(&expected_path_str),
+        "expected path {expected_path_str} in developer message: {developer_messages:?}"
     );
     let _codex_home_guard = codex_home;
 }

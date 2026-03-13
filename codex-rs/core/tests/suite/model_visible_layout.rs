@@ -45,7 +45,7 @@ fn format_labeled_requests_snapshot(
     )
 }
 
-fn agents_message_count(request: &ResponsesRequest) -> usize {
+fn user_instructions_wrapper_count(request: &ResponsesRequest) -> usize {
     request
         .message_input_texts("user")
         .iter()
@@ -262,14 +262,14 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
     let requests = responses.requests();
     assert_eq!(requests.len(), 2, "expected two requests");
     assert_eq!(
-        agents_message_count(&requests[0]),
-        1,
-        "expected exactly one AGENTS message in first request"
+        user_instructions_wrapper_count(&requests[0]),
+        0,
+        "expected first request to omit the serialized user-instructions wrapper when cwd-only project docs are introduced after session init"
     );
     assert_eq!(
-        agents_message_count(&requests[1]),
-        1,
-        "expected AGENTS to refresh after cwd change, but current behavior only keeps history AGENTS"
+        user_instructions_wrapper_count(&requests[1]),
+        0,
+        "expected second request to keep omitting the serialized user-instructions wrapper after cwd change with the current session-scoped project doc behavior"
     );
     insta::assert_snapshot!(
         "model_visible_layout_cwd_change_does_not_refresh_agents",
