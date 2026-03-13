@@ -2731,6 +2731,21 @@ mod tests {
 
     #[test]
     fn request_permissions_response_accepts_partial_network_and_file_system_grants() {
+        let input_path = if cfg!(target_os = "windows") {
+            r"C:\tmp\input"
+        } else {
+            "/tmp/input"
+        };
+        let output_path = if cfg!(target_os = "windows") {
+            r"C:\tmp\output"
+        } else {
+            "/tmp/output"
+        };
+        let ignored_path = if cfg!(target_os = "windows") {
+            r"C:\tmp\ignored"
+        } else {
+            "/tmp/ignored"
+        };
         let absolute_path = |path: &str| {
             AbsolutePathBuf::try_from(std::path::PathBuf::from(path)).expect("absolute path")
         };
@@ -2739,8 +2754,8 @@ mod tests {
                 enabled: Some(true),
             }),
             file_system: Some(CoreFileSystemPermissions {
-                read: Some(vec![absolute_path("/tmp/input")]),
-                write: Some(vec![absolute_path("/tmp/output")]),
+                read: Some(vec![absolute_path(input_path)]),
+                write: Some(vec![absolute_path(output_path)]),
             }),
         };
         let cases = vec![
@@ -2764,13 +2779,13 @@ mod tests {
             (
                 serde_json::json!({
                     "fileSystem": {
-                        "write": ["/tmp/output"],
+                        "write": [output_path],
                     },
                 }),
                 CoreRequestPermissionProfile {
                     file_system: Some(CoreFileSystemPermissions {
                         read: None,
-                        write: Some(vec![absolute_path("/tmp/output")]),
+                        write: Some(vec![absolute_path(output_path)]),
                     }),
                     ..CoreRequestPermissionProfile::default()
                 },
@@ -2778,8 +2793,8 @@ mod tests {
             (
                 serde_json::json!({
                     "fileSystem": {
-                        "read": ["/tmp/input"],
-                        "write": ["/tmp/output", "/tmp/ignored"],
+                        "read": [input_path],
+                        "write": [output_path, ignored_path],
                     },
                     "macos": {
                         "calendar": true,
@@ -2787,8 +2802,8 @@ mod tests {
                 }),
                 CoreRequestPermissionProfile {
                     file_system: Some(CoreFileSystemPermissions {
-                        read: Some(vec![absolute_path("/tmp/input")]),
-                        write: Some(vec![absolute_path("/tmp/output")]),
+                        read: Some(vec![absolute_path(input_path)]),
+                        write: Some(vec![absolute_path(output_path)]),
                     }),
                     ..CoreRequestPermissionProfile::default()
                 },
