@@ -87,6 +87,7 @@ struct RunnerRequest {
     cwd: PathBuf,
     env_map: HashMap<String, String>,
     timeout_ms: Option<u64>,
+    use_private_desktop: bool,
     stdin_pipe: String,
     stdout_pipe: String,
     stderr_pipe: String,
@@ -541,9 +542,10 @@ pub fn main() -> Result<()> {
                 &req.env_map,
                 Some(&req.codex_home),
                 stdio,
+                req.use_private_desktop,
             )
         };
-        let (proc_info, _si) = match spawn_result {
+        let created = match spawn_result {
             Ok(v) => v,
             Err(err) => {
                 log_note(&format!("runner: spawn failed: {err:?}"), log_dir);
@@ -556,6 +558,7 @@ pub fn main() -> Result<()> {
                 return Err(err);
             }
         };
+        let proc_info = created.process_info;
 
         let h_job = unsafe { create_job_kill_on_close().ok() };
         if let Some(job) = h_job {

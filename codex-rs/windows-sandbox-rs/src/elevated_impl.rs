@@ -15,9 +15,9 @@ mod windows_impl {
     use crate::logging::log_success;
     use crate::policy::parse_policy;
     use crate::policy::SandboxPolicy;
-    use crate::sandbox_users::resolve_sid;
     use crate::token::convert_string_sid_to_sid;
     use crate::winutil::quote_windows_arg;
+    use crate::winutil::resolve_sid;
     use crate::winutil::string_from_sid_bytes;
     use crate::winutil::to_wide;
     use anyhow::Result;
@@ -229,8 +229,9 @@ mod windows_impl {
         log_start(&command, logs_base_dir);
         let sandbox_creds =
             require_logon_sandbox_creds(&policy, sandbox_policy_cwd, cwd, &env_map, codex_home)?;
-        let sandbox_sid = resolve_sid(&sandbox_creds.username)
-            .map_err(|err| io::Error::new(io::ErrorKind::PermissionDenied, err.to_string()))?;
+        let sandbox_sid = resolve_sid(&sandbox_creds.username).map_err(|err: anyhow::Error| {
+            io::Error::new(io::ErrorKind::PermissionDenied, err.to_string())
+        })?;
         let sandbox_sid = string_from_sid_bytes(&sandbox_sid)
             .map_err(|err| io::Error::new(io::ErrorKind::PermissionDenied, err))?;
         // Build capability SID for ACL grants.

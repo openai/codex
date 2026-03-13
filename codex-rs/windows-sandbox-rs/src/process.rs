@@ -222,8 +222,9 @@ pub fn spawn_process_with_pipes(
     };
 
     let stdio = Some((in_r, out_w, stderr_handle));
-    let spawn_result = unsafe { create_process_as_user(h_token, argv, cwd, env_map, None, stdio) };
-    let (pi, _si) = match spawn_result {
+    let spawn_result =
+        unsafe { create_process_as_user(h_token, argv, cwd, env_map, None, stdio, false) };
+    let created = match spawn_result {
         Ok(v) => v,
         Err(err) => {
             unsafe {
@@ -239,6 +240,7 @@ pub fn spawn_process_with_pipes(
             return Err(err);
         }
     };
+    let pi = created.process_info;
 
     unsafe {
         CloseHandle(in_r);
