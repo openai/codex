@@ -6052,6 +6052,19 @@ async fn slash_help_opens_reference_popup() {
 }
 
 #[tokio::test]
+async fn slash_help_with_whitespace_only_args_clears_composer() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane
+        .set_composer_text("/help   ".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(chat.bottom_pane.has_active_view());
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+    assert!(chat.remote_image_urls().is_empty());
+}
+
+#[tokio::test]
 async fn slash_help_search_jumps_to_lower_match() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 

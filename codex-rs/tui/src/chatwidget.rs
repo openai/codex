@@ -4730,6 +4730,8 @@ impl ChatWidget {
             if should_queue && !cmd.requires_interaction() {
                 self.queue_current_inline_bare_slash_command(cmd);
             } else {
+                self.set_composer_text(String::new(), Vec::new(), Vec::new());
+                self.set_remote_image_urls(Vec::new());
                 self.dispatch_command(cmd);
             }
             return;
