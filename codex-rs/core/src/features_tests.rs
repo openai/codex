@@ -78,7 +78,7 @@ fn guardian_approval_is_experimental_and_user_toggleable() {
     assert_eq!(
         stage.experimental_menu_description().map(str::to_owned),
         Some(
-            "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to the guardian reviewer subagent instead of blocking on your input. This can consume significantly more tokens because it runs a subagent on every approval request.".to_string()
+            "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to a carefully-prompted security reviewer subagent rather than blocking the agent on your input. This can consume significantly more tokens because it runs a subagent on every approval request.".to_string()
         )
     );
     assert_eq!(stage.experimental_announcement(), None);
