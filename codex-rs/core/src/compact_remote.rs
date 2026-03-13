@@ -136,6 +136,9 @@ async fn run_remote_compact_task_inner_impl(
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);
     }
+    // Remote compaction snapshots history, waits on an API call, then replaces
+    // session history wholesale. Background writers can append during that
+    // window, so re-snapshot here and preserve any append-only tail items.
     let latest_history_snapshot = sess.clone_history().await;
     if !append_concurrent_history_tail_if_append_only(
         &mut new_history,
