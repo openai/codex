@@ -122,7 +122,7 @@ use self::pending_interactive_replay::PendingInteractiveReplayState;
 use self::skills::effective_skills_list_cwds;
 use self::skills::emit_skill_load_warnings;
 use self::skills::errors_for_cwd;
-use self::skills::request_app_server_skills_list;
+use self::skills::request_skills_list;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
@@ -2232,7 +2232,7 @@ impl App {
                                     app.latest_skills_list_generation_by_cwd.insert(cwd.clone(), generation);
                                 }
 
-                                request_app_server_skills_list(
+                                request_skills_list(
                                     app.app_event_tx.clone(),
                                     app_server.requester(),
                                     cwds,
@@ -2314,7 +2314,7 @@ impl App {
             }
         };
         if let Err(err) = app_server.shutdown().await {
-            tracing::warn!(error = %err, "failed to shut down embedded app server");
+            tracing::warn!(error = %err, "failed to shut down app server");
         }
         let clear_result = tui.terminal.clear();
         let exit_reason = match exit_reason_result {
