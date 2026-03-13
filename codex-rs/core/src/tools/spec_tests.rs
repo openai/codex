@@ -2,7 +2,9 @@ use crate::client_common::tools::FreeformTool;
 use crate::config::test_config;
 use crate::models_manager::manager::ModelsManager;
 use crate::models_manager::model_info::with_config_overrides;
+use crate::tools::ToolRouter;
 use crate::tools::registry::ConfiguredToolSpec;
+use crate::tools::router::ToolRouterParams;
 use codex_app_server_protocol::AppInfo;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
@@ -933,8 +935,20 @@ fn assert_model_tools(
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
-    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-    let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
+    let router = ToolRouter::from_config(
+        &tools_config,
+        ToolRouterParams {
+            mcp_tools: None,
+            app_tools: None,
+            discoverable_tools: None,
+            dynamic_tools: &[],
+        },
+    );
+    let model_visible_specs = router.model_visible_specs();
+    let tool_names = model_visible_specs
+        .iter()
+        .map(ToolSpec::name)
+        .collect::<Vec<_>>();
     assert_eq!(&tool_names, &expected_tools,);
 }
 
@@ -2528,6 +2542,9 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
 
     assert!(!description.contains("Enabled nested tools:"));
     assert!(!description.contains("Nested tool reference:"));
+    assert!(description.starts_with(
+        "Use `exec/exec_wait` tool to run all other tools, do not attempt to use any other tools directly"
+    ));
     assert!(description.contains("### `update_plan` (`update_plan`)"));
     assert!(description.contains("### `view_image` (`view_image`)"));
     assert!(description.contains("Code mode declaration:"));

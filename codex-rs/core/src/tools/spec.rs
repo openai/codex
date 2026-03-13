@@ -1999,7 +1999,10 @@ fn create_js_repl_reset_tool() -> ToolSpec {
     })
 }
 
-fn create_code_mode_tool(enabled_tools: &[(String, String)]) -> ToolSpec {
+fn create_code_mode_tool(
+    enabled_tools: &[(String, String)],
+    code_mode_only_enabled: bool,
+) -> ToolSpec {
     const CODE_MODE_FREEFORM_GRAMMAR: &str = r#"
 start: pragma_source | plain_source
 pragma_source: PRAGMA_LINE NEWLINE SOURCE
@@ -2012,7 +2015,7 @@ SOURCE: /[\s\S]+/
 
     ToolSpec::Freeform(FreeformTool {
         name: PUBLIC_TOOL_NAME.to_string(),
-        description: code_mode_tool_description(enabled_tools),
+        description: code_mode_tool_description(enabled_tools, code_mode_only_enabled),
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
             syntax: "lark".to_string(),
@@ -2498,7 +2501,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         enabled_tools.dedup_by(|left, right| left.0 == right.0);
         push_tool_spec(
             &mut builder,
-            create_code_mode_tool(&enabled_tools),
+            create_code_mode_tool(&enabled_tools, config.code_mode_only_enabled),
             false,
             config.code_mode_enabled,
         );
@@ -2510,10 +2513,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             config.code_mode_enabled,
         );
         builder.register_handler(WAIT_TOOL_NAME, code_mode_wait_handler);
-
-        if config.code_mode_only_enabled {
-            return builder;
-        }
     }
 
     match &config.shell_type {

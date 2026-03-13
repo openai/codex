@@ -280,6 +280,56 @@ async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_only_can_call_nested_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call(
+                "call-1",
+                "exec",
+                r#"
+const output = await tools.exec_command({ cmd: "printf code_mode_only_nested_tool_marker" });
+text(output.output);
+"#,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let follow_up_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        let _ = config.features.enable(Feature::CodeModeOnly);
+    });
+    let test = builder.build(&server).await?;
+    test.submit_turn("use exec to run nested tool in code mode only")
+        .await?;
+
+    let request = follow_up_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&request, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "code_mode_only nested tool call failed unexpectedly: {output}"
+    );
+    assert_eq!(output, "code_mode_only_nested_tool_marker");
+
+    Ok(())
+}
+
 #[cfg_attr(windows, ignore = "flaky on windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_nested_tool_calls_can_run_in_parallel() -> Result<()> {
