@@ -873,6 +873,7 @@ impl TurnContext {
             sandbox_policy: self.sandbox_policy.get(),
             windows_sandbox_level: self.windows_sandbox_level,
         })
+        .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_agent_roles(config.agent_roles.clone());
@@ -1261,6 +1262,9 @@ impl Session {
         session_telemetry: &SessionTelemetry,
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
+        user_shell: &shell::Shell,
+        shell_zsh_path: Option<&PathBuf>,
+        main_execve_wrapper_exe: Option<&PathBuf>,
         per_turn_config: Config,
         model_info: ModelInfo,
         models_manager: &ModelsManager,
@@ -1292,6 +1296,11 @@ impl Session {
             sandbox_policy: session_configuration.sandbox_policy.get(),
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         })
+        .with_unified_exec_shell_mode_for_session(
+            user_shell,
+            shell_zsh_path,
+            main_execve_wrapper_exe,
+        )
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_agent_roles(per_turn_config.agent_roles.clone());
@@ -2358,6 +2367,9 @@ impl Session {
             &self.services.session_telemetry,
             session_configuration.provider.clone(),
             &session_configuration,
+            self.services.user_shell.as_ref(),
+            self.services.shell_zsh_path.as_ref(),
+            self.services.main_execve_wrapper_exe.as_ref(),
             per_turn_config,
             model_info,
             &self.services.models_manager,
@@ -5269,6 +5281,11 @@ async fn spawn_review_thread(
         sandbox_policy: parent_turn_context.sandbox_policy.get(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
     })
+    .with_unified_exec_shell_mode_for_session(
+        sess.services.user_shell.as_ref(),
+        sess.services.shell_zsh_path.as_ref(),
+        sess.services.main_execve_wrapper_exe.as_ref(),
+    )
     .with_web_search_config(None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
     .with_agent_roles(config.agent_roles.clone());

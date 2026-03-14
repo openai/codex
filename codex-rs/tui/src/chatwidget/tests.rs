@@ -8648,9 +8648,35 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
     }
     chat.config.notices.hide_full_access_warning = Some(true);
     chat.set_feature_enabled(Feature::GuardianApproval, true);
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    chat.config
+        .permissions
+        .sandbox_policy
+        .set(SandboxPolicy::new_workspace_write_policy())
+        .expect("set sandbox policy");
+    chat.set_approvals_reviewer(ApprovalsReviewer::User);
 
     chat.open_permissions_popup();
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup
+            .lines()
+            .any(|line| line.contains("(current)") && line.contains('›')),
+        "expected permissions popup to open with the current preset selected: {popup}"
+    );
+
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup
+            .lines()
+            .any(|line| line.contains("Smart Approvals") && line.contains('›')),
+        "expected one Down from Default to select Smart Approvals: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let op = std::iter::from_fn(|| rx.try_recv().ok())

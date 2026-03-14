@@ -102,6 +102,7 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
                 let command = crate::tools::handlers::unified_exec::get_command(
                     &params,
                     invocation.session.user_shell(),
+                    &invocation.turn.tools_config.unified_exec_shell_mode,
                     invocation.turn.tools_config.allow_login_shell,
                 )
                 .ok()?;

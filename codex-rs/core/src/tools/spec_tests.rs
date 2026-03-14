@@ -2,6 +2,8 @@ use crate::client_common::tools::FreeformTool;
 use crate::config::test_config;
 use crate::models_manager::manager::ModelsManager;
 use crate::models_manager::model_info::with_config_overrides;
+use crate::shell::Shell;
+use crate::shell::ShellType;
 use crate::tools::ToolRouter;
 use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::router::ToolRouterParams;
@@ -9,7 +11,9 @@ use codex_app_server_protocol::AppInfo;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use std::path::PathBuf;
 
 use super::*;
 
@@ -1431,6 +1435,11 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
+    let user_shell = Shell {
+        shell_type: ShellType::Zsh,
+        shell_path: PathBuf::from("/bin/zsh"),
+        shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+    };
 
     assert_eq!(tools_config.shell_type, ConfigShellToolType::ShellCommand);
     assert_eq!(
@@ -1438,8 +1447,36 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
         ShellCommandBackendConfig::ZshFork
     );
     assert_eq!(
-        tools_config.unified_exec_backend,
-        UnifiedExecBackendConfig::ZshFork
+        tools_config.unified_exec_shell_mode,
+        UnifiedExecShellMode::Direct
+    );
+    assert_eq!(
+        tools_config
+            .with_unified_exec_shell_mode_for_session(
+                &user_shell,
+                Some(&PathBuf::from(if cfg!(windows) {
+                    r"C:\opt\codex\zsh"
+                } else {
+                    "/opt/codex/zsh"
+                })),
+                Some(&PathBuf::from(if cfg!(windows) {
+                    r"C:\opt\codex\codex-execve-wrapper"
+                } else {
+                    "/opt/codex/codex-execve-wrapper"
+                })),
+            )
+            .unified_exec_shell_mode,
+        if cfg!(unix) {
+            UnifiedExecShellMode::ZshFork(ZshForkConfig {
+                shell_zsh_path: AbsolutePathBuf::from_absolute_path("/opt/codex/zsh").unwrap(),
+                main_execve_wrapper_exe: AbsolutePathBuf::from_absolute_path(
+                    "/opt/codex/codex-execve-wrapper",
+                )
+                .unwrap(),
+            })
+        } else {
+            UnifiedExecShellMode::Direct
+        }
     );
 }
 
