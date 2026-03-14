@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -60,6 +61,12 @@ impl GuardianSubagent {
     async fn shutdown(self) {
         let _ = self.codex.shutdown_and_wait().await;
     }
+
+    fn shutdown_in_background(self) {
+        drop(tokio::spawn(async move {
+            self.shutdown().await;
+        }));
+    }
 }
 
 impl GuardianSubagentManager {
@@ -67,24 +74,41 @@ impl GuardianSubagentManager {
         &self,
         params: GuardianSubagentRunParams,
     ) -> GuardianSubagentRunOutcome {
-        let mut state = self.state.lock().await;
+        let deadline = tokio::time::Instant::now() + GUARDIAN_REVIEW_TIMEOUT;
+        let mut state = match run_before_review_deadline(
+            deadline,
+            params.external_cancel.as_ref(),
+            self.state.lock(),
+        )
+        .await
+        {
+            Ok(state) => state,
+            Err(outcome) => return outcome,
+        };
 
         if state
             .as_ref()
             .is_some_and(|subagent| subagent.live_network_config != params.live_network_config)
             && let Some(subagent) = state.take()
         {
-            subagent.shutdown().await;
+            subagent.shutdown_in_background();
         }
 
         if state.is_none() {
-            match spawn_guardian_subagent(&params).await {
-                Ok(subagent) => {
+            match run_before_review_deadline(
+                deadline,
+                params.external_cancel.as_ref(),
+                Box::pin(spawn_guardian_subagent(&params)),
+            )
+            .await
+            {
+                Ok(Ok(subagent)) => {
                     *state = Some(subagent);
                 }
-                Err(err) => {
+                Ok(Err(err)) => {
                     return GuardianSubagentRunOutcome::Completed(Err(err));
                 }
+                Err(outcome) => return outcome,
             }
         }
 
@@ -94,53 +118,71 @@ impl GuardianSubagentManager {
             )));
         };
 
-        // Keep the same conversation id for prompt-cache reuse, but clear prior
-        // review turns so each approval is evaluated independently.
-        subagent
-            .codex
-            .session
-            .replace_history(Vec::new(), None)
-            .await;
-        subagent
-            .codex
-            .session
-            .set_previous_turn_settings(None)
-            .await;
+        let submit_result = run_before_review_deadline(
+            deadline,
+            params.external_cancel.as_ref(),
+            Box::pin(async {
+                // Keep the same conversation id for prompt-cache reuse, but clear prior
+                // review turns so each approval is evaluated independently.
+                subagent
+                    .codex
+                    .session
+                    .replace_history(Vec::new(), None)
+                    .await;
+                subagent
+                    .codex
+                    .session
+                    .set_previous_turn_settings(None)
+                    .await;
 
-        params
-            .parent_session
-            .services
-            .network_approval
-            .copy_session_approved_hosts_to(&subagent.codex.session.services.network_approval)
-            .await;
+                params
+                    .parent_session
+                    .services
+                    .network_approval
+                    .copy_session_approved_hosts_to(
+                        &subagent.codex.session.services.network_approval,
+                    )
+                    .await;
 
-        let submit_result = subagent
-            .codex
-            .submit(Op::UserTurn {
-                items: params.prompt_items,
-                cwd: params.parent_turn.cwd.clone(),
-                approval_policy: AskForApproval::Never,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                model: params.model,
-                effort: params.reasoning_effort,
-                summary: Some(params.reasoning_summary),
-                service_tier: None,
-                final_output_json_schema: Some(params.schema),
-                collaboration_mode: None,
-                personality: params.personality,
-            })
-            .await;
+                subagent
+                    .codex
+                    .submit(Op::UserTurn {
+                        items: params.prompt_items,
+                        cwd: params.parent_turn.cwd.clone(),
+                        approval_policy: AskForApproval::Never,
+                        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                        model: params.model,
+                        effort: params.reasoning_effort,
+                        summary: Some(params.reasoning_summary),
+                        service_tier: None,
+                        final_output_json_schema: Some(params.schema),
+                        collaboration_mode: None,
+                        personality: params.personality,
+                    })
+                    .await
+            }),
+        )
+        .await;
+        let submit_result = match submit_result {
+            Ok(submit_result) => submit_result,
+            Err(outcome) => {
+                if let Some(subagent) = state.take() {
+                    subagent.shutdown_in_background();
+                }
+                return outcome;
+            }
+        };
         if let Err(err) = submit_result {
             if let Some(subagent) = state.take() {
-                subagent.shutdown().await;
+                subagent.shutdown_in_background();
             }
             return GuardianSubagentRunOutcome::Completed(Err(err.into()));
         }
 
         let (outcome, keep_subagent) =
-            wait_for_guardian_review(subagent, params.external_cancel.as_ref()).await;
+            wait_for_guardian_review(subagent, deadline, params.external_cancel.as_ref()).await;
         if !keep_subagent && let Some(subagent) = state.take() {
-            subagent.shutdown().await;
+            subagent.shutdown_in_background();
         }
         outcome
     }
@@ -169,9 +211,10 @@ async fn spawn_guardian_subagent(
 
 async fn wait_for_guardian_review(
     subagent: &GuardianSubagent,
+    deadline: tokio::time::Instant,
     external_cancel: Option<&CancellationToken>,
 ) -> (GuardianSubagentRunOutcome, bool) {
-    let timeout = tokio::time::sleep(GUARDIAN_REVIEW_TIMEOUT);
+    let timeout = tokio::time::sleep_until(deadline);
     tokio::pin!(timeout);
 
     loop {
@@ -221,6 +264,27 @@ async fn wait_for_guardian_review(
     }
 }
 
+async fn run_before_review_deadline<T>(
+    deadline: tokio::time::Instant,
+    external_cancel: Option<&CancellationToken>,
+    future: impl Future<Output = T>,
+) -> Result<T, GuardianSubagentRunOutcome> {
+    let timeout = tokio::time::sleep_until(deadline);
+    tokio::pin!(timeout);
+
+    tokio::select! {
+        output = future => Ok(output),
+        _ = &mut timeout => Err(GuardianSubagentRunOutcome::TimedOut),
+        _ = async {
+            if let Some(cancel_token) = external_cancel {
+                cancel_token.cancelled().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => Err(GuardianSubagentRunOutcome::Aborted),
+    }
+}
+
 async fn interrupt_and_drain_turn(codex: &Codex) -> anyhow::Result<()> {
     let _ = codex.submit(Op::Interrupt).await;
 
@@ -239,4 +303,42 @@ async fn interrupt_and_drain_turn(codex: &Codex) -> anyhow::Result<()> {
     .map_err(|_| anyhow!("timed out draining guardian subagent after interrupt"))??;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_before_review_deadline_times_out_before_future_completes() {
+        let outcome = run_before_review_deadline(
+            tokio::time::Instant::now() + Duration::from_millis(10),
+            None,
+            async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            },
+        )
+        .await;
+
+        assert!(matches!(outcome, Err(GuardianSubagentRunOutcome::TimedOut)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_before_review_deadline_aborts_when_cancelled() {
+        let cancel_token = CancellationToken::new();
+        let canceller = cancel_token.clone();
+        drop(tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            canceller.cancel();
+        }));
+
+        let outcome = run_before_review_deadline(
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            Some(&cancel_token),
+            std::future::pending::<()>(),
+        )
+        .await;
+
+        assert!(matches!(outcome, Err(GuardianSubagentRunOutcome::Aborted)));
+    }
 }
