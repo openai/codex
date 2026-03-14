@@ -42,6 +42,7 @@ fn test_model_info(
 ) -> ModelInfo {
     ModelInfo {
         slug: slug.to_string(),
+        request_model: None,
         display_name: display_name.to_string(),
         description: Some(description.to_string()),
         default_reasoning_level: Some(ReasoningEffort::Medium),
@@ -838,6 +839,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
 
     let base_model = ModelInfo {
         slug: large_model_slug.to_string(),
+        request_model: None,
         display_name: "Larger Model".to_string(),
         description: Some("larger context window model".to_string()),
         default_reasoning_level: Some(ReasoningEffort::Medium),
