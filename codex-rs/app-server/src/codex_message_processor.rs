@@ -248,6 +248,7 @@ use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
 use codex_protocol::ThreadId;
+use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
@@ -325,6 +326,9 @@ use crate::thread_state::ThreadStateManager;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
+const APP_SERVER_AUTH_STATUS_EVENT: &str = "codex.app_server_auth_status";
+const APP_SERVER_AUTH_CACHE_EVENT: &str = "codex.app_server_auth_cache";
+const APP_SERVER_AUTH_NOTIFICATION_EVENT: &str = "codex.app_server_auth_notification";
 
 struct ThreadListFilters {
     model_providers: Option<Vec<String>>,
@@ -437,6 +441,174 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AppServerAuthStatusObservation {
+    provider_id: String,
+    requires_openai_auth: bool,
+    auth_method: String,
+    auth_token_present: bool,
+    include_token_requested: bool,
+    refresh_token_requested: bool,
+    decision_state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AppServerAuthCacheObservation {
+    action: String,
+    reason: String,
+    auth_method: String,
+    token_present: bool,
+    account_id_present: bool,
+    plan_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AppServerAuthNotificationObservation {
+    method: String,
+    followup_auth_check_started: bool,
+    followup_auth_check_completed: bool,
+    followup_requires_openai_auth: bool,
+    followup_auth_method: String,
+    followup_auth_token_present: bool,
+}
+
+fn normalize_app_server_auth_method(auth_method: Option<AuthMode>) -> String {
+    match auth_method {
+        Some(AuthMode::ApiKey) => "api_key".to_string(),
+        Some(AuthMode::Chatgpt) => "chatgpt".to_string(),
+        Some(AuthMode::ChatgptAuthTokens) => "chatgpt_auth_tokens".to_string(),
+        None => "none".to_string(),
+    }
+}
+
+fn normalize_core_auth_method(auth: Option<&CodexAuth>) -> String {
+    match auth.map(CodexAuth::api_auth_mode) {
+        Some(AuthMode::ApiKey) => "api_key".to_string(),
+        Some(AuthMode::Chatgpt) => "chatgpt".to_string(),
+        Some(AuthMode::ChatgptAuthTokens) => "chatgpt_auth_tokens".to_string(),
+        None => "none".to_string(),
+    }
+}
+
+fn normalize_plan_type(auth: Option<&CodexAuth>) -> String {
+    match auth.and_then(CodexAuth::account_plan_type) {
+        Some(AccountPlanType::Free) => "free".to_string(),
+        Some(AccountPlanType::Go) => "go".to_string(),
+        Some(AccountPlanType::Plus) => "plus".to_string(),
+        Some(AccountPlanType::Pro) => "pro".to_string(),
+        Some(AccountPlanType::Team) => "team".to_string(),
+        Some(AccountPlanType::Business) => "business".to_string(),
+        Some(AccountPlanType::Enterprise) => "enterprise".to_string(),
+        Some(AccountPlanType::Edu) => "edu".to_string(),
+        Some(AccountPlanType::Unknown) => "unknown".to_string(),
+        None => "absent".to_string(),
+    }
+}
+
+fn auth_token_present(auth: Option<&CodexAuth>) -> bool {
+    auth.and_then(|value| value.get_token().ok())
+        .is_some_and(|token| !token.is_empty())
+}
+
+fn build_auth_status_observation(
+    provider_id: &str,
+    response: &GetAuthStatusResponse,
+    include_token_requested: bool,
+    refresh_token_requested: bool,
+) -> AppServerAuthStatusObservation {
+    let requires_openai_auth = response.requires_openai_auth.unwrap_or(true);
+    let auth_token_present = response.auth_method.is_some()
+        || response
+            .auth_token
+            .as_ref()
+            .is_some_and(|token| !token.is_empty());
+    let decision_state = if !requires_openai_auth || auth_token_present {
+        "connected"
+    } else {
+        "unauthed"
+    };
+
+    AppServerAuthStatusObservation {
+        provider_id: provider_id.to_string(),
+        requires_openai_auth,
+        auth_method: normalize_app_server_auth_method(response.auth_method),
+        auth_token_present,
+        include_token_requested,
+        refresh_token_requested,
+        decision_state: decision_state.to_string(),
+    }
+}
+
+fn build_auth_cache_observation(
+    action: &str,
+    reason: &str,
+    auth: Option<&CodexAuth>,
+) -> AppServerAuthCacheObservation {
+    AppServerAuthCacheObservation {
+        action: action.to_string(),
+        reason: reason.to_string(),
+        auth_method: normalize_core_auth_method(auth),
+        token_present: auth_token_present(auth),
+        account_id_present: auth.and_then(CodexAuth::get_account_id).is_some(),
+        plan_type: normalize_plan_type(auth),
+    }
+}
+
+fn build_auth_notification_observation(
+    method: &str,
+    requires_openai_auth: bool,
+    auth: Option<&CodexAuth>,
+) -> AppServerAuthNotificationObservation {
+    AppServerAuthNotificationObservation {
+        method: method.to_string(),
+        followup_auth_check_started: true,
+        followup_auth_check_completed: true,
+        followup_requires_openai_auth: requires_openai_auth,
+        followup_auth_method: normalize_core_auth_method(auth),
+        followup_auth_token_present: auth_token_present(auth),
+    }
+}
+
+fn emit_auth_status_observation(observation: &AppServerAuthStatusObservation) {
+    tracing::info!(
+        event.name = APP_SERVER_AUTH_STATUS_EVENT,
+        provider_id = %observation.provider_id,
+        requires_openai_auth = observation.requires_openai_auth,
+        auth_method = %observation.auth_method,
+        auth_token_present = observation.auth_token_present,
+        include_token_requested = observation.include_token_requested,
+        refresh_token_requested = observation.refresh_token_requested,
+        decision_state = %observation.decision_state,
+        "codex app-server auth status resolved",
+    );
+}
+
+fn emit_auth_cache_observation(observation: &AppServerAuthCacheObservation) {
+    tracing::info!(
+        event.name = APP_SERVER_AUTH_CACHE_EVENT,
+        action = %observation.action,
+        reason = %observation.reason,
+        auth_method = %observation.auth_method,
+        token_present = observation.token_present,
+        account_id_present = observation.account_id_present,
+        plan_type = %observation.plan_type,
+        "codex app-server auth cache changed",
+    );
+}
+
+fn emit_auth_notification_observation(observation: &AppServerAuthNotificationObservation) {
+    tracing::info!(
+        event.name = APP_SERVER_AUTH_NOTIFICATION_EVENT,
+        method = %observation.method,
+        followup_auth_check_started = observation.followup_auth_check_started,
+        followup_auth_check_completed = observation.followup_auth_check_completed,
+        followup_requires_openai_auth = observation.followup_requires_openai_auth,
+        followup_auth_method = %observation.followup_auth_method,
+        followup_auth_token_present = observation.followup_auth_token_present,
+        "codex app-server auth notification follow-up resolved",
+    );
 }
 
 impl CodexMessageProcessor {
@@ -1014,6 +1186,7 @@ impl CodexMessageProcessor {
     ) {
         match self.login_api_key_common(&params).await {
             Ok(()) => {
+                let auth = self.auth_manager.auth_cached();
                 let response = codex_app_server_protocol::LoginAccountResponse::ApiKey {};
                 self.outgoing.send_response(request_id, response).await;
 
@@ -1027,12 +1200,27 @@ impl CodexMessageProcessor {
                         payload_login_completed,
                     ))
                     .await;
+                emit_auth_cache_observation(&build_auth_cache_observation(
+                    "set",
+                    "login_completed",
+                    auth.as_ref(),
+                ));
+                emit_auth_notification_observation(&build_auth_notification_observation(
+                    "account/login/completed",
+                    self.config.model_provider.requires_openai_auth,
+                    auth.as_ref(),
+                ));
 
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(
                         self.current_account_updated_notification(),
                     ))
                     .await;
+                emit_auth_notification_observation(&build_auth_notification_observation(
+                    "account/updated",
+                    self.config.model_provider.requires_openai_auth,
+                    auth.as_ref(),
+                ));
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -1096,6 +1284,7 @@ impl CodexMessageProcessor {
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
                     let codex_home = self.config.codex_home.clone();
                     let cli_overrides = self.cli_overrides.clone();
+                    let requires_openai_auth = self.config.model_provider.requires_openai_auth;
                     let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
                         let (success, error_msg) = match tokio::time::timeout(
@@ -1139,6 +1328,18 @@ impl CodexMessageProcessor {
 
                             // Notify clients with the actual current auth mode.
                             let auth = auth_manager.auth_cached();
+                            emit_auth_cache_observation(&build_auth_cache_observation(
+                                "set",
+                                "login_completed",
+                                auth.as_ref(),
+                            ));
+                            emit_auth_notification_observation(
+                                &build_auth_notification_observation(
+                                    "account/login/completed",
+                                    requires_openai_auth,
+                                    auth.as_ref(),
+                                ),
+                            );
                             let payload_v2 = AccountUpdatedNotification {
                                 auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
                                 plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
@@ -1148,6 +1349,13 @@ impl CodexMessageProcessor {
                                     payload_v2,
                                 ))
                                 .await;
+                            emit_auth_notification_observation(
+                                &build_auth_notification_observation(
+                                    "account/updated",
+                                    requires_openai_auth,
+                                    auth.as_ref(),
+                                ),
+                            );
                         }
 
                         // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
@@ -1277,6 +1485,7 @@ impl CodexMessageProcessor {
             return;
         }
         self.auth_manager.reload();
+        let auth = self.auth_manager.auth_cached();
         replace_cloud_requirements_loader(
             self.cloud_requirements.as_ref(),
             self.auth_manager.clone(),
@@ -1303,12 +1512,27 @@ impl CodexMessageProcessor {
                 payload_login_completed,
             ))
             .await;
+        emit_auth_cache_observation(&build_auth_cache_observation(
+            "set",
+            "login_completed",
+            auth.as_ref(),
+        ));
+        emit_auth_notification_observation(&build_auth_notification_observation(
+            "account/login/completed",
+            self.config.model_provider.requires_openai_auth,
+            auth.as_ref(),
+        ));
 
         self.outgoing
             .send_server_notification(ServerNotification::AccountUpdated(
                 self.current_account_updated_notification(),
             ))
             .await;
+        emit_auth_notification_observation(&build_auth_notification_observation(
+            "account/updated",
+            self.config.model_provider.requires_openai_auth,
+            auth.as_ref(),
+        ));
     }
 
     async fn logout_common(&mut self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
@@ -1350,6 +1574,11 @@ impl CodexMessageProcessor {
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
                     .await;
+                emit_auth_cache_observation(&build_auth_cache_observation(
+                    "clear",
+                    "logout",
+                    self.auth_manager.auth_cached().as_ref(),
+                ));
             }
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -1361,8 +1590,15 @@ impl CodexMessageProcessor {
         if self.auth_manager.is_external_auth_active() {
             return;
         }
-        if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
-            tracing::warn!("failed to refresh token while getting account: {err}");
+        if do_refresh {
+            if let Err(err) = self.auth_manager.refresh_token().await {
+                tracing::warn!("failed to refresh token while getting account: {err}");
+            }
+            emit_auth_cache_observation(&build_auth_cache_observation(
+                "refresh",
+                "refresh_requested",
+                self.auth_manager.auth_cached().as_ref(),
+            ));
         }
     }
 
@@ -1412,6 +1648,12 @@ impl CodexMessageProcessor {
             }
         };
 
+        emit_auth_status_observation(&build_auth_status_observation(
+            self.config.model_provider_id.as_str(),
+            &response,
+            include_token,
+            do_refresh,
+        ));
         self.outgoing.send_response(request_id, response).await;
     }
 
@@ -8175,6 +8417,7 @@ mod tests {
     use crate::outgoing_message::OutgoingEnvelope;
     use crate::outgoing_message::OutgoingMessage;
     use anyhow::Result;
+    use codex_app_server_protocol::GetAuthStatusResponse;
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ToolRequestUserInputParams;
     use codex_protocol::protocol::SessionSource;
@@ -8564,6 +8807,87 @@ mod tests {
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));
         Ok(())
+    }
+
+    #[test]
+    fn build_auth_status_observation_marks_unauthed_when_auth_is_required_but_missing() {
+        let observation = build_auth_status_observation(
+            "openai",
+            &GetAuthStatusResponse {
+                auth_method: None,
+                auth_token: None,
+                requires_openai_auth: Some(true),
+            },
+            false,
+            false,
+        );
+
+        assert_eq!(
+            observation,
+            AppServerAuthStatusObservation {
+                provider_id: "openai".to_string(),
+                requires_openai_auth: true,
+                auth_method: "none".to_string(),
+                auth_token_present: false,
+                include_token_requested: false,
+                refresh_token_requested: false,
+                decision_state: "unauthed".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn build_auth_status_observation_marks_connected_when_openai_auth_is_not_required() {
+        let observation = build_auth_status_observation(
+            "mock_provider",
+            &GetAuthStatusResponse {
+                auth_method: None,
+                auth_token: None,
+                requires_openai_auth: Some(false),
+            },
+            false,
+            false,
+        );
+
+        assert_eq!(observation.decision_state, "connected");
+        assert_eq!(observation.auth_method, "none");
+        assert_eq!(observation.requires_openai_auth, false);
+    }
+
+    #[test]
+    fn build_auth_cache_observation_normalizes_present_chatgpt_auth() {
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        let observation = build_auth_cache_observation("refresh", "refresh_requested", Some(&auth));
+
+        assert_eq!(
+            observation,
+            AppServerAuthCacheObservation {
+                action: "refresh".to_string(),
+                reason: "refresh_requested".to_string(),
+                auth_method: "chatgpt".to_string(),
+                token_present: true,
+                account_id_present: true,
+                plan_type: "unknown".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn build_auth_notification_observation_uses_current_auth_snapshot() {
+        let auth = CodexAuth::from_api_key("sk-test-key");
+        let observation = build_auth_notification_observation("account/updated", true, Some(&auth));
+
+        assert_eq!(
+            observation,
+            AppServerAuthNotificationObservation {
+                method: "account/updated".to_string(),
+                followup_auth_check_started: true,
+                followup_auth_check_completed: true,
+                followup_requires_openai_auth: true,
+                followup_auth_method: "api_key".to_string(),
+                followup_auth_token_present: true,
+            }
+        );
     }
 
     #[tokio::test]
