@@ -1747,12 +1747,18 @@ async fn includes_developer_instructions_message_in_request() {
         .iter()
         .filter(|item| item.get("role").and_then(|role| role.as_str()) == Some("developer"))
         .collect();
+    let developer_contents: Vec<&str> = developer_messages
+        .iter()
+        .filter_map(|item| item.get("content").and_then(serde_json::Value::as_array))
+        .flat_map(|content| content.iter())
+        .filter(|span| span.get("type").and_then(serde_json::Value::as_str) == Some("input_text"))
+        .filter_map(|span| span.get("text").and_then(serde_json::Value::as_str))
+        .collect();
     assert!(
-        developer_messages
+        developer_contents
             .iter()
-            .any(|item| message_input_texts(item).contains(&"be useful")),
-        "expected developer instructions in a developer message, got {:?}",
-        request_body["input"]
+            .any(|content| content.contains("be useful")),
+        "expected developer instructions in a developer message, got {developer_contents:?}",
     );
 
     assert_message_role(&request_body["input"][1], "user");

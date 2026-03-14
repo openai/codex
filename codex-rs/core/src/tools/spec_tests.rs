@@ -466,9 +466,15 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         create_spawn_agent_tool(&config),
         create_send_input_tool(),
         create_resume_agent_tool(),
-        create_wait_agent_tool(),
+        create_list_agents_tool(config.agent_watchdog),
+        create_wait_tool(config.agent_watchdog),
         create_close_agent_tool(),
     ] {
+        expected.insert(tool_name(&spec).to_string(), spec);
+    }
+
+    if config.agent_watchdog {
+        let spec = create_compact_parent_context_tool();
         expected.insert(tool_name(&spec).to_string(), spec);
     }
 
