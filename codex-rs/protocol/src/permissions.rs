@@ -390,37 +390,68 @@ impl FileSystemSandboxPolicy {
         }
 
         let resolved_entries = self.resolved_entries_with_cwd(cwd);
-        let read_only_roots = dedup_absolute_paths(
-            resolved_entries
-                .iter()
-                .filter(|entry| !entry.access.can_write())
-                .filter(|entry| !self.can_write_path_with_cwd(entry.path.as_path(), cwd))
-                .map(|entry| entry.path.clone())
-                .collect(),
-            /*normalize_effective_paths*/ true,
-        );
+        let writable_entries: Vec<AbsolutePathBuf> = resolved_entries
+            .iter()
+            .filter(|entry| entry.access.can_write())
+            .filter(|entry| self.can_write_path_with_cwd(entry.path.as_path(), cwd))
+            .map(|entry| entry.path.clone())
+            .collect();
 
         dedup_absolute_paths(
-            resolved_entries
-                .into_iter()
-                .filter(|entry| entry.access.can_write())
-                .filter(|entry| self.can_write_path_with_cwd(entry.path.as_path(), cwd))
-                .map(|entry| entry.path)
-                .collect(),
+            writable_entries.clone(),
             /*normalize_effective_paths*/ true,
         )
         .into_iter()
         .map(|root| {
+            let preserve_raw_carveout_paths = root.as_path().parent().is_some();
+            let raw_writable_roots: Vec<&AbsolutePathBuf> = writable_entries
+                .iter()
+                .filter(|path| normalize_effective_absolute_path((*path).clone()) == root)
+                .collect();
             let mut read_only_subpaths = default_read_only_subpaths_for_writable_root(&root);
             // Narrower explicit non-write entries carve out broader writable roots.
             // More specific write entries still remain writable because they appear
             // as separate WritableRoot values and are checked independently.
+            // Preserve symlink path components that live under the writable root
+            // so downstream sandboxes can still mask the symlink inode itself.
             read_only_subpaths.extend(
-                read_only_roots
+                resolved_entries
                     .iter()
-                    .filter(|path| path.as_path() != root.as_path())
-                    .filter(|path| path.as_path().starts_with(root.as_path()))
-                    .cloned(),
+                    .filter(|entry| !entry.access.can_write())
+                    .filter(|entry| !self.can_write_path_with_cwd(entry.path.as_path(), cwd))
+                    .filter_map(|entry| {
+                        let effective_path = normalize_effective_absolute_path(entry.path.clone());
+                        if effective_path == root
+                            || !effective_path.as_path().starts_with(root.as_path())
+                        {
+                            return None;
+                        }
+
+                        if !preserve_raw_carveout_paths {
+                            return Some(effective_path);
+                        }
+
+                        if entry.path.as_path().starts_with(root.as_path()) {
+                            return Some(entry.path.clone());
+                        }
+
+                        Some(
+                            raw_writable_roots
+                                .iter()
+                                .find_map(|raw_root| {
+                                    let suffix = entry
+                                        .path
+                                        .as_path()
+                                        .strip_prefix(raw_root.as_path())
+                                        .ok()?;
+                                    let candidate = root.join(suffix).ok()?;
+                                    (normalize_effective_absolute_path(candidate.clone())
+                                        == effective_path)
+                                        .then_some(candidate)
+                                })
+                                .unwrap_or(effective_path),
+                        )
+                    }),
             );
             WritableRoot {
                 root,
@@ -1212,6 +1243,59 @@ mod tests {
         assert_eq!(
             writable_roots[0].read_only_subpaths,
             vec![expected_dot_codex]
+        );
+        assert!(
+            !writable_roots[0]
+                .read_only_subpaths
+                .contains(&unexpected_decoy)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writable_roots_preserve_explicit_symlinked_carveouts_under_symlinked_roots() {
+        let cwd = TempDir::new().expect("tempdir");
+        let real_root = cwd.path().join("real");
+        let link_root = cwd.path().join("link");
+        let decoy = real_root.join("decoy-private");
+        let linked_private = real_root.join("linked-private");
+        fs::create_dir_all(&decoy).expect("create decoy");
+        symlink_dir(&real_root, &link_root).expect("create symlinked root");
+        symlink_dir(&decoy, &linked_private).expect("create linked-private symlink");
+
+        let link_root =
+            AbsolutePathBuf::from_absolute_path(&link_root).expect("absolute symlinked root");
+        let link_private = link_root
+            .join("linked-private")
+            .expect("symlinked linked-private path");
+        let expected_root = AbsolutePathBuf::from_absolute_path(
+            real_root.canonicalize().expect("canonicalize real root"),
+        )
+        .expect("absolute canonical root");
+        let expected_linked_private = expected_root
+            .join("linked-private")
+            .expect("expected linked-private path");
+        let unexpected_decoy =
+            AbsolutePathBuf::from_absolute_path(decoy.canonicalize().expect("canonicalize decoy"))
+                .expect("absolute canonical decoy");
+
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: link_root },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: link_private },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        assert_eq!(writable_roots.len(), 1);
+        assert_eq!(writable_roots[0].root, expected_root);
+        assert_eq!(
+            writable_roots[0].read_only_subpaths,
+            vec![expected_linked_private]
         );
         assert!(
             !writable_roots[0]
