@@ -5643,7 +5643,6 @@ pub(crate) async fn run_turn(
         .await;
     let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
-    let mut pending_stop_hook_message: Option<String> = None;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -5735,15 +5734,11 @@ pub(crate) async fn run_turn(
         }
 
         // Construct the input that we will send to the model.
-        let mut sampling_request_input: Vec<ResponseItem> = {
+        let sampling_request_input: Vec<ResponseItem> = {
             sess.clone_history()
                 .await
                 .for_prompt(&turn_context.model_info.input_modalities)
         };
-        if let Some(stop_hook_message) = pending_stop_hook_message.take() {
-            sampling_request_input
-                .push(DeveloperTextFragment::new(stop_hook_message).into_message());
-        }
 
         let sampling_request_input_messages = sampling_request_input
             .iter()
@@ -5842,7 +5837,13 @@ pub(crate) async fn run_turn(
                     if stop_outcome.should_block {
                         if let Some(continuation_prompt) = stop_outcome.continuation_prompt.clone()
                         {
-                            pending_stop_hook_message = Some(continuation_prompt);
+                            let developer_message =
+                                DeveloperTextFragment::new(continuation_prompt).into_message();
+                            sess.record_conversation_items(
+                                &turn_context,
+                                std::slice::from_ref(&developer_message),
+                            )
+                            .await;
                             stop_hook_active = true;
                             continue;
                         } else {
