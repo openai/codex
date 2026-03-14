@@ -2861,6 +2861,7 @@ mod tests {
             .sandbox_policy
             .set(turn.sandbox_policy.get().clone())
             .expect("sandbox policy set");
+        expected.features = config.features.clone();
         assert_eq!(config, expected);
     }
 

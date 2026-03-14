@@ -215,7 +215,7 @@ async fn fork_thread_session_configured_preserves_parent_and_history() {
         session_configured,
         ..
     } = thread_manager
-        .fork_thread(usize::MAX, config_for_fork, base_path, false)
+        .fork_thread(usize::MAX, config_for_fork, base_path, false, None)
         .await
         .expect("fork thread");
 

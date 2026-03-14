@@ -807,6 +807,7 @@ async fn truncate_before_nth_user_message(
 #[cfg(test)]
 #[path = "thread_manager_tests.rs"]
 mod tests;
+#[cfg(test)]
 mod fork_reference_tests {
     use super::*;
     use crate::codex::make_session_and_context;
@@ -859,6 +860,7 @@ mod fork_reference_tests {
                 id: None,
                 call_id: "c1".to_string(),
                 name: "tool".to_string(),
+                namespace: None,
                 arguments: "{}".to_string(),
             },
             assistant_msg("a4"),

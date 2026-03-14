@@ -22,9 +22,9 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::ForkReferenceItem;
 use codex_protocol::protocol::AGENT_INBOX_KIND;
 use codex_protocol::protocol::AgentInboxPayload;
+use codex_protocol::protocol::ForkReferenceItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -1102,6 +1102,7 @@ async fn inject_agent_message(
 #[cfg(test)]
 #[path = "control_tests.rs"]
 mod tests;
+#[cfg(test)]
 mod fork_reference_tests {
     use super::*;
     use crate::CodexAuth;
