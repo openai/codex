@@ -96,3 +96,68 @@ impl App {
             .map_err(|err| format!("failed to reject app-server request: {err}"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert_matches::assert_matches;
+    use codex_app_server_protocol::JSONRPCNotification;
+    use codex_protocol::protocol::EventMsg;
+    use serde_json::json;
+
+    #[test]
+    fn legacy_notification_to_thread_event_parses_valid_payload() {
+        let thread_id = ThreadId::new();
+        let event = Event {
+            id: "ev-1".to_string(),
+            msg: EventMsg::ShutdownComplete,
+        };
+
+        let mut params = serde_json::to_value(&event).expect("event should serialize");
+        params
+            .as_object_mut()
+            .expect("event should serialize to object")
+            .insert(
+                "conversationId".to_string(),
+                serde_json::Value::String(thread_id.to_string()),
+            );
+
+        let parsed = App::legacy_notification_to_thread_event(JSONRPCNotification {
+            method: "codex/event/shutdownComplete".to_string(),
+            params: Some(params),
+        })
+        .expect("notification should parse");
+
+        let (parsed_thread_id, parsed_event) = parsed;
+        assert_eq!(parsed_thread_id, thread_id);
+        assert_eq!(parsed_event.id, event.id);
+        assert_matches!(parsed_event.msg, EventMsg::ShutdownComplete);
+    }
+
+    #[test]
+    fn legacy_notification_to_thread_event_returns_none_without_conversation_id() {
+        let parsed = App::legacy_notification_to_thread_event(JSONRPCNotification {
+            method: "codex/event/shutdownComplete".to_string(),
+            params: Some(json!({
+                "id": "ev-1",
+                "msg": "shutdown_complete",
+            })),
+        });
+
+        assert!(parsed.is_none());
+    }
+
+    #[test]
+    fn legacy_notification_to_thread_event_returns_none_for_invalid_event_payload() {
+        let thread_id = ThreadId::new();
+
+        let parsed = App::legacy_notification_to_thread_event(JSONRPCNotification {
+            method: "codex/event/shutdownComplete".to_string(),
+            params: Some(json!({
+                "conversationId": thread_id.to_string(),
+            })),
+        });
+
+        assert!(parsed.is_none());
+    }
+}
