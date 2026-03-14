@@ -269,6 +269,9 @@ async fn refresh_available_models_sorts_by_priority() {
         if line.contains("auth_mode=") {
             return Err("unexpected legacy auth_mode field".to_string());
         }
+        if !line.contains("success=true") {
+            return Err("missing standard success field".to_string());
+        }
         Ok(())
     });
 }

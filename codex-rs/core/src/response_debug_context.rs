@@ -67,8 +67,8 @@ pub(crate) fn telemetry_transport_error_message(error: &TransportError) -> Strin
         TransportError::Http { status, .. } => format!("http {}", status.as_u16()),
         TransportError::RetryLimit => "retry limit reached".to_string(),
         TransportError::Timeout => "timeout".to_string(),
-        TransportError::Network(_) => "network error".to_string(),
-        TransportError::Build(_) => "request build error".to_string(),
+        TransportError::Network(err) => err.to_string(),
+        TransportError::Build(err) => err.to_string(),
     }
 }
 
@@ -76,7 +76,7 @@ pub(crate) fn telemetry_api_error_message(error: &ApiError) -> String {
     match error {
         ApiError::Transport(transport) => telemetry_transport_error_message(transport),
         ApiError::Api { status, .. } => format!("api error {}", status.as_u16()),
-        ApiError::Stream(_) => "stream error".to_string(),
+        ApiError::Stream(err) => err.to_string(),
         ApiError::ContextWindowExceeded => "context window exceeded".to_string(),
         ApiError::QuotaExceeded => "quota exceeded".to_string(),
         ApiError::UsageNotIncluded => "usage not included".to_string(),
@@ -146,5 +146,22 @@ mod tests {
             telemetry_api_error_message(&ApiError::Transport(transport)),
             "http 401"
         );
+    }
+
+    #[test]
+    fn telemetry_error_messages_preserve_non_http_details() {
+        let network = TransportError::Network("dns lookup failed".to_string());
+        let build = TransportError::Build("invalid header value".to_string());
+        let stream = ApiError::Stream("socket closed".to_string());
+
+        assert_eq!(
+            telemetry_transport_error_message(&network),
+            "dns lookup failed"
+        );
+        assert_eq!(
+            telemetry_transport_error_message(&build),
+            "invalid header value"
+        );
+        assert_eq!(telemetry_api_error_message(&stream), "socket closed");
     }
 }

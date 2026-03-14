@@ -55,6 +55,7 @@ impl RequestTelemetry for ModelsRequestTelemetry {
         error: Option<&TransportError>,
         duration: Duration,
     ) {
+        let success = status.is_some_and(|code| code.is_success()) && error.is_none();
         let error_message = error.map(telemetry_transport_error_message);
         let response_debug = error
             .map(extract_response_debug_context)
@@ -66,6 +67,7 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             event.name = "codex.api_request",
             duration_ms = %duration.as_millis(),
             http.response.status_code = status,
+            success = success,
             error.message = error_message.as_deref(),
             attempt = attempt,
             endpoint = MODELS_ENDPOINT,
@@ -83,6 +85,7 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             event.name = "codex.api_request",
             duration_ms = %duration.as_millis(),
             http.response.status_code = status,
+            success = success,
             error.message = error_message.as_deref(),
             attempt = attempt,
             endpoint = MODELS_ENDPOINT,
