@@ -342,6 +342,7 @@ struct AppServerCommand {
 }
 
 #[derive(Debug, clap::Subcommand)]
+#[allow(clippy::enum_variant_names)]
 enum AppServerSubcommand {
     /// [experimental] Generate TypeScript bindings for the app server protocol.
     GenerateTs(GenerateTsCommand),
