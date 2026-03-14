@@ -5963,6 +5963,16 @@ mod tests {
 
     #[test]
     fn permissions_request_approval_uses_request_permission_profile() {
+        let read_only_path = if cfg!(windows) {
+            r"C:\tmp\read-only"
+        } else {
+            "/tmp/read-only"
+        };
+        let read_write_path = if cfg!(windows) {
+            r"C:\tmp\read-write"
+        } else {
+            "/tmp/read-write"
+        };
         let params = serde_json::from_value::<PermissionsRequestApprovalParams>(json!({
             "threadId": "thr_123",
             "turnId": "turn_123",
@@ -5973,8 +5983,8 @@ mod tests {
                     "enabled": true,
                 },
                 "fileSystem": {
-                    "read": ["/tmp/read-only"],
-                    "write": ["/tmp/read-write"],
+                    "read": [read_only_path],
+                    "write": [read_write_path],
                 },
             },
         }))
@@ -5988,11 +5998,11 @@ mod tests {
                 }),
                 file_system: Some(AdditionalFileSystemPermissions {
                     read: Some(vec![
-                        AbsolutePathBuf::try_from(PathBuf::from("/tmp/read-only"))
+                        AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
                             .expect("path must be absolute"),
                     ]),
                     write: Some(vec![
-                        AbsolutePathBuf::try_from(PathBuf::from("/tmp/read-write"))
+                        AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
                 }),
@@ -6007,11 +6017,11 @@ mod tests {
                 }),
                 file_system: Some(CoreFileSystemPermissions {
                     read: Some(vec![
-                        AbsolutePathBuf::try_from(PathBuf::from("/tmp/read-only"))
+                        AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
                             .expect("path must be absolute"),
                     ]),
                     write: Some(vec![
-                        AbsolutePathBuf::try_from(PathBuf::from("/tmp/read-write"))
+                        AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
                 }),
@@ -6050,14 +6060,24 @@ mod tests {
 
     #[test]
     fn permissions_request_approval_response_uses_granted_permission_profile_without_macos() {
+        let read_only_path = if cfg!(windows) {
+            r"C:\tmp\read-only"
+        } else {
+            "/tmp/read-only"
+        };
+        let read_write_path = if cfg!(windows) {
+            r"C:\tmp\read-write"
+        } else {
+            "/tmp/read-write"
+        };
         let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(json!({
             "permissions": {
                 "network": {
                     "enabled": true,
                 },
                 "fileSystem": {
-                    "read": ["/tmp/read-only"],
-                    "write": ["/tmp/read-write"],
+                    "read": [read_only_path],
+                    "write": [read_write_path],
                 },
             },
         }))
@@ -6071,11 +6091,11 @@ mod tests {
                 }),
                 file_system: Some(AdditionalFileSystemPermissions {
                     read: Some(vec![
-                        AbsolutePathBuf::try_from(PathBuf::from("/tmp/read-only"))
+                        AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
                             .expect("path must be absolute"),
                     ]),
                     write: Some(vec![
-                        AbsolutePathBuf::try_from(PathBuf::from("/tmp/read-write"))
+                        AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
                 }),
@@ -6090,11 +6110,11 @@ mod tests {
                 }),
                 file_system: Some(CoreFileSystemPermissions {
                     read: Some(vec![
-                        AbsolutePathBuf::try_from(PathBuf::from("/tmp/read-only"))
+                        AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
                             .expect("path must be absolute"),
                     ]),
                     write: Some(vec![
-                        AbsolutePathBuf::try_from(PathBuf::from("/tmp/read-write"))
+                        AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
                             .expect("path must be absolute"),
                     ]),
                 }),
