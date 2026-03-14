@@ -130,6 +130,7 @@ pub use rollout::append_thread_name;
 pub use rollout::find_archived_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use rollout::find_conversation_path_by_id_str;
+pub use rollout::find_or_unarchive_thread_path_by_id_str;
 pub use rollout::find_thread_name_by_id;
 pub use rollout::find_thread_path_by_id_str;
 pub use rollout::find_thread_path_by_name_str;
