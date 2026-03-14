@@ -131,6 +131,7 @@ use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::ui_consts::FOOTER_INDENT_COLS;
+use codex_app_server_protocol::SkillMetadata;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -216,7 +217,6 @@ use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_chatgpt::connectors;
 use codex_chatgpt::connectors::AppInfo;
 use codex_core::plugins::PluginCapabilitySummary;
-use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -3584,7 +3584,7 @@ impl ChatComposer {
                     description,
                     insert_text: format!("${skill_name}"),
                     search_terms,
-                    path: Some(skill.path_to_skills_md.to_string_lossy().into_owned()),
+                    path: Some(skill.path.to_string_lossy().into_owned()),
                     category_tag: Some("[Skill]".to_string()),
                     sort_rank: 1,
                 });
@@ -4494,6 +4494,8 @@ impl Drop for ChatComposer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_app_server_protocol::SkillInterface;
+    use codex_app_server_protocol::SkillScope;
     use image::ImageBuffer;
     use image::Rgba;
     use pretty_assertions::assert_eq;
@@ -5393,7 +5395,7 @@ mod tests {
                 name: "google-calendar-skill".to_string(),
                 description: "Find availability and plan event changes".to_string(),
                 short_description: None,
-                interface: Some(codex_core::skills::model::SkillInterface {
+                interface: Some(SkillInterface {
                     display_name: Some("Google Calendar".to_string()),
                     short_description: None,
                     icon_small: None,
@@ -5402,11 +5404,9 @@ mod tests {
                     default_prompt: None,
                 }),
                 dependencies: None,
-                policy: None,
-                permission_profile: None,
-                managed_network_override: None,
-                path_to_skills_md: PathBuf::from("/tmp/repo/google-calendar/SKILL.md"),
-                scope: codex_protocol::protocol::SkillScope::Repo,
+                path: PathBuf::from("/tmp/repo/google-calendar/SKILL.md"),
+                scope: SkillScope::Repo,
+                enabled: true,
             }]));
             composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
                 config_name: "google-calendar@debug".to_string(),

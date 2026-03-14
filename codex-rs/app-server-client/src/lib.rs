@@ -21,6 +21,8 @@ use std::io::Error as IoError;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::sync::Arc;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 pub use codex_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
@@ -59,6 +61,8 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// the same JSON-RPC result envelope used by socket/stdio transports because
 /// `MessageProcessor` continues to produce that shape internally.
 pub type RequestResult = std::result::Result<JsonRpcResult, JSONRPCErrorError>;
+
+static NEXT_GENERATED_REQUEST_ID: AtomicI64 = AtomicI64::new(1);
 
 fn event_requires_delivery(event: &InProcessServerEvent) -> bool {
     // These terminal events drive surface shutdown/completion state. Dropping
@@ -281,6 +285,12 @@ pub struct InProcessAppServerClient {
     thread_manager: Arc<ThreadManager>,
 }
 
+/// Cloneable request handle for detached app-server RPCs.
+#[derive(Clone)]
+pub struct InProcessAppServerRequester {
+    command_tx: mpsc::Sender<ClientCommand>,
+}
+
 impl InProcessAppServerClient {
     /// Starts the in-process runtime and facade worker task.
     ///
@@ -457,30 +467,19 @@ impl InProcessAppServerClient {
         self.thread_manager.clone()
     }
 
+    /// Returns a cloneable request handle for detached background RPCs.
+    pub fn requester(&self) -> InProcessAppServerRequester {
+        InProcessAppServerRequester {
+            command_tx: self.command_tx.clone(),
+        }
+    }
+
     /// Sends a typed client request and returns raw JSON-RPC result.
     ///
     /// Callers that expect a concrete response type should usually prefer
     /// [`request_typed`](Self::request_typed).
     pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.command_tx
-            .send(ClientCommand::Request {
-                request: Box::new(request),
-                response_tx,
-            })
-            .await
-            .map_err(|_| {
-                IoError::new(
-                    ErrorKind::BrokenPipe,
-                    "in-process app-server worker channel is closed",
-                )
-            })?;
-        response_rx.await.map_err(|_| {
-            IoError::new(
-                ErrorKind::BrokenPipe,
-                "in-process app-server request channel is closed",
-            )
-        })?
+        send_request(&self.command_tx, request).await
     }
 
     /// Sends a typed client request and decodes the successful response body.
@@ -493,20 +492,7 @@ impl InProcessAppServerClient {
     where
         T: DeserializeOwned,
     {
-        let method = request_method_name(&request);
-        let response =
-            self.request(request)
-                .await
-                .map_err(|source| TypedRequestError::Transport {
-                    method: method.clone(),
-                    source,
-                })?;
-        let result = response.map_err(|source| TypedRequestError::Server {
-            method: method.clone(),
-            source,
-        })?;
-        serde_json::from_value(result)
-            .map_err(|source| TypedRequestError::Deserialize { method, source })
+        request_typed(&self.command_tx, request).await
     }
 
     /// Sends a typed client notification.
@@ -641,6 +627,83 @@ impl InProcessAppServerClient {
     }
 }
 
+impl InProcessAppServerRequester {
+    /// Sends a typed client request and returns raw JSON-RPC result.
+    pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
+        send_request(&self.command_tx, request).await
+    }
+
+    /// Sends a typed client request and decodes the successful response body.
+    pub async fn request_typed<T>(&self, request: ClientRequest) -> Result<T, TypedRequestError>
+    where
+        T: DeserializeOwned,
+    {
+        request_typed(&self.command_tx, request).await
+    }
+
+    /// Sends a typed client request using a generated request ID.
+    pub async fn request_typed_with_generated_id<T, F>(
+        &self,
+        build: F,
+    ) -> Result<T, TypedRequestError>
+    where
+        T: DeserializeOwned,
+        F: FnOnce(RequestId) -> ClientRequest,
+    {
+        let request_id =
+            RequestId::Integer(NEXT_GENERATED_REQUEST_ID.fetch_add(1, Ordering::Relaxed));
+        request_typed(&self.command_tx, build(request_id)).await
+    }
+}
+
+async fn send_request(
+    command_tx: &mpsc::Sender<ClientCommand>,
+    request: ClientRequest,
+) -> IoResult<RequestResult> {
+    let (response_tx, response_rx) = oneshot::channel();
+    command_tx
+        .send(ClientCommand::Request {
+            request: Box::new(request),
+            response_tx,
+        })
+        .await
+        .map_err(|_| {
+            IoError::new(
+                ErrorKind::BrokenPipe,
+                "in-process app-server worker channel is closed",
+            )
+        })?;
+    response_rx.await.map_err(|_| {
+        IoError::new(
+            ErrorKind::BrokenPipe,
+            "in-process app-server request channel is closed",
+        )
+    })?
+}
+
+async fn request_typed<T>(
+    command_tx: &mpsc::Sender<ClientCommand>,
+    request: ClientRequest,
+) -> Result<T, TypedRequestError>
+where
+    T: DeserializeOwned,
+{
+    let method = request_method_name(&request);
+    let response =
+        send_request(command_tx, request)
+            .await
+            .map_err(|source| TypedRequestError::Transport {
+                method: method.clone(),
+                source,
+            })?;
+    let result = response.map_err(|source| TypedRequestError::Server {
+        method: method.clone(),
+        source,
+    })?;
+    serde_json::from_value(result)
+        .map_err(|source| TypedRequestError::Deserialize { method, source })
+}
+
 /// Extracts the JSON-RPC method name for diagnostics without extending the
 /// protocol crate with in-process-only helpers.
 fn request_method_name(request: &ClientRequest) -> String {
@@ -715,6 +778,20 @@ mod tests {
             })
             .await
             .expect("typed request should succeed");
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
+    async fn generated_id_typed_request_roundtrip_works() {
+        let client = start_test_client(SessionSource::Exec).await;
+        let requester = client.requester();
+        let _response: ConfigRequirementsReadResponse = requester
+            .request_typed_with_generated_id(|request_id| ClientRequest::ConfigRequirementsRead {
+                request_id,
+                params: None,
+            })
+            .await
+            .expect("typed request with generated ID should succeed");
         client.shutdown().await.expect("shutdown should complete");
     }
 

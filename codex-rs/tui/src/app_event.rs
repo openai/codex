@@ -108,9 +108,6 @@ pub(crate) enum AppEvent {
     /// background tasks, rollout flush, or child process cleanup).
     Exit(ExitMode),
 
-    /// Request to exit the application due to a fatal error.
-    FatalExitRequest(String),
-
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(codex_protocol::protocol::Op),
@@ -135,6 +132,15 @@ pub(crate) enum AppEvent {
     ConnectorsLoaded {
         result: Result<ConnectorsSnapshot, String>,
         is_final: bool,
+    },
+
+    RefreshSkillsList,
+
+    /// Result of an app-server-proxied `skills/list` request.
+    SkillsListLoaded {
+        requested_cwds: Vec<PathBuf>,
+        generation: u64,
+        result: Result<codex_app_server_protocol::SkillsListResponse, String>,
     },
 
     /// Result of computing a `/diff` command.
