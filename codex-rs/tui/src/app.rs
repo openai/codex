@@ -1894,8 +1894,7 @@ impl App {
                 || "model_reasoning_effort".to_string(),
                 |profile| format!("profiles.{profile}.model_reasoning_effort"),
             );
-            let value =
-                serde_json::to_value(reasoning_effort).expect("reasoning effort should serialize");
+            let value = Value::String(reasoning_effort.to_string());
             config_overrides.insert(key, value);
         }
 
