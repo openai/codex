@@ -67,10 +67,7 @@ impl CommandPopup {
             .filter(|cmd| !cmd.command().starts_with("debug"))
             .collect();
         // Exclude prompts that collide with builtin command names and sort by name.
-        let exclude: HashSet<String> = builtins
-            .iter()
-            .map(|cmd| cmd.command().to_string())
-            .collect();
+        let exclude = reserved_builtin_names(&builtins);
         prompts.retain(|p| !exclude.contains(&p.name));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
@@ -82,11 +79,7 @@ impl CommandPopup {
     }
 
     pub(crate) fn set_prompts(&mut self, mut prompts: Vec<CustomPrompt>) {
-        let exclude: HashSet<String> = self
-            .builtins
-            .iter()
-            .map(|cmd| cmd.command().to_string())
-            .collect();
+        let exclude = reserved_builtin_names(&self.builtins);
         prompts.retain(|p| !exclude.contains(&p.name));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
         self.prompts = prompts;
@@ -272,6 +265,14 @@ impl CommandPopup {
     }
 }
 
+fn reserved_builtin_names(builtins: &[SlashCommand]) -> HashSet<String> {
+    builtins
+        .iter()
+        .flat_map(|cmd| std::iter::once(cmd.command()).chain(cmd.command_aliases().iter().copied()))
+        .map(str::to_string)
+        .collect()
+}
+
 impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let rows = self.rows_from_matches(self.filtered());
@@ -422,6 +423,31 @@ mod tests {
         assert!(
             !has_collision_prompt,
             "prompt with builtin name should be ignored"
+        );
+    }
+
+    #[test]
+    fn prompt_name_collision_with_builtin_alias_is_ignored() {
+        let popup = CommandPopup::new(
+            vec![CustomPrompt {
+                name: "multi-agents".to_string(),
+                path: "/tmp/multi-agents.md".to_string().into(),
+                content: "should be ignored".to_string(),
+                description: None,
+                argument_hint: None,
+            }],
+            CommandPopupFlags::default(),
+        );
+        let items = popup.filtered_items();
+        let has_collision_prompt = items.into_iter().any(|it| match it {
+            CommandItem::UserPrompt(i) => popup
+                .prompt(i)
+                .is_some_and(|prompt| prompt.name == "multi-agents"),
+            CommandItem::Builtin(_) => false,
+        });
+        assert!(
+            !has_collision_prompt,
+            "prompt with builtin alias should be ignored"
         );
     }
 
