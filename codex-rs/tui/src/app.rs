@@ -4829,26 +4829,18 @@ mod tests {
             Some(thread_id)
         );
         assert_eq!(app.active_thread_id, Some(thread_id));
+        assert!(app.active_thread_rx.is_some());
         assert_eq!(
             app.thread_event_listener_tasks.contains_key(&thread_id),
             false
         );
-
-        let first_event = time::timeout(
-            Duration::from_millis(50),
-            app.active_thread_rx
-                .as_mut()
-                .expect("primary thread receiver should be active")
-                .recv(),
-        )
-        .await
-        .expect("timed out waiting for session configured event")
-        .expect("channel closed unexpectedly");
-
-        assert!(matches!(
-            first_event.msg,
-            EventMsg::SessionConfigured(received) if received == session
-        ));
+        assert!(
+            app.thread_event_channels
+                .get(&thread_id)
+                .and_then(|channel| channel.receiver.as_ref())
+                .is_none(),
+            "active thread receiver should be moved out of the stored channel"
+        );
 
         Ok(())
     }
