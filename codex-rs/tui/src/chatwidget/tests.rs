@@ -17,6 +17,7 @@ use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
+use codex_app_server_protocol::SkillScope;
 use codex_core::CodexAuth;
 use codex_core::config::ApprovalsReviewer;
 use codex_core::config::Config;
@@ -36,7 +37,6 @@ use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::ModelsManager;
-use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
@@ -99,7 +99,6 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_protocol::protocol::ThreadRolledBackEvent;
@@ -1020,11 +1019,9 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             short_description: None,
             interface: None,
             dependencies: None,
-            policy: None,
-            permission_profile: None,
-            managed_network_override: None,
-            path_to_skills_md: repo_skill_path,
+            path: repo_skill_path,
             scope: SkillScope::Repo,
+            enabled: true,
         },
         SkillMetadata {
             name: "figma".to_string(),
@@ -1032,11 +1029,9 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             short_description: None,
             interface: None,
             dependencies: None,
-            policy: None,
-            permission_profile: None,
-            managed_network_override: None,
-            path_to_skills_md: user_skill_path.clone(),
+            path: user_skill_path.clone(),
             scope: SkillScope::User,
+            enabled: true,
         },
     ]));
 

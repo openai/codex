@@ -51,6 +51,7 @@ use crate::status::rate_limit_snapshot_display_for_limit;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::SkillMetadata;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_core::config::Config;
@@ -70,7 +71,6 @@ use codex_core::mcp::McpManager;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::plugins::PluginsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
-use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
 use codex_core::terminal::terminal_info;
 #[cfg(target_os = "windows")]
@@ -119,7 +119,6 @@ use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ListCustomPromptsResponseEvent;
-use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupStatus;
@@ -131,7 +130,6 @@ use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
-use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_protocol::protocol::TokenUsage;
@@ -674,7 +672,7 @@ pub(crate) struct ChatWidget {
     running_commands: HashMap<String, RunningCommand>,
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
     suppressed_exec_calls: HashSet<String>,
-    skills_all: Vec<ProtocolSkillMetadata>,
+    skills_all: Vec<SkillMetadata>,
     skills_initial_state: Option<HashMap<PathBuf, bool>>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
@@ -1423,10 +1421,7 @@ impl ChatWidget {
         }
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
-        self.submit_op(Op::ListSkills {
-            cwds: Vec::new(),
-            force_reload: true,
-        });
+        self.request_skills_list(Vec::new(), true);
         if self.connectors_enabled() {
             self.prefetch_connectors();
         }
@@ -4939,14 +4934,12 @@ impl ChatWidget {
                     .strip_prefix("skill://")
                     .unwrap_or(binding.path.as_str());
                 let path = Path::new(path);
-                if let Some(skill) = skills
-                    .iter()
-                    .find(|skill| skill.path_to_skills_md.as_path() == path)
-                    && selected_skill_paths.insert(skill.path_to_skills_md.clone())
+                if let Some(skill) = skills.iter().find(|skill| skill.path.as_path() == path)
+                    && selected_skill_paths.insert(skill.path.clone())
                 {
                     items.push(UserInput::Skill {
                         name: skill.name.clone(),
-                        path: skill.path_to_skills_md.clone(),
+                        path: skill.path.clone(),
                     });
                 }
             }
@@ -4954,13 +4947,13 @@ impl ChatWidget {
             let skill_mentions = find_skill_mentions_with_tool_mentions(&mentions, skills);
             for skill in skill_mentions {
                 if bound_names.contains(skill.name.as_str())
-                    || !selected_skill_paths.insert(skill.path_to_skills_md.clone())
+                    || !selected_skill_paths.insert(skill.path.clone())
                 {
                     continue;
                 }
                 items.push(UserInput::Skill {
                     name: skill.name.clone(),
-                    path: skill.path_to_skills_md.clone(),
+                    path: skill.path.clone(),
                 });
             }
         }
@@ -5331,14 +5324,9 @@ impl ChatWidget {
             EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
-            EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
+            EventMsg::ListSkillsResponse(_) => {}
             EventMsg::ListRemoteSkillsResponse(_) | EventMsg::RemoteSkillDownloaded(_) => {}
-            EventMsg::SkillsUpdateAvailable => {
-                self.submit_op(Op::ListSkills {
-                    cwds: Vec::new(),
-                    force_reload: true,
-                });
-            }
+            EventMsg::SkillsUpdateAvailable => {}
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
             EventMsg::DeprecationNotice(ev) => self.on_deprecation_notice(ev),
@@ -8817,6 +8805,11 @@ impl ChatWidget {
         true
     }
 
+    fn request_skills_list(&mut self, cwds: Vec<PathBuf>, force_reload: bool) {
+        let op = Op::ListSkills { cwds, force_reload };
+        self.app_event_tx.send(AppEvent::CodexOp(op));
+    }
+
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
         self.add_to_history(history_cell::new_mcp_tools_output(
             &self.config,
@@ -8832,11 +8825,6 @@ impl ChatWidget {
         debug!("received {len} custom prompts");
         // Forward to bottom pane so the slash popup can show them now.
         self.bottom_pane.set_custom_prompts(ev.custom_prompts);
-    }
-
-    fn on_list_skills(&mut self, ev: ListSkillsResponseEvent) {
-        self.set_skills_from_response(&ev);
-        self.refresh_plugin_mentions();
     }
 
     pub(crate) fn on_connectors_loaded(
@@ -8933,7 +8921,7 @@ impl ChatWidget {
         self.bottom_pane.set_connectors_snapshot(Some(snapshot));
     }
 
-    fn refresh_plugin_mentions(&mut self) {
+    pub(crate) fn refresh_plugin_mentions(&mut self) {
         if !self.config.features.enabled(Feature::Plugins) {
             self.bottom_pane.set_plugin_mentions(None);
             return;

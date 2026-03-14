@@ -27,9 +27,9 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
+use codex_app_server_protocol::SkillMetadata;
 use codex_core::features::Features;
 use codex_core::plugins::PluginCapabilitySummary;
-use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
@@ -1234,8 +1234,8 @@ mod tests {
     use crate::app_event::AppEvent;
     use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
     use crate::status_indicator_widget::StatusDetailsCapitalization;
+    use codex_app_server_protocol::SkillScope;
     use codex_protocol::protocol::Op;
-    use codex_protocol::protocol::SkillScope;
     use crossterm::event::KeyEventKind;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
@@ -1673,11 +1673,9 @@ mod tests {
                 short_description: None,
                 interface: None,
                 dependencies: None,
-                policy: None,
-                permission_profile: None,
-                managed_network_override: None,
-                path_to_skills_md: PathBuf::from("test-skill"),
+                path: PathBuf::from("test-skill"),
                 scope: SkillScope::User,
+                enabled: true,
             }]),
         });
 
