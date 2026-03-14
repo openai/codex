@@ -2037,9 +2037,9 @@ async fn session_configured_bootstrap_updates_state_and_requests_prompts_and_ski
     chat.on_session_configured(configured.clone());
 
     assert_eq!(chat.thread_id(), Some(thread_id));
-    assert_eq!(chat.thread_name(), configured.thread_name.clone());
+    assert_eq!(chat.thread_name(), configured.thread_name);
     assert_eq!(chat.current_cwd, Some(configured.cwd.clone()));
-    assert_eq!(chat.rollout_path(), configured.rollout_path.clone());
+    assert_eq!(chat.rollout_path(), configured.rollout_path);
 
     assert_matches!(op_rx.try_recv(), Ok(Op::ListCustomPrompts));
     let mut saw_skills_request = false;
@@ -2112,9 +2112,9 @@ async fn app_server_existing_thread_constructor_applies_bootstrap_state() {
     );
 
     assert_eq!(chat.thread_id(), Some(session_configured.session_id));
-    assert_eq!(chat.thread_name(), session_configured.thread_name.clone());
+    assert_eq!(chat.thread_name(), session_configured.thread_name);
     assert_eq!(chat.current_cwd, Some(session_configured.cwd.clone()));
-    assert_eq!(chat.rollout_path(), session_configured.rollout_path.clone());
+    assert_eq!(chat.rollout_path(), session_configured.rollout_path);
 }
 
 fn drain_insert_history(

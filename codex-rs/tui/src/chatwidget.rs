@@ -1085,7 +1085,7 @@ impl ChatWidget {
     ) -> Self {
         debug_assert_eq!(bootstrap.transport, ThreadTransport::DirectCore);
 
-        let codex_op_tx = spawn_op_forwarder(thread.clone());
+        let codex_op_tx = spawn_op_forwarder(thread);
         let mut widget = Self::new_with_op_sender(common, codex_op_tx);
         widget.apply_session_configured_state(&bootstrap.session);
         widget.run_session_bootstrap_side_effects(&bootstrap.session);
@@ -1099,7 +1099,7 @@ impl ChatWidget {
     ) -> Self {
         debug_assert_eq!(bootstrap.transport, ThreadTransport::AppServerManaged);
 
-        let codex_op_tx = spawn_op_forwarder(thread.clone());
+        let codex_op_tx = spawn_op_forwarder(thread);
         let mut widget = Self::new_with_op_sender(common, codex_op_tx);
         widget.apply_session_configured_state(&bootstrap.session);
         widget.run_session_bootstrap_side_effects(&bootstrap.session);
