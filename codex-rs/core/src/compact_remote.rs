@@ -6,6 +6,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::built_tools;
 use crate::compact::InitialContextInjection;
+use crate::compact::append_concurrent_history_tail_if_append_only;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
@@ -24,6 +25,7 @@ use futures::TryFutureExt;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
@@ -73,7 +75,8 @@ async fn run_remote_compact_task_inner_impl(
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(turn_context, &compaction_item)
         .await;
-    let mut history = sess.clone_history().await;
+    let history_snapshot = sess.clone_history().await;
+    let mut history = history_snapshot.clone();
     let base_instructions = sess.get_base_instructions().await;
     let deleted_items = trim_function_call_history_to_fit_context_window(
         &mut history,
@@ -147,6 +150,20 @@ async fn run_remote_compact_task_inner_impl(
 
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);
+    }
+    // Remote compaction snapshots history, waits on an API call, then replaces
+    // session history wholesale. Background writers can append during that
+    // window, so re-snapshot here and preserve any append-only tail items.
+    let latest_history_snapshot = sess.clone_history().await;
+    if !append_concurrent_history_tail_if_append_only(
+        &mut new_history,
+        history_snapshot.raw_items(),
+        latest_history_snapshot.raw_items(),
+    ) {
+        warn!(
+            turn_id = %turn_context.sub_id,
+            "session history changed non-append-only during remote compaction; skipping concurrent tail merge"
+        );
     }
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,

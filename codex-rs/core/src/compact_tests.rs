@@ -185,6 +185,111 @@ fn build_token_limited_compacted_history_appends_summary_message() {
     assert_eq!(summary, summary_text);
 }
 
+#[test]
+fn append_concurrent_history_tail_if_append_only_appends_concurrent_tail() {
+    let base_history = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "before compact".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }];
+    let appended_item = ResponseItem::GhostSnapshot {
+        ghost_commit: codex_git::GhostCommit::new(
+            "ghost-123".to_string(),
+            None,
+            Vec::new(),
+            Vec::new(),
+        ),
+    };
+    let latest_history = vec![base_history[0].clone(), appended_item.clone()];
+    let mut compacted_history = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "summary".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }];
+
+    let merged = append_concurrent_history_tail_if_append_only(
+        &mut compacted_history,
+        &base_history,
+        &latest_history,
+    );
+
+    assert!(merged);
+    assert_eq!(
+        compacted_history,
+        vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "summary".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            appended_item,
+        ]
+    );
+}
+
+#[test]
+fn append_concurrent_history_tail_if_append_only_rejects_non_append_only_changes() {
+    let base_history = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "before compact".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }];
+    let latest_history = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "rewritten".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }];
+    let mut compacted_history = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "summary".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }];
+
+    let merged = append_concurrent_history_tail_if_append_only(
+        &mut compacted_history,
+        &base_history,
+        &latest_history,
+    );
+
+    assert!(!merged);
+    assert_eq!(
+        compacted_history,
+        vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "summary".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }]
+    );
+}
+
 #[tokio::test]
 async fn process_compacted_history_replaces_developer_messages() {
     let compacted_history = vec![

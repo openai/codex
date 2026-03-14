@@ -27,6 +27,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
 use tracing::error;
+use tracing::warn;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
@@ -210,6 +211,20 @@ async fn run_compact_task_inner(
         .cloned()
         .collect();
     new_history.extend(ghost_snapshots);
+    // Compaction snapshots history, waits on a model call, then replaces
+    // session history wholesale. Background writers can append during that
+    // window, so re-snapshot here and preserve any append-only tail items.
+    let latest_history_snapshot = sess.clone_history().await;
+    if !append_concurrent_history_tail_if_append_only(
+        &mut new_history,
+        history_items,
+        latest_history_snapshot.raw_items(),
+    ) {
+        warn!(
+            turn_id = %turn_context.sub_id,
+            "session history changed non-append-only during compaction; skipping concurrent tail merge"
+        );
+    }
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
@@ -268,6 +283,30 @@ pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
 
 pub(crate) fn is_summary_message(message: &str) -> bool {
     message.starts_with(format!("{SUMMARY_PREFIX}\n").as_str())
+}
+
+/// Appends items added after `base_history` only when `latest_history` still
+/// preserves `base_history` as an exact prefix.
+///
+/// Returns `true` when no concurrent history change occurred or when the newer
+/// history differs only by append-only tail growth, in which case that tail is
+/// appended to `new_history`. Returns `false` when concurrent history mutation
+/// rewrote or removed earlier items, since this helper cannot safely merge that
+/// shape.
+pub(crate) fn append_concurrent_history_tail_if_append_only(
+    new_history: &mut Vec<ResponseItem>,
+    base_history: &[ResponseItem],
+    latest_history: &[ResponseItem],
+) -> bool {
+    if latest_history == base_history {
+        return true;
+    }
+    if !latest_history.starts_with(base_history) {
+        return false;
+    }
+
+    new_history.extend_from_slice(&latest_history[base_history.len()..]);
+    true
 }
 
 /// Inserts canonical initial context into compacted replacement history at the
