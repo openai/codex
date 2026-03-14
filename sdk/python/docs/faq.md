@@ -38,16 +38,23 @@ Common causes:
 - local auth/session is missing
 - incompatible/old app-server
 
-Maintainers stage releases by building the SDK once and the runtime once per
-platform with the same pinned runtime version. Publish `codex-cli-bin` as
-platform wheels only; do not publish an sdist:
+Maintainers stage releases by building the core SDK once, the bundled SDK
+metapackage once, and the runtime once per platform with the same pinned
+runtime version. Publish `codex-cli-bin` as platform wheels only; do not
+publish an sdist. Published Python package versions should match the
+`rust-v...` release tag:
 
 ```bash
 cd sdk/python
 python scripts/update_sdk_artifacts.py generate-types
 python scripts/update_sdk_artifacts.py \
+  stage-sdk-core \
+  /tmp/codex-python-release/codex-app-server-sdk-core \
+  --sdk-version 1.2.3
+python scripts/update_sdk_artifacts.py \
   stage-sdk \
   /tmp/codex-python-release/codex-app-server-sdk \
+  --sdk-version 1.2.3 \
   --runtime-version 1.2.3
 python scripts/update_sdk_artifacts.py \
   stage-runtime \

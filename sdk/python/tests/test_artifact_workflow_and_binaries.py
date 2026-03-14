@@ -238,17 +238,31 @@ def test_stage_runtime_release_replaces_existing_staging_dir(tmp_path: Path) -> 
     assert script.staged_runtime_bin_path(staged).read_text() == "fake codex\n"
 
 
-def test_stage_sdk_release_injects_exact_runtime_pin(tmp_path: Path) -> None:
+def test_stage_core_sdk_release_sets_version_without_runtime_pin(tmp_path: Path) -> None:
+    script = _load_update_script_module()
+    staged = script.stage_python_core_sdk_package(tmp_path / "sdk-core-stage", "0.2.1")
+
+    pyproject = (staged / "pyproject.toml").read_text()
+    assert 'version = "0.2.1"' in pyproject
+    assert 'name = "codex-app-server-sdk-core"' in pyproject
+    assert "codex-cli-bin" not in pyproject
+    assert not any((staged / "src" / "codex_app_server").glob("bin/**"))
+
+
+def test_stage_bundled_sdk_release_injects_exact_core_and_runtime_pins(
+    tmp_path: Path,
+) -> None:
     script = _load_update_script_module()
     staged = script.stage_python_sdk_package(tmp_path / "sdk-stage", "0.2.1", "1.2.3")
 
     pyproject = (staged / "pyproject.toml").read_text()
+    assert 'name = "codex-app-server-sdk"' in pyproject
     assert 'version = "0.2.1"' in pyproject
+    assert '"codex-app-server-sdk-core==0.2.1"' in pyproject
     assert '"codex-cli-bin==1.2.3"' in pyproject
-    assert not any((staged / "src" / "codex_app_server").glob("bin/**"))
 
 
-def test_stage_sdk_release_replaces_existing_staging_dir(tmp_path: Path) -> None:
+def test_stage_bundled_sdk_release_replaces_existing_staging_dir(tmp_path: Path) -> None:
     script = _load_update_script_module()
     staging_dir = tmp_path / "sdk-stage"
     old_file = staging_dir / "stale.txt"
@@ -259,6 +273,49 @@ def test_stage_sdk_release_replaces_existing_staging_dir(tmp_path: Path) -> None
 
     assert staged == staging_dir
     assert not old_file.exists()
+
+
+def test_stage_sdk_core_runs_type_generation_before_staging(tmp_path: Path) -> None:
+    script = _load_update_script_module()
+    calls: list[str] = []
+    args = script.parse_args(
+        [
+            "stage-sdk-core",
+            str(tmp_path / "sdk-core-stage"),
+        ]
+    )
+
+    def fake_generate_types() -> None:
+        calls.append("generate_types")
+
+    def fake_stage_core_sdk_package(_staging_dir: Path, _sdk_version: str) -> Path:
+        calls.append("stage_sdk_core")
+        return tmp_path / "sdk-core-stage"
+
+    def fake_stage_sdk_package(
+        _staging_dir: Path, _sdk_version: str, _runtime_version: str
+    ) -> Path:
+        raise AssertionError("bundled sdk staging should not run for stage-sdk-core")
+
+    def fake_stage_runtime_package(
+        _staging_dir: Path, _runtime_version: str, _runtime_binary: Path
+    ) -> Path:
+        raise AssertionError("runtime staging should not run for stage-sdk-core")
+
+    def fake_current_sdk_version() -> str:
+        return "0.2.0"
+
+    ops = script.CliOps(
+        generate_types=fake_generate_types,
+        stage_python_core_sdk_package=fake_stage_core_sdk_package,
+        stage_python_sdk_package=fake_stage_sdk_package,
+        stage_python_runtime_package=fake_stage_runtime_package,
+        current_sdk_version=fake_current_sdk_version,
+    )
+
+    script.run_command(args, ops)
+
+    assert calls == ["generate_types", "stage_sdk_core"]
 
 
 def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
@@ -276,6 +333,9 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
     def fake_generate_types() -> None:
         calls.append("generate_types")
 
+    def fake_stage_core_sdk_package(_staging_dir: Path, _sdk_version: str) -> Path:
+        raise AssertionError("core sdk staging should not run for stage-sdk")
+
     def fake_stage_sdk_package(
         _staging_dir: Path, _sdk_version: str, _runtime_version: str
     ) -> Path:
@@ -292,6 +352,7 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
 
     ops = script.CliOps(
         generate_types=fake_generate_types,
+        stage_python_core_sdk_package=fake_stage_core_sdk_package,
         stage_python_sdk_package=fake_stage_sdk_package,
         stage_python_runtime_package=fake_stage_runtime_package,
         current_sdk_version=fake_current_sdk_version,
@@ -320,6 +381,9 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
     def fake_generate_types() -> None:
         calls.append("generate_types")
 
+    def fake_stage_core_sdk_package(_staging_dir: Path, _sdk_version: str) -> Path:
+        raise AssertionError("core sdk staging should not run for stage-runtime")
+
     def fake_stage_sdk_package(
         _staging_dir: Path, _sdk_version: str, _runtime_version: str
     ) -> Path:
@@ -336,6 +400,7 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
 
     ops = script.CliOps(
         generate_types=fake_generate_types,
+        stage_python_core_sdk_package=fake_stage_core_sdk_package,
         stage_python_sdk_package=fake_stage_sdk_package,
         stage_python_runtime_package=fake_stage_runtime_package,
         current_sdk_version=fake_current_sdk_version,

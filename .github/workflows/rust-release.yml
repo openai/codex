@@ -302,6 +302,41 @@ jobs:
           apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
           apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
 
+      - name: Setup Python for runtime packaging
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Build Python runtime wheel
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+
+          version="${RELEASE_TAG#rust-v}"
+          staging_dir="${RUNNER_TEMP}/codex-cli-bin-${TARGET}"
+          out_dir="${GITHUB_WORKSPACE}/dist-python/${TARGET}"
+
+          python -m pip install --upgrade pip
+          python -m pip install build hatchling
+
+          python sdk/python/scripts/update_sdk_artifacts.py \
+            stage-runtime \
+            "${staging_dir}" \
+            "codex-rs/target/${TARGET}/release/codex" \
+            --runtime-version "${version}"
+
+          python -m build --wheel --outdir "${out_dir}" "${staging_dir}"
+
+      - name: Upload Python runtime wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-runtime-${{ matrix.target }}
+          path: dist-python/${{ matrix.target }}/*
+
       - name: Stage artifacts
         shell: bash
         run: |
@@ -384,6 +419,7 @@ jobs:
     needs:
       - build
       - build-windows
+      - build-python-sdk
       - shell-tool-mcp
     name: release
     runs-on: ubuntu-latest
@@ -532,6 +568,190 @@ jobs:
             echo "::warning title=developers.openai.com deploy hook failed::Vercel deploy hook POST failed for ${GITHUB_REF_NAME}"
             exit 1
           fi
+
+  build-python-sdk:
+    name: build-python-sdk
+    needs:
+      - tag-check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Build Python SDK artifacts
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          version="${RELEASE_TAG#rust-v}"
+          core_staging_dir="${RUNNER_TEMP}/codex-app-server-sdk-core"
+          core_out_dir="${GITHUB_WORKSPACE}/dist-python/sdk-core"
+          bundled_staging_dir="${RUNNER_TEMP}/codex-app-server-sdk"
+          bundled_out_dir="${GITHUB_WORKSPACE}/dist-python/sdk"
+
+          python -m pip install --upgrade pip
+          python -m pip install \
+            build \
+            hatchling \
+            "datamodel-code-generator==0.31.2" \
+            "ruff==0.11.13"
+
+          python sdk/python/scripts/update_sdk_artifacts.py generate-types
+
+          python sdk/python/scripts/update_sdk_artifacts.py \
+            stage-sdk-core \
+            "${core_staging_dir}" \
+            --sdk-version "${version}"
+
+          python -m build --outdir "${core_out_dir}" "${core_staging_dir}"
+
+          python sdk/python/scripts/update_sdk_artifacts.py \
+            stage-sdk \
+            "${bundled_staging_dir}" \
+            --sdk-version "${version}" \
+            --runtime-version "${version}"
+
+          python -m build --outdir "${bundled_out_dir}" "${bundled_staging_dir}"
+
+      - name: Upload Python core SDK artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-sdk-core
+          path: dist-python/sdk-core/*
+
+      - name: Upload Python SDK artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-sdk
+          path: dist-python/sdk/*
+
+  publish-pypi-runtime:
+    name: publish-pypi-runtime
+    needs:
+      - build
+      - build-windows
+      - release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment:
+      name: pypi
+
+    steps:
+      # Do not publish musl runtime wheels to PyPI yet. GNU and musl builds for
+      # the same architecture currently infer the same wheel tag, which can make
+      # the published Linux runtime nondeterministic.
+      - name: Download macOS arm64 runtime wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: python-runtime-aarch64-apple-darwin
+          path: dist-pypi/runtime
+
+      - name: Download macOS x64 runtime wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: python-runtime-x86_64-apple-darwin
+          path: dist-pypi/runtime
+
+      - name: Download Linux GNU arm64 runtime wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: python-runtime-aarch64-unknown-linux-gnu
+          path: dist-pypi/runtime
+
+      - name: Download Linux GNU x64 runtime wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: python-runtime-x86_64-unknown-linux-gnu
+          path: dist-pypi/runtime
+
+      - name: Download Windows arm64 runtime wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: python-runtime-aarch64-pc-windows-msvc
+          path: dist-pypi/runtime
+
+      - name: Download Windows x64 runtime wheel
+        uses: actions/download-artifact@v8
+        with:
+          name: python-runtime-x86_64-pc-windows-msvc
+          path: dist-pypi/runtime
+
+      - name: List runtime wheels
+        shell: bash
+        run: ls -R dist-pypi/runtime
+
+      - name: Publish Python runtime wheels to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-pypi/runtime/
+
+  publish-pypi-sdk-core:
+    name: publish-pypi-sdk-core
+    needs:
+      - build-python-sdk
+      - publish-pypi-runtime
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment:
+      name: pypi
+
+    steps:
+      - name: Download Python core SDK artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: python-sdk-core
+          path: dist-pypi/sdk-core
+
+      - name: List core SDK artifacts
+        shell: bash
+        run: ls -R dist-pypi/sdk-core
+
+      - name: Publish Python core SDK to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-pypi/sdk-core/
+
+  publish-pypi-sdk:
+    name: publish-pypi-sdk
+    needs:
+      - build-python-sdk
+      - publish-pypi-sdk-core
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment:
+      name: pypi
+
+    steps:
+      - name: Download bundled Python SDK artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: python-sdk
+          path: dist-pypi/sdk
+
+      - name: List bundled SDK artifacts
+        shell: bash
+        run: ls -R dist-pypi/sdk
+
+      - name: Publish bundled Python SDK to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-pypi/sdk/
 
   # Publish to npm using OIDC authentication.
   # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
