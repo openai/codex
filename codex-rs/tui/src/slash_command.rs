@@ -48,7 +48,7 @@ pub enum SlashCommand {
     Feedback,
     Rollout,
     Ps,
-    #[strum(serialize = "stop", serialize = "clean")]
+    #[strum(to_string = "stop", serialize = "clean")]
     Stop,
     Clear,
     Personality,
@@ -195,4 +195,22 @@ pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
         .filter(|command| command.is_visible())
         .map(|c| (c.command(), c))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use std::str::FromStr;
+
+    use super::SlashCommand;
+
+    #[test]
+    fn stop_command_is_canonical_name() {
+        assert_eq!(SlashCommand::Stop.command(), "stop");
+    }
+
+    #[test]
+    fn clean_alias_parses_to_stop_command() {
+        assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
+    }
 }
