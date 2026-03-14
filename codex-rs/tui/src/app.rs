@@ -44,6 +44,10 @@ use codex_app_server_client::InProcessAppServerRequester;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::ThreadForkParams;
+use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_core::AuthManager;
@@ -131,6 +135,12 @@ use self::skills::request_skills_list;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
+
+enum AppServerPrimaryThreadResponse {
+    Start(ThreadStartResponse),
+    Resume(ThreadResumeResponse),
+    Fork(ThreadForkResponse),
+}
 
 enum ThreadInteractiveRequest {
     Approval(ApprovalRequest),
@@ -1257,26 +1267,6 @@ impl App {
         );
     }
 
-    /// Spawn a tokio task that polls `thread.next_event()` in a loop and
-    /// forwards each event as `AppEvent::ThreadEvent`.
-    ///
-    /// Only used for `DirectCore` threads (resume/fork). App-server-managed
-    /// threads receive events through the app-server notification stream
-    /// instead; spawning a listener for those would duplicate events.
-    fn spawn_direct_thread_event_listener(
-        &mut self,
-        thread_id: ThreadId,
-        thread: Arc<codex_core::CodexThread>,
-    ) {
-        let app_event_tx = self.app_event_tx.clone();
-        let handle = tokio::spawn(async move {
-            while let Ok(event) = thread.next_event().await {
-                app_event_tx.send(AppEvent::ThreadEvent { thread_id, event });
-            }
-        });
-        self.thread_event_listener_tasks.insert(thread_id, handle);
-    }
-
     /// Register a thread whose events are delivered by the app-server
     /// notification stream. No listener task is spawned.
     fn attach_app_server_managed_thread(
@@ -1299,24 +1289,9 @@ impl App {
         self.activate_thread_channel(thread_id).await;
     }
 
-    /// Register a thread whose events are polled directly from
-    /// `CodexThread::next_event()`. Both the event channel and a listener
-    /// task are created.
-    fn attach_direct_thread(
-        &mut self,
-        thread_id: ThreadId,
-        thread: Arc<codex_core::CodexThread>,
-        session: SessionConfiguredEvent,
-    ) {
-        self.register_thread_event_channel(thread_id, session);
-        self.app_server_managed_thread_ids.remove(&thread_id);
-        self.spawn_direct_thread_event_listener(thread_id, thread);
-    }
-
     fn should_route_app_server_legacy_thread_event(&self, thread_id: ThreadId) -> bool {
         self.app_server_managed_thread_ids.contains(&thread_id)
     }
-
     async fn activate_thread_channel(&mut self, thread_id: ThreadId) {
         if self.active_thread_id.is_some() {
             return;
@@ -1893,14 +1868,131 @@ impl App {
         let session_configured =
             Self::session_configured_from_thread_start_response(thread.as_ref(), response)?;
 
-        let widget = ChatWidget::new_from_existing_app_server(
-            init,
-            thread,
-            crate::chatwidget::ExistingThreadBootstrap {
-                session: session_configured.clone(),
-                transport: crate::chatwidget::ThreadTransport::AppServerManaged,
+        let widget = ChatWidget::new_from_existing(init, thread, session_configured.clone());
+
+        Ok((widget, thread_id, session_configured))
+    }
+
+    async fn build_resumed_app_server_session(
+        requester: InProcessAppServerRequester,
+        server: Arc<ThreadManager>,
+        init: crate::chatwidget::ChatWidgetInit,
+        target: crate::resume_picker::SessionTarget,
+    ) -> Result<(ChatWidget, ThreadId, SessionConfiguredEvent)> {
+        let params = ThreadResumeParams {
+            thread_id: target.thread_id.to_string(),
+            path: Some(target.path.clone()),
+            model: init.model.clone().or_else(|| init.config.model.clone()),
+            model_provider: Some(init.config.model_provider_id.clone()),
+            service_tier: Some(init.config.service_tier),
+            cwd: Some(init.config.cwd.to_string_lossy().into_owned()),
+            approval_policy: Some(init.config.permissions.approval_policy.value().into()),
+            approvals_reviewer: Some(init.config.approvals_reviewer.into()),
+            sandbox: match init.config.permissions.sandbox_policy.get() {
+                SandboxPolicy::DangerFullAccess => {
+                    Some(codex_app_server_protocol::SandboxMode::DangerFullAccess)
+                }
+                SandboxPolicy::ReadOnly { .. } => {
+                    Some(codex_app_server_protocol::SandboxMode::ReadOnly)
+                }
+                SandboxPolicy::WorkspaceWrite { .. } => {
+                    Some(codex_app_server_protocol::SandboxMode::WorkspaceWrite)
+                }
+                SandboxPolicy::ExternalSandbox { .. } => None,
             },
-        );
+            config: init.config.active_profile.as_ref().map(|profile| {
+                HashMap::from([("profile".to_string(), Value::String(profile.clone()))])
+            }),
+            base_instructions: init.config.base_instructions.clone(),
+            developer_instructions: init.config.developer_instructions.clone(),
+            personality: init.config.personality,
+            ..ThreadResumeParams::default()
+        };
+
+        let response: ThreadResumeResponse = requester
+            .request_typed_with_generated_id(|request_id| ClientRequest::ThreadResume {
+                request_id,
+                params,
+            })
+            .await
+            .wrap_err("thread/resume failed")?;
+
+        let thread_id = ThreadId::from_string(&response.thread.id)
+            .wrap_err("thread/resume returned invalid thread id")?;
+
+        let thread = server
+            .get_thread(thread_id)
+            .await
+            .wrap_err_with(|| format!("failed to fetch resumed thread {thread_id}"))?;
+
+        let session_configured = Self::session_configured_from_app_server_primary_thread_response(
+            thread.as_ref(),
+            AppServerPrimaryThreadResponse::Resume(response),
+        )?;
+
+        let widget = ChatWidget::new_from_existing(init, thread, session_configured.clone());
+
+        Ok((widget, thread_id, session_configured))
+    }
+
+    async fn build_forked_app_server_session(
+        requester: InProcessAppServerRequester,
+        server: Arc<ThreadManager>,
+        init: crate::chatwidget::ChatWidgetInit,
+        target: crate::resume_picker::SessionTarget,
+    ) -> Result<(ChatWidget, ThreadId, SessionConfiguredEvent)> {
+        let params = ThreadForkParams {
+            thread_id: target.thread_id.to_string(),
+            path: Some(target.path.clone()),
+            model: init.model.clone().or_else(|| init.config.model.clone()),
+            model_provider: Some(init.config.model_provider_id.clone()),
+            service_tier: Some(init.config.service_tier),
+            cwd: Some(init.config.cwd.to_string_lossy().into_owned()),
+            approval_policy: Some(init.config.permissions.approval_policy.value().into()),
+            approvals_reviewer: Some(init.config.approvals_reviewer.into()),
+            sandbox: match init.config.permissions.sandbox_policy.get() {
+                SandboxPolicy::DangerFullAccess => {
+                    Some(codex_app_server_protocol::SandboxMode::DangerFullAccess)
+                }
+                SandboxPolicy::ReadOnly { .. } => {
+                    Some(codex_app_server_protocol::SandboxMode::ReadOnly)
+                }
+                SandboxPolicy::WorkspaceWrite { .. } => {
+                    Some(codex_app_server_protocol::SandboxMode::WorkspaceWrite)
+                }
+                SandboxPolicy::ExternalSandbox { .. } => None,
+            },
+            config: init.config.active_profile.as_ref().map(|profile| {
+                HashMap::from([("profile".to_string(), Value::String(profile.clone()))])
+            }),
+            base_instructions: init.config.base_instructions.clone(),
+            developer_instructions: init.config.developer_instructions.clone(),
+            ephemeral: init.config.ephemeral,
+            ..ThreadForkParams::default()
+        };
+
+        let response: ThreadForkResponse = requester
+            .request_typed_with_generated_id(|request_id| ClientRequest::ThreadFork {
+                request_id,
+                params,
+            })
+            .await
+            .wrap_err("thread/fork failed")?;
+
+        let thread_id = ThreadId::from_string(&response.thread.id)
+            .wrap_err("thread/fork returned invalid thread id")?;
+
+        let thread = server
+            .get_thread(thread_id)
+            .await
+            .wrap_err_with(|| format!("failed to fetch forked thread {thread_id}"))?;
+
+        let session_configured = Self::session_configured_from_app_server_primary_thread_response(
+            thread.as_ref(),
+            AppServerPrimaryThreadResponse::Fork(response),
+        )?;
+
+        let widget = ChatWidget::new_from_existing(init, thread, session_configured.clone());
 
         Ok((widget, thread_id, session_configured))
     }
@@ -1950,36 +2042,100 @@ impl App {
         }
     }
 
-    /// Map the app-server `ThreadStartResponse` into the internal
+    /// Map any app-server primary-thread bootstrap response into the internal
     /// `SessionConfiguredEvent` that the rest of the TUI consumes.
     ///
     /// Needs a reference to the `CodexThread` for fields not present in the
     /// protocol response (currently just `rollout_path`).
-    fn session_configured_from_thread_start_response(
+    fn session_configured_from_app_server_primary_thread_response(
         thread: &codex_core::CodexThread,
-        response: ThreadStartResponse,
+        response: AppServerPrimaryThreadResponse,
     ) -> Result<SessionConfiguredEvent> {
-        let thread_id = ThreadId::from_string(&response.thread.id)
-            .wrap_err("thread/start returned invalid thread id")?;
+        let (
+            response_thread,
+            model,
+            model_provider,
+            service_tier,
+            cwd,
+            approval_policy,
+            approvals_reviewer,
+            sandbox,
+            reasoning_effort,
+            forked_from_id,
+            invalid_thread_id_message,
+        ) = match response {
+            AppServerPrimaryThreadResponse::Start(response) => (
+                response.thread,
+                response.model,
+                response.model_provider,
+                response.service_tier,
+                response.cwd,
+                response.approval_policy,
+                response.approvals_reviewer,
+                response.sandbox,
+                response.reasoning_effort,
+                None,
+                "thread/start returned invalid thread id",
+            ),
+            AppServerPrimaryThreadResponse::Resume(response) => (
+                response.thread,
+                response.model,
+                response.model_provider,
+                response.service_tier,
+                response.cwd,
+                response.approval_policy,
+                response.approvals_reviewer,
+                response.sandbox,
+                response.reasoning_effort,
+                None,
+                "thread/resume returned invalid thread id",
+            ),
+            AppServerPrimaryThreadResponse::Fork(response) => (
+                response.thread,
+                response.model,
+                response.model_provider,
+                response.service_tier,
+                response.cwd,
+                response.approval_policy,
+                response.approvals_reviewer,
+                response.sandbox,
+                response.reasoning_effort,
+                None,
+                "thread/fork returned invalid thread id",
+            ),
+        };
+
+        let thread_id =
+            ThreadId::from_string(&response_thread.id).wrap_err(invalid_thread_id_message)?;
 
         Ok(SessionConfiguredEvent {
             session_id: thread_id,
-            forked_from_id: None,
-            thread_name: response.thread.name,
-            model: response.model,
-            model_provider_id: response.model_provider,
-            service_tier: response.service_tier,
-            approval_policy: response.approval_policy.to_core(),
-            approvals_reviewer: response.approvals_reviewer.to_core(),
-            sandbox_policy: response.sandbox.to_core(),
-            cwd: response.cwd,
-            reasoning_effort: response.reasoning_effort,
+            forked_from_id,
+            thread_name: response_thread.name,
+            model,
+            model_provider_id: model_provider,
+            service_tier,
+            approval_policy: approval_policy.to_core(),
+            approvals_reviewer: approvals_reviewer.to_core(),
+            sandbox_policy: sandbox.to_core(),
+            cwd,
+            reasoning_effort,
             history_log_id: 0,
             history_entry_count: 0,
             initial_messages: None,
             network_proxy: None,
             rollout_path: thread.rollout_path(),
         })
+    }
+
+    fn session_configured_from_thread_start_response(
+        thread: &codex_core::CodexThread,
+        response: ThreadStartResponse,
+    ) -> Result<SessionConfiguredEvent> {
+        Self::session_configured_from_app_server_primary_thread_response(
+            thread,
+            AppServerPrimaryThreadResponse::Start(response),
+        )
     }
 
     async fn start_fresh_session_with_summary_hint(&mut self, tui: &mut tui::Tui) {
@@ -2250,13 +2406,10 @@ impl App {
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
             Self::should_wait_for_initial_session(&session_selection);
-        let mut initial_direct_bootstrap: Option<(
-            ThreadId,
-            SessionConfiguredEvent,
-            Arc<codex_core::CodexThread>,
-        )> = None;
-        let mut fresh_app_server_bootstrap: Option<(ThreadId, SessionConfiguredEvent)> = None;
-        let mut chat_widget = match session_selection {
+        let (mut chat_widget, initial_app_server_bootstrap): (
+            ChatWidget,
+            (ThreadId, SessionConfiguredEvent),
+        ) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let startup_tooltip_override =
                     prepare_startup_tooltip_override(&mut config, &available_models, is_first_run)
@@ -2281,7 +2434,6 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-
                 let (widget, thread_id, session_configured) = Self::build_fresh_app_server_session(
                     app_server.requester(),
                     thread_manager.clone(),
@@ -2289,22 +2441,9 @@ impl App {
                 )
                 .await?;
 
-                fresh_app_server_bootstrap = Some((thread_id, session_configured));
-                widget
+                (widget, (thread_id, session_configured))
             }
             SessionSelection::Resume(target_session) => {
-                let resumed = thread_manager
-                    .resume_thread_from_rollout(
-                        config.clone(),
-                        target_session.path.clone(),
-                        auth_manager.clone(),
-                        None,
-                    )
-                    .await
-                    .wrap_err_with(|| {
-                        let path_display = target_session.path.display();
-                        format!("Failed to resume session from {path_display}")
-                    })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -2326,31 +2465,22 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                let session_configured = resumed.session_configured;
-                let thread_id = session_configured.session_id;
-                let thread = resumed.thread.clone();
-                let bootstrap = crate::chatwidget::ExistingThreadBootstrap {
-                    session: session_configured.clone(),
-                    transport: crate::chatwidget::ThreadTransport::DirectCore,
-                };
-                initial_direct_bootstrap = Some((thread_id, session_configured, thread));
-                ChatWidget::new_from_existing_direct(init, resumed.thread, bootstrap)
+
+                let (widget, thread_id, session_configured) =
+                    Self::build_resumed_app_server_session(
+                        app_server.requester(),
+                        thread_manager.clone(),
+                        init,
+                        target_session,
+                    )
+                    .await
+                    .wrap_err("Failed to build resumed app-server session")?;
+
+                (widget, (thread_id, session_configured))
             }
             SessionSelection::Fork(target_session) => {
                 session_telemetry.counter("codex.thread.fork", 1, &[("source", "cli_subcommand")]);
-                let forked = thread_manager
-                    .fork_thread(
-                        usize::MAX,
-                        config.clone(),
-                        target_session.path.clone(),
-                        false,
-                        None,
-                    )
-                    .await
-                    .wrap_err_with(|| {
-                        let path_display = target_session.path.display();
-                        format!("Failed to fork session from {path_display}")
-                    })?;
+
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -2372,15 +2502,18 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                let session_configured = forked.session_configured;
-                let thread_id = session_configured.session_id;
-                let thread = forked.thread.clone();
-                let bootstrap = crate::chatwidget::ExistingThreadBootstrap {
-                    session: session_configured.clone(),
-                    transport: crate::chatwidget::ThreadTransport::DirectCore,
-                };
-                initial_direct_bootstrap = Some((thread_id, session_configured, thread));
-                ChatWidget::new_from_existing_direct(init, forked.thread, bootstrap)
+
+                let (widget, thread_id, session_configured) =
+                    Self::build_forked_app_server_session(
+                        app_server.requester(),
+                        thread_manager.clone(),
+                        init,
+                        target_session,
+                    )
+                    .await
+                    .wrap_err("Failed to build forked app-server session")?;
+
+                (widget, (thread_id, session_configured))
             }
         };
 
@@ -2432,16 +2565,9 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
         };
-        if let Some((thread_id, session_configured)) = fresh_app_server_bootstrap {
-            app.activate_primary_app_server_thread(thread_id, session_configured)
-                .await;
-        }
-        if let Some((thread_id, session_configured, thread)) = initial_direct_bootstrap {
-            app.primary_thread_id = Some(thread_id);
-            app.primary_session_configured = Some(session_configured.clone());
-            app.attach_direct_thread(thread_id, thread, session_configured);
-            app.activate_thread_channel(thread_id).await;
-        }
+        let (thread_id, session_configured) = initial_app_server_bootstrap;
+        app.activate_primary_app_server_thread(thread_id, session_configured)
+            .await;
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -2784,42 +2910,33 @@ impl App {
                             self.chat_widget.thread_id(),
                             self.chat_widget.thread_name(),
                         );
-                        match self
-                            .server
-                            .resume_thread_from_rollout(
-                                resume_config.clone(),
-                                target_session.path.clone(),
-                                self.auth_manager.clone(),
-                                None,
-                            )
-                            .await
+                        let path_display = target_session.path.display().to_string();
+
+                        self.shutdown_current_thread().await;
+                        self.config = resume_config;
+                        tui.set_notification_method(self.config.tui_notification_method);
+                        self.file_search.update_search_dir(self.config.cwd.clone());
+
+                        let init = self
+                            .chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
+
+                        match Self::build_resumed_app_server_session(
+                            self.app_server_requester.clone(),
+                            self.server.clone(),
+                            init,
+                            target_session,
+                        )
+                        .await
                         {
-                            Ok(resumed) => {
-                                self.shutdown_current_thread().await;
-                                self.config = resume_config;
-                                tui.set_notification_method(self.config.tui_notification_method);
-                                self.file_search.update_search_dir(self.config.cwd.clone());
-                                let init = self.chatwidget_init_for_forked_or_resumed_thread(
-                                    tui,
-                                    self.config.clone(),
-                                );
-                                let session_configured = resumed.session_configured;
-                                let thread_id = session_configured.session_id;
-                                let thread = resumed.thread.clone();
-                                let bootstrap = crate::chatwidget::ExistingThreadBootstrap {
-                                    session: session_configured.clone(),
-                                    transport: crate::chatwidget::ThreadTransport::DirectCore,
-                                };
-                                self.chat_widget = ChatWidget::new_from_existing_direct(
-                                    init,
-                                    resumed.thread,
-                                    bootstrap,
-                                );
+                            Ok((chat_widget, thread_id, session_configured)) => {
+                                self.chat_widget = chat_widget;
                                 self.reset_thread_event_state();
-                                self.primary_thread_id = Some(thread_id);
-                                self.primary_session_configured = Some(session_configured.clone());
-                                self.attach_direct_thread(thread_id, thread, session_configured);
-                                self.activate_thread_channel(thread_id).await;
+                                self.activate_primary_app_server_thread(
+                                    thread_id,
+                                    session_configured,
+                                )
+                                .await;
+
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
                                         vec![summary.usage_line.clone().into()];
@@ -2834,7 +2951,6 @@ impl App {
                                 }
                             }
                             Err(err) => {
-                                let path_display = target_session.path.display();
                                 self.chat_widget.add_error_message(format!(
                                     "Failed to resume session from {path_display}: {err}"
                                 ));
@@ -2868,34 +2984,42 @@ impl App {
                     // Fresh threads expose a precomputed path, but the file is
                     // materialized lazily on first user message.
                     if path.exists() {
-                        match self
-                            .server
-                            .fork_thread(usize::MAX, self.config.clone(), path.clone(), false, None)
-                            .await
+                        let Some(thread_id) = self.chat_widget.thread_id() else {
+                            self.chat_widget.add_error_message(
+                                "Could not determine the current thread id for forking."
+                                    .to_string(),
+                            );
+                            tui.frame_requester().schedule_frame();
+                            return Ok(AppRunControl::Continue);
+                        };
+
+                        let target_session = crate::resume_picker::SessionTarget {
+                            path: path.clone(),
+                            thread_id,
+                        };
+                        let path_display = path.display().to_string();
+
+                        self.shutdown_current_thread().await;
+                        let init = self
+                            .chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
+
+                        match Self::build_forked_app_server_session(
+                            self.app_server_requester.clone(),
+                            self.server.clone(),
+                            init,
+                            target_session,
+                        )
+                        .await
                         {
-                            Ok(forked) => {
-                                self.shutdown_current_thread().await;
-                                let init = self.chatwidget_init_for_forked_or_resumed_thread(
-                                    tui,
-                                    self.config.clone(),
-                                );
-                                let session_configured = forked.session_configured;
-                                let thread_id = session_configured.session_id;
-                                let thread = forked.thread.clone();
-                                let bootstrap = crate::chatwidget::ExistingThreadBootstrap {
-                                    session: session_configured.clone(),
-                                    transport: crate::chatwidget::ThreadTransport::DirectCore,
-                                };
-                                self.chat_widget = ChatWidget::new_from_existing_direct(
-                                    init,
-                                    forked.thread,
-                                    bootstrap,
-                                );
+                            Ok((chat_widget, thread_id, session_configured)) => {
+                                self.chat_widget = chat_widget;
                                 self.reset_thread_event_state();
-                                self.primary_thread_id = Some(thread_id);
-                                self.primary_session_configured = Some(session_configured.clone());
-                                self.attach_direct_thread(thread_id, thread, session_configured);
-                                self.activate_thread_channel(thread_id).await;
+                                self.activate_primary_app_server_thread(
+                                    thread_id,
+                                    session_configured,
+                                )
+                                .await;
+
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
                                         vec![summary.usage_line.clone().into()];
@@ -2910,7 +3034,6 @@ impl App {
                                 }
                             }
                             Err(err) => {
-                                let path_display = path.display();
                                 self.chat_widget.add_error_message(format!(
                                     "Failed to fork current session from {path_display}: {err}"
                                 ));
@@ -4216,7 +4339,7 @@ impl App {
             rollout_path: thread.rollout_path(),
         };
 
-        self.attach_direct_thread(thread_id, thread, session_configured);
+        self.attach_app_server_managed_thread(thread_id, session_configured);
         Ok(())
     }
 
@@ -4556,8 +4679,12 @@ mod tests {
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::RolloutLine;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionConfiguredEvent;
+    use codex_protocol::protocol::SessionMeta;
+    use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
@@ -4571,6 +4698,7 @@ mod tests {
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
+    use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -4843,6 +4971,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handle_thread_created_registers_channel_without_listener() -> Result<()> {
+        let mut app = make_test_app().await;
+        let new_thread = app.server.start_thread(app.config.clone()).await?;
+        let thread_id = new_thread.thread_id;
+
+        app.handle_thread_created(thread_id).await?;
+
+        assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
+        assert_eq!(
+            app.thread_event_listener_tasks.contains_key(&thread_id),
+            false
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn activate_primary_app_server_thread_registers_active_receiver() -> Result<()> {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();
@@ -4873,30 +5018,6 @@ mod tests {
         );
         assert_eq!(app.app_server_managed_thread_ids.contains(&thread_id), true);
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn attach_direct_thread_registers_channel_and_listener() -> Result<()> {
-        let mut app = make_test_app().await;
-        let new_thread = app.server.start_thread(app.config.clone()).await?;
-        let thread_id = new_thread.thread_id;
-        let thread = new_thread.thread.clone();
-        let session = new_thread.session_configured;
-
-        app.attach_direct_thread(thread_id, thread, session);
-
-        assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
-        assert_eq!(
-            app.thread_event_listener_tasks.contains_key(&thread_id),
-            true
-        );
-        assert_eq!(
-            app.app_server_managed_thread_ids.contains(&thread_id),
-            false
-        );
-
-        app.reset_thread_event_state();
         Ok(())
     }
 
@@ -7031,6 +7152,52 @@ guardian_approval = true
         )
     }
 
+    fn write_test_rollout_fixture() -> Result<(tempfile::TempDir, PathBuf)> {
+        let dir = tempdir()?;
+        let thread_id = ThreadId::new();
+        let rollout_path = dir.path().join("rollout.jsonl");
+        let session_meta_line = SessionMetaLine {
+            meta: SessionMeta {
+                id: thread_id,
+                forked_from_id: None,
+                timestamp: "2026-01-27T12:00:00Z".to_string(),
+                cwd: dir.path().to_path_buf(),
+                originator: "test".to_string(),
+                cli_version: "test".to_string(),
+                source: SessionSource::Cli,
+                agent_nickname: None,
+                agent_role: None,
+                model_provider: None,
+                base_instructions: None,
+                dynamic_tools: None,
+                memory_mode: None,
+            },
+            git: None,
+        };
+        let lines = [
+            RolloutLine {
+                timestamp: "2026-01-27T12:00:00Z".to_string(),
+                item: RolloutItem::SessionMeta(session_meta_line),
+            },
+            RolloutLine {
+                timestamp: "2026-01-27T12:00:01Z".to_string(),
+                item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                    message: "hello from rollout fixture".to_string(),
+                    images: None,
+                    local_images: Vec::new(),
+                    text_elements: Vec::new(),
+                })),
+            },
+        ];
+        let jsonl = lines
+            .iter()
+            .map(|line| serde_json::to_string(line).expect("rollout line should serialize"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&rollout_path, format!("{jsonl}\n"))?;
+        Ok((dir, rollout_path))
+    }
+
     fn app_enabled_in_effective_config(config: &Config, app_id: &str) -> Option<bool> {
         config
             .config_layer_stack
@@ -7191,6 +7358,146 @@ guardian_approval = true
 
         let (chat, thread_id, session_configured) =
             App::build_fresh_app_server_session(client.requester(), server, init).await?;
+
+        assert_eq!(thread_id, session_configured.session_id);
+        assert_eq!(chat.thread_id(), Some(thread_id));
+        assert_eq!(chat.thread_name(), session_configured.thread_name.clone());
+        assert_eq!(chat.rollout_path(), session_configured.rollout_path.clone());
+        assert_eq!(
+            session_configured.approval_policy,
+            AskForApproval::OnRequest
+        );
+        assert_eq!(
+            session_configured.approvals_reviewer,
+            ApprovalsReviewer::GuardianSubagent
+        );
+        assert_matches!(
+            session_configured.sandbox_policy,
+            SandboxPolicy::WorkspaceWrite { .. }
+        );
+        assert_eq!(
+            session_configured.service_tier,
+            Some(codex_protocol::config_types::ServiceTier::Flex)
+        );
+
+        client.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn build_resumed_app_server_session_returns_bootstrapped_widget() -> Result<()> {
+        let mut app = make_test_app().await;
+        app.config
+            .permissions
+            .approval_policy
+            .set(AskForApproval::OnRequest)?;
+        app.config
+            .permissions
+            .sandbox_policy
+            .set(SandboxPolicy::new_workspace_write_policy())?;
+        app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+        app.config.service_tier = Some(codex_protocol::config_types::ServiceTier::Flex);
+
+        let client = start_test_app_server_client(app.config.clone()).await;
+        let server = client.thread_manager();
+        let model = codex_core::test_support::get_model_offline(app.config.model.as_deref());
+        let session_telemetry = test_session_telemetry(&app.config, model.as_str());
+
+        let init = crate::chatwidget::ChatWidgetInit {
+            config: app.config.clone(),
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            app_event_tx: app.app_event_tx.clone(),
+            initial_user_message: None,
+            enhanced_keys_supported: false,
+            auth_manager: app.auth_manager.clone(),
+            models_manager: server.get_models_manager(),
+            feedback: app.feedback.clone(),
+            is_first_run: false,
+            feedback_audience: FeedbackAudience::External,
+            model: Some(model),
+            startup_tooltip_override: None,
+            status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
+            session_telemetry,
+        };
+
+        let (_rollout_dir, fixture_path) = write_test_rollout_fixture()?;
+        let target = crate::resume_picker::SessionTarget {
+            path: fixture_path,
+            thread_id: ThreadId::new(),
+        };
+
+        let (chat, thread_id, session_configured) =
+            App::build_resumed_app_server_session(client.requester(), server, init, target).await?;
+
+        assert_eq!(thread_id, session_configured.session_id);
+        assert_eq!(chat.thread_id(), Some(thread_id));
+        assert_eq!(chat.thread_name(), session_configured.thread_name.clone());
+        assert_eq!(chat.rollout_path(), session_configured.rollout_path.clone());
+        assert_eq!(
+            session_configured.approval_policy,
+            AskForApproval::OnRequest
+        );
+        assert_eq!(
+            session_configured.approvals_reviewer,
+            ApprovalsReviewer::GuardianSubagent
+        );
+        assert_matches!(
+            session_configured.sandbox_policy,
+            SandboxPolicy::WorkspaceWrite { .. }
+        );
+        assert_eq!(
+            session_configured.service_tier,
+            Some(codex_protocol::config_types::ServiceTier::Flex)
+        );
+
+        client.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn build_forked_app_server_session_returns_bootstrapped_widget() -> Result<()> {
+        let mut app = make_test_app().await;
+        app.config
+            .permissions
+            .approval_policy
+            .set(AskForApproval::OnRequest)?;
+        app.config
+            .permissions
+            .sandbox_policy
+            .set(SandboxPolicy::new_workspace_write_policy())?;
+        app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+        app.config.service_tier = Some(codex_protocol::config_types::ServiceTier::Flex);
+
+        let client = start_test_app_server_client(app.config.clone()).await;
+        let server = client.thread_manager();
+        let model = codex_core::test_support::get_model_offline(app.config.model.as_deref());
+        let session_telemetry = test_session_telemetry(&app.config, model.as_str());
+
+        let init = crate::chatwidget::ChatWidgetInit {
+            config: app.config.clone(),
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            app_event_tx: app.app_event_tx.clone(),
+            initial_user_message: None,
+            enhanced_keys_supported: false,
+            auth_manager: app.auth_manager.clone(),
+            models_manager: server.get_models_manager(),
+            feedback: app.feedback.clone(),
+            is_first_run: false,
+            feedback_audience: FeedbackAudience::External,
+            model: Some(model),
+            startup_tooltip_override: None,
+            status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
+            session_telemetry,
+        };
+
+        let (_rollout_dir, fixture_path) = write_test_rollout_fixture()?;
+        let target = crate::resume_picker::SessionTarget {
+            path: fixture_path,
+            thread_id: ThreadId::new(),
+        };
+
+        let (chat, thread_id, session_configured) =
+            App::build_forked_app_server_session(client.requester(), server, init, target).await?;
 
         assert_eq!(thread_id, session_configured.session_id);
         assert_eq!(chat.thread_id(), Some(thread_id));

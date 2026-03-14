@@ -2102,14 +2102,7 @@ async fn app_server_existing_thread_constructor_applies_bootstrap_state() {
         .await
         .expect("thread should start");
 
-    let chat = ChatWidget::new_from_existing_app_server(
-        init,
-        thread,
-        ExistingThreadBootstrap {
-            session: session_configured.clone(),
-            transport: ThreadTransport::AppServerManaged,
-        },
-    );
+    let chat = ChatWidget::new_from_existing(init, thread, session_configured.clone());
 
     assert_eq!(chat.thread_id(), Some(session_configured.session_id));
     assert_eq!(chat.thread_name(), session_configured.thread_name);
