@@ -157,6 +157,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     session,
                     turn,
                     GuardianApprovalRequest::Shell {
+                        id: call_id,
                         command,
                         cwd,
                         sandbox_permissions: req.sandbox_permissions,

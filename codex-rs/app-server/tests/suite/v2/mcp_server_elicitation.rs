@@ -66,7 +66,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const CONNECTOR_ID: &str = "calendar";
 const CONNECTOR_NAME: &str = "Calendar";
 const TOOL_NAME: &str = "calendar_confirm_action";
-const QUALIFIED_TOOL_NAME: &str = "mcp__codex_apps__calendar-confirm-action";
+const QUALIFIED_TOOL_NAME: &str = "mcp__codex_apps__calendar_confirm_action";
 const TOOL_CALL_ID: &str = "call-calendar-confirm";
 const ELICITATION_MESSAGE: &str = "Allow this request?";
 

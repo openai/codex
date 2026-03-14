@@ -494,6 +494,7 @@ async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Resu
                 ("after rollback", &requests[3]),
             ],
             &ContextSnapshotOptions::default()
+                .strip_capability_instructions()
                 .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 }),
         )
     );

@@ -35,10 +35,10 @@ const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 1] = [
     "Tools of the apps (Calendar) are hidden until you search for them with this tool (`tool_search`).",
 ];
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
-const CALENDAR_CREATE_TOOL: &str = "mcp__codex_apps__calendar-create-event";
-const CALENDAR_LIST_TOOL: &str = "mcp__codex_apps__calendar-list-events";
+const CALENDAR_CREATE_TOOL: &str = "mcp__codex_apps__calendar_create_event";
+const CALENDAR_LIST_TOOL: &str = "mcp__codex_apps__calendar_list_events";
 const SEARCH_CALENDAR_NAMESPACE: &str = "mcp__codex_apps__calendar";
-const SEARCH_CALENDAR_CREATE_TOOL: &str = "-create-event";
+const SEARCH_CALENDAR_CREATE_TOOL: &str = "_create_event";
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")

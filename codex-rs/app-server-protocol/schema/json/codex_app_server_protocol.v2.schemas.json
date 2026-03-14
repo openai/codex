@@ -532,6 +532,14 @@
     "AppToolsConfig": {
       "type": "object"
     },
+    "ApprovalsReviewer": {
+      "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
+      "enum": [
+        "user",
+        "guardian_subagent"
+      ],
+      "type": "string"
+    },
     "AppsConfig": {
       "properties": {
         "_default": {
@@ -1256,6 +1264,174 @@
             "params"
           ],
           "title": "App/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/readFile"
+              ],
+              "title": "Fs/readFileRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsReadFileParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/readFileRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/writeFile"
+              ],
+              "title": "Fs/writeFileRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsWriteFileParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/writeFileRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/createDirectory"
+              ],
+              "title": "Fs/createDirectoryRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsCreateDirectoryParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/createDirectoryRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/getMetadata"
+              ],
+              "title": "Fs/getMetadataRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsGetMetadataParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/getMetadataRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/readDirectory"
+              ],
+              "title": "Fs/readDirectoryRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsReadDirectoryParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/readDirectoryRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/remove"
+              ],
+              "title": "Fs/removeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsRemoveParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/removeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/copy"
+              ],
+              "title": "Fs/copyRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsCopyParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/copyRequest",
           "type": "object"
         },
         {
@@ -2657,6 +2833,17 @@
             }
           ]
         },
+        "approvals_reviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "[UNSTABLE] Optional default for where approval requests are routed for review."
+        },
         "compact_prompt": {
           "type": [
             "string",
@@ -3832,6 +4019,290 @@
       ],
       "type": "string"
     },
+    "FsCopyParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Copy a file or directory tree on the host filesystem.",
+      "properties": {
+        "destinationPath": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute destination path."
+        },
+        "recursive": {
+          "description": "Required for directory copies; ignored for file copies.",
+          "type": "boolean"
+        },
+        "sourcePath": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute source path."
+        }
+      },
+      "required": [
+        "destinationPath",
+        "sourcePath"
+      ],
+      "title": "FsCopyParams",
+      "type": "object"
+    },
+    "FsCopyResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Successful response for `fs/copy`.",
+      "title": "FsCopyResponse",
+      "type": "object"
+    },
+    "FsCreateDirectoryParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Create a directory on the host filesystem.",
+      "properties": {
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute directory path to create."
+        },
+        "recursive": {
+          "description": "Whether parent directories should also be created. Defaults to `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "FsCreateDirectoryParams",
+      "type": "object"
+    },
+    "FsCreateDirectoryResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Successful response for `fs/createDirectory`.",
+      "title": "FsCreateDirectoryResponse",
+      "type": "object"
+    },
+    "FsGetMetadataParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Request metadata for an absolute path.",
+      "properties": {
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute path to inspect."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "FsGetMetadataParams",
+      "type": "object"
+    },
+    "FsGetMetadataResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Metadata returned by `fs/getMetadata`.",
+      "properties": {
+        "createdAtMs": {
+          "description": "File creation time in Unix milliseconds when available, otherwise `0`.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "isDirectory": {
+          "description": "Whether the path currently resolves to a directory.",
+          "type": "boolean"
+        },
+        "isFile": {
+          "description": "Whether the path currently resolves to a regular file.",
+          "type": "boolean"
+        },
+        "modifiedAtMs": {
+          "description": "File modification time in Unix milliseconds when available, otherwise `0`.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "createdAtMs",
+        "isDirectory",
+        "isFile",
+        "modifiedAtMs"
+      ],
+      "title": "FsGetMetadataResponse",
+      "type": "object"
+    },
+    "FsReadDirectoryEntry": {
+      "description": "A directory entry returned by `fs/readDirectory`.",
+      "properties": {
+        "fileName": {
+          "description": "Direct child entry name only, not an absolute or relative path.",
+          "type": "string"
+        },
+        "isDirectory": {
+          "description": "Whether this entry resolves to a directory.",
+          "type": "boolean"
+        },
+        "isFile": {
+          "description": "Whether this entry resolves to a regular file.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "fileName",
+        "isDirectory",
+        "isFile"
+      ],
+      "type": "object"
+    },
+    "FsReadDirectoryParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "List direct child names for a directory.",
+      "properties": {
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute directory path to read."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "FsReadDirectoryParams",
+      "type": "object"
+    },
+    "FsReadDirectoryResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Directory entries returned by `fs/readDirectory`.",
+      "properties": {
+        "entries": {
+          "description": "Direct child entries in the requested directory.",
+          "items": {
+            "$ref": "#/definitions/FsReadDirectoryEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "title": "FsReadDirectoryResponse",
+      "type": "object"
+    },
+    "FsReadFileParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Read a file from the host filesystem.",
+      "properties": {
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute path to read."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "FsReadFileParams",
+      "type": "object"
+    },
+    "FsReadFileResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Base64-encoded file contents returned by `fs/readFile`.",
+      "properties": {
+        "dataBase64": {
+          "description": "File contents encoded as base64.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataBase64"
+      ],
+      "title": "FsReadFileResponse",
+      "type": "object"
+    },
+    "FsRemoveParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Remove a file or directory tree from the host filesystem.",
+      "properties": {
+        "force": {
+          "description": "Whether missing paths should be ignored. Defaults to `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute path to remove."
+        },
+        "recursive": {
+          "description": "Whether directory removal should recurse. Defaults to `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "FsRemoveParams",
+      "type": "object"
+    },
+    "FsRemoveResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Successful response for `fs/remove`.",
+      "title": "FsRemoveResponse",
+      "type": "object"
+    },
+    "FsWriteFileParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Write a file on the host filesystem.",
+      "properties": {
+        "dataBase64": {
+          "description": "File contents encoded as base64.",
+          "type": "string"
+        },
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute path to write."
+        }
+      },
+      "required": [
+        "dataBase64",
+        "path"
+      ],
+      "title": "FsWriteFileParams",
+      "type": "object"
+    },
+    "FsWriteFileResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Successful response for `fs/writeFile`.",
+      "title": "FsWriteFileResponse",
+      "type": "object"
+    },
     "FunctionCallOutputBody": {
       "anyOf": [
         {
@@ -4136,6 +4607,61 @@
       },
       "type": "object"
     },
+    "GuardianApprovalReview": {
+      "description": "[UNSTABLE] Temporary guardian approval review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
+      "properties": {
+        "rationale": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "riskLevel": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuardianRiskLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "riskScore": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/GuardianApprovalReviewStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "GuardianApprovalReviewStatus": {
+      "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
+      "enum": [
+        "inProgress",
+        "approved",
+        "denied",
+        "aborted"
+      ],
+      "type": "string"
+    },
+    "GuardianRiskLevel": {
+      "description": "[UNSTABLE] Risk level assigned by guardian approval review.",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
     "HazelnutScope": {
       "enum": [
         "example",
@@ -4418,6 +4944,60 @@
         "turnId"
       ],
       "title": "ItemCompletedNotification",
+      "type": "object"
+    },
+    "ItemGuardianApprovalReviewCompletedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+      "properties": {
+        "action": true,
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "targetItemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "review",
+        "targetItemId",
+        "threadId",
+        "turnId"
+      ],
+      "title": "ItemGuardianApprovalReviewCompletedNotification",
+      "type": "object"
+    },
+    "ItemGuardianApprovalReviewStartedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+      "properties": {
+        "action": true,
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "targetItemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "review",
+        "targetItemId",
+        "threadId",
+        "turnId"
+      ],
+      "title": "ItemGuardianApprovalReviewStartedNotification",
       "type": "object"
     },
     "ItemStartedNotification": {
@@ -5730,6 +6310,17 @@
               "type": "null"
             }
           ]
+        },
+        "approvals_reviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "[UNSTABLE] Optional profile-level override for where approval requests are routed for review. If omitted, the enclosing config default is used."
         },
         "chatgpt_base_url": {
           "type": [
@@ -7483,6 +8074,46 @@
           "properties": {
             "method": {
               "enum": [
+                "item/autoApprovalReview/started"
+              ],
+              "title": "Item/autoApprovalReview/startedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ItemGuardianApprovalReviewStartedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Item/autoApprovalReview/startedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "item/autoApprovalReview/completed"
+              ],
+              "title": "Item/autoApprovalReview/completedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ItemGuardianApprovalReviewCompletedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Item/autoApprovalReview/completedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "item/completed"
               ],
               "title": "Item/completedNotificationMethod",
@@ -8918,6 +9549,17 @@
             }
           ]
         },
+        "approvalsReviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override where approval requests are routed for review on this thread and subsequent turns."
+        },
         "baseInstructions": {
           "type": [
             "string",
@@ -9002,6 +9644,14 @@
         "approvalPolicy": {
           "$ref": "#/definitions/AskForApproval"
         },
+        "approvalsReviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            }
+          ],
+          "description": "Reviewer currently used for approval requests on this thread."
+        },
         "cwd": {
           "type": "string"
         },
@@ -9040,6 +9690,7 @@
       },
       "required": [
         "approvalPolicy",
+        "approvalsReviewer",
         "cwd",
         "model",
         "modelProvider",
@@ -10036,6 +10687,17 @@
             }
           ]
         },
+        "approvalsReviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override where approval requests are routed for review on this thread and subsequent turns."
+        },
         "baseInstructions": {
           "type": [
             "string",
@@ -10127,6 +10789,14 @@
         "approvalPolicy": {
           "$ref": "#/definitions/AskForApproval"
         },
+        "approvalsReviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            }
+          ],
+          "description": "Reviewer currently used for approval requests on this thread."
+        },
         "cwd": {
           "type": "string"
         },
@@ -10165,6 +10835,7 @@
       },
       "required": [
         "approvalPolicy",
+        "approvalsReviewer",
         "cwd",
         "model",
         "modelProvider",
@@ -10269,6 +10940,17 @@
             }
           ]
         },
+        "approvalsReviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override where approval requests are routed for review on this thread and subsequent turns."
+        },
         "baseInstructions": {
           "type": [
             "string",
@@ -10365,6 +11047,14 @@
         "approvalPolicy": {
           "$ref": "#/definitions/AskForApproval"
         },
+        "approvalsReviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            }
+          ],
+          "description": "Reviewer currently used for approval requests on this thread."
+        },
         "cwd": {
           "type": "string"
         },
@@ -10403,6 +11093,7 @@
       },
       "required": [
         "approvalPolicy",
+        "approvalsReviewer",
         "cwd",
         "model",
         "modelProvider",
@@ -10911,6 +11602,17 @@
             }
           ],
           "description": "Override the approval policy for this turn and subsequent turns."
+        },
+        "approvalsReviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override where approval requests are routed for review on this turn and subsequent turns."
         },
         "cwd": {
           "description": "Override the working directory for this turn and subsequent turns.",

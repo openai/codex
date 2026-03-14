@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 3925
+assertion_line: 7365
 expression: popup
 ---
   Update Model Permissions
