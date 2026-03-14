@@ -102,7 +102,7 @@ use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
-use codex_core::find_thread_path_by_id_str;
+use codex_core::find_or_unarchive_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
@@ -1488,7 +1488,13 @@ async fn resolve_resume_path(
             }
         }
     } else if let Some(id_str) = args.session_id.as_deref() {
-        resolve_thread_path_by_id_or_name(config, id_str).await
+        if Uuid::parse_str(id_str).is_ok() {
+            let path = find_or_unarchive_thread_path_by_id_str(&config.codex_home, id_str).await?;
+            Ok(path)
+        } else {
+            let path = find_thread_path_by_name_str(&config.codex_home, id_str).await?;
+            Ok(path)
+        }
     } else {
         Ok(None)
     }

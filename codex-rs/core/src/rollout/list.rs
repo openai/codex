@@ -1248,14 +1248,114 @@ async fn find_thread_path_by_id_str_in_subdir(
     Ok(found)
 }
 
-/// Locate a recorded thread rollout file by its UUID string using the existing
-/// paginated listing implementation. Returns `Ok(Some(path))` if found, `Ok(None)` if not present
-/// or the id is invalid.
+async fn try_unarchive_thread_path_by_id_str(
+    codex_home: &Path,
+    id_str: &str,
+) -> io::Result<Option<PathBuf>> {
+    let Ok(requested_id) = Uuid::parse_str(id_str) else {
+        return Ok(None);
+    };
+    let Some(archived_path) =
+        find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, id_str).await?
+    else {
+        return Ok(None);
+    };
+    let archived_root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
+    if archived_path.strip_prefix(&archived_root).is_err() {
+        tracing::error!(
+            "archived rollout candidate for thread {id_str} is not under {}: {}",
+            archived_root.display(),
+            archived_path.display()
+        );
+        return Ok(None);
+    }
+
+    let Some(file_name) = archived_path.file_name().map(OsStr::to_owned) else {
+        tracing::error!(
+            "archived rollout path for thread {id_str} missing file name: {}",
+            archived_path.display()
+        );
+        return Ok(None);
+    };
+    let file_name_str = file_name.to_string_lossy();
+    let Some((_created_at, file_id)) = parse_timestamp_uuid_from_filename(&file_name_str) else {
+        tracing::error!(
+            "archived rollout path for thread {id_str} has invalid rollout filename: {}",
+            archived_path.display()
+        );
+        return Ok(None);
+    };
+    if file_id != requested_id {
+        tracing::error!(
+            "archived rollout path for thread {id_str} has mismatched rollout filename: {}",
+            archived_path.display()
+        );
+        return Ok(None);
+    }
+    let Some((year, month, day)) = rollout_date_parts(&file_name) else {
+        tracing::error!(
+            "archived rollout path for thread {id_str} missing filename timestamp: {}",
+            archived_path.display()
+        );
+        return Ok(None);
+    };
+
+    let restored_dir = codex_home
+        .join(SESSIONS_SUBDIR)
+        .join(year)
+        .join(month)
+        .join(day);
+    tokio::fs::create_dir_all(&restored_dir).await?;
+    let restored_path = restored_dir.join(&file_name);
+    match tokio::fs::rename(&archived_path, &restored_path).await {
+        Ok(()) => {}
+        Err(err) => {
+            if tokio::fs::try_exists(&restored_path).await.unwrap_or(false) {
+                tracing::debug!(
+                    "archived rollout for thread {id_str} already restored concurrently to {}",
+                    restored_path.display()
+                );
+            } else {
+                return Err(err);
+            }
+        }
+    }
+
+    if let Some(state_db_ctx) = state_db::open_if_present(codex_home, "").await
+        && let Ok(thread_id) = ThreadId::from_string(id_str)
+    {
+        let _ = state_db_ctx
+            .mark_unarchived(thread_id, restored_path.as_path())
+            .await;
+    }
+
+    Ok(Some(restored_path))
+}
+
+/// Locate a recorded active thread rollout file by its UUID string using the existing paginated
+/// listing implementation.
+///
+/// This helper intentionally has no side effects. Callers that want "resume and restore from
+/// archive if needed" semantics must opt in with [`find_or_unarchive_thread_path_by_id_str`] so
+/// that other lookup paths (for example fork-reference resolution) do not silently move archived
+/// rollouts back into `sessions/`.
 pub async fn find_thread_path_by_id_str(
     codex_home: &Path,
     id_str: &str,
 ) -> io::Result<Option<PathBuf>> {
     find_thread_path_by_id_str_in_subdir(codex_home, SESSIONS_SUBDIR, id_str).await
+}
+
+/// Locate a thread rollout file by UUID string, restoring it from `archived_sessions/` when
+/// needed for resume flows.
+pub async fn find_or_unarchive_thread_path_by_id_str(
+    codex_home: &Path,
+    id_str: &str,
+) -> io::Result<Option<PathBuf>> {
+    if let Some(active_path) = find_thread_path_by_id_str(codex_home, id_str).await? {
+        return Ok(Some(active_path));
+    }
+    try_unarchive_thread_path_by_id_str(codex_home, id_str).await
 }
 
 /// Locate an archived thread rollout file by its UUID string.
