@@ -371,7 +371,7 @@ impl FileSystemSandboxPolicy {
             return Vec::new();
         }
 
-        dedup_normalized_absolute_paths(
+        dedup_absolute_paths(
             self.resolved_entries_with_cwd(cwd)
                 .into_iter()
                 .filter(|entry| entry.access.can_read())
@@ -389,7 +389,7 @@ impl FileSystemSandboxPolicy {
         }
 
         let resolved_entries = self.resolved_entries_with_cwd(cwd);
-        let read_only_roots = dedup_normalized_absolute_paths(
+        let read_only_roots = dedup_absolute_paths(
             resolved_entries
                 .iter()
                 .filter(|entry| !entry.access.can_write())
@@ -398,7 +398,7 @@ impl FileSystemSandboxPolicy {
                 .collect(),
         );
 
-        dedup_normalized_absolute_paths(
+        dedup_absolute_paths(
             resolved_entries
                 .into_iter()
                 .filter(|entry| entry.access.can_write())
@@ -421,7 +421,10 @@ impl FileSystemSandboxPolicy {
             );
             WritableRoot {
                 root,
-                read_only_subpaths: dedup_normalized_absolute_paths(read_only_subpaths),
+                // Preserve literal in-root protected paths like `.git` and
+                // `.codex` so downstream sandboxes can still detect and mask
+                // the symlink itself instead of only its resolved target.
+                read_only_subpaths: dedup_absolute_paths_preserving_symlinks(read_only_subpaths),
             }
         })
         .collect()
@@ -437,7 +440,7 @@ impl FileSystemSandboxPolicy {
             .ok()
             .map(|cwd| absolute_root_path_for_cwd(&cwd));
 
-        dedup_normalized_absolute_paths(
+        dedup_absolute_paths(
             self.resolved_entries_with_cwd(cwd)
                 .iter()
                 .filter(|entry| entry.access == FileSystemAccessMode::None)
@@ -580,13 +583,13 @@ impl FileSystemSandboxPolicy {
                 } else {
                     ReadOnlyAccess::Restricted {
                         include_platform_defaults,
-                        readable_roots: dedup_absolute_paths(readable_roots),
+                        readable_roots: dedup_absolute_paths_preserving_symlinks(readable_roots),
                     }
                 };
 
                 if workspace_root_writable {
                     SandboxPolicy::WorkspaceWrite {
-                        writable_roots: dedup_absolute_paths(writable_roots),
+                        writable_roots: dedup_absolute_paths_preserving_symlinks(writable_roots),
                         read_only_access,
                         network_access: network_policy.is_enabled(),
                         exclude_tmpdir_env_var: !tmpdir_writable,
@@ -926,6 +929,18 @@ fn dedup_absolute_paths(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
     let mut deduped = Vec::with_capacity(paths.len());
     let mut seen = HashSet::new();
     for path in paths {
+        let normalized_path = normalize_effective_absolute_path(path);
+        if seen.insert(normalized_path.to_path_buf()) {
+            deduped.push(normalized_path);
+        }
+    }
+    deduped
+}
+
+fn dedup_absolute_paths_preserving_symlinks(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
+    let mut deduped = Vec::with_capacity(paths.len());
+    let mut seen = HashSet::new();
+    for path in paths {
         if seen.insert(path.to_path_buf()) {
             deduped.push(path);
         }
@@ -949,15 +964,6 @@ fn normalize_effective_absolute_path(path: AbsolutePathBuf) -> AbsolutePathBuf {
         }
     }
     path
-}
-
-fn dedup_normalized_absolute_paths(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
-    dedup_absolute_paths(
-        paths
-            .into_iter()
-            .map(normalize_effective_absolute_path)
-            .collect(),
-    )
 }
 
 fn default_read_only_subpaths_for_writable_root(
@@ -993,7 +999,7 @@ fn default_read_only_subpaths_for_writable_root(
         }
     }
 
-    dedup_absolute_paths(subpaths)
+    dedup_absolute_paths_preserving_symlinks(subpaths)
 }
 
 fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
@@ -1158,6 +1164,46 @@ mod tests {
             writable_roots[0]
                 .read_only_subpaths
                 .contains(&expected_codex)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writable_roots_preserve_symlinked_protected_subpaths() {
+        let cwd = TempDir::new().expect("tempdir");
+        let root = cwd.path().join("root");
+        let decoy = root.join("decoy-codex");
+        let dot_codex = root.join(".codex");
+        fs::create_dir_all(&decoy).expect("create decoy");
+        symlink_dir(&decoy, &dot_codex).expect("create .codex symlink");
+
+        let root = AbsolutePathBuf::from_absolute_path(&root).expect("absolute root");
+        let expected_dot_codex = AbsolutePathBuf::from_absolute_path(
+            root.as_path()
+                .canonicalize()
+                .expect("canonicalize root")
+                .join(".codex"),
+        )
+        .expect("absolute .codex symlink");
+        let unexpected_decoy =
+            AbsolutePathBuf::from_absolute_path(decoy.canonicalize().expect("canonicalize decoy"))
+                .expect("absolute canonical decoy");
+
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: root },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        assert_eq!(writable_roots.len(), 1);
+        assert_eq!(
+            writable_roots[0].read_only_subpaths,
+            vec![expected_dot_codex]
+        );
+        assert!(
+            !writable_roots[0]
+                .read_only_subpaths
+                .contains(&unexpected_decoy)
         );
     }
 
