@@ -1925,13 +1925,18 @@ impl App {
             .await
             .wrap_err_with(|| format!("failed to fetch resumed thread {thread_id}"))?;
 
-        let session_configured = Self::session_configured_from_app_server_primary_thread_response(
-            thread.as_ref(),
-            AppServerPrimaryThreadResponse::Resume(response),
-        )?;
+        let mut session_configured =
+            Self::session_configured_from_app_server_primary_thread_response(
+                thread.as_ref(),
+                AppServerPrimaryThreadResponse::Resume(response),
+            )?;
+        session_configured.initial_messages = Self::replay_messages_from_rollout_path(
+            thread.rollout_path().as_deref(),
+            Some(target.path.as_path()),
+        )
+        .await;
 
         let widget = ChatWidget::new_from_existing(init, thread, session_configured.clone());
-
         Ok((widget, thread_id, session_configured))
     }
 
@@ -1987,13 +1992,18 @@ impl App {
             .await
             .wrap_err_with(|| format!("failed to fetch forked thread {thread_id}"))?;
 
-        let session_configured = Self::session_configured_from_app_server_primary_thread_response(
-            thread.as_ref(),
-            AppServerPrimaryThreadResponse::Fork(response),
-        )?;
+        let mut session_configured =
+            Self::session_configured_from_app_server_primary_thread_response(
+                thread.as_ref(),
+                AppServerPrimaryThreadResponse::Fork(response),
+            )?;
+        session_configured.initial_messages = Self::replay_messages_from_rollout_path(
+            thread.rollout_path().as_deref(),
+            Some(target.path.as_path()),
+        )
+        .await;
 
         let widget = ChatWidget::new_from_existing(init, thread, session_configured.clone());
-
         Ok((widget, thread_id, session_configured))
     }
 
@@ -2039,6 +2049,24 @@ impl App {
             personality: config.personality,
             ephemeral: Some(config.ephemeral),
             ..ThreadStartParams::default()
+        }
+    }
+
+    async fn replay_messages_from_rollout_path(
+        preferred_rollout_path: Option<&Path>,
+        fallback_rollout_path: Option<&Path>,
+    ) -> Option<Vec<EventMsg>> {
+        let rollout_path = preferred_rollout_path.or(fallback_rollout_path)?;
+
+        match codex_core::RolloutRecorder::get_rollout_history(rollout_path).await {
+            Ok(initial_history) => initial_history.get_event_msgs(),
+            Err(err) => {
+                tracing::warn!(
+                    path = %rollout_path.display(),
+                    "failed to reconstruct replay messages from rollout: {err}"
+                );
+                None
+            }
         }
     }
 
@@ -4676,6 +4704,7 @@ mod tests {
     use codex_protocol::config_types::Settings;
     use codex_protocol::openai_models::ModelAvailabilityNux;
     use codex_protocol::protocol::AgentMessageDeltaEvent;
+    use codex_protocol::protocol::AgentMessageEvent;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
@@ -7152,7 +7181,9 @@ guardian_approval = true
         )
     }
 
-    fn write_test_rollout_fixture() -> Result<(tempfile::TempDir, PathBuf)> {
+    fn write_test_rollout_fixture_with_messages(
+        messages: Vec<EventMsg>,
+    ) -> Result<(tempfile::TempDir, PathBuf)> {
         let dir = tempdir()?;
         let thread_id = ThreadId::new();
         let rollout_path = dir.path().join("rollout.jsonl");
@@ -7174,21 +7205,16 @@ guardian_approval = true
             },
             git: None,
         };
-        let lines = [
-            RolloutLine {
-                timestamp: "2026-01-27T12:00:00Z".to_string(),
-                item: RolloutItem::SessionMeta(session_meta_line),
-            },
-            RolloutLine {
-                timestamp: "2026-01-27T12:00:01Z".to_string(),
-                item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
-                    message: "hello from rollout fixture".to_string(),
-                    images: None,
-                    local_images: Vec::new(),
-                    text_elements: Vec::new(),
-                })),
-            },
-        ];
+        let mut lines = vec![RolloutLine {
+            timestamp: "2026-01-27T12:00:00Z".to_string(),
+            item: RolloutItem::SessionMeta(session_meta_line),
+        }];
+        for (idx, msg) in messages.into_iter().enumerate() {
+            lines.push(RolloutLine {
+                timestamp: format!("2026-01-27T12:00:{:02}Z", idx + 1),
+                item: RolloutItem::EventMsg(msg),
+            });
+        }
         let jsonl = lines
             .iter()
             .map(|line| serde_json::to_string(line).expect("rollout line should serialize"))
@@ -7196,6 +7222,15 @@ guardian_approval = true
             .join("\n");
         fs::write(&rollout_path, format!("{jsonl}\n"))?;
         Ok((dir, rollout_path))
+    }
+
+    fn write_test_rollout_fixture() -> Result<(tempfile::TempDir, PathBuf)> {
+        write_test_rollout_fixture_with_messages(vec![EventMsg::UserMessage(UserMessageEvent {
+            message: "hello from rollout fixture".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        })])
     }
 
     fn app_enabled_in_effective_config(config: &Config, app_id: &str) -> Option<bool> {
@@ -7448,6 +7483,160 @@ guardian_approval = true
         assert_eq!(
             session_configured.service_tier,
             Some(codex_protocol::config_types::ServiceTier::Flex)
+        );
+
+        client.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn build_resumed_app_server_session_replays_rollout_history() -> Result<()> {
+        let (app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let client = start_test_app_server_client(app.config.clone()).await;
+        let server = client.thread_manager();
+        let model = codex_core::test_support::get_model_offline(app.config.model.as_deref());
+        let session_telemetry = test_session_telemetry(&app.config, model.as_str());
+
+        let init = crate::chatwidget::ChatWidgetInit {
+            config: app.config.clone(),
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            app_event_tx: app.app_event_tx.clone(),
+            initial_user_message: None,
+            enhanced_keys_supported: false,
+            auth_manager: app.auth_manager.clone(),
+            models_manager: server.get_models_manager(),
+            feedback: app.feedback.clone(),
+            is_first_run: false,
+            feedback_audience: FeedbackAudience::External,
+            model: Some(model),
+            startup_tooltip_override: None,
+            status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
+            session_telemetry,
+        };
+
+        let (_rollout_dir, fixture_path) = write_test_rollout_fixture_with_messages(vec![
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "hi".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            }),
+            EventMsg::AgentMessage(AgentMessageEvent {
+                message: "Hi.".to_string(),
+                phase: None,
+            }),
+        ])?;
+        let target = crate::resume_picker::SessionTarget {
+            path: fixture_path,
+            thread_id: ThreadId::new(),
+        };
+
+        let (_chat, _thread_id, session_configured) =
+            App::build_resumed_app_server_session(client.requester(), server, init, target).await?;
+
+        let initial_messages = session_configured
+            .initial_messages
+            .as_ref()
+            .expect("resumed session should carry initial messages for transcript replay");
+        assert_eq!(initial_messages.len(), 2);
+
+        let history = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::InsertHistoryCell(cell) => Some(
+                    cell.display_lines(120)
+                        .into_iter()
+                        .map(|line| line.to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            history.contains("hi"),
+            "expected resumed widget to replay the saved user message, got: {history:?}"
+        );
+        assert!(
+            history.contains("Hi."),
+            "expected resumed widget to replay the saved assistant message, got: {history:?}"
+        );
+
+        client.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn build_forked_app_server_session_replays_rollout_history() -> Result<()> {
+        let (app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let client = start_test_app_server_client(app.config.clone()).await;
+        let server = client.thread_manager();
+        let model = codex_core::test_support::get_model_offline(app.config.model.as_deref());
+        let session_telemetry = test_session_telemetry(&app.config, model.as_str());
+
+        let init = crate::chatwidget::ChatWidgetInit {
+            config: app.config.clone(),
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            app_event_tx: app.app_event_tx.clone(),
+            initial_user_message: None,
+            enhanced_keys_supported: false,
+            auth_manager: app.auth_manager.clone(),
+            models_manager: server.get_models_manager(),
+            feedback: app.feedback.clone(),
+            is_first_run: false,
+            feedback_audience: FeedbackAudience::External,
+            model: Some(model),
+            startup_tooltip_override: None,
+            status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
+            session_telemetry,
+        };
+
+        let (_rollout_dir, fixture_path) = write_test_rollout_fixture_with_messages(vec![
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "hi".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            }),
+            EventMsg::AgentMessage(AgentMessageEvent {
+                message: "Hi.".to_string(),
+                phase: None,
+            }),
+        ])?;
+        let target = crate::resume_picker::SessionTarget {
+            path: fixture_path,
+            thread_id: ThreadId::new(),
+        };
+
+        let (_chat, _thread_id, session_configured) =
+            App::build_forked_app_server_session(client.requester(), server, init, target).await?;
+
+        let initial_messages = session_configured
+            .initial_messages
+            .as_ref()
+            .expect("forked session should carry initial messages for transcript replay");
+        assert_eq!(initial_messages.len(), 2);
+
+        let history = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::InsertHistoryCell(cell) => Some(
+                    cell.display_lines(120)
+                        .into_iter()
+                        .map(|line| line.to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            history.contains("hi"),
+            "expected forked widget to replay the saved user message, got: {history:?}"
+        );
+        assert!(
+            history.contains("Hi."),
+            "expected forked widget to replay the saved assistant message, got: {history:?}"
         );
 
         client.shutdown().await?;
