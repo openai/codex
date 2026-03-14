@@ -385,26 +385,23 @@ struct McpToolApprovalMetadata {
     connector_description: Option<String>,
     tool_title: Option<String>,
     tool_description: Option<String>,
-    resource_uri: Option<String>,
+    codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
-const MCP_TOOL_RESOURCE_URI_META_KEY: &str = "resource_uri";
+const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
 
 fn build_mcp_tool_call_request_meta(
     server: &str,
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> Option<serde_json::Value> {
-    let resource_uri = if server == CODEX_APPS_MCP_SERVER_NAME {
-        metadata
-            .and_then(|metadata| metadata.resource_uri.as_deref())
-            .map(str::trim)
-            .filter(|resource_uri| !resource_uri.is_empty())
-    } else {
-        None
-    }?;
+    if server != CODEX_APPS_MCP_SERVER_NAME {
+        return None;
+    }
+
+    let codex_apps_meta = metadata.and_then(|metadata| metadata.codex_apps_meta.as_ref())?;
 
     Some(serde_json::json!({
-        MCP_TOOL_RESOURCE_URI_META_KEY: resource_uri,
+        MCP_TOOL_CODEX_APPS_META_KEY: codex_apps_meta,
     }))
 }
 
@@ -769,15 +766,13 @@ async fn lookup_mcp_tool_metadata(
         connector_description,
         tool_title: tool_info.tool.title,
         tool_description: tool_info.tool.description.map(std::borrow::Cow::into_owned),
-        resource_uri: tool_info
+        codex_apps_meta: tool_info
             .tool
             .meta
             .as_ref()
-            .and_then(|meta| meta.get(MCP_TOOL_RESOURCE_URI_META_KEY))
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|resource_uri| !resource_uri.is_empty())
-            .map(str::to_string),
+            .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
+            .and_then(serde_json::Value::as_object)
+            .cloned(),
     })
 }
 

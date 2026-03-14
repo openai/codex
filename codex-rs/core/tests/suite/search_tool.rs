@@ -411,7 +411,11 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
             .expect("tool call should succeed")
             .structured_content,
         Some(json!({
-            "resource_uri": CALENDAR_CREATE_EVENT_RESOURCE_URI,
+            "_codex_apps": {
+                "resource_uri": CALENDAR_CREATE_EVENT_RESOURCE_URI,
+                "contains_mcp_source": true,
+                "connector_id": "calendar",
+            },
         }))
     );
 

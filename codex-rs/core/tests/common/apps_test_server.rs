@@ -179,7 +179,11 @@ impl Respond for CodexAppsJsonRpcResponder {
                                     "connector_id": CONNECTOR_ID,
                                     "connector_name": self.connector_name.clone(),
                                     "connector_description": self.connector_description.clone(),
-                                    "resource_uri": CALENDAR_CREATE_EVENT_RESOURCE_URI
+                                    "_codex_apps": {
+                                        "resource_uri": CALENDAR_CREATE_EVENT_RESOURCE_URI,
+                                        "contains_mcp_source": true,
+                                        "connector_id": CONNECTOR_ID
+                                    }
                                 }
                             },
                             {
@@ -197,7 +201,11 @@ impl Respond for CodexAppsJsonRpcResponder {
                                     "connector_id": CONNECTOR_ID,
                                     "connector_name": self.connector_name.clone(),
                                     "connector_description": self.connector_description.clone(),
-                                    "resource_uri": CALENDAR_LIST_EVENTS_RESOURCE_URI
+                                    "_codex_apps": {
+                                        "resource_uri": CALENDAR_LIST_EVENTS_RESOURCE_URI,
+                                        "contains_mcp_source": true,
+                                        "connector_id": CONNECTOR_ID
+                                    }
                                 }
                             }
                         ],
@@ -219,9 +227,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                     .pointer("/params/arguments/starts_at")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let resource_uri = body
-                    .pointer("/params/_meta/resource_uri")
-                    .and_then(Value::as_str);
+                let codex_apps_meta = body.pointer("/params/_meta/_codex_apps").cloned();
 
                 ResponseTemplate::new(200).set_body_json(json!({
                     "jsonrpc": "2.0",
@@ -232,7 +238,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                             "text": format!("called {tool_name} for {title} at {starts_at}")
                         }],
                         "structuredContent": {
-                            "resource_uri": resource_uri,
+                            "_codex_apps": codex_apps_meta,
                         },
                         "isError": false
                     }
