@@ -221,8 +221,8 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() {
 fn guardian_assessment_action_value_redacts_apply_patch_patch_text() {
     let cwd = PathBuf::from("/tmp");
     let file = AbsolutePathBuf::try_from("/tmp/guardian.txt").expect("absolute path");
-    let expected_cwd = cwd.to_string_lossy().replace('\\', "/");
-    let expected_file = file.to_string_lossy().replace('\\', "/");
+    let expected_cwd = serde_json::to_value(&cwd).expect("serialize cwd");
+    let expected_file = serde_json::to_value(&file).expect("serialize file");
     let action = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
         cwd,
