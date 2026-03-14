@@ -1285,6 +1285,17 @@ impl App {
         self.register_thread_event_channel(thread_id, session);
     }
 
+    async fn activate_primary_app_server_thread(
+        &mut self,
+        thread_id: ThreadId,
+        session_configured: SessionConfiguredEvent,
+    ) {
+        self.primary_thread_id = Some(thread_id);
+        self.primary_session_configured = Some(session_configured.clone());
+        self.attach_app_server_managed_thread(thread_id, session_configured);
+        self.activate_thread_channel(thread_id).await;
+    }
+
     /// Register a thread whose events are polled directly from
     /// `CodexThread::next_event()`. Both the event channel and a listener
     /// task are created.
@@ -1962,9 +1973,8 @@ impl App {
             Ok((chat_widget, thread_id, session_configured)) => {
                 self.chat_widget = chat_widget;
                 self.reset_thread_event_state();
-                self.primary_thread_id = Some(thread_id);
-                self.primary_session_configured = Some(session_configured.clone());
-                self.attach_app_server_managed_thread(thread_id, session_configured);
+                self.activate_primary_app_server_thread(thread_id, session_configured)
+                    .await;
 
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
@@ -2361,10 +2371,8 @@ impl App {
             pending_primary_events: VecDeque::new(),
         };
         if let Some((thread_id, session_configured)) = fresh_app_server_bootstrap {
-            app.primary_thread_id = Some(thread_id);
-            app.primary_session_configured = Some(session_configured.clone());
-            app.attach_app_server_managed_thread(thread_id, session_configured);
-            app.activate_thread_channel(thread_id).await;
+            app.activate_primary_app_server_thread(thread_id, session_configured)
+                .await;
         }
         if let Some((thread_id, session_configured, thread)) = initial_direct_bootstrap {
             app.primary_thread_id = Some(thread_id);
@@ -2623,7 +2631,14 @@ impl App {
             return Ok(());
         }
 
-        let event = result.map_err(|err| color_eyre::eyre::eyre!(err))?;
+        let event = match result {
+            Ok(event) => event,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to refresh skills list: {err}"));
+                return Ok(());
+            }
+        };
         emit_skill_load_warnings(&self.app_event_tx, &errors_for_cwd(&current_cwd, &event));
         self.chat_widget.set_skills_from_response(&event);
         self.chat_widget.refresh_plugin_mentions();
