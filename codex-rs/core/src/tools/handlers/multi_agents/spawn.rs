@@ -147,6 +147,7 @@ impl ToolHandler for Handler {
                     prompt,
                     model: effective_model,
                     reasoning_effort: effective_reasoning_effort,
+                    spawn_mode: AgentSpawnMode::Spawn,
                     status,
                 }
                 .into(),

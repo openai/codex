@@ -9,6 +9,7 @@ use crate::render::line_utils::prefix_lines;
 use crate::text_formatting::truncate_text;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::AgentSpawnMode;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentRef;
@@ -611,6 +612,7 @@ mod tests {
                 prompt: "Compute 11! and reply with just the integer result.".to_string(),
                 model: "gpt-5".to_string(),
                 reasoning_effort: ReasoningEffortConfig::High,
+                spawn_mode: AgentSpawnMode::Spawn,
                 status: AgentStatus::PendingInit,
             },
             Some(&SpawnRequestSummary {
@@ -749,6 +751,7 @@ mod tests {
                 prompt: String::new(),
                 model: "gpt-5".to_string(),
                 reasoning_effort: ReasoningEffortConfig::High,
+                spawn_mode: AgentSpawnMode::Spawn,
                 status: AgentStatus::PendingInit,
             },
             Some(&SpawnRequestSummary {
