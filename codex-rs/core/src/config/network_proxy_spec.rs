@@ -1,5 +1,6 @@
 use crate::config_loader::NetworkConstraints;
 use async_trait::async_trait;
+use codex_execpolicy::Policy;
 use codex_network_proxy::BlockedRequestObserver;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigState;
@@ -13,8 +14,10 @@ use codex_network_proxy::NetworkProxyHandle;
 use codex_network_proxy::NetworkProxyState;
 use codex_network_proxy::build_config_state;
 use codex_network_proxy::host_and_port_from_network_addr;
+use codex_network_proxy::normalize_host;
 use codex_network_proxy::validate_policy_against_constraints;
 use codex_protocol::protocol::SandboxPolicy;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,6 +154,21 @@ impl NetworkProxySpec {
         Ok(StartedNetworkProxy::new(proxy, handle))
     }
 
+    pub(crate) fn with_exec_policy_network_rules(
+        &self,
+        exec_policy: &Policy,
+    ) -> std::io::Result<Self> {
+        let mut spec = self.clone();
+        apply_exec_policy_network_rules(&mut spec.config, exec_policy);
+        validate_policy_against_constraints(&spec.config, &spec.constraints).map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("network proxy constraints are invalid: {err}"),
+            )
+        })?;
+        Ok(spec)
+    }
+
     fn build_state_with_audit_metadata(
         &self,
         audit_metadata: NetworkProxyAuditMetadata,
@@ -277,6 +295,41 @@ impl NetworkProxySpec {
         }
         managed
     }
+}
+
+fn apply_exec_policy_network_rules(config: &mut NetworkProxyConfig, exec_policy: &Policy) {
+    let (allowed_domains, denied_domains) = exec_policy.compiled_network_domains();
+    upsert_network_domains(
+        &mut config.network.allowed_domains,
+        &mut config.network.denied_domains,
+        allowed_domains,
+    );
+    upsert_network_domains(
+        &mut config.network.denied_domains,
+        &mut config.network.allowed_domains,
+        denied_domains,
+    );
+}
+
+fn upsert_network_domains(
+    target: &mut Vec<String>,
+    opposite: &mut Vec<String>,
+    hosts: Vec<String>,
+) {
+    let mut incoming = HashSet::new();
+    let mut deduped_hosts = Vec::new();
+    for host in hosts {
+        if incoming.insert(host.clone()) {
+            deduped_hosts.push(host);
+        }
+    }
+    if incoming.is_empty() {
+        return;
+    }
+
+    opposite.retain(|entry| !incoming.contains(&normalize_host(entry)));
+    target.retain(|entry| !incoming.contains(&normalize_host(entry)));
+    target.extend(deduped_hosts);
 }
 
 #[cfg(test)]

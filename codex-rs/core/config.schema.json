@@ -168,6 +168,14 @@
       "description": "Tool settings for a single app.",
       "type": "object"
     },
+    "ApprovalsReviewer": {
+      "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
+      "enum": [
+        "user",
+        "guardian_subagent"
+      ],
+      "type": "string"
+    },
     "AppsConfigToml": {
       "additionalProperties": {
         "$ref": "#/definitions/AppConfig"
@@ -304,6 +312,9 @@
         "approval_policy": {
           "$ref": "#/definitions/AskForApproval"
         },
+        "approvals_reviewer": {
+          "$ref": "#/definitions/ApprovalsReviewer"
+        },
         "chatgpt_base_url": {
           "type": "string"
         },
@@ -337,6 +348,9 @@
               "type": "boolean"
             },
             "code_mode": {
+              "type": "boolean"
+            },
+            "code_mode_only": {
               "type": "boolean"
             },
             "codex_git_commit": {
@@ -382,9 +396,6 @@
               "type": "boolean"
             },
             "fast_mode": {
-              "type": "boolean"
-            },
-            "guardian_approval": {
               "type": "boolean"
             },
             "image_detail_original": {
@@ -463,6 +474,9 @@
               "type": "boolean"
             },
             "skill_mcp_dependency_install": {
+              "type": "boolean"
+            },
+            "smart_approvals": {
               "type": "boolean"
             },
             "sqlite": {
@@ -1766,6 +1780,14 @@
       ],
       "description": "Default approval policy for executing commands."
     },
+    "approvals_reviewer": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ApprovalsReviewer"
+        }
+      ],
+      "description": "Configures who approval requests are routed to for review once they have been escalated. This does not disable separate safety checks such as ARC."
+    },
     "apps": {
       "allOf": [
         {
@@ -1880,6 +1902,9 @@
         "code_mode": {
           "type": "boolean"
         },
+        "code_mode_only": {
+          "type": "boolean"
+        },
         "codex_git_commit": {
           "type": "boolean"
         },
@@ -1923,9 +1948,6 @@
           "type": "boolean"
         },
         "fast_mode": {
-          "type": "boolean"
-        },
-        "guardian_approval": {
           "type": "boolean"
         },
         "image_detail_original": {
@@ -2004,6 +2026,9 @@
           "type": "boolean"
         },
         "skill_mcp_dependency_install": {
+          "type": "boolean"
+        },
+        "smart_approvals": {
           "type": "boolean"
         },
         "sqlite": {
@@ -2198,7 +2223,7 @@
         "$ref": "#/definitions/ModelProviderInfo"
       },
       "default": {},
-      "description": "User-defined provider entries that extend/override the built-in list.",
+      "description": "User-defined provider entries that extend the built-in list. Built-in IDs cannot be overridden.",
       "type": "object"
     },
     "model_reasoning_effort": {
@@ -2234,6 +2259,10 @@
         "type": "string"
       },
       "type": "array"
+    },
+    "openai_base_url": {
+      "description": "Base URL override for the built-in `openai` model provider.",
+      "type": "string"
     },
     "oss_provider": {
       "description": "Preferred OSS provider for local models, e.g. \"lmstudio\" or \"ollama\".",

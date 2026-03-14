@@ -14,7 +14,7 @@ pub(crate) struct Handler;
 
 #[async_trait]
 impl ToolHandler for Handler {
-    type Output = WaitResult;
+    type Output = WaitAgentResult;
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -153,7 +153,7 @@ impl ToolHandler for Handler {
 
         let statuses_map = statuses.clone().into_iter().collect::<HashMap<_, _>>();
         let agent_statuses = build_wait_agent_statuses(&statuses_map, &receiver_agents);
-        let result = WaitResult {
+        let result = WaitAgentResult {
             status: statuses_map.clone(),
             timed_out: statuses.is_empty(),
         };
@@ -182,14 +182,14 @@ struct WaitArgs {
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub(crate) struct WaitResult {
+pub(crate) struct WaitAgentResult {
     pub(crate) status: HashMap<ThreadId, AgentStatus>,
     pub(crate) timed_out: bool,
 }
 
-impl ToolOutput for WaitResult {
+impl ToolOutput for WaitAgentResult {
     fn log_preview(&self) -> String {
-        tool_output_json_text(self, "wait")
+        tool_output_json_text(self, "wait_agent")
     }
 
     fn success_for_logging(&self) -> bool {
@@ -197,11 +197,11 @@ impl ToolOutput for WaitResult {
     }
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
-        tool_output_response_item(call_id, payload, self, None, "wait")
+        tool_output_response_item(call_id, payload, self, None, "wait_agent")
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
-        tool_output_code_mode_result(self, "wait")
+        tool_output_code_mode_result(self, "wait_agent")
     }
 }
 

@@ -8,7 +8,11 @@ use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::test_support;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ContentItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::ReviewDecision;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses::ev_assistant_message;
@@ -24,6 +28,7 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 #[test]
@@ -160,6 +165,7 @@ fn guardian_truncate_text_keeps_prefix_suffix_and_xml_marker() {
 fn format_guardian_action_pretty_truncates_large_string_fields() {
     let patch = "line\n".repeat(10_000);
     let action = GuardianApprovalRequest::ApplyPatch {
+        id: "patch-1".to_string(),
         cwd: PathBuf::from("/tmp"),
         files: Vec::new(),
         change_count: 1usize,
@@ -175,6 +181,7 @@ fn format_guardian_action_pretty_truncates_large_string_fields() {
 #[test]
 fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() {
     let action = GuardianApprovalRequest::McpToolCall {
+        id: "call-1".to_string(),
         server: "mcp_server".to_string(),
         tool_name: "browser_navigate".to_string(),
         arguments: Some(serde_json::json!({
@@ -209,6 +216,123 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() {
             },
         })
     );
+}
+
+#[test]
+fn guardian_assessment_action_value_redacts_apply_patch_patch_text() {
+    let (cwd, file) = if cfg!(windows) {
+        (r"C:\tmp", r"C:\tmp\guardian.txt")
+    } else {
+        ("/tmp", "/tmp/guardian.txt")
+    };
+    let cwd = PathBuf::from(cwd);
+    let file = AbsolutePathBuf::try_from(file).expect("absolute path");
+    let action = GuardianApprovalRequest::ApplyPatch {
+        id: "patch-1".to_string(),
+        cwd: cwd.clone(),
+        files: vec![file.clone()],
+        change_count: 1usize,
+        patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+secret\n*** End Patch"
+            .to_string(),
+    };
+
+    assert_eq!(
+        guardian_assessment_action_value(&action),
+        serde_json::json!({
+            "tool": "apply_patch",
+            "cwd": cwd,
+            "files": [file],
+            "change_count": 1,
+        })
+    );
+}
+
+#[test]
+fn guardian_request_turn_id_prefers_network_access_owner_turn() {
+    let network_access = GuardianApprovalRequest::NetworkAccess {
+        id: "network-1".to_string(),
+        turn_id: "owner-turn".to_string(),
+        target: "https://example.com:443".to_string(),
+        host: "example.com".to_string(),
+        protocol: NetworkApprovalProtocol::Https,
+        port: 443,
+    };
+    let apply_patch = GuardianApprovalRequest::ApplyPatch {
+        id: "patch-1".to_string(),
+        cwd: PathBuf::from("/tmp"),
+        files: vec![AbsolutePathBuf::try_from("/tmp/guardian.txt").expect("absolute path")],
+        change_count: 1usize,
+        patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+hello\n*** End Patch"
+            .to_string(),
+    };
+
+    assert_eq!(
+        guardian_request_turn_id(&network_access, "fallback-turn"),
+        "owner-turn"
+    );
+    assert_eq!(
+        guardian_request_turn_id(&apply_patch, "fallback-turn"),
+        "fallback-turn"
+    );
+}
+
+#[tokio::test]
+async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
+    let (session, turn, rx) = crate::codex::make_session_and_context_with_rx().await;
+    let cancel_token = CancellationToken::new();
+    cancel_token.cancel();
+
+    let decision = review_approval_request_with_cancel(
+        &session,
+        &turn,
+        GuardianApprovalRequest::ApplyPatch {
+            id: "patch-1".to_string(),
+            cwd: PathBuf::from("/tmp"),
+            files: vec![AbsolutePathBuf::try_from("/tmp/guardian.txt").expect("absolute path")],
+            change_count: 1usize,
+            patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+hello\n*** End Patch"
+                .to_string(),
+        },
+        None,
+        cancel_token,
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Abort);
+
+    let mut guardian_statuses = Vec::new();
+    let mut warnings = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        match event.msg {
+            EventMsg::GuardianAssessment(event) => guardian_statuses.push(event.status),
+            EventMsg::Warning(event) => warnings.push(event.message),
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        guardian_statuses,
+        vec![
+            GuardianAssessmentStatus::InProgress,
+            GuardianAssessmentStatus::Aborted,
+        ]
+    );
+    assert!(warnings.is_empty());
+}
+
+#[tokio::test]
+async fn routes_approval_to_guardian_requires_auto_only_review_policy() {
+    let (_session, mut turn) = crate::codex::make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::User;
+    turn.config = Arc::new(config.clone());
+
+    assert!(!routes_approval_to_guardian(&turn));
+
+    config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+    turn.config = Arc::new(config);
+
+    assert!(routes_approval_to_guardian(&turn));
 }
 
 #[test]
@@ -290,7 +414,9 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     .await;
 
     let (mut session, mut turn) = crate::codex::make_session_and_context().await;
+    let temp_cwd = TempDir::new()?;
     let mut config = (*turn.config).clone();
+    config.cwd = temp_cwd.path().to_path_buf();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
     let models_manager = Arc::new(test_support::models_manager_with_provider(
@@ -349,6 +475,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         session.as_ref(),
         Some("Sandbox denied outbound git push to github.com.".to_string()),
         GuardianApprovalRequest::Shell {
+            id: "shell-1".to_string(),
             command: vec![
                 "git".to_string(),
                 "push".to_string(),
@@ -385,7 +512,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
             context_snapshot::format_labeled_requests_snapshot(
                 "Guardian review request layout",
                 &[("Guardian Review Request", &request)],
-                &ContextSnapshotOptions::default(),
+                &ContextSnapshotOptions::default().strip_capability_instructions(),
             )
         );
     });

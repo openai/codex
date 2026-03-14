@@ -1,13 +1,18 @@
 use super::*;
 use crate::codex::make_session_and_context;
 use crate::config::test_config;
+use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use crate::models_manager::manager::RefreshStrategy;
 use assert_matches::assert_matches;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelsResponse;
+use core_test_support::responses::mount_models_once;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 use tempfile::tempdir;
+use wiremock::MockServer;
 
 fn user_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -149,4 +154,34 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
     assert!(report.submit_failed.is_empty());
     assert!(report.timed_out.is_empty());
     assert!(manager.list_thread_ids().await.is_empty());
+}
+
+#[tokio::test]
+async fn new_uses_configured_openai_provider_for_model_refresh() {
+    let server = MockServer::start().await;
+    let models_mock = mount_models_once(&server, ModelsResponse { models: vec![] }).await;
+
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config();
+    config.codex_home = temp_dir.path().join("codex-home");
+    config.cwd = config.codex_home.clone();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+    config.model_catalog = None;
+    config
+        .model_providers
+        .get_mut("openai")
+        .expect("openai provider should exist")
+        .base_url = Some(server.uri());
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager,
+        SessionSource::Exec,
+        CollaborationModesConfig::default(),
+    );
+
+    let _ = manager.list_models(RefreshStrategy::Online).await;
+    assert_eq!(models_mock.requests().len(), 1);
 }

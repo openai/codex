@@ -77,7 +77,15 @@ pub(super) struct SessionAudioFormat {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionAudioOutput {
-    pub(super) voice: String,
+    pub(super) voice: SessionAudioVoice,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub(super) enum SessionAudioVoice {
+    #[serde(rename = "fathom")]
+    Fathom,
+    #[serde(rename = "alloy")]
+    Alloy,
 }
 
 #[derive(Debug, Clone, Serialize)]

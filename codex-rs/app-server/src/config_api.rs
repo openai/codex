@@ -305,6 +305,7 @@ mod tests {
                 ]),
             }),
             mcp_servers: None,
+            apps: None,
             rules: None,
             enforce_residency: Some(CoreResidencyRequirement::Us),
             network: Some(CoreNetworkRequirementsToml {
@@ -375,6 +376,7 @@ mod tests {
             allowed_web_search_modes: Some(Vec::new()),
             feature_requirements: None,
             mcp_servers: None,
+            apps: None,
             rules: None,
             enforce_residency: None,
             network: None,

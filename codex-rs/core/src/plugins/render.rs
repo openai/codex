@@ -1,4 +1,6 @@
 use crate::plugins::PluginCapabilitySummary;
+use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_CLOSE_TAG;
+use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
 
 pub(crate) fn render_plugins_section(plugins: &[PluginCapabilitySummary]) -> Option<String> {
     if plugins.is_empty() {
@@ -31,7 +33,10 @@ pub(crate) fn render_plugins_section(plugins: &[PluginCapabilitySummary]) -> Opt
             .to_string(),
     );
 
-    Some(lines.join("\n"))
+    let body = lines.join("\n");
+    Some(format!(
+        "{PLUGINS_INSTRUCTIONS_OPEN_TAG}\n{body}\n{PLUGINS_INSTRUCTIONS_CLOSE_TAG}"
+    ))
 }
 
 pub(crate) fn render_explicit_plugin_instructions(
