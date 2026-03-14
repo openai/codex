@@ -705,6 +705,7 @@ pub(crate) struct App {
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
+    app_server_managed_thread_ids: HashSet<ThreadId>,
     agent_navigation: AgentNavigationState,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<Event>>,
@@ -1284,6 +1285,7 @@ impl App {
         session: SessionConfiguredEvent,
     ) {
         self.register_thread_event_channel(thread_id, session);
+        self.app_server_managed_thread_ids.insert(thread_id);
     }
 
     async fn activate_primary_app_server_thread(
@@ -1307,7 +1309,12 @@ impl App {
         session: SessionConfiguredEvent,
     ) {
         self.register_thread_event_channel(thread_id, session);
+        self.app_server_managed_thread_ids.remove(&thread_id);
         self.spawn_direct_thread_event_listener(thread_id, thread);
+    }
+
+    fn should_route_app_server_legacy_thread_event(&self, thread_id: ThreadId) -> bool {
+        self.app_server_managed_thread_ids.contains(&thread_id)
     }
 
     async fn activate_thread_channel(&mut self, thread_id: ThreadId) {
@@ -1833,6 +1840,7 @@ impl App {
     fn reset_thread_event_state(&mut self) {
         self.abort_all_thread_event_listeners();
         self.thread_event_channels.clear();
+        self.app_server_managed_thread_ids.clear();
         self.agent_navigation.clear();
         self.active_thread_id = None;
         self.active_thread_rx = None;
@@ -1840,6 +1848,17 @@ impl App {
         self.pending_primary_events.clear();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
+    }
+
+    fn handle_app_server_event_stream_closed(&mut self) -> AppRunControl {
+        tracing::warn!("app-server event stream closed");
+        if self.app_server_managed_thread_ids.is_empty() {
+            return AppRunControl::Continue;
+        }
+
+        AppRunControl::Exit(ExitReason::Fatal(
+            "app-server event stream closed while managing thread events".to_string(),
+        ))
     }
 
     /// Start a brand-new thread via the app-server `thread/start` RPC and
@@ -2405,6 +2424,7 @@ impl App {
             latest_skills_list_generation_by_cwd: HashMap::new(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
+            app_server_managed_thread_ids: HashSet::new(),
             agent_navigation: AgentNavigationState::default(),
             active_thread_id: None,
             active_thread_rx: None,
@@ -2528,13 +2548,15 @@ impl App {
                     }
                     app_server_event = app_server.next_event(), if listen_for_app_server_events => {
                         match app_server_event {
-                            Some(event) => app.handle_app_server_event(&app_server, event).await,
+                            Some(event) => {
+                                app.handle_app_server_event(&app_server, event).await;
+                                AppRunControl::Continue
+                            }
                             None => {
                                 listen_for_app_server_events = false;
-                                tracing::warn!("app-server event stream closed");
+                                app.handle_app_server_event_stream_closed()
                             }
                         }
-                        AppRunControl::Continue
                     }
                     // Listen on new thread creation due to collab tools.
                     created = thread_created_rx.recv(), if listen_for_threads => {
@@ -4511,6 +4533,7 @@ mod tests {
     use codex_app_server_client::InProcessClientStartArgs;
     use codex_app_server_client::InProcessServerEvent;
     use codex_app_server_protocol::ClientRequest;
+    use codex_app_server_protocol::JSONRPCNotification;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::SkillsChangedNotification;
     use codex_app_server_protocol::ThreadStartParams;
@@ -4808,32 +4831,14 @@ mod tests {
     async fn attach_app_server_managed_thread_registers_channel_without_listener() -> Result<()> {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();
-        let session = SessionConfiguredEvent {
-            session_id: thread_id,
-            forked_from_id: None,
-            thread_name: Some("app-server".to_string()),
-            model: "gpt-test".to_string(),
-            model_provider_id: "test-provider".to_string(),
-            service_tier: None,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            cwd: PathBuf::from("/tmp/project"),
-            reasoning_effort: None,
-            history_log_id: 0,
-            history_entry_count: 0,
-            initial_messages: None,
-            network_proxy: None,
-            rollout_path: Some(PathBuf::from("/tmp/project/rollout.jsonl")),
-        };
-
-        app.attach_app_server_managed_thread(thread_id, session);
+        app.attach_app_server_managed_thread(thread_id, test_app_server_session(thread_id));
 
         assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
         assert_eq!(
             app.thread_event_listener_tasks.contains_key(&thread_id),
             false
         );
+        assert_eq!(app.app_server_managed_thread_ids.contains(&thread_id), true);
         Ok(())
     }
 
@@ -4841,24 +4846,7 @@ mod tests {
     async fn activate_primary_app_server_thread_registers_active_receiver() -> Result<()> {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();
-        let session = SessionConfiguredEvent {
-            session_id: thread_id,
-            forked_from_id: None,
-            thread_name: Some("app-server".to_string()),
-            model: "gpt-test".to_string(),
-            model_provider_id: "test-provider".to_string(),
-            service_tier: None,
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: ApprovalsReviewer::User,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            cwd: PathBuf::from("/tmp/project"),
-            reasoning_effort: None,
-            history_log_id: 0,
-            history_entry_count: 0,
-            initial_messages: None,
-            network_proxy: None,
-            rollout_path: Some(PathBuf::from("/tmp/project/rollout.jsonl")),
-        };
+        let session = test_app_server_session(thread_id);
 
         app.activate_primary_app_server_thread(thread_id, session.clone())
             .await;
@@ -4883,6 +4871,7 @@ mod tests {
                 .is_none(),
             "active thread receiver should be moved out of the stored channel"
         );
+        assert_eq!(app.app_server_managed_thread_ids.contains(&thread_id), true);
 
         Ok(())
     }
@@ -4902,8 +4891,87 @@ mod tests {
             app.thread_event_listener_tasks.contains_key(&thread_id),
             true
         );
+        assert_eq!(
+            app.app_server_managed_thread_ids.contains(&thread_id),
+            false
+        );
 
         app.reset_thread_event_state();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_notifications_only_forward_for_app_server_managed_threads() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let client = start_test_app_server_client(app.config.clone()).await;
+        let thread_id = ThreadId::new();
+        let event = Event {
+            id: "ev-1".to_string(),
+            msg: EventMsg::ShutdownComplete,
+        };
+        let mut params = serde_json::to_value(&event)?;
+        params
+            .as_object_mut()
+            .expect("event should serialize to an object")
+            .insert(
+                "conversationId".to_string(),
+                Value::String(thread_id.to_string()),
+            );
+        let notification = JSONRPCNotification {
+            method: "codex/event/shutdownComplete".to_string(),
+            params: Some(params),
+        };
+
+        app.handle_app_server_event(
+            &client,
+            InProcessServerEvent::LegacyNotification(notification.clone()),
+        )
+        .await;
+
+        assert_matches!(app_event_rx.try_recv(), Err(TryRecvError::Empty));
+
+        app.attach_app_server_managed_thread(thread_id, test_app_server_session(thread_id));
+        app.handle_app_server_event(
+            &client,
+            InProcessServerEvent::LegacyNotification(notification),
+        )
+        .await;
+
+        assert_matches!(
+            app_event_rx.try_recv(),
+            Ok(AppEvent::ThreadEvent { thread_id: routed_thread_id, event: routed_event })
+                if routed_thread_id == thread_id
+                    && matches!(routed_event.msg, EventMsg::ShutdownComplete)
+        );
+
+        client.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn app_server_event_stream_closed_is_fatal_for_managed_threads() -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.attach_app_server_managed_thread(thread_id, test_app_server_session(thread_id));
+
+        assert_matches!(
+            app.handle_app_server_event_stream_closed(),
+            AppRunControl::Exit(ExitReason::Fatal(message))
+                if message == "app-server event stream closed while managing thread events"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn app_server_event_stream_closed_is_nonfatal_without_managed_threads() -> Result<()> {
+        let mut app = make_test_app().await;
+
+        assert_matches!(
+            app.handle_app_server_event_stream_closed(),
+            AppRunControl::Continue
+        );
+
         Ok(())
     }
 
@@ -6814,6 +6882,7 @@ guardian_approval = true
             latest_skills_list_generation_by_cwd: HashMap::new(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
+            app_server_managed_thread_ids: HashSet::new(),
             agent_navigation: AgentNavigationState::default(),
             active_thread_id: None,
             active_thread_rx: None,
@@ -6880,6 +6949,7 @@ guardian_approval = true
                 latest_skills_list_generation_by_cwd: HashMap::new(),
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
+                app_server_managed_thread_ids: HashSet::new(),
                 agent_navigation: AgentNavigationState::default(),
                 active_thread_id: None,
                 active_thread_rx: None,
@@ -6911,6 +6981,27 @@ guardian_approval = true
         })
         .await
         .expect("in-process app-server client should start")
+    }
+
+    fn test_app_server_session(thread_id: ThreadId) -> SessionConfiguredEvent {
+        SessionConfiguredEvent {
+            session_id: thread_id,
+            forked_from_id: None,
+            thread_name: Some("app-server".to_string()),
+            model: "gpt-test".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: PathBuf::from("/tmp/project"),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::from("/tmp/project/rollout.jsonl")),
+        }
     }
 
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {

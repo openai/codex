@@ -44,6 +44,7 @@ impl App {
             InProcessServerEvent::LegacyNotification(notification) => {
                 if let Some((thread_id, event)) =
                     Self::legacy_notification_to_thread_event(notification)
+                    && self.should_route_app_server_legacy_thread_event(thread_id)
                 {
                     self.app_event_tx
                         .send(AppEvent::ThreadEvent { thread_id, event });
