@@ -646,6 +646,9 @@ pub(crate) struct App {
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) active_profile: Option<String>,
+    /// Handle for issuing typed RPC requests to the in-process app server
+    /// (e.g. `thread/start`). Cloneable — kept here so `start_fresh_session`
+    /// and similar flows can create threads without re-deriving the handle.
     app_server_requester: InProcessAppServerRequester,
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
@@ -1229,6 +1232,9 @@ impl App {
         }
     }
 
+    /// Create the per-thread event channel and pre-seed it with a
+    /// `SessionConfigured` event so that the first consumer to activate the
+    /// channel receives the session metadata without a separate code path.
     fn register_thread_event_channel(
         &mut self,
         thread_id: ThreadId,
@@ -1244,6 +1250,12 @@ impl App {
         );
     }
 
+    /// Spawn a tokio task that polls `thread.next_event()` in a loop and
+    /// forwards each event as `AppEvent::ThreadEvent`.
+    ///
+    /// Only used for `DirectCore` threads (resume/fork). App-server-managed
+    /// threads receive events through the app-server notification stream
+    /// instead; spawning a listener for those would duplicate events.
     fn spawn_direct_thread_event_listener(
         &mut self,
         thread_id: ThreadId,
@@ -1258,6 +1270,8 @@ impl App {
         self.thread_event_listener_tasks.insert(thread_id, handle);
     }
 
+    /// Register a thread whose events are delivered by the app-server
+    /// notification stream. No listener task is spawned.
     fn attach_app_server_managed_thread(
         &mut self,
         thread_id: ThreadId,
@@ -1266,6 +1280,9 @@ impl App {
         self.register_thread_event_channel(thread_id, session);
     }
 
+    /// Register a thread whose events are polled directly from
+    /// `CodexThread::next_event()`. Both the event channel and a listener
+    /// task are created.
     fn attach_direct_thread(
         &mut self,
         thread_id: ThreadId,
@@ -1808,6 +1825,13 @@ impl App {
         self.sync_active_agent_label();
     }
 
+    /// Start a brand-new thread via the app-server `thread/start` RPC and
+    /// return a fully-bootstrapped `ChatWidget` ready for rendering.
+    ///
+    /// This is the single codepath for fresh-session creation now that the TUI
+    /// no longer calls `ThreadManager::start_thread` directly. The caller is
+    /// responsible for attaching the returned `ThreadId` / `SessionConfiguredEvent`
+    /// to `App`'s thread-event bookkeeping via `attach_app_server_managed_thread`.
     async fn build_fresh_app_server_session(
         requester: InProcessAppServerRequester,
         server: Arc<ThreadManager>,
@@ -1849,6 +1873,11 @@ impl App {
         Ok((widget, thread_id, session_configured))
     }
 
+    /// Map the app-server `ThreadStartResponse` into the internal
+    /// `SessionConfiguredEvent` that the rest of the TUI consumes.
+    ///
+    /// Needs a reference to the `CodexThread` for fields not present in the
+    /// protocol response (currently just `rollout_path`).
     fn session_configured_from_thread_start_response(
         thread: &codex_core::CodexThread,
         response: ThreadStartResponse,

@@ -483,12 +483,30 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) session_telemetry: SessionTelemetry,
 }
 
+/// How a thread's runtime events reach the TUI.
+///
+/// Fresh sessions started via the app-server RPC surface receive events through
+/// the app-server's `LegacyNotification` stream — no per-thread listener task
+/// is needed. Resume/fork sessions that hold a direct `Arc<CodexThread>` still
+/// require a dedicated tokio task that polls `next_event()`.
+///
+/// `App` inspects this tag when attaching a thread to decide whether to spawn a
+/// listener task. Passing the wrong variant will either duplicate events
+/// (listener + app-server both forwarding) or silently lose them (no listener
+/// and no app-server route).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ThreadTransport {
+    /// Events arrive via the app-server notification stream; no listener task.
     AppServerManaged,
+    /// Events are polled from `CodexThread::next_event()` by a spawned task.
     DirectCore,
 }
 
+/// Everything a `ChatWidget` constructor needs to adopt a thread that already
+/// exists (started by the app-server or resumed/forked from history).
+///
+/// Callers must ensure that `transport` matches how the thread was actually
+/// created — the constructors `debug_assert` the expected variant.
 #[derive(Clone, Debug)]
 pub(crate) struct ExistingThreadBootstrap {
     pub session: SessionConfiguredEvent,
@@ -1078,6 +1096,12 @@ enum ReplayKind {
 }
 
 impl ChatWidget {
+    /// Build a widget for a resumed or forked thread whose events are polled
+    /// directly from `CodexThread::next_event()`.
+    ///
+    /// Session state is applied synchronously — the widget is fully configured
+    /// before it is returned, so no deferred `SessionConfigured` event is
+    /// expected from the event stream.
     pub(crate) fn new_from_existing_direct(
         common: ChatWidgetInit,
         thread: Arc<codex_core::CodexThread>,
@@ -1092,6 +1116,12 @@ impl ChatWidget {
         widget
     }
 
+    /// Build a widget for a thread started via the app-server `thread/start`
+    /// RPC, whose events will arrive through the app-server notification
+    /// stream rather than a per-thread listener.
+    ///
+    /// Like `new_from_existing_direct`, session state is applied
+    /// synchronously.
     pub(crate) fn new_from_existing_app_server(
         common: ChatWidgetInit,
         thread: Arc<codex_core::CodexThread>,
@@ -1391,6 +1421,13 @@ impl ChatWidget {
         self.run_session_bootstrap_side_effects(&event);
     }
 
+    /// Apply all widget state derived from a `SessionConfiguredEvent` — thread
+    /// identity, cwd, approval policy, model, rollout path, history, etc.
+    ///
+    /// This is the pure-state half of session bootstrap. It mutates `self` but
+    /// triggers no async side effects and sends no ops. Call
+    /// `run_session_bootstrap_side_effects` afterwards to kick off the side
+    /// effects (skills list, custom prompts, initial user message, redraw).
     fn apply_session_configured_state(&mut self, event: &SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
@@ -1462,6 +1499,13 @@ impl ChatWidget {
         }
     }
 
+    /// Trigger the side effects that follow session configuration: request
+    /// custom prompts and skills from core, submit any queued initial user
+    /// message, emit the fork event if applicable, and schedule a redraw.
+    ///
+    /// Must be called after `apply_session_configured_state` — the ops
+    /// submitted here depend on state set by that method (e.g. `cwd` for
+    /// skills listing).
     fn run_session_bootstrap_side_effects(&mut self, event: &SessionConfiguredEvent) {
         self.submit_op(Op::ListCustomPrompts);
         self.request_skills_list(Vec::new(), true);
