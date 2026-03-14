@@ -100,6 +100,26 @@ pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
 pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
+pub const AGENT_INBOX_KIND: &str = "agent_inbox";
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+pub struct AgentInboxPayload {
+    pub injected: bool,
+    pub kind: String,
+    pub sender_thread_id: ThreadId,
+    pub message: String,
+}
+
+impl AgentInboxPayload {
+    pub fn new(sender_thread_id: ThreadId, message: String) -> Self {
+        Self {
+            injected: true,
+            kind: AGENT_INBOX_KIND.to_string(),
+            sender_thread_id,
+            message,
+        }
+    }
+}
 
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -243,6 +263,9 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
     },
+
+    /// Inject non-user response items into an existing turn, or start a turn if needed.
+    InjectResponseItems { items: Vec<ResponseInputItem> },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
     /// for a turn of a [`crate::codex_thread::CodexThread`].
@@ -588,6 +611,7 @@ impl Op {
             Self::UserInputAnswer { .. } => "user_input_answer",
             Self::RequestPermissionsResponse { .. } => "request_permissions_response",
             Self::DynamicToolResponse { .. } => "dynamic_tool_response",
+            Self::InjectResponseItems { .. } => "inject_response_items",
             Self::AddToHistory { .. } => "add_to_history",
             Self::GetHistoryEntryRequest { .. } => "get_history_entry_request",
             Self::ListMcpTools => "list_mcp_tools",

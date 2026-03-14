@@ -33,6 +33,9 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
+#[cfg(windows)]
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+#[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 async fn wait_for_responses_request_count_to_stabilize(

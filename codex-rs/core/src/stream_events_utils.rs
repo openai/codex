@@ -458,6 +458,17 @@ fn completed_item_defers_mailbox_delivery_to_next_turn(
 
 pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Option<ResponseItem> {
     match input {
+        ResponseInputItem::FunctionCall {
+            name,
+            arguments,
+            call_id,
+        } => Some(ResponseItem::FunctionCall {
+            id: None,
+            name: name.clone(),
+            namespace: None,
+            arguments: arguments.clone(),
+            call_id: call_id.clone(),
+        }),
         ResponseInputItem::FunctionCallOutput { call_id, output } => {
             Some(ResponseItem::FunctionCallOutput {
                 call_id: call_id.clone(),

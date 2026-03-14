@@ -888,7 +888,7 @@ async fn turn_start_uses_migrated_pragmatic_personality_without_override_v2() ->
         "2025-01-01T00:00:00Z",
         "history user message",
         Some("mock_provider"),
-        /*git_info*/ None,
+        None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -1025,27 +1025,9 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     // Mock server: first turn requests a shell call (elicitation), then completes.
     // Second turn same, but we'll set approval_policy=never to avoid elicitation.
     let responses = vec![
-        create_shell_command_sse_response(
-            vec![
-                "python3".to_string(),
-                "-c".to_string(),
-                "print(42)".to_string(),
-            ],
-            /*workdir*/ None,
-            Some(5000),
-            "call1",
-        )?,
+        create_shell_command_sse_response(fast_shell_command(), None, Some(1000), "call1")?,
         create_final_assistant_message_sse_response("done 1")?,
-        create_shell_command_sse_response(
-            vec![
-                "python3".to_string(),
-                "-c".to_string(),
-                "print(42)".to_string(),
-            ],
-            /*workdir*/ None,
-            Some(5000),
-            "call2",
-        )?,
+        create_shell_command_sse_response(fast_shell_command(), None, Some(1000), "call2")?,
         create_final_assistant_message_sse_response("done 2")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
@@ -1170,6 +1152,23 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     Ok(())
 }
 
+fn fast_shell_command() -> Vec<String> {
+    if cfg!(windows) {
+        vec![
+            "cmd".to_string(),
+            "/d".to_string(),
+            "/c".to_string(),
+            "echo 42".to_string(),
+        ]
+    } else {
+        vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            "print(42)".to_string(),
+        ]
+    }
+}
+
 #[tokio::test]
 async fn turn_start_exec_approval_decline_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1186,7 +1185,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
-            /*workdir*/ None,
+            None,
             Some(5000),
             "call-decline",
         )?,
@@ -1331,14 +1330,14 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     let responses = vec![
         create_shell_command_sse_response(
             vec!["echo".to_string(), "first".to_string(), "turn".to_string()],
-            /*workdir*/ None,
+            None,
             Some(5000),
             "call-first",
         )?,
         create_final_assistant_message_sse_response("done first")?,
         create_shell_command_sse_response(
             vec!["echo".to_string(), "second".to_string(), "turn".to_string()],
-            /*workdir*/ None,
+            None,
             Some(5000),
             "call-second",
         )?,
