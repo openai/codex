@@ -8385,6 +8385,20 @@ async fn feedback_selection_popup_emits_serialized_slash_draft() {
 }
 
 #[tokio::test]
+async fn feedback_inline_args_respect_feedback_disabled_flag() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.config.feedback_enabled = false;
+
+    chat.handle_serialized_slash_command(UserMessage::from("/feedback bug".to_string()));
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(popup.contains("Sending feedback is disabled"));
+    assert!(popup.contains("This action is disabled by configuration."));
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
 async fn skills_menu_emits_serialized_slash_drafts() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 

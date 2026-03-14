@@ -5164,6 +5164,12 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Feedback => {
+                if !self.config.feedback_enabled {
+                    let params = crate::bottom_pane::feedback_disabled_params();
+                    self.bottom_pane.show_selection_view(params);
+                    self.request_redraw();
+                    return QueueReplayControl::Stop;
+                }
                 let args = match SlashCommandInvocation::parse_args(
                     &args_message.text,
                     "Usage: /feedback <bug|bad-result|good-result|safety-check|other>",
