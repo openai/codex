@@ -138,6 +138,7 @@ pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+const OPENAI_BASE_URL_ENV_VAR: &str = "OPENAI_BASE_URL";
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
@@ -1343,6 +1344,9 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
+    /// Base URL override for the built-in `openai` model provider.
+    pub openai_base_url: Option<String>,
+
     /// Machine-local realtime audio device preferences used by realtime voice.
     #[serde(default)]
     pub audio: Option<RealtimeAudioToml>,
@@ -2249,7 +2253,28 @@ impl Config {
         let agent_roles =
             agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
 
-        let mut model_providers = built_in_model_providers();
+        let openai_base_url = cfg
+            .openai_base_url
+            .clone()
+            .filter(|value| !value.is_empty());
+        let openai_base_url_from_env = std::env::var(OPENAI_BASE_URL_ENV_VAR)
+            .ok()
+            .filter(|value| !value.is_empty());
+        if openai_base_url_from_env.is_some() {
+            if openai_base_url.is_some() {
+                tracing::warn!(
+                    env_var = OPENAI_BASE_URL_ENV_VAR,
+                    "deprecated env var is ignored because `openai_base_url` is set in config.toml"
+                );
+            } else {
+                startup_warnings.push(format!(
+                    "`{OPENAI_BASE_URL_ENV_VAR}` is deprecated. Set `openai_base_url` in config.toml instead."
+                ));
+            }
+        }
+        let effective_openai_base_url = openai_base_url.or(openai_base_url_from_env);
+
+        let mut model_providers = built_in_model_providers(effective_openai_base_url);
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);

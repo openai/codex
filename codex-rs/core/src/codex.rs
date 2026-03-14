@@ -867,6 +867,7 @@ impl TurnContext {
             sandbox_policy: self.sandbox_policy.get(),
             windows_sandbox_level: self.windows_sandbox_level,
         })
+        .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_agent_roles(config.agent_roles.clone());
@@ -1156,12 +1157,22 @@ impl Session {
 
     async fn start_managed_network_proxy(
         spec: &crate::config::NetworkProxySpec,
+        exec_policy: &codex_execpolicy::Policy,
         sandbox_policy: &SandboxPolicy,
         network_policy_decider: Option<Arc<dyn codex_network_proxy::NetworkPolicyDecider>>,
         blocked_request_observer: Option<Arc<dyn codex_network_proxy::BlockedRequestObserver>>,
         managed_network_requirements_enabled: bool,
         audit_metadata: NetworkProxyAuditMetadata,
     ) -> anyhow::Result<(StartedNetworkProxy, SessionNetworkProxyRuntime)> {
+        let spec = spec
+            .with_exec_policy_network_rules(exec_policy)
+            .map_err(|err| {
+                tracing::warn!(
+                    "failed to apply execpolicy network rules to managed proxy; continuing with configured network policy: {err}"
+                );
+                err
+            })
+            .unwrap_or_else(|_| spec.clone());
         let network_proxy = spec
             .start_proxy(
                 sandbox_policy,
@@ -1255,6 +1266,9 @@ impl Session {
         session_telemetry: &SessionTelemetry,
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
+        user_shell: &shell::Shell,
+        shell_zsh_path: Option<&PathBuf>,
+        main_execve_wrapper_exe: Option<&PathBuf>,
         per_turn_config: Config,
         model_info: ModelInfo,
         models_manager: &ModelsManager,
@@ -1286,6 +1300,11 @@ impl Session {
             sandbox_policy: session_configuration.sandbox_policy.get(),
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         })
+        .with_unified_exec_shell_mode_for_session(
+            user_shell,
+            shell_zsh_path,
+            main_execve_wrapper_exe,
+        )
         .with_web_search_config(per_turn_config.web_search_config.clone())
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_agent_roles(per_turn_config.agent_roles.clone());
@@ -1677,8 +1696,10 @@ impl Session {
                 });
         let (network_proxy, session_network_proxy) =
             if let Some(spec) = config.permissions.network.as_ref() {
+                let current_exec_policy = exec_policy.current();
                 let (network_proxy, session_network_proxy) = Self::start_managed_network_proxy(
                     spec,
+                    current_exec_policy.as_ref(),
                     config.permissions.sandbox_policy.get(),
                     network_policy_decider.as_ref().map(Arc::clone),
                     blocked_request_observer.as_ref().map(Arc::clone),
@@ -2050,17 +2071,9 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
-
-                let reconstructed_rollout = self
-                    .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+                let previous_turn_settings = self
+                    .apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
-                let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
-                self.set_previous_turn_settings(previous_turn_settings.clone())
-                    .await;
-                {
-                    let mut state = self.state.lock().await;
-                    state.set_reference_context_item(reconstructed_rollout.reference_context_item);
-                }
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr: &str = turn_context.model_info.slug.as_str();
@@ -2082,13 +2095,6 @@ impl Session {
                     .await;
                 }
 
-                // Always add response items to conversation history
-                let reconstructed_history = reconstructed_rollout.history;
-                if !reconstructed_history.is_empty() {
-                    self.record_into_history(&reconstructed_history, &turn_context)
-                        .await;
-                }
-
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
                 if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
@@ -2103,26 +2109,8 @@ impl Session {
                 }
             }
             InitialHistory::Forked(rollout_items) => {
-                let reconstructed_rollout = self
-                    .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+                self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
-                self.set_previous_turn_settings(
-                    reconstructed_rollout.previous_turn_settings.clone(),
-                )
-                .await;
-                {
-                    let mut state = self.state.lock().await;
-                    state.set_reference_context_item(
-                        reconstructed_rollout.reference_context_item.clone(),
-                    );
-                }
-
-                // Always add response items to conversation history
-                let reconstructed_history = reconstructed_rollout.history;
-                if !reconstructed_history.is_empty() {
-                    self.record_into_history(&reconstructed_history, &turn_context)
-                        .await;
-                }
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
@@ -2154,6 +2142,25 @@ impl Session {
                 }
             }
         }
+    }
+
+    async fn apply_rollout_reconstruction(
+        &self,
+        turn_context: &TurnContext,
+        rollout_items: &[RolloutItem],
+    ) -> Option<PreviousTurnSettings> {
+        let reconstructed_rollout = self
+            .reconstruct_history_from_rollout(turn_context, rollout_items)
+            .await;
+        let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
+        self.replace_history(
+            reconstructed_rollout.history,
+            reconstructed_rollout.reference_context_item,
+        )
+        .await;
+        self.set_previous_turn_settings(previous_turn_settings.clone())
+            .await;
+        previous_turn_settings
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
@@ -2352,6 +2359,9 @@ impl Session {
             &self.services.session_telemetry,
             session_configuration.provider.clone(),
             &session_configuration,
+            self.services.user_shell.as_ref(),
+            self.services.shell_zsh_path.as_ref(),
+            self.services.main_execve_wrapper_exe.as_ref(),
             per_turn_config,
             model_info,
             &self.services.models_manager,
@@ -2595,31 +2605,17 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
-        // Record the last known agent status.
-        if let Some(status) = agent_status_from_event(&event.msg) {
-            self.agent_status.send_replace(status);
-        }
         // Persist the event into rollout (recorder filters as needed)
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
-        if let Err(e) = self.tx_event.send(event).await {
-            debug!("dropping event because channel is closed: {e}");
-        }
+        self.deliver_event_raw(event).await;
     }
 
-    /// Persist the event to the rollout file, flush it, and only then deliver it to clients.
-    ///
-    /// Most events can be delivered immediately after queueing the rollout write, but some
-    /// clients (e.g. app-server thread/rollback) re-read the rollout file synchronously on
-    /// receipt of the event and depend on the marker already being visible on disk.
-    pub(crate) async fn send_event_raw_flushed(&self, event: Event) {
+    async fn deliver_event_raw(&self, event: Event) {
         // Record the last known agent status.
         if let Some(status) = agent_status_from_event(&event.msg) {
             self.agent_status.send_replace(status);
         }
-        self.persist_rollout_items(&[RolloutItem::EventMsg(event.msg.clone())])
-            .await;
-        self.flush_rollout().await;
         if let Err(e) = self.tx_event.send(event).await {
             debug!("dropping event because channel is closed: {e}");
         }
@@ -5067,29 +5063,22 @@ mod handlers {
             };
 
         let rollback_event = ThreadRolledBackEvent { num_turns };
+        let rollback_msg = EventMsg::ThreadRolledBack(rollback_event.clone());
         let replay_items = initial_history
             .get_rollout_items()
             .into_iter()
-            .chain(std::iter::once(RolloutItem::EventMsg(
-                EventMsg::ThreadRolledBack(rollback_event.clone()),
-            )))
+            .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
             .collect::<Vec<_>>();
-
-        let reconstructed = sess
-            .reconstruct_history_from_rollout(turn_context.as_ref(), replay_items.as_slice())
+        sess.persist_rollout_items(&[RolloutItem::EventMsg(rollback_msg.clone())])
             .await;
-        sess.replace_history(
-            reconstructed.history,
-            reconstructed.reference_context_item.clone(),
-        )
-        .await;
-        sess.set_previous_turn_settings(reconstructed.previous_turn_settings)
+        sess.flush_rollout().await;
+        sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
             .await;
         sess.recompute_token_usage(turn_context.as_ref()).await;
 
-        sess.send_event_raw_flushed(Event {
+        sess.deliver_event_raw(Event {
             id: turn_context.sub_id.clone(),
-            msg: EventMsg::ThreadRolledBack(rollback_event),
+            msg: rollback_msg,
         })
         .await;
     }
@@ -5278,6 +5267,11 @@ async fn spawn_review_thread(
         sandbox_policy: parent_turn_context.sandbox_policy.get(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
     })
+    .with_unified_exec_shell_mode_for_session(
+        sess.services.user_shell.as_ref(),
+        sess.services.shell_zsh_path.as_ref(),
+        sess.services.main_execve_wrapper_exe.as_ref(),
+    )
     .with_web_search_config(None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
     .with_agent_roles(config.agent_roles.clone());
