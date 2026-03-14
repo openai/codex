@@ -1651,6 +1651,7 @@ dependencies = [
  "codex-config",
  "codex-core",
  "codex-exec",
+ "codex-exec-server",
  "codex-execpolicy",
  "codex-login",
  "codex-mcp-server",
@@ -1837,6 +1838,7 @@ dependencies = [
  "codex-client",
  "codex-config",
  "codex-connectors",
+ "codex-exec-server",
  "codex-execpolicy",
  "codex-file-search",
  "codex-git",
@@ -1983,6 +1985,23 @@ dependencies = [
  "uuid",
  "walkdir",
  "wiremock",
+]
+
+[[package]]
+name = "codex-exec-server"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "codex-app-server-protocol",
+ "codex-utils-cargo-bin",
+ "codex-utils-pty",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

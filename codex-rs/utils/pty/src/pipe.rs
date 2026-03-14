@@ -238,6 +238,7 @@ async fn spawn_process_with_stdin_mode(
         wait_handle,
         exit_status,
         exit_code,
+        Some(pid),
         None,
     );
 

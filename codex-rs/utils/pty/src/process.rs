@@ -79,6 +79,7 @@ pub struct ProcessHandle {
     wait_handle: StdMutex<Option<JoinHandle<()>>>,
     exit_status: Arc<AtomicBool>,
     exit_code: Arc<StdMutex<Option<i32>>>,
+    pid: Option<u32>,
     // PtyHandles must be preserved because the process will receive Control+C if the
     // slave is closed
     _pty_handles: StdMutex<Option<PtyHandles>>,
@@ -101,6 +102,7 @@ impl ProcessHandle {
         wait_handle: JoinHandle<()>,
         exit_status: Arc<AtomicBool>,
         exit_code: Arc<StdMutex<Option<i32>>>,
+        pid: Option<u32>,
         pty_handles: Option<PtyHandles>,
     ) -> Self {
         Self {
@@ -112,6 +114,7 @@ impl ProcessHandle {
             wait_handle: StdMutex::new(Some(wait_handle)),
             exit_status,
             exit_code,
+            pid,
             _pty_handles: StdMutex::new(pty_handles),
         }
     }
@@ -137,6 +140,11 @@ impl ProcessHandle {
     /// Returns the exit code if known.
     pub fn exit_code(&self) -> Option<i32> {
         self.exit_code.lock().ok().and_then(|guard| *guard)
+    }
+
+    /// Returns the OS process ID when known.
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
     }
 
     /// Resize the PTY in character cells.

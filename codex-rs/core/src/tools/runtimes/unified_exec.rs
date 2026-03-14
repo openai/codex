@@ -46,6 +46,7 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub struct UnifiedExecRequest {
+    pub process_id: i32,
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
@@ -239,6 +240,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                     return self
                         .manager
                         .open_session_with_exec_env(
+                            req.process_id,
                             &prepared.exec_request,
                             req.tty,
                             prepared.spawn_lifecycle,
@@ -275,7 +277,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
         self.manager
-            .open_session_with_exec_env(&exec_env, req.tty, Box::new(NoopSpawnLifecycle))
+            .open_session_with_exec_env(
+                req.process_id,
+                &exec_env,
+                req.tty,
+                Box::new(NoopSpawnLifecycle),
+            )
             .await
             .map_err(|err| match err {
                 UnifiedExecError::SandboxDenied { output, .. } => {

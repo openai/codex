@@ -18,6 +18,7 @@ use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::formatted_truncate_text;
+use codex_exec_server::ExecServerProcess;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::SpawnedPty;
 
@@ -40,6 +41,49 @@ pub(crate) trait SpawnLifecycle: std::fmt::Debug + Send + Sync {
 
 pub(crate) type SpawnLifecycleHandle = Box<dyn SpawnLifecycle>;
 
+trait ExecProcessControl: std::fmt::Debug + Send + Sync {
+    fn writer_sender(&self) -> mpsc::Sender<Vec<u8>>;
+    fn has_exited(&self) -> bool;
+    fn exit_code(&self) -> Option<i32>;
+    fn terminate(&self);
+}
+
+impl ExecProcessControl for ExecCommandSession {
+    fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
+        self.writer_sender()
+    }
+
+    fn has_exited(&self) -> bool {
+        self.has_exited()
+    }
+
+    fn exit_code(&self) -> Option<i32> {
+        self.exit_code()
+    }
+
+    fn terminate(&self) {
+        self.terminate();
+    }
+}
+
+impl ExecProcessControl for ExecServerProcess {
+    fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
+        self.writer_sender()
+    }
+
+    fn has_exited(&self) -> bool {
+        self.has_exited()
+    }
+
+    fn exit_code(&self) -> Option<i32> {
+        self.exit_code()
+    }
+
+    fn terminate(&self) {
+        self.terminate();
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct NoopSpawnLifecycle;
 
@@ -56,7 +100,7 @@ pub(crate) struct OutputHandles {
 
 #[derive(Debug)]
 pub(crate) struct UnifiedExecProcess {
-    process_handle: ExecCommandSession,
+    process_handle: Box<dyn ExecProcessControl>,
     output_rx: broadcast::Receiver<Vec<u8>>,
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,
@@ -70,8 +114,8 @@ pub(crate) struct UnifiedExecProcess {
 }
 
 impl UnifiedExecProcess {
-    pub(super) fn new(
-        process_handle: ExecCommandSession,
+    fn build(
+        process_handle: Box<dyn ExecProcessControl>,
         initial_output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
         sandbox_type: SandboxType,
         spawn_lifecycle: SpawnLifecycleHandle,
@@ -120,6 +164,34 @@ impl UnifiedExecProcess {
             sandbox_type,
             _spawn_lifecycle: spawn_lifecycle,
         }
+    }
+
+    pub(super) fn new(
+        process_handle: ExecCommandSession,
+        initial_output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
+        sandbox_type: SandboxType,
+        spawn_lifecycle: SpawnLifecycleHandle,
+    ) -> Self {
+        Self::build(
+            Box::new(process_handle),
+            initial_output_rx,
+            sandbox_type,
+            spawn_lifecycle,
+        )
+    }
+
+    pub(super) fn from_remote(
+        process_handle: ExecServerProcess,
+        sandbox_type: SandboxType,
+        spawn_lifecycle: SpawnLifecycleHandle,
+    ) -> Self {
+        let output_rx = process_handle.output_receiver();
+        Self::build(
+            Box::new(process_handle),
+            output_rx,
+            sandbox_type,
+            spawn_lifecycle,
+        )
     }
 
     pub(super) fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {

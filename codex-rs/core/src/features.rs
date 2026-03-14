@@ -93,6 +93,8 @@ pub enum Feature {
     JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
+    /// Route unified-exec process realization through the exec-server daemon.
+    ExecServer,
     /// Route shell tool execution through the zsh exec bridge.
     ShellZshFork,
     /// Include the freeform apply_patch tool.
@@ -539,6 +541,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "unified_exec",
         stage: Stage::Stable,
         default_enabled: !cfg!(windows),
+    },
+    FeatureSpec {
+        id: Feature::ExecServer,
+        key: "experimental_exec_server",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ShellZshFork,

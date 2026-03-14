@@ -50,6 +50,7 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
+use codex_exec_server::ExecParams as ExecServerExecParams;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("NO_COLOR", "1"),
@@ -529,10 +530,32 @@ impl UnifiedExecProcessManager {
 
     pub(crate) async fn open_session_with_exec_env(
         &self,
+        process_id: i32,
         env: &ExecRequest,
         tty: bool,
         mut spawn_lifecycle: SpawnLifecycleHandle,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
+        if let Some(exec_server_client) = self.exec_server_client.as_ref() {
+            let process = exec_server_client
+                .start_process(ExecServerExecParams {
+                    process_id: process_id.to_string(),
+                    argv: env.command.clone(),
+                    cwd: env.cwd.clone(),
+                    env: env.env.clone(),
+                    tty,
+                    output_bytes_cap: crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_BYTES,
+                    arg0: env.arg0.clone(),
+                })
+                .await
+                .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+            spawn_lifecycle.after_spawn();
+            return Ok(UnifiedExecProcess::from_remote(
+                process,
+                env.sandbox,
+                spawn_lifecycle,
+            ));
+        }
+
         let (program, args) = env
             .command
             .split_first()
@@ -600,6 +623,7 @@ impl UnifiedExecProcessManager {
             })
             .await;
         let req = UnifiedExecToolRequest {
+            process_id: request.process_id,
             command: request.command.clone(),
             cwd,
             env,

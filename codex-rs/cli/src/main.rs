@@ -20,6 +20,7 @@ use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
 use codex_exec::ReviewArgs;
+use codex_exec_server::run_main as run_exec_server_main;
 use codex_execpolicy::ExecPolicyCheckCommand;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_state::StateRuntime;
@@ -143,6 +144,10 @@ enum Subcommand {
     /// Internal: relay stdio to a Unix domain socket.
     #[clap(hide = true, name = "stdio-to-uds")]
     StdioToUds(StdioToUdsCommand),
+
+    /// Internal: run the exec-server stdio JSON-RPC daemon.
+    #[clap(hide = true, name = "exec-server")]
+    ExecServer,
 
     /// Inspect feature flags.
     Features(FeaturesCli),
@@ -780,6 +785,11 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             let socket_path = cmd.socket_path;
             tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
+        }
+        Some(Subcommand::ExecServer) => {
+            run_exec_server_main()
+                .await
+                .map_err(|err| anyhow::anyhow!(err.to_string()))?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {

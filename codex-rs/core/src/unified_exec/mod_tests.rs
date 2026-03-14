@@ -8,6 +8,9 @@ use crate::protocol::SandboxPolicy;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::WriteStdinRequest;
+use codex_exec_server::ExecServerClient;
+use codex_exec_server::ExecServerLaunchCommand;
+use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::skip_if_sandbox;
 use std::sync::Arc;
 use tokio::time::Duration;
@@ -73,6 +76,54 @@ async fn write_stdin(
     session
         .services
         .unified_exec_manager
+        .write_stdin(WriteStdinRequest {
+            process_id,
+            input,
+            yield_time_ms,
+            max_output_tokens: None,
+        })
+        .await
+}
+
+async fn exec_command_with_manager(
+    manager: &UnifiedExecProcessManager,
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
+    cmd: &str,
+    yield_time_ms: u64,
+) -> Result<ExecCommandToolOutput, UnifiedExecError> {
+    let context =
+        UnifiedExecContext::new(Arc::clone(session), Arc::clone(turn), "call".to_string());
+    let process_id = manager.allocate_process_id().await;
+
+    manager
+        .exec_command(
+            ExecCommandRequest {
+                command: vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()],
+                process_id,
+                yield_time_ms,
+                max_output_tokens: None,
+                workdir: None,
+                network: None,
+                tty: true,
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                additional_permissions: None,
+                additional_permissions_preapproved: false,
+                justification: None,
+                prefix_rule: None,
+            },
+            &context,
+        )
+        .await
+}
+
+async fn write_stdin_with_manager(
+    manager: &UnifiedExecProcessManager,
+    process_id: i32,
+    input: &str,
+    yield_time_ms: u64,
+) -> Result<ExecCommandToolOutput, UnifiedExecError> {
+    manager
         .write_stdin(WriteStdinRequest {
             process_id,
             input,
@@ -339,5 +390,48 @@ async fn reusing_completed_process_returns_unknown_process() -> anyhow::Result<(
             .is_empty()
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_can_route_through_exec_server() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let manager = UnifiedExecProcessManager::new(
+        DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
+        Some(Arc::new(
+            ExecServerClient::spawn(ExecServerLaunchCommand {
+                program: cargo_bin("codex-exec-server")?,
+                args: Vec::new(),
+            })
+            .await?,
+        )),
+    );
+    let (session, turn) = test_session_and_turn().await;
+
+    let open_shell = exec_command_with_manager(&manager, &session, &turn, "bash -i", 2_500).await?;
+    let process_id = open_shell.process_id.expect("expected process_id");
+
+    write_stdin_with_manager(
+        &manager,
+        process_id,
+        "export CODEX_INTERACTIVE_SHELL_VAR=codex-remote\n",
+        2_500,
+    )
+    .await?;
+
+    let output = write_stdin_with_manager(
+        &manager,
+        process_id,
+        "echo $CODEX_INTERACTIVE_SHELL_VAR\n",
+        2_500,
+    )
+    .await?;
+    assert!(
+        output.truncated_output().contains("codex-remote"),
+        "expected remote exec-server backed session state"
+    );
+
+    manager.terminate_all_processes().await;
     Ok(())
 }

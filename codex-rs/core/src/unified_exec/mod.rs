@@ -27,6 +27,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
 
+use codex_exec_server::ExecServerClient;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
 use rand::Rng;
@@ -123,21 +124,26 @@ impl ProcessStore {
 pub(crate) struct UnifiedExecProcessManager {
     process_store: Mutex<ProcessStore>,
     max_write_stdin_yield_time_ms: u64,
+    exec_server_client: Option<Arc<ExecServerClient>>,
 }
 
 impl UnifiedExecProcessManager {
-    pub(crate) fn new(max_write_stdin_yield_time_ms: u64) -> Self {
+    pub(crate) fn new(
+        max_write_stdin_yield_time_ms: u64,
+        exec_server_client: Option<Arc<ExecServerClient>>,
+    ) -> Self {
         Self {
             process_store: Mutex::new(ProcessStore::default()),
             max_write_stdin_yield_time_ms: max_write_stdin_yield_time_ms
                 .max(MIN_EMPTY_YIELD_TIME_MS),
+            exec_server_client,
         }
     }
 }
 
 impl Default for UnifiedExecProcessManager {
     fn default() -> Self {
-        Self::new(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS)
+        Self::new(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS, None)
     }
 }
 

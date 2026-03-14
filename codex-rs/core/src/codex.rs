@@ -59,6 +59,8 @@ use chrono::Local;
 use chrono::Utc;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
+use codex_exec_server::ExecServerClient;
+use codex_exec_server::ExecServerLaunchCommand;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -175,6 +177,60 @@ use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
 use codex_config::CONFIG_TOML_FILE;
+
+const CODEX_EXEC_SERVER_EXE_ENV_VAR: &str = "CODEX_EXEC_SERVER_EXE";
+
+fn resolve_exec_server_launch_command() -> CodexResult<ExecServerLaunchCommand> {
+    if let Some(override_path) = std::env::var_os(CODEX_EXEC_SERVER_EXE_ENV_VAR) {
+        return Ok(ExecServerLaunchCommand {
+            program: PathBuf::from(override_path),
+            args: Vec::new(),
+        });
+    }
+
+    let exec_server_binary_name = if cfg!(windows) {
+        "codex-exec-server.exe"
+    } else {
+        "codex-exec-server"
+    };
+    if let Ok(current_exe) = std::env::current_exe()
+        && let Some(parent) = current_exe.parent()
+    {
+        let sibling = parent.join(exec_server_binary_name);
+        if sibling.is_file() {
+            return Ok(ExecServerLaunchCommand {
+                program: sibling,
+                args: Vec::new(),
+            });
+        }
+
+        let codex_binary = parent.join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        if codex_binary.is_file() {
+            return Ok(ExecServerLaunchCommand {
+                program: codex_binary,
+                args: vec!["exec-server".to_string()],
+            });
+        }
+    }
+
+    if let Ok(program) = which::which(exec_server_binary_name) {
+        return Ok(ExecServerLaunchCommand {
+            program,
+            args: Vec::new(),
+        });
+    }
+
+    if let Ok(program) = which::which(if cfg!(windows) { "codex.exe" } else { "codex" }) {
+        return Ok(ExecServerLaunchCommand {
+            program,
+            args: vec!["exec-server".to_string()],
+        });
+    }
+
+    Err(CodexErr::Fatal(format!(
+        "failed to resolve exec-server binary; set {CODEX_EXEC_SERVER_EXE_ENV_VAR} or install codex-exec-server"
+    )))
+}
 
 mod rollout_reconstruction;
 #[cfg(test)]
@@ -1737,6 +1793,18 @@ impl Session {
             });
         }
 
+        let exec_server_client = if config.features.enabled(Feature::ExecServer) {
+            Some(Arc::new(
+                ExecServerClient::spawn(resolve_exec_server_launch_command()?)
+                    .await
+                    .map_err(|err| {
+                        CodexErr::Fatal(format!("failed to start exec-server: {err}"))
+                    })?,
+            ))
+        } else {
+            None
+        };
+
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -1751,6 +1819,7 @@ impl Session {
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::new(
                 config.background_terminal_max_timeout,
+                exec_server_client,
             ),
             shell_zsh_path: config.zsh_path.clone(),
             main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
