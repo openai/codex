@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::num::NonZeroU16;
 use std::string::String;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,6 +10,9 @@ use anyhow::anyhow;
 use anyhow::bail;
 use reqwest::ClientBuilder;
 use reqwest::Url;
+use rmcp::transport::auth::AuthError;
+use rmcp::transport::auth::AuthorizationManager;
+use rmcp::transport::auth::AuthorizationMetadata;
 use rmcp::transport::auth::OAuthState;
 use tiny_http::Response;
 use tiny_http::Server;
@@ -23,6 +27,18 @@ use crate::oauth::compute_expires_at_millis;
 use crate::save_oauth_tokens;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
+
+/// Built-in Client ID Metadata Document used for SEP-991/CIMD fallback.
+///
+/// This intentionally tracks the `main` branch so clients can pick up metadata updates
+/// without requiring a binary release.
+const DEFAULT_CIMD_CLIENT_METADATA_URL: &str =
+    "https://raw.githubusercontent.com/openai/codex/main/codex-rs/client-metadata.json";
+const CLIENT_ID_METADATA_DOCUMENT_SUPPORTED_FIELD: &str = "client_id_metadata_document_supported";
+/// Fixed loopback callback port required by Codex's built-in CIMD redirect URIs.
+const DEFAULT_CIMD_CALLBACK_PORT: u16 = 33418;
+const DEFAULT_CIMD_REDIRECT_URI_ROOT: &str = "http://127.0.0.1:33418/";
+const DEFAULT_CIMD_REDIRECT_URI_CALLBACK: &str = "http://127.0.0.1:33418/callback";
 
 struct OauthHeaders {
     http_headers: Option<HashMap<String, String>>,
@@ -284,17 +300,36 @@ struct OauthLoginFlow {
     timeout: Duration,
 }
 
-fn resolve_callback_port(callback_port: Option<u16>) -> Result<Option<u16>> {
-    if let Some(config_port) = callback_port {
-        if config_port == 0 {
-            bail!(
-                "invalid MCP OAuth callback port `{config_port}`: port must be between 1 and 65535"
-            );
-        }
-        return Ok(Some(config_port));
+struct CallbackListener {
+    guard: CallbackServerGuard,
+    redirect_uri: String,
+    rx: oneshot::Receiver<CallbackResult>,
+}
+
+fn default_cimd_callback_port_nonzero() -> Result<NonZeroU16> {
+    NonZeroU16::new(DEFAULT_CIMD_CALLBACK_PORT).ok_or_else(|| {
+        anyhow!(
+            "invalid built-in CIMD callback port `{DEFAULT_CIMD_CALLBACK_PORT}`: port must be between 1 and 65535"
+        )
+    })
+}
+
+fn resolve_callback_port(
+    callback_port: Option<u16>,
+    use_default_cimd_metadata: bool,
+) -> Result<Option<NonZeroU16>> {
+    if let Some(port) = callback_port {
+        let Some(port) = NonZeroU16::new(port) else {
+            bail!("invalid MCP OAuth callback port `{port}`: port must be between 1 and 65535");
+        };
+        return Ok(Some(port));
     }
 
-    Ok(None)
+    if use_default_cimd_metadata {
+        Ok(Some(default_cimd_callback_port_nonzero()?))
+    } else {
+        Ok(None)
+    }
 }
 
 fn local_redirect_uri(server: &Server) -> Result<String> {
@@ -329,19 +364,87 @@ fn callback_path_from_redirect_uri(redirect_uri: &str) -> Result<String> {
     Ok(parsed.path().to_string())
 }
 
-fn callback_bind_host(callback_url: Option<&str>) -> &'static str {
+fn uses_default_cimd_redirect_uri(redirect_uri: &str) -> bool {
+    matches!(
+        redirect_uri,
+        DEFAULT_CIMD_REDIRECT_URI_ROOT | DEFAULT_CIMD_REDIRECT_URI_CALLBACK
+    )
+}
+
+fn validate_callback_listener_settings(
+    callback_port: Option<u16>,
+    callback_url: Option<&str>,
+) -> Result<()> {
     let Some(callback_url) = callback_url else {
-        return "127.0.0.1";
+        return Ok(());
+    };
+    if !uses_default_cimd_redirect_uri(callback_url) {
+        return Ok(());
+    };
+    let Some(callback_port) = callback_port else {
+        return Ok(());
+    };
+
+    if callback_port == DEFAULT_CIMD_CALLBACK_PORT {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "MCP OAuth callback URL `{callback_url}` is a built-in Codex client metadata redirect URI, so `mcp_oauth_callback_port` must be `{DEFAULT_CIMD_CALLBACK_PORT}` or unset"
+        ))
+    }
+}
+
+fn callback_bind_host(callback_url: Option<&str>) -> String {
+    let Some(callback_url) = callback_url else {
+        return "127.0.0.1".to_string();
     };
 
     let Ok(parsed) = Url::parse(callback_url) else {
-        return "127.0.0.1";
+        return "127.0.0.1".to_string();
     };
 
-    match parsed.host_str() {
-        Some("localhost" | "127.0.0.1" | "::1") | None => "127.0.0.1",
-        Some(_) => "0.0.0.0",
+    let Some(host) = parsed.host_str() else {
+        return "127.0.0.1".to_string();
+    };
+
+    if host.eq_ignore_ascii_case("localhost") {
+        return "127.0.0.1".to_string();
     }
+    let host = host.trim_matches(['[', ']']);
+
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) if ip.is_loopback() => ip.to_string(),
+        Ok(std::net::IpAddr::V6(ip)) if ip.is_loopback() => format!("[{ip}]"),
+        Ok(_) | Err(_) => "0.0.0.0".to_string(),
+    }
+}
+
+fn start_callback_listener(
+    bind_host: &str,
+    callback_port: Option<NonZeroU16>,
+    callback_url: Option<&str>,
+) -> Result<CallbackListener> {
+    let bind_addr = match callback_port {
+        Some(port) => format!("{bind_host}:{}", port.get()),
+        None => format!("{bind_host}:0"),
+    };
+
+    let server = Arc::new(Server::http(&bind_addr).map_err(|err| anyhow!(err))?);
+    let guard = CallbackServerGuard {
+        server: Arc::clone(&server),
+    };
+
+    let redirect_uri = resolve_redirect_uri(&server, callback_url)?;
+    let callback_path = callback_path_from_redirect_uri(&redirect_uri)?;
+
+    let (tx, rx) = oneshot::channel();
+    spawn_callback_server(server, tx, callback_path);
+
+    Ok(CallbackListener {
+        guard,
+        redirect_uri,
+        rx,
+    })
 }
 
 impl OauthLoginFlow {
@@ -360,23 +463,7 @@ impl OauthLoginFlow {
     ) -> Result<Self> {
         const DEFAULT_OAUTH_TIMEOUT_SECS: i64 = 300;
 
-        let bind_host = callback_bind_host(callback_url);
-        let callback_port = resolve_callback_port(callback_port)?;
-        let bind_addr = match callback_port {
-            Some(port) => format!("{bind_host}:{port}"),
-            None => format!("{bind_host}:0"),
-        };
-
-        let server = Arc::new(Server::http(&bind_addr).map_err(|err| anyhow!(err))?);
-        let guard = CallbackServerGuard {
-            server: Arc::clone(&server),
-        };
-
-        let redirect_uri = resolve_redirect_uri(&server, callback_url)?;
-        let callback_path = callback_path_from_redirect_uri(&redirect_uri)?;
-
-        let (tx, rx) = oneshot::channel();
-        spawn_callback_server(server, tx, callback_path);
+        validate_callback_listener_settings(callback_port, callback_url)?;
 
         let OauthHeaders {
             http_headers,
@@ -384,12 +471,82 @@ impl OauthLoginFlow {
         } = headers;
         let default_headers = build_default_headers(http_headers, env_http_headers)?;
         let http_client = apply_default_headers(ClientBuilder::new(), &default_headers).build()?;
+        let metadata = discover_oauth_authorization_metadata(server_url, http_client.clone())
+            .await
+            .context("failed to discover OAuth authorization metadata")?;
+        let should_start_with_default_cimd_metadata = should_use_default_cimd_metadata(&metadata);
+        let supports_default_cimd_metadata = client_id_metadata_document_supported(&metadata);
+        let callback_port_is_explicitly_set = callback_port.is_some();
+        let callback_url_is_explicitly_set = callback_url.is_some();
+        let callback_url_uses_default_cimd_redirect = callback_url
+            .map(uses_default_cimd_redirect_uri)
+            .unwrap_or(false);
+        let should_rebind_callback_for_cimd_fallback =
+            !callback_port_is_explicitly_set && !callback_url_is_explicitly_set;
+        let should_bind_to_default_cimd_port = should_start_with_default_cimd_metadata
+            || (!callback_port_is_explicitly_set && callback_url_uses_default_cimd_redirect);
 
-        let mut oauth_state = OAuthState::new(server_url, Some(http_client)).await?;
+        let bind_host = callback_bind_host(callback_url);
+        let callback_port = resolve_callback_port(callback_port, should_bind_to_default_cimd_port)?;
+        let mut callback_listener =
+            start_callback_listener(&bind_host, callback_port, callback_url)?;
+
         let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
-        oauth_state
-            .start_authorization(&scope_refs, &redirect_uri, Some("Codex"))
-            .await?;
+        let oauth_state = match start_oauth_authorization(
+            server_url,
+            &http_client,
+            &scope_refs,
+            &callback_listener.redirect_uri,
+            should_start_with_default_cimd_metadata,
+        )
+        .await
+        {
+            Ok(oauth_state) => oauth_state,
+            Err(dynamic_registration_err)
+                if !should_start_with_default_cimd_metadata
+                    && supports_default_cimd_metadata
+                    && matches!(dynamic_registration_err, AuthError::RegistrationFailed(_)) =>
+            {
+                if should_rebind_callback_listener_for_cimd_fallback(
+                    should_rebind_callback_for_cimd_fallback,
+                    &callback_listener.redirect_uri,
+                ) {
+                    callback_listener = start_callback_listener(
+                        "127.0.0.1",
+                        Some(default_cimd_callback_port_nonzero().context(
+                            "invalid built-in CIMD callback port for fallback listener",
+                        )?),
+                        None,
+                    )
+                    .context("failed to rebind OAuth callback listener for CIMD fallback")?;
+                } else if callback_port_is_explicitly_set || callback_url_is_explicitly_set {
+                    validate_redirect_uri_for_default_cimd_metadata(
+                        &callback_listener.redirect_uri,
+                    )?;
+                }
+
+                start_oauth_authorization(
+                    server_url,
+                    &http_client,
+                    &scope_refs,
+                    &callback_listener.redirect_uri,
+                    true,
+                )
+                .await
+                .map_err(anyhow::Error::from)
+                .context(
+                    "failed to start OAuth authorization with default client metadata URL after dynamic registration failed",
+                )?
+            }
+            Err(err) if should_start_with_default_cimd_metadata => {
+                return Err(anyhow::Error::from(err).context(
+                    "failed to start OAuth authorization with default client metadata URL",
+                ));
+            }
+            Err(err) => {
+                return Err(anyhow::Error::from(err).context("failed to start OAuth authorization"));
+            }
+        };
         let auth_url = append_query_param(
             &oauth_state.get_authorization_url().await?,
             "resource",
@@ -401,8 +558,8 @@ impl OauthLoginFlow {
         Ok(Self {
             auth_url,
             oauth_state,
-            rx,
-            guard,
+            rx: callback_listener.rx,
+            guard: callback_listener.guard,
             server_name: server_name.to_string(),
             server_url: server_url.to_string(),
             store_mode,
@@ -492,6 +649,81 @@ impl OauthLoginFlow {
     }
 }
 
+async fn start_oauth_authorization(
+    server_url: &str,
+    http_client: &reqwest::Client,
+    scope_refs: &[&str],
+    redirect_uri: &str,
+    use_default_cimd_metadata: bool,
+) -> std::result::Result<OAuthState, AuthError> {
+    let mut oauth_state = OAuthState::new(server_url, Some(http_client.clone())).await?;
+
+    if use_default_cimd_metadata {
+        validate_redirect_uri_for_default_cimd_metadata(redirect_uri)
+            .map_err(|err| AuthError::InternalError(err.to_string()))?;
+        oauth_state
+            .start_authorization_with_metadata_url(
+                scope_refs,
+                redirect_uri,
+                Some("Codex"),
+                Some(DEFAULT_CIMD_CLIENT_METADATA_URL),
+            )
+            .await?;
+    } else {
+        oauth_state
+            .start_authorization(scope_refs, redirect_uri, Some("Codex"))
+            .await?;
+    }
+
+    Ok(oauth_state)
+}
+
+async fn discover_oauth_authorization_metadata(
+    server_url: &str,
+    http_client: reqwest::Client,
+) -> Result<AuthorizationMetadata> {
+    let mut manager = AuthorizationManager::new(server_url)
+        .await
+        .context("failed to create OAuth authorization manager")?;
+    manager
+        .with_client(http_client)
+        .context("failed to configure OAuth HTTP client")?;
+    manager
+        .discover_metadata()
+        .await
+        .context("failed to discover OAuth server metadata")
+}
+
+fn should_use_default_cimd_metadata(metadata: &AuthorizationMetadata) -> bool {
+    metadata.registration_endpoint.is_none() && client_id_metadata_document_supported(metadata)
+}
+
+fn client_id_metadata_document_supported(metadata: &AuthorizationMetadata) -> bool {
+    metadata
+        .additional_fields
+        .get(CLIENT_ID_METADATA_DOCUMENT_SUPPORTED_FIELD)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn validate_redirect_uri_for_default_cimd_metadata(redirect_uri: &str) -> Result<()> {
+    if uses_default_cimd_redirect_uri(redirect_uri) {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "MCP OAuth callback URL `{redirect_uri}` is incompatible with built-in Codex client metadata; use `{DEFAULT_CIMD_REDIRECT_URI_ROOT}` or `{DEFAULT_CIMD_REDIRECT_URI_CALLBACK}`"
+        ))
+    }
+}
+
+fn should_rebind_callback_listener_for_cimd_fallback(
+    should_rebind_callback_for_cimd_fallback: bool,
+    redirect_uri: &str,
+) -> bool {
+    should_rebind_callback_for_cimd_fallback
+        && validate_redirect_uri_for_default_cimd_metadata(redirect_uri).is_err()
+}
+
 fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
     let Some(value) = value else {
         return url.to_string();
@@ -510,85 +742,5 @@ fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use pretty_assertions::assert_eq;
-
-    use super::CallbackOutcome;
-    use super::OAuthProviderError;
-    use super::append_query_param;
-    use super::callback_path_from_redirect_uri;
-    use super::parse_oauth_callback;
-
-    #[test]
-    fn parse_oauth_callback_accepts_default_path() {
-        let parsed = parse_oauth_callback("/callback?code=abc&state=xyz", "/callback");
-        assert!(matches!(parsed, CallbackOutcome::Success(_)));
-    }
-
-    #[test]
-    fn parse_oauth_callback_accepts_custom_path() {
-        let parsed = parse_oauth_callback("/oauth/callback?code=abc&state=xyz", "/oauth/callback");
-        assert!(matches!(parsed, CallbackOutcome::Success(_)));
-    }
-
-    #[test]
-    fn parse_oauth_callback_rejects_wrong_path() {
-        let parsed = parse_oauth_callback("/callback?code=abc&state=xyz", "/oauth/callback");
-        assert!(matches!(parsed, CallbackOutcome::Invalid));
-    }
-
-    #[test]
-    fn parse_oauth_callback_returns_provider_error() {
-        let parsed = parse_oauth_callback(
-            "/callback?error=invalid_scope&error_description=scope%20rejected",
-            "/callback",
-        );
-
-        assert_eq!(
-            parsed,
-            CallbackOutcome::Error(OAuthProviderError::new(
-                Some("invalid_scope".to_string()),
-                Some("scope rejected".to_string()),
-            ))
-        );
-    }
-
-    #[test]
-    fn callback_path_comes_from_redirect_uri() {
-        let path = callback_path_from_redirect_uri("https://example.com/oauth/callback")
-            .expect("redirect URI should parse");
-        assert_eq!(path, "/oauth/callback");
-    }
-
-    #[test]
-    fn append_query_param_adds_resource_to_absolute_url() {
-        let url = append_query_param(
-            "https://example.com/authorize?scope=read",
-            "resource",
-            Some("https://api.example.com"),
-        );
-
-        assert_eq!(
-            url,
-            "https://example.com/authorize?scope=read&resource=https%3A%2F%2Fapi.example.com"
-        );
-    }
-
-    #[test]
-    fn append_query_param_ignores_empty_values() {
-        let url = append_query_param(
-            "https://example.com/authorize?scope=read",
-            "resource",
-            Some("   "),
-        );
-
-        assert_eq!(url, "https://example.com/authorize?scope=read");
-    }
-
-    #[test]
-    fn append_query_param_handles_unparseable_url() {
-        let url = append_query_param("not a url", "resource", Some("api/resource"));
-
-        assert_eq!(url, "not a url?resource=api%2Fresource");
-    }
-}
+#[path = "perform_oauth_login.rs_tests.rs"]
+mod tests;
