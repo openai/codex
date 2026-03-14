@@ -1077,6 +1077,9 @@ mod tests {
     use tempfile::TempDir;
 
     #[cfg(unix)]
+    const SYMLINKED_TMPDIR_TEST_ENV: &str = "CODEX_PROTOCOL_TEST_SYMLINKED_TMPDIR";
+
+    #[cfg(unix)]
     fn symlink_dir(original: &Path, link: &Path) -> std::io::Result<()> {
         std::os::unix::fs::symlink(original, link)
     }
@@ -1205,6 +1208,90 @@ mod tests {
             !writable_roots[0]
                 .read_only_subpaths
                 .contains(&unexpected_decoy)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tmpdir_special_path_canonicalizes_symlinked_tmpdir() {
+        if std::env::var_os(SYMLINKED_TMPDIR_TEST_ENV).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .env(SYMLINKED_TMPDIR_TEST_ENV, "1")
+                .arg("--exact")
+                .arg("permissions::tests::tmpdir_special_path_canonicalizes_symlinked_tmpdir")
+                .output()
+                .expect("run tmpdir subprocess test");
+
+            assert!(
+                output.status.success(),
+                "tmpdir subprocess test failed\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let cwd = TempDir::new().expect("tempdir");
+        let real_tmpdir = cwd.path().join("real-tmpdir");
+        let link_tmpdir = cwd.path().join("link-tmpdir");
+        let blocked = real_tmpdir.join("blocked");
+        let codex_dir = real_tmpdir.join(".codex");
+
+        fs::create_dir_all(&blocked).expect("create blocked");
+        fs::create_dir_all(&codex_dir).expect("create .codex");
+        symlink_dir(&real_tmpdir, &link_tmpdir).expect("create symlinked tmpdir");
+
+        let link_blocked =
+            AbsolutePathBuf::from_absolute_path(link_tmpdir.join("blocked")).expect("link blocked");
+        let expected_root = AbsolutePathBuf::from_absolute_path(
+            real_tmpdir
+                .canonicalize()
+                .expect("canonicalize real tmpdir"),
+        )
+        .expect("absolute canonical tmpdir");
+        let expected_blocked = AbsolutePathBuf::from_absolute_path(
+            blocked.canonicalize().expect("canonicalize blocked"),
+        )
+        .expect("absolute canonical blocked");
+        let expected_codex = AbsolutePathBuf::from_absolute_path(
+            codex_dir.canonicalize().expect("canonicalize .codex"),
+        )
+        .expect("absolute canonical .codex");
+
+        unsafe {
+            std::env::set_var("TMPDIR", &link_tmpdir);
+        }
+
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Tmpdir,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: link_blocked },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        assert_eq!(
+            policy.get_unreadable_roots_with_cwd(cwd.path()),
+            vec![expected_blocked.clone()]
+        );
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        assert_eq!(writable_roots.len(), 1);
+        assert_eq!(writable_roots[0].root, expected_root);
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .contains(&expected_blocked)
+        );
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .contains(&expected_codex)
         );
     }
 
