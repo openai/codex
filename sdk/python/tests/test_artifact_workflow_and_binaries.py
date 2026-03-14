@@ -117,7 +117,7 @@ def test_python_codegen_schema_annotation_adds_stable_variant_titles() -> None:
     ]
     assert ask_for_approval_titles == [
         "AskForApprovalValue",
-        "RejectAskForApproval",
+        "GranularAskForApproval",
     ]
 
     reasoning_summary_titles = [
