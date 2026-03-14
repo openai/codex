@@ -86,6 +86,11 @@ write-app-server-schema *args:
 write-hooks-schema:
     cargo run --manifest-path ./codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures
 
+# Run the argument-comment Dylint checks across codex-rs.
+[no-cd]
+argument-comment-lint *args:
+    ./tools/argument-comment-lint/run.sh "$@"
+
 # Tail logs from the state SQLite database
 log *args:
     if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p codex-state --bin logs_client -- "$@"

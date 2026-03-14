@@ -21,17 +21,12 @@ use crate::config_loader::default_project_root_markers;
 use crate::config_loader::merge_toml_values;
 use crate::config_loader::project_root_markers_from_config;
 use crate::features::Feature;
-use crate::plugins::PluginCapabilitySummary;
-use crate::plugins::render_plugins_section;
-use crate::skills::SkillMetadata;
-use crate::skills::render_skills_section;
 use codex_app_server_protocol::ConfigLayerSource;
 use dunce::canonicalize as normalize_path;
 use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
 use toml::Value as TomlValue;
 use tracing::error;
-use tracing::instrument;
 
 pub(crate) const HIERARCHICAL_AGENTS_MESSAGE: &str =
     include_str!("../hierarchical_agents_message.md");
@@ -81,12 +76,7 @@ fn render_js_repl_instructions(config: &Config) -> Option<String> {
 
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
-#[instrument(level = "info", skip_all)]
-pub(crate) async fn get_user_instructions(
-    config: &Config,
-    skills: Option<&[SkillMetadata]>,
-    plugins: Option<&[PluginCapabilitySummary]>,
-) -> Option<String> {
+pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
     let project_docs = read_project_docs(config).await;
 
     let mut output = String::new();
@@ -113,21 +103,6 @@ pub(crate) async fn get_user_instructions(
             output.push_str("\n\n");
         }
         output.push_str(&js_repl_section);
-    }
-
-    if let Some(plugin_section) = plugins.and_then(render_plugins_section) {
-        if !output.is_empty() {
-            output.push_str("\n\n");
-        }
-        output.push_str(&plugin_section);
-    }
-
-    let skills_section = skills.and_then(render_skills_section);
-    if let Some(skills_section) = skills_section {
-        if !output.is_empty() {
-            output.push_str("\n\n");
-        }
-        output.push_str(&skills_section);
     }
 
     if config.features.enabled(Feature::ChildAgentsMd) {

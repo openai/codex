@@ -22,6 +22,8 @@ from .v2_all import FuzzyFileSearchSessionUpdatedNotification
 from .v2_all import HookCompletedNotification
 from .v2_all import HookStartedNotification
 from .v2_all import ItemCompletedNotification
+from .v2_all import ItemGuardianApprovalReviewCompletedNotification
+from .v2_all import ItemGuardianApprovalReviewStartedNotification
 from .v2_all import ItemStartedNotification
 from .v2_all import McpServerOauthLoginCompletedNotification
 from .v2_all import McpToolCallProgressNotification
@@ -66,6 +68,8 @@ NOTIFICATION_MODELS: dict[str, type[BaseModel]] = {
     "hook/completed": HookCompletedNotification,
     "hook/started": HookStartedNotification,
     "item/agentMessage/delta": AgentMessageDeltaNotification,
+    "item/autoApprovalReview/completed": ItemGuardianApprovalReviewCompletedNotification,
+    "item/autoApprovalReview/started": ItemGuardianApprovalReviewStartedNotification,
     "item/commandExecution/outputDelta": CommandExecutionOutputDeltaNotification,
     "item/commandExecution/terminalInteraction": TerminalInteractionNotification,
     "item/completed": ItemCompletedNotification,

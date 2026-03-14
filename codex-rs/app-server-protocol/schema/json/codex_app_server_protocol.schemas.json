@@ -7050,6 +7050,9 @@
       },
       "DynamicToolSpec": {
         "properties": {
+          "deferLoading": {
+            "type": "boolean"
+          },
           "description": {
             "type": "string"
           },
@@ -9292,8 +9295,12 @@
             ]
           },
           "defaultPrompt": {
+            "description": "Starter prompts for the plugin. Capped at 3 entries with a maximum of 128 characters per entry.",
+            "items": {
+              "type": "string"
+            },
             "type": [
-              "string",
+              "array",
               "null"
             ]
           },

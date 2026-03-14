@@ -4,6 +4,14 @@ use anyhow::Result;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::features::Feature;
+use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
+use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ResponseMock;
@@ -17,6 +25,8 @@ use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -91,16 +101,37 @@ fn custom_tool_output_body_and_success(
     req: &ResponsesRequest,
     call_id: &str,
 ) -> (String, Option<bool>) {
-    let (_, success) = req
+    let (content, success) = req
         .custom_tool_call_output_content_and_success(call_id)
         .expect("custom tool output should be present");
     let items = custom_tool_output_items(req, call_id);
-    let output = items
+    let text_items = items
         .iter()
-        .skip(1)
         .filter_map(|item| item.get("text").and_then(Value::as_str))
-        .collect();
+        .collect::<Vec<_>>();
+    let output = match text_items.as_slice() {
+        [] => content.unwrap_or_default(),
+        [only] => (*only).to_string(),
+        [_, rest @ ..] => rest.concat(),
+    };
     (output, success)
+}
+
+fn custom_tool_output_last_non_empty_text(req: &ResponsesRequest, call_id: &str) -> Option<String> {
+    match req.custom_tool_call_output(call_id).get("output") {
+        Some(Value::String(text)) if !text.trim().is_empty() => Some(text.clone()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| item.get("text").and_then(Value::as_str))
+            .rfind(|text| !text.trim().is_empty())
+            .map(str::to_string),
+        Some(Value::String(_))
+        | Some(Value::Object(_))
+        | Some(Value::Number(_))
+        | Some(Value::Bool(_))
+        | Some(Value::Null)
+        | None => None,
+    }
 }
 
 async fn run_code_mode_turn(
@@ -1506,6 +1537,10 @@ text({ json: true });
 
     let req = second_mock.single_request();
     let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    eprintln!(
+        "hidden dynamic tool raw output: {}",
+        req.custom_tool_call_output("call-1")
+    );
     assert_ne!(
         success,
         Some(false),
@@ -1920,7 +1955,10 @@ text(JSON.stringify(tool));
         "exec ALL_TOOLS lookup failed unexpectedly: {output}"
     );
 
-    let parsed: Value = serde_json::from_str(&output)?;
+    let parsed: Value = serde_json::from_str(
+        &custom_tool_output_last_non_empty_text(&req, "call-1")
+            .expect("exec ALL_TOOLS lookup should emit JSON"),
+    )?;
     assert_eq!(
         parsed,
         serde_json::json!({
@@ -1955,13 +1993,169 @@ text(JSON.stringify(tool));
         "exec ALL_TOOLS MCP lookup failed unexpectedly: {output}"
     );
 
-    let parsed: Value = serde_json::from_str(&output)?;
+    let parsed: Value = serde_json::from_str(
+        &custom_tool_output_last_non_empty_text(&req, "call-1")
+            .expect("exec ALL_TOOLS MCP lookup should emit JSON"),
+    )?;
     assert_eq!(
         parsed,
         serde_json::json!({
             "name": "mcp__rmcp__echo",
             "description": "Echo back the provided message and include environment data.\n\nexec tool declaration:\n```ts\ndeclare const tools: { mcp__rmcp__echo(args: { env_var?: string; message: string; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };\n```",
         })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex().with_config(move |config| {
+        let _ = config.features.enable(Feature::CodeMode);
+    });
+    let base_test = builder.build(&server).await?;
+    let new_thread = base_test
+        .thread_manager
+        .start_thread_with_tools(
+            base_test.config.clone(),
+            vec![DynamicToolSpec {
+                name: "hidden_dynamic_tool".to_string(),
+                description: "A hidden dynamic tool.".to_string(),
+                input_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "city": { "type": "string" }
+                        },
+                    "required": ["city"],
+                    "additionalProperties": false,
+                }),
+                defer_loading: true,
+            }],
+            false,
+        )
+        .await?;
+    let test = TestCodex {
+        home: base_test.home,
+        cwd: base_test.cwd,
+        codex: new_thread.thread,
+        session_configured: new_thread.session_configured,
+        config: base_test.config,
+        thread_manager: base_test.thread_manager,
+    };
+
+    let code = r#"
+import { ALL_TOOLS, hidden_dynamic_tool } from "tools.js";
+
+const tool = ALL_TOOLS.find(({ name }) => name === "hidden_dynamic_tool");
+const out = await hidden_dynamic_tool({ city: "Paris" });
+text(
+  JSON.stringify({
+    name: tool?.name ?? null,
+    description: tool?.description ?? null,
+    out,
+  })
+);
+"#;
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call("call-1", "exec", code),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let second_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "use exec to inspect and call hidden tools".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let turn_id = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+    let request = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::DynamicToolCallRequest(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(request.tool, "hidden_dynamic_tool");
+    assert_eq!(request.arguments, serde_json::json!({ "city": "Paris" }));
+    test.codex
+        .submit(Op::DynamicToolResponse {
+            id: request.call_id,
+            response: DynamicToolResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "hidden-ok".to_string(),
+                }],
+                success: true,
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| match event {
+        EventMsg::TurnComplete(event) => event.turn_id == turn_id,
+        _ => false,
+    })
+    .await;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec hidden dynamic tool call failed unexpectedly: {output}"
+    );
+
+    let parsed: Value = serde_json::from_str(
+        &custom_tool_output_last_non_empty_text(&req, "call-1")
+            .expect("exec hidden dynamic tool lookup should emit JSON"),
+    )?;
+    assert_eq!(
+        parsed.get("name"),
+        Some(&Value::String("hidden_dynamic_tool".to_string()))
+    );
+    assert_eq!(
+        parsed.get("out"),
+        Some(&Value::String("hidden-ok".to_string()))
+    );
+    assert!(
+        parsed
+            .get("description")
+            .and_then(Value::as_str)
+            .is_some_and(|description| {
+                description.contains("A hidden dynamic tool.")
+                    && description.contains("declare const tools:")
+                    && description.contains("hidden_dynamic_tool(args:")
+            })
     );
 
     Ok(())
@@ -2130,7 +2324,10 @@ text(JSON.stringify(load("nb")));
         Some(false),
         "exec load call failed unexpectedly: {second_output}"
     );
-    let loaded: Value = serde_json::from_str(&second_output)?;
+    let loaded: Value = serde_json::from_str(
+        &custom_tool_output_last_non_empty_text(&second_request, "call-2")
+            .expect("exec load call should emit JSON"),
+    )?;
     assert_eq!(
         loaded,
         serde_json::json!({ "title": "Notebook", "items": [1, true, null] })
