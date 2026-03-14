@@ -54,11 +54,13 @@ pub(crate) struct GuardianSubagentManager {
 
 struct GuardianSubagent {
     codex: Codex,
+    cancel_token: CancellationToken,
     live_network_config: Option<NetworkProxyConfig>,
 }
 
 impl GuardianSubagent {
     async fn shutdown(self) {
+        self.cancel_token.cancel();
         let _ = self.codex.shutdown_and_wait().await;
     }
 
@@ -102,10 +104,12 @@ impl GuardianSubagentManager {
         }
 
         if state.is_none() {
-            match run_before_review_deadline(
+            let spawn_cancel_token = CancellationToken::new();
+            match run_before_review_deadline_with_cancel(
                 deadline,
                 params.external_cancel.as_ref(),
-                Box::pin(spawn_guardian_subagent(&params)),
+                &spawn_cancel_token,
+                Box::pin(spawn_guardian_subagent(&params, spawn_cancel_token.clone())),
             )
             .await
             {
@@ -198,6 +202,7 @@ impl GuardianSubagentManager {
     pub(crate) async fn cache_for_test(&self, codex: Codex) {
         *self.state.lock().await = Some(GuardianSubagent {
             codex,
+            cancel_token: CancellationToken::new(),
             live_network_config: None,
         });
     }
@@ -205,6 +210,7 @@ impl GuardianSubagentManager {
 
 async fn spawn_guardian_subagent(
     params: &GuardianSubagentRunParams,
+    cancel_token: CancellationToken,
 ) -> anyhow::Result<GuardianSubagent> {
     let codex = run_codex_thread_interactive(
         params.spawn_config.clone(),
@@ -212,7 +218,7 @@ async fn spawn_guardian_subagent(
         params.parent_session.services.models_manager.clone(),
         Arc::clone(&params.parent_session),
         Arc::clone(&params.parent_turn),
-        CancellationToken::new(),
+        cancel_token.clone(),
         SubAgentSource::Other(GUARDIAN_SUBAGENT_NAME.to_string()),
         None,
     )
@@ -220,6 +226,7 @@ async fn spawn_guardian_subagent(
 
     Ok(GuardianSubagent {
         codex,
+        cancel_token,
         live_network_config: params.live_network_config.clone(),
     })
 }
@@ -300,6 +307,19 @@ async fn run_before_review_deadline<T>(
     }
 }
 
+async fn run_before_review_deadline_with_cancel<T>(
+    deadline: tokio::time::Instant,
+    external_cancel: Option<&CancellationToken>,
+    cancel_token: &CancellationToken,
+    future: impl Future<Output = T>,
+) -> Result<T, GuardianSubagentRunOutcome> {
+    let result = run_before_review_deadline(deadline, external_cancel, future).await;
+    if result.is_err() {
+        cancel_token.cancel();
+    }
+    result
+}
+
 async fn interrupt_and_drain_turn(codex: &Codex) -> anyhow::Result<()> {
     let _ = codex.submit(Op::Interrupt).await;
 
@@ -355,5 +375,61 @@ mod tests {
         .await;
 
         assert!(matches!(outcome, Err(GuardianSubagentRunOutcome::Aborted)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_before_review_deadline_with_cancel_cancels_token_on_timeout() {
+        let cancel_token = CancellationToken::new();
+
+        let outcome = run_before_review_deadline_with_cancel(
+            tokio::time::Instant::now() + Duration::from_millis(10),
+            None,
+            &cancel_token,
+            async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            },
+        )
+        .await;
+
+        assert!(matches!(outcome, Err(GuardianSubagentRunOutcome::TimedOut)));
+        assert!(cancel_token.is_cancelled());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_before_review_deadline_with_cancel_cancels_token_on_abort() {
+        let external_cancel = CancellationToken::new();
+        let external_canceller = external_cancel.clone();
+        let cancel_token = CancellationToken::new();
+        drop(tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            external_canceller.cancel();
+        }));
+
+        let outcome = run_before_review_deadline_with_cancel(
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            Some(&external_cancel),
+            &cancel_token,
+            std::future::pending::<()>(),
+        )
+        .await;
+
+        assert!(matches!(outcome, Err(GuardianSubagentRunOutcome::Aborted)));
+        assert!(cancel_token.is_cancelled());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_before_review_deadline_with_cancel_preserves_token_on_success() {
+        let cancel_token = CancellationToken::new();
+
+        let outcome = run_before_review_deadline_with_cancel(
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            None,
+            &cancel_token,
+            async { 7_u8 },
+        )
+        .await;
+
+        assert!(matches!(outcome, Ok(7)));
+        assert!(!cancel_token.is_cancelled());
     }
 }

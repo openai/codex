@@ -614,8 +614,8 @@ impl ConfigBuilder {
             fallback_cwd,
         } = self;
         let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
-        if let Err(err) = maybe_migrate_guardian_approval_alias(&codex_home).await {
-            tracing::warn!(error = %err, "failed to migrate guardian_approval feature alias");
+        if let Err(err) = maybe_migrate_smart_approvals_alias(&codex_home).await {
+            tracing::warn!(error = %err, "failed to migrate smart_approvals feature alias");
         }
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
@@ -664,17 +664,17 @@ impl ConfigBuilder {
     }
 }
 
-/// Rewrites the legacy `guardian_approval` feature flag to
-/// `smart_approvals` in `config.toml` before normal config loading.
+/// Rewrites the legacy `smart_approvals` feature flag to
+/// `guardian_approval` in `config.toml` before normal config loading.
 ///
 /// If the old key is present and enabled, this preserves the enabled state by
-/// setting `smart_approvals = true` when the new key is not already present.
+/// setting `guardian_approval = true` when the new key is not already present.
 /// Because the deprecated flag historically meant "turn guardian review on",
 /// this migration also backfills `approvals_reviewer = "guardian_subagent"`
 /// in the same scope when that reviewer is not already configured there.
-/// In all cases it removes the deprecated `guardian_approval` entry so future
+/// In all cases it removes the deprecated `smart_approvals` entry so future
 /// loads only see the canonical feature flag name.
-async fn maybe_migrate_guardian_approval_alias(codex_home: &Path) -> std::io::Result<bool> {
+async fn maybe_migrate_smart_approvals_alias(codex_home: &Path) -> std::io::Result<bool> {
     let config_path = codex_home.join(CONFIG_TOML_FILE);
     if !tokio::fs::try_exists(&config_path).await? {
         return Ok(false);
@@ -688,11 +688,11 @@ async fn maybe_migrate_guardian_approval_alias(codex_home: &Path) -> std::io::Re
     let mut edits = Vec::new();
 
     if let Some(features) = config_toml.features.as_ref()
-        && let Some(enabled) = features.entries.get("guardian_approval").copied()
+        && let Some(enabled) = features.entries.get("smart_approvals").copied()
     {
-        if enabled && !features.entries.contains_key("smart_approvals") {
+        if enabled && !features.entries.contains_key("guardian_approval") {
             edits.push(ConfigEdit::SetPath {
-                segments: vec!["features".to_string(), "smart_approvals".to_string()],
+                segments: vec!["features".to_string(), "guardian_approval".to_string()],
                 value: value(true),
             });
         }
@@ -703,21 +703,21 @@ async fn maybe_migrate_guardian_approval_alias(codex_home: &Path) -> std::io::Re
             });
         }
         edits.push(ConfigEdit::ClearPath {
-            segments: vec!["features".to_string(), "guardian_approval".to_string()],
+            segments: vec!["features".to_string(), "smart_approvals".to_string()],
         });
     }
 
     for (profile_name, profile) in &config_toml.profiles {
         if let Some(features) = profile.features.as_ref()
-            && let Some(enabled) = features.entries.get("guardian_approval").copied()
+            && let Some(enabled) = features.entries.get("smart_approvals").copied()
         {
-            if enabled && !features.entries.contains_key("smart_approvals") {
+            if enabled && !features.entries.contains_key("guardian_approval") {
                 edits.push(ConfigEdit::SetPath {
                     segments: vec![
                         "profiles".to_string(),
                         profile_name.clone(),
                         "features".to_string(),
-                        "smart_approvals".to_string(),
+                        "guardian_approval".to_string(),
                     ],
                     value: value(true),
                 });
@@ -737,7 +737,7 @@ async fn maybe_migrate_guardian_approval_alias(codex_home: &Path) -> std::io::Re
                     "profiles".to_string(),
                     profile_name.clone(),
                     "features".to_string(),
-                    "guardian_approval".to_string(),
+                    "smart_approvals".to_string(),
                 ],
             });
         }
@@ -752,7 +752,7 @@ async fn maybe_migrate_guardian_approval_alias(codex_home: &Path) -> std::io::Re
         .apply()
         .await
         .map_err(|err| {
-            std::io::Error::other(format!("failed to migrate smart_approvals alias: {err}"))
+            std::io::Error::other(format!("failed to migrate guardian_approval alias: {err}"))
         })?;
     Ok(true)
 }
@@ -818,8 +818,8 @@ pub async fn load_config_as_toml_with_cli_overrides(
     cwd: &AbsolutePathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
-    if let Err(err) = maybe_migrate_guardian_approval_alias(codex_home).await {
-        tracing::warn!(error = %err, "failed to migrate guardian_approval feature alias");
+    if let Err(err) = maybe_migrate_smart_approvals_alias(codex_home).await {
+        tracing::warn!(error = %err, "failed to migrate smart_approvals feature alias");
     }
     let config_layer_stack = load_config_layers_state(
         codex_home,

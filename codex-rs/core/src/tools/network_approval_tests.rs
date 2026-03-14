@@ -101,6 +101,48 @@ async fn session_approved_hosts_preserve_protocol_and_port_scope() {
 }
 
 #[tokio::test]
+async fn copy_session_approved_hosts_to_replaces_existing_target_hosts() {
+    let source = NetworkApprovalService::default();
+    {
+        let mut approved_hosts = source.session_approved_hosts.lock().await;
+        approved_hosts.insert(HostApprovalKey {
+            host: "source.example.com".to_string(),
+            protocol: "https",
+            port: 443,
+        });
+    }
+
+    let target = NetworkApprovalService::default();
+    {
+        let mut approved_hosts = target.session_approved_hosts.lock().await;
+        approved_hosts.insert(HostApprovalKey {
+            host: "stale.example.com".to_string(),
+            protocol: "https",
+            port: 8443,
+        });
+    }
+
+    source.copy_session_approved_hosts_to(&target).await;
+
+    let copied = target
+        .session_approved_hosts
+        .lock()
+        .await
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        copied,
+        vec![HostApprovalKey {
+            host: "source.example.com".to_string(),
+            protocol: "https",
+            port: 443,
+        }]
+    );
+}
+
+#[tokio::test]
 async fn pending_waiters_receive_owner_decision() {
     let pending = Arc::new(PendingHostApproval::new());
 

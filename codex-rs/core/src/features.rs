@@ -785,9 +785,9 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::GuardianApproval,
-        key: "smart_approvals",
+        key: "guardian_approval",
         stage: Stage::Experimental {
-            name: "Smart Approvals",
+            name: "Guardian Approvals",
             menu_description: "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to a carefully-prompted security reviewer subagent rather than blocking the agent on your input. This can consume significantly more tokens because it runs a subagent on every approval request.",
             announcement: "",
         },
