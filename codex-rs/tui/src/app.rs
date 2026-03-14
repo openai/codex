@@ -4424,8 +4424,11 @@ mod tests {
     use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
     use codex_app_server_client::InProcessClientStartArgs;
     use codex_app_server_client::InProcessServerEvent;
+    use codex_app_server_protocol::ClientRequest;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::SkillsChangedNotification;
+    use codex_app_server_protocol::ThreadStartParams;
+    use codex_app_server_protocol::ThreadStartResponse;
     use codex_arg0::Arg0DispatchPaths;
     use codex_core::CodexAuth;
     use codex_core::config::ConfigBuilder;
@@ -4713,6 +4716,59 @@ mod tests {
             .await
             .expect("timed out waiting for listener task abort")
             .expect("listener task drop notification should succeed");
+    }
+
+    #[tokio::test]
+    async fn attach_app_server_managed_thread_registers_channel_without_listener() -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let session = SessionConfiguredEvent {
+            session_id: thread_id,
+            forked_from_id: None,
+            thread_name: Some("app-server".to_string()),
+            model: "gpt-test".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: PathBuf::from("/tmp/project"),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::from("/tmp/project/rollout.jsonl")),
+        };
+
+        app.attach_app_server_managed_thread(thread_id, session);
+
+        assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
+        assert_eq!(
+            app.thread_event_listener_tasks.contains_key(&thread_id),
+            false
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn attach_direct_thread_registers_channel_and_listener() -> Result<()> {
+        let mut app = make_test_app().await;
+        let new_thread = app.server.start_thread(app.config.clone()).await?;
+        let thread_id = new_thread.thread_id;
+        let thread = new_thread.thread.clone();
+        let session = new_thread.session_configured.clone();
+
+        app.attach_direct_thread(thread_id, thread, session);
+
+        assert_eq!(app.thread_event_channels.contains_key(&thread_id), true);
+        assert_eq!(
+            app.thread_event_listener_tasks.contains_key(&thread_id),
+            true
+        );
+
+        app.reset_thread_event_state();
+        Ok(())
     }
 
     #[tokio::test]
@@ -6778,6 +6834,79 @@ guardian_approval = true
                 errors: Vec::new(),
             }],
         }
+    }
+
+    #[tokio::test]
+    async fn session_configured_from_thread_start_response_maps_thread_start_fields() -> Result<()>
+    {
+        let app = make_test_app().await;
+        let client = start_test_app_server_client(app.config.clone()).await;
+        let server = client.thread_manager();
+        let response: ThreadStartResponse = client
+            .requester()
+            .request_typed_with_generated_id(|request_id| ClientRequest::ThreadStart {
+                request_id,
+                params: ThreadStartParams {
+                    model: app.config.model.clone(),
+                    cwd: Some(app.config.cwd.to_string_lossy().into_owned()),
+                    service_tier: Some(app.config.service_tier),
+                    ..ThreadStartParams::default()
+                },
+            })
+            .await?;
+
+        let thread_id = ThreadId::from_string(&response.thread.id).expect("valid thread id");
+        let thread = server.get_thread(thread_id).await?;
+        let session =
+            App::session_configured_from_thread_start_response(thread.as_ref(), response.clone())?;
+
+        assert_eq!(session.session_id, thread_id);
+        assert_eq!(session.thread_name, response.thread.name);
+        assert_eq!(session.model, response.model);
+        assert_eq!(session.model_provider_id, response.model_provider);
+        assert_eq!(session.service_tier, response.service_tier);
+        assert_eq!(session.cwd, response.cwd);
+        assert_eq!(session.rollout_path, thread.rollout_path());
+
+        client.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn build_fresh_app_server_session_returns_bootstrapped_widget() -> Result<()> {
+        let app = make_test_app().await;
+        let client = start_test_app_server_client(app.config.clone()).await;
+        let server = client.thread_manager();
+        let model = codex_core::test_support::get_model_offline(app.config.model.as_deref());
+        let session_telemetry = test_session_telemetry(&app.config, model.as_str());
+
+        let init = crate::chatwidget::ChatWidgetInit {
+            config: app.config.clone(),
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            app_event_tx: app.app_event_tx.clone(),
+            initial_user_message: None,
+            enhanced_keys_supported: false,
+            auth_manager: app.auth_manager.clone(),
+            models_manager: server.get_models_manager(),
+            feedback: app.feedback.clone(),
+            is_first_run: false,
+            feedback_audience: FeedbackAudience::External,
+            model: Some(model),
+            startup_tooltip_override: None,
+            status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
+            session_telemetry,
+        };
+
+        let (chat, thread_id, session_configured) =
+            App::build_fresh_app_server_session(client.requester(), server, init).await?;
+
+        assert_eq!(thread_id, session_configured.session_id);
+        assert_eq!(chat.thread_id(), Some(thread_id));
+        assert_eq!(chat.thread_name(), session_configured.thread_name.clone());
+        assert_eq!(chat.rollout_path(), session_configured.rollout_path.clone());
+
+        client.shutdown().await?;
+        Ok(())
     }
 
     #[tokio::test]
