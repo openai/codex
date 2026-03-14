@@ -1525,6 +1525,16 @@
               ],
               "writeOnly": true
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "phase": {
               "anyOf": [
                 {
@@ -1973,6 +1983,21 @@
           "type": "object"
         }
       ]
+    },
+    "ResponseItemMetadata": {
+      "properties": {
+        "user_message_type": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserMessageType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "ResponsesApiWebSearchAction": {
       "oneOf": [
@@ -3367,6 +3392,14 @@
           "type": "object"
         }
       ]
+    },
+    "UserMessageType": {
+      "enum": [
+        "prompt",
+        "prompt_steering",
+        "prompt_queued"
+      ],
+      "type": "string"
     },
     "WindowsSandboxSetupMode": {
       "enum": [

@@ -330,6 +330,7 @@ mod job {
                         &rollout_contents,
                     )?,
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             }],

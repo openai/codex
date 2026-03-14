@@ -57,6 +57,7 @@ impl ContextualUserFragmentDefinition {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText { text }],
+            metadata: None,
             end_turn: None,
             phase: None,
         }

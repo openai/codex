@@ -157,6 +157,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
                 text: "pasted image".to_string(),
             },
         ],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -240,6 +241,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
                 text: "dropped image".to_string(),
             },
         ],
+        metadata: None,
         end_turn: None,
         phase: None,
     };

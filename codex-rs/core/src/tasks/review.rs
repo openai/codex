@@ -239,6 +239,7 @@ pub(crate) async fn exit_review_mode(
                 id: Some(REVIEW_USER_MESSAGE_ID.to_string()),
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: user_message }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             }],
@@ -260,6 +261,7 @@ pub(crate) async fn exit_review_mode(
                 content: vec![ContentItem::OutputText {
                     text: assistant_message,
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },

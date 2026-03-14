@@ -125,6 +125,7 @@ impl CodexThread {
         let pending_item = ResponseInputItem::Message {
             role: "user".to_string(),
             content: vec![ContentItem::InputText { text: message }],
+            metadata: None,
         };
         let pending_items = vec![pending_item];
         let Err(items_without_active_turn) = self

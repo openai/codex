@@ -113,6 +113,7 @@ fn user_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     }
@@ -125,6 +126,7 @@ fn assistant_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     }
@@ -137,6 +139,7 @@ fn skill_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     }
@@ -752,6 +755,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
         content: vec![ContentItem::InputText {
             text: "summary".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -763,6 +767,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
             content: vec![ContentItem::InputText {
                 text: "stale developer instructions".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         },
@@ -3547,6 +3552,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
         content: vec![ContentItem::InputText {
             text: format!("{}\nsummary", crate::compact::SUMMARY_PREFIX),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -3910,6 +3916,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         content: vec![ContentItem::InputText {
             text: "late pending input".to_string(),
         }],
+        metadata: None,
     }])
     .await
     .expect("inject pending input into active turn");
@@ -3923,6 +3930,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         content: vec![ContentItem::InputText {
             text: "late pending input".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -4265,6 +4273,7 @@ async fn sample_rollout(
         content: vec![ContentItem::InputText {
             text: "first user".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -4280,6 +4289,7 @@ async fn sample_rollout(
         content: vec![ContentItem::OutputText {
             text: "assistant reply one".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -4307,6 +4317,7 @@ async fn sample_rollout(
         content: vec![ContentItem::InputText {
             text: "second user".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -4322,6 +4333,7 @@ async fn sample_rollout(
         content: vec![ContentItem::OutputText {
             text: "assistant reply two".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -4349,6 +4361,7 @@ async fn sample_rollout(
         content: vec![ContentItem::InputText {
             text: "third user".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -4364,6 +4377,7 @@ async fn sample_rollout(
         content: vec![ContentItem::OutputText {
             text: "assistant reply three".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };

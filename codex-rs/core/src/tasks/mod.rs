@@ -442,6 +442,7 @@ impl Session {
                         "{TURN_ABORTED_OPEN_TAG}\n{TURN_ABORTED_INTERRUPTED_GUIDANCE}\n</turn_aborted>"
                     ),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             };

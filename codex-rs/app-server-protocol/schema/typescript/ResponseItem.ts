@@ -9,9 +9,10 @@ import type { LocalShellStatus } from "./LocalShellStatus";
 import type { MessagePhase } from "./MessagePhase";
 import type { ReasoningItemContent } from "./ReasoningItemContent";
 import type { ReasoningItemReasoningSummary } from "./ReasoningItemReasoningSummary";
+import type { ResponseItemMetadata } from "./ResponseItemMetadata";
 import type { WebSearchAction } from "./WebSearchAction";
 
-export type ResponseItem = { "type": "message", role: string, content: Array<ContentItem>, end_turn?: boolean, phase?: MessagePhase, } | { "type": "reasoning", summary: Array<ReasoningItemReasoningSummary>, content?: Array<ReasoningItemContent>, encrypted_content: string | null, } | { "type": "local_shell_call", 
+export type ResponseItem = { "type": "message", role: string, content: Array<ContentItem>, metadata?: ResponseItemMetadata, end_turn?: boolean, phase?: MessagePhase, } | { "type": "reasoning", summary: Array<ReasoningItemReasoningSummary>, content?: Array<ReasoningItemContent>, encrypted_content: string | null, } | { "type": "local_shell_call", 
 /**
  * Set when using the Responses API.
  */

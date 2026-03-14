@@ -530,6 +530,7 @@ async fn review_input_isolated_from_parent_history() {
             content: vec![codex_protocol::models::ContentItem::InputText {
                 text: "parent: earlier user message".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         };
@@ -550,6 +551,7 @@ async fn review_input_isolated_from_parent_history() {
             content: vec![codex_protocol::models::ContentItem::OutputText {
                 text: "parent: assistant reply".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         };

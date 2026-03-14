@@ -129,6 +129,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
             content: vec![ContentItem::OutputText {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         },

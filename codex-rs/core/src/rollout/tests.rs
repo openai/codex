@@ -1134,6 +1134,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 content: vec![ContentItem::OutputText {
                     text: format!("reply-{idx}"),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             }),

@@ -367,6 +367,7 @@ fn build_compacted_history_with_limit(
             content: vec![ContentItem::InputText {
                 text: message.clone(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         });
@@ -382,6 +383,7 @@ fn build_compacted_history_with_limit(
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText { text: summary_text }],
+        metadata: None,
         end_turn: None,
         phase: None,
     });
