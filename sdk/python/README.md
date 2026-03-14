@@ -12,8 +12,9 @@ python -m pip install -e .
 ```
 
 Published SDK builds pin an exact `codex-cli-bin` runtime dependency. For local
-repo development, pass `AppServerConfig(codex_bin=...)` to point at a local
-build explicitly.
+repo development, either pass `AppServerConfig(codex_bin=...)` to point at a
+local build explicitly, or use the repo examples/notebook bootstrap which
+installs the pinned runtime package automatically.
 
 ## Quickstart
 
@@ -54,7 +55,8 @@ wheel.
 
 For local repo development, the checked-in `sdk/python-runtime` package is only
 a template for staged release artifacts. Editable installs should use an
-explicit `codex_bin` override instead.
+explicit `codex_bin` override for manual SDK usage; the repo examples and
+notebook bootstrap the pinned runtime package automatically.
 
 ## Maintainer workflow
 
