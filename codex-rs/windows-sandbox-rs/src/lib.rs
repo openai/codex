@@ -270,7 +270,7 @@ mod windows_impl {
         }
         if !policy.has_full_disk_read_access() {
             anyhow::bail!(
-                "Restricted read-only access is not yet supported by the Windows sandbox backend"
+                "Restricted read-only access requires the elevated Windows sandbox backend"
             );
         }
         let caps = load_or_create_cap_sids(codex_home)?;

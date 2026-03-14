@@ -190,6 +190,7 @@ fn windows_restricted_token_skips_external_sandbox_policies() {
     assert_eq!(
         should_use_windows_restricted_token_sandbox(
             SandboxType::WindowsRestrictedToken,
+            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
             &policy,
             &file_system_policy,
         ),
@@ -205,6 +206,7 @@ fn windows_restricted_token_runs_for_legacy_restricted_policies() {
     assert_eq!(
         should_use_windows_restricted_token_sandbox(
             SandboxType::WindowsRestrictedToken,
+            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
             &policy,
             &file_system_policy,
         ),
@@ -222,6 +224,7 @@ fn windows_restricted_token_rejects_network_only_restrictions() {
     assert_eq!(
             unsupported_windows_restricted_token_sandbox_reason(
                 SandboxType::WindowsRestrictedToken,
+                codex_protocol::config_types::WindowsSandboxLevel::Disabled,
                 &policy,
                 &file_system_policy,
                 NetworkSandboxPolicy::Restricted,
@@ -240,11 +243,46 @@ fn windows_restricted_token_allows_legacy_restricted_policies() {
     assert_eq!(
         unsupported_windows_restricted_token_sandbox_reason(
             SandboxType::WindowsRestrictedToken,
+            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
             &policy,
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
         ),
         None
+    );
+}
+
+#[test]
+fn windows_restricted_token_rejects_restricted_read_only_policies() {
+    let policy = SandboxPolicy::ReadOnly {
+        access: codex_protocol::protocol::ReadOnlyAccess::Restricted {
+            include_platform_defaults: true,
+            readable_roots: vec![],
+        },
+        network_access: false,
+    };
+    let file_system_policy = FileSystemSandboxPolicy::from(&policy);
+
+    assert_eq!(
+        should_use_windows_restricted_token_sandbox(
+            SandboxType::WindowsRestrictedToken,
+            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            &policy,
+            &file_system_policy,
+        ),
+        false
+    );
+    assert_eq!(
+        unsupported_windows_restricted_token_sandbox_reason(
+            SandboxType::WindowsRestrictedToken,
+            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            &policy,
+            &file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+        ),
+        Some(
+            "windows sandbox backend cannot enforce file_system=Restricted, network=Restricted, legacy_policy=ReadOnly { access: Restricted { include_platform_defaults: true, readable_roots: [] }, network_access: false }; refusing to run unsandboxed".to_string()
+        )
     );
 }
 
@@ -262,6 +300,39 @@ fn windows_restricted_token_allows_legacy_workspace_write_policies() {
     assert_eq!(
         unsupported_windows_restricted_token_sandbox_reason(
             SandboxType::WindowsRestrictedToken,
+            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            &policy,
+            &file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+        ),
+        None
+    );
+}
+
+#[test]
+fn windows_elevated_sandbox_allows_restricted_read_only_policies() {
+    let policy = SandboxPolicy::ReadOnly {
+        access: codex_protocol::protocol::ReadOnlyAccess::Restricted {
+            include_platform_defaults: true,
+            readable_roots: vec![],
+        },
+        network_access: false,
+    };
+    let file_system_policy = FileSystemSandboxPolicy::from(&policy);
+
+    assert_eq!(
+        should_use_windows_restricted_token_sandbox(
+            SandboxType::WindowsRestrictedToken,
+            codex_protocol::config_types::WindowsSandboxLevel::Elevated,
+            &policy,
+            &file_system_policy,
+        ),
+        true
+    );
+    assert_eq!(
+        unsupported_windows_restricted_token_sandbox_reason(
+            SandboxType::WindowsRestrictedToken,
+            codex_protocol::config_types::WindowsSandboxLevel::Elevated,
             &policy,
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
