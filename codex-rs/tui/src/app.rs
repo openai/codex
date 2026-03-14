@@ -1885,6 +1885,20 @@ impl App {
         config: &Config,
         model: Option<String>,
     ) -> ThreadStartParams {
+        let mut config_overrides = HashMap::new();
+        if let Some(profile) = config.active_profile.as_ref() {
+            config_overrides.insert("profile".to_string(), Value::String(profile.clone()));
+        }
+        if let Some(reasoning_effort) = config.model_reasoning_effort {
+            let key = config.active_profile.as_ref().map_or_else(
+                || "model_reasoning_effort".to_string(),
+                |profile| format!("profiles.{profile}.model_reasoning_effort"),
+            );
+            let value =
+                serde_json::to_value(reasoning_effort).expect("reasoning effort should serialize");
+            config_overrides.insert(key, value);
+        }
+
         ThreadStartParams {
             model: model.or_else(|| config.model.clone()),
             model_provider: Some(config.model_provider_id.clone()),
@@ -1904,9 +1918,7 @@ impl App {
                 }
                 SandboxPolicy::ExternalSandbox { .. } => None,
             },
-            config: config.active_profile.as_ref().map(|profile| {
-                HashMap::from([("profile".to_string(), Value::String(profile.clone()))])
-            }),
+            config: (!config_overrides.is_empty()).then_some(config_overrides),
             base_instructions: config.base_instructions.clone(),
             developer_instructions: config.developer_instructions.clone(),
             personality: config.personality,
@@ -7007,6 +7019,7 @@ smart_approvals = true
         config.base_instructions = Some("base instructions".to_string());
         config.developer_instructions = Some("developer instructions".to_string());
         config.personality = Some(Personality::Friendly);
+        config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
         config.ephemeral = true;
 
         let params =
@@ -7024,10 +7037,13 @@ smart_approvals = true
                     codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent,
                 ),
                 sandbox: Some(codex_app_server_protocol::SandboxMode::WorkspaceWrite),
-                config: Some(HashMap::from([(
-                    "profile".to_string(),
-                    Value::String("guardian".to_string()),
-                )])),
+                config: Some(HashMap::from([
+                    ("profile".to_string(), Value::String("guardian".to_string()),),
+                    (
+                        "profiles.guardian.model_reasoning_effort".to_string(),
+                        Value::String("high".to_string()),
+                    ),
+                ])),
                 service_name: None,
                 base_instructions: Some("base instructions".to_string()),
                 developer_instructions: Some("developer instructions".to_string()),
