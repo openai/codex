@@ -19,6 +19,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -30,6 +31,68 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
+
+async fn guardian_test_session_and_turn(
+    server: &wiremock::MockServer,
+) -> (Arc<Session>, Arc<TurnContext>) {
+    let (mut session, mut turn) = crate::codex::make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    let config = Arc::new(config);
+    let models_manager = Arc::new(test_support::models_manager_with_provider(
+        config.codex_home.clone(),
+        Arc::clone(&session.services.auth_manager),
+        config.model_provider.clone(),
+    ));
+    session.services.models_manager = models_manager;
+    turn.config = Arc::clone(&config);
+    turn.provider = config.model_provider.clone();
+
+    (Arc::new(session), Arc::new(turn))
+}
+
+async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnContext>) {
+    session
+        .record_into_history(
+            &[
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "Please check the repo visibility and push the docs fix if needed."
+                            .to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+                ResponseItem::FunctionCall {
+                    id: None,
+                    name: "gh_repo_view".to_string(),
+                    namespace: None,
+                    arguments: "{\"repo\":\"openai/codex\"}".to_string(),
+                    call_id: "call-1".to_string(),
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: "call-1".to_string(),
+                    output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                        "repo visibility: public".to_string(),
+                    ),
+                },
+                ResponseItem::Message {
+                    id: None,
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: "The repo is public; I now need approval to push the docs fix."
+                            .to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+            ],
+            turn.as_ref(),
+        )
+        .await;
+}
 
 #[test]
 fn build_guardian_transcript_keeps_original_numbering() {
@@ -429,47 +492,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     turn.provider = config.model_provider.clone();
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-
-    session
-        .record_into_history(
-            &[
-                ResponseItem::Message {
-                    id: None,
-                    role: "user".to_string(),
-                    content: vec![ContentItem::InputText {
-                        text: "Please check the repo visibility and push the docs fix if needed."
-                            .to_string(),
-                    }],
-                    end_turn: None,
-                    phase: None,
-                },
-                ResponseItem::FunctionCall {
-                    id: None,
-                    name: "gh_repo_view".to_string(),
-                    namespace: None,
-                    arguments: "{\"repo\":\"openai/codex\"}".to_string(),
-                    call_id: "call-1".to_string(),
-                },
-                ResponseItem::FunctionCallOutput {
-                    call_id: "call-1".to_string(),
-                    output: codex_protocol::models::FunctionCallOutputPayload::from_text(
-                        "repo visibility: public".to_string(),
-                    ),
-                },
-                ResponseItem::Message {
-                    id: None,
-                    role: "assistant".to_string(),
-                    content: vec![ContentItem::OutputText {
-                        text: "The repo is public; I now need approval to push the docs fix."
-                            .to_string(),
-                    }],
-                    end_turn: None,
-                    phase: None,
-                },
-            ],
-            turn.as_ref(),
-        )
-        .await;
+    seed_guardian_parent_history(&session, &turn).await;
 
     let prompt = build_guardian_prompt_items(
         session.as_ref(),
@@ -492,14 +515,17 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     )
     .await;
 
-    let assessment = run_guardian_subagent(
+    let outcome = run_guardian_subagent(
         Arc::clone(&session),
         Arc::clone(&turn),
         prompt,
         guardian_output_schema(),
-        CancellationToken::new(),
+        None,
     )
-    .await?;
+    .await;
+    let GuardianReviewOutcome::Completed(Ok(assessment)) = outcome else {
+        panic!("expected guardian assessment");
+    };
     assert_eq!(assessment.risk_score, 35);
 
     let request = request_log.single_request();
@@ -516,6 +542,124 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
             )
         );
     });
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_reuses_prompt_cache_key_without_retaining_prior_reviews() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let first_rationale = "first guardian rationale should not appear in later prompts";
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-guardian-1"),
+                ev_assistant_message(
+                    "msg-guardian-1",
+                    &serde_json::json!({
+                        "risk_level": "low",
+                        "risk_score": 5,
+                        "rationale": first_rationale,
+                        "evidence": [],
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-guardian-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian-2"),
+                ev_assistant_message(
+                    "msg-guardian-2",
+                    &serde_json::json!({
+                        "risk_level": "low",
+                        "risk_score": 7,
+                        "rationale": "second guardian rationale",
+                        "evidence": [],
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-guardian-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let first_prompt = build_guardian_prompt_items(
+        session.as_ref(),
+        Some("First retry reason".to_string()),
+        GuardianApprovalRequest::Shell {
+            id: "shell-1".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the first docs fix.".to_string()),
+        },
+    )
+    .await;
+    let second_prompt = build_guardian_prompt_items(
+        session.as_ref(),
+        Some("Second retry reason".to_string()),
+        GuardianApprovalRequest::Shell {
+            id: "shell-2".to_string(),
+            command: vec![
+                "git".to_string(),
+                "push".to_string(),
+                "--force-with-lease".to_string(),
+            ],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the second docs fix.".to_string()),
+        },
+    )
+    .await;
+
+    let first_outcome = run_guardian_subagent(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        first_prompt,
+        guardian_output_schema(),
+        None,
+    )
+    .await;
+    let second_outcome = run_guardian_subagent(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        second_prompt,
+        guardian_output_schema(),
+        None,
+    )
+    .await;
+
+    let GuardianReviewOutcome::Completed(Ok(first_assessment)) = first_outcome else {
+        panic!("expected first guardian assessment");
+    };
+    let GuardianReviewOutcome::Completed(Ok(second_assessment)) = second_outcome else {
+        panic!("expected second guardian assessment");
+    };
+    assert_eq!(first_assessment.risk_score, 5);
+    assert_eq!(second_assessment.risk_score, 7);
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2);
+
+    let first_body = requests[0].body_json();
+    let second_body = requests[1].body_json();
+    assert_eq!(
+        first_body["prompt_cache_key"],
+        second_body["prompt_cache_key"]
+    );
+    assert!(
+        !second_body.to_string().contains(first_rationale),
+        "guardian session should be reset between reviews"
+    );
 
     Ok(())
 }

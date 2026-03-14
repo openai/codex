@@ -36,14 +36,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::codex_delegate::run_codex_thread_interactive;
 use crate::compact::content_items_to_text;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::NetworkProxySpec;
 use crate::event_mapping::is_contextual_user_message_content;
 use crate::features::Feature;
-use crate::protocol::Op;
+use crate::guardian_subagent::GuardianSubagentRunOutcome;
+use crate::guardian_subagent::GuardianSubagentRunParams;
 use crate::protocol::SandboxPolicy;
 use crate::truncate::approx_bytes_for_tokens;
 use crate::truncate::approx_token_count;
@@ -51,7 +51,7 @@ use crate::truncate::approx_tokens_from_byte_count;
 use codex_protocol::protocol::ReviewDecision;
 
 const GUARDIAN_PREFERRED_MODEL: &str = "gpt-5.4";
-const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
+pub(crate) const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
 pub(crate) const GUARDIAN_SUBAGENT_NAME: &str = "guardian";
 // Guardian needs a large enough transcript budget to preserve the real
 // authorization signal and recent evidence. Keep separate budgets for
@@ -81,6 +81,12 @@ pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = concat!(
     "or if the user explicitly approves the action after being informed of the risk. ",
     "Otherwise, stop and request user input.",
 );
+
+enum GuardianReviewOutcome {
+    Completed(anyhow::Result<GuardianAssessment>),
+    TimedOut,
+    Aborted,
+}
 
 fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
     match level {
@@ -257,41 +263,38 @@ async fn run_guardian_review(
         )
         .await;
 
+    if external_cancel
+        .as_ref()
+        .is_some_and(CancellationToken::is_cancelled)
+    {
+        session
+            .send_event(
+                turn.as_ref(),
+                EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+                    id: assessment_id,
+                    turn_id: assessment_turn_id,
+                    status: GuardianAssessmentStatus::Aborted,
+                    risk_score: None,
+                    risk_level: None,
+                    rationale: None,
+                    action: Some(action_summary),
+                }),
+            )
+            .await;
+        return ReviewDecision::Abort;
+    }
+
     let terminal_action = action_summary.clone();
     let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, request).await;
     let schema = guardian_output_schema();
-    let cancel_token = CancellationToken::new();
-    enum GuardianReviewOutcome {
-        Completed(anyhow::Result<GuardianAssessment>),
-        TimedOut,
-        Aborted,
-    }
-    let outcome = tokio::select! {
-        review = run_guardian_subagent(
-            session.clone(),
-            turn.clone(),
-            prompt_items,
-            schema,
-            cancel_token.clone(),
-        ) => GuardianReviewOutcome::Completed(review),
-        _ = tokio::time::sleep(GUARDIAN_REVIEW_TIMEOUT) => {
-            // Cancel the delegate token before failing closed so the one-shot
-            // subagent tears down its background streams instead of lingering
-            // after the caller has already timed out.
-            cancel_token.cancel();
-            GuardianReviewOutcome::TimedOut
-        },
-        _ = async {
-            if let Some(external_cancel) = external_cancel.as_ref() {
-                external_cancel.cancelled().await;
-            } else {
-                std::future::pending::<()>().await;
-            }
-        } => {
-            cancel_token.cancel();
-            GuardianReviewOutcome::Aborted
-        },
-    };
+    let outcome = run_guardian_subagent(
+        session.clone(),
+        turn.clone(),
+        prompt_items,
+        schema,
+        external_cancel,
+    )
+    .await;
 
     let assessment = match outcome {
         GuardianReviewOutcome::Completed(Ok(assessment)) => assessment,
@@ -638,22 +641,27 @@ fn collect_guardian_transcript_entries(items: &[ResponseItem]) -> Vec<GuardianTr
     entries
 }
 
-/// Runs the guardian as a locked-down one-shot subagent.
+/// Runs the guardian in a locked-down reusable subagent session.
 ///
 /// The guardian itself should not mutate state or trigger further approvals, so
 /// it is pinned to a read-only sandbox with `approval_policy = never` and
-/// nonessential agent features disabled. It may still reuse the parent's
-/// managed-network allowlist for read-only checks, but it intentionally runs
-/// without inherited exec-policy rules.
+/// nonessential agent features disabled. The child session is reused across
+/// approvals to preserve a stable prompt-cache key, but its history is cleared
+/// before each review so prior guardian decisions do not bleed into later ones.
+/// It may still reuse the parent's managed-network allowlist for read-only
+/// checks, but it intentionally runs without inherited exec-policy rules.
 async fn run_guardian_subagent(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     prompt_items: Vec<UserInput>,
     schema: Value,
-    cancel_token: CancellationToken,
-) -> anyhow::Result<GuardianAssessment> {
+    external_cancel: Option<CancellationToken>,
+) -> GuardianReviewOutcome {
     let live_network_config = match session.services.network_proxy.as_ref() {
-        Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),
+        Some(network_proxy) => match network_proxy.proxy().current_cfg().await {
+            Ok(config) => Some(config),
+            Err(err) => return GuardianReviewOutcome::Completed(Err(err)),
+        },
         None => None,
     };
     let available_models = session
@@ -697,58 +705,43 @@ async fn run_guardian_subagent(
     };
     let guardian_config = build_guardian_subagent_config(
         turn.config.as_ref(),
-        live_network_config,
+        live_network_config.clone(),
         guardian_model.as_str(),
         guardian_reasoning_effort,
-    )?;
+    );
+    let guardian_config = match guardian_config {
+        Ok(config) => config,
+        Err(err) => return GuardianReviewOutcome::Completed(Err(err)),
+    };
 
-    // Reuse the standard interactive subagent runner so we can seed inherited
-    // session-scoped network approvals before the guardian's first turn is
-    // submitted.
-    // The guardian subagent source is also how session startup recognizes this
-    // reviewer and disables inherited exec-policy rules.
-    let child_cancel = cancel_token.child_token();
-    let codex = run_codex_thread_interactive(
-        guardian_config,
-        session.services.auth_manager.clone(),
-        session.services.models_manager.clone(),
-        Arc::clone(&session),
-        turn,
-        child_cancel.clone(),
-        SubAgentSource::Other(GUARDIAN_SUBAGENT_NAME.to_string()),
-        None,
-    )
-    .await?;
-    // Preserve exact session-scoped network approvals after spawn so their
-    // original protocol/port scope survives without broadening them into
-    // host-level allowlist entries.
-    session
-        .services
-        .network_approval
-        .copy_session_approved_hosts_to(&codex.session.services.network_approval)
-        .await;
-    codex
-        .submit(Op::UserInput {
-            items: prompt_items,
-            final_output_json_schema: Some(schema),
+    match session
+        .guardian_subagent
+        .run_review(GuardianSubagentRunParams {
+            parent_session: Arc::clone(&session),
+            parent_turn: turn.clone(),
+            spawn_config: guardian_config,
+            live_network_config,
+            prompt_items,
+            schema,
+            model: guardian_model,
+            reasoning_effort: guardian_reasoning_effort,
+            reasoning_summary: turn.reasoning_summary,
+            personality: turn.personality,
+            external_cancel,
         })
-        .await?;
-
-    let mut last_agent_message = None;
-    while let Ok(event) = codex.next_event().await {
-        match event.msg {
-            EventMsg::TurnComplete(event) => {
-                last_agent_message = event.last_agent_message;
-                break;
-            }
-            EventMsg::TurnAborted(_) => break,
-            _ => {}
+        .await
+    {
+        GuardianSubagentRunOutcome::Completed(Ok(last_agent_message)) => {
+            GuardianReviewOutcome::Completed(parse_guardian_assessment(
+                last_agent_message.as_deref(),
+            ))
         }
+        GuardianSubagentRunOutcome::Completed(Err(err)) => {
+            GuardianReviewOutcome::Completed(Err(err))
+        }
+        GuardianSubagentRunOutcome::TimedOut => GuardianReviewOutcome::TimedOut,
+        GuardianSubagentRunOutcome::Aborted => GuardianReviewOutcome::Aborted,
     }
-    let _ = codex.submit(Op::Shutdown {}).await;
-    child_cancel.cancel();
-
-    parse_guardian_assessment(last_agent_message.as_deref())
 }
 
 /// Builds the locked-down guardian config from the parent turn config.
