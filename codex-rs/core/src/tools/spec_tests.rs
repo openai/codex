@@ -466,9 +466,15 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         create_spawn_agent_tool(&config),
         create_send_input_tool(),
         create_resume_agent_tool(),
-        create_wait_agent_tool(),
+        create_list_agents_tool(config.agent_watchdog),
+        create_wait_tool(config.agent_watchdog),
         create_close_agent_tool(),
     ] {
+        expected.insert(tool_name(&spec).to_string(), spec);
+    }
+
+    if config.agent_watchdog {
+        let spec = create_compact_parent_context_tool();
         expected.insert(tool_name(&spec).to_string(), spec);
     }
 
@@ -511,7 +517,13 @@ fn test_build_specs_collab_tools_enabled() {
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     assert_contains_tool_names(
         &tools,
-        &["spawn_agent", "send_input", "wait_agent", "close_agent"],
+        &[
+            "spawn_agent",
+            "send_input",
+            "list_agents",
+            "wait",
+            "close_agent",
+        ],
     );
     assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
 }
@@ -539,7 +551,8 @@ fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
         &[
             "spawn_agent",
             "send_input",
-            "wait_agent",
+            "list_agents",
+            "wait",
             "close_agent",
             "spawn_agents_on_csv",
         ],
@@ -660,7 +673,8 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
             "spawn_agent",
             "send_input",
             "resume_agent",
-            "wait_agent",
+            "list_agents",
+            "wait",
             "close_agent",
             "spawn_agents_on_csv",
             "report_agent_job_result",
@@ -1196,7 +1210,8 @@ fn test_build_specs_gpt5_codex_default() {
             "spawn_agent",
             "send_input",
             "resume_agent",
-            "wait_agent",
+            "list_agents",
+            "wait",
             "close_agent",
         ],
     );
@@ -1219,7 +1234,8 @@ fn test_build_specs_gpt51_codex_default() {
             "spawn_agent",
             "send_input",
             "resume_agent",
-            "wait_agent",
+            "list_agents",
+            "wait",
             "close_agent",
         ],
     );
@@ -1244,7 +1260,8 @@ fn test_build_specs_gpt5_codex_unified_exec_web_search() {
             "spawn_agent",
             "send_input",
             "resume_agent",
-            "wait_agent",
+            "list_agents",
+            "wait",
             "close_agent",
         ],
     );
@@ -1269,7 +1286,8 @@ fn test_build_specs_gpt51_codex_unified_exec_web_search() {
             "spawn_agent",
             "send_input",
             "resume_agent",
-            "wait_agent",
+            "list_agents",
+            "wait",
             "close_agent",
         ],
     );
@@ -1292,7 +1310,8 @@ fn test_gpt_5_1_codex_max_defaults() {
             "spawn_agent",
             "send_input",
             "resume_agent",
-            "wait_agent",
+            "list_agents",
+            "wait",
             "close_agent",
         ],
     );
@@ -1315,7 +1334,8 @@ fn test_codex_5_1_mini_defaults() {
             "spawn_agent",
             "send_input",
             "resume_agent",
-            "wait_agent",
+            "list_agents",
+            "wait",
             "close_agent",
         ],
     );
@@ -1337,7 +1357,8 @@ fn test_gpt_5_defaults() {
             "spawn_agent",
             "send_input",
             "resume_agent",
-            "wait_agent",
+            "list_agents",
+            "wait",
             "close_agent",
         ],
     );
@@ -1360,7 +1381,8 @@ fn test_gpt_5_1_defaults() {
             "spawn_agent",
             "send_input",
             "resume_agent",
-            "wait_agent",
+            "list_agents",
+            "wait",
             "close_agent",
         ],
     );
@@ -1385,7 +1407,8 @@ fn test_gpt_5_1_codex_max_unified_exec_web_search() {
             "spawn_agent",
             "send_input",
             "resume_agent",
-            "wait_agent",
+            "list_agents",
+            "wait",
             "close_agent",
         ],
     );
