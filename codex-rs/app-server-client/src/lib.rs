@@ -15,6 +15,8 @@
 //! bridging async `mpsc` channels on both sides. Queues are bounded so overload
 //! surfaces as channel-full errors rather than unbounded memory growth.
 
+mod remote;
+
 use std::error::Error;
 use std::fmt;
 use std::io::Error as IoError;
@@ -33,8 +35,11 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
+use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
@@ -51,6 +56,9 @@ use tokio::time::timeout;
 use toml::Value as TomlValue;
 use tracing::warn;
 
+pub use crate::remote::RemoteAppServerClient;
+pub use crate::remote::RemoteAppServerConnectArgs;
+
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Raw app-server request result for typed in-process requests.
@@ -59,6 +67,30 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// the same JSON-RPC result envelope used by socket/stdio transports because
 /// `MessageProcessor` continues to produce that shape internally.
 pub type RequestResult = std::result::Result<JsonRpcResult, JSONRPCErrorError>;
+
+#[derive(Debug, Clone)]
+pub enum AppServerEvent {
+    Lagged { skipped: usize },
+    ServerNotification(ServerNotification),
+    LegacyNotification(JSONRPCNotification),
+    ServerRequest(ServerRequest),
+    Disconnected { message: String },
+}
+
+impl From<InProcessServerEvent> for AppServerEvent {
+    fn from(value: InProcessServerEvent) -> Self {
+        match value {
+            InProcessServerEvent::Lagged { skipped } => Self::Lagged { skipped },
+            InProcessServerEvent::ServerNotification(notification) => {
+                Self::ServerNotification(notification)
+            }
+            InProcessServerEvent::LegacyNotification(notification) => {
+                Self::LegacyNotification(notification)
+            }
+            InProcessServerEvent::ServerRequest(request) => Self::ServerRequest(request),
+        }
+    }
+}
 
 fn event_requires_delivery(event: &InProcessServerEvent) -> bool {
     // These terminal events drive surface shutdown/completion state. Dropping
@@ -284,6 +316,17 @@ pub struct InProcessAppServerClient {
 #[derive(Clone)]
 pub struct InProcessAppServerRequestHandle {
     command_tx: mpsc::Sender<ClientCommand>,
+}
+
+#[derive(Clone)]
+pub enum AppServerRequestHandle {
+    InProcess(InProcessAppServerRequestHandle),
+    Remote(crate::remote::RemoteAppServerRequestHandle),
+}
+
+pub enum AppServerClient {
+    InProcess(InProcessAppServerClient),
+    Remote(RemoteAppServerClient),
 }
 
 impl InProcessAppServerClient {
@@ -696,9 +739,97 @@ impl InProcessAppServerRequestHandle {
     }
 }
 
+impl AppServerRequestHandle {
+    pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
+        match self {
+            Self::InProcess(handle) => handle.request(request).await,
+            Self::Remote(handle) => handle.request(request).await,
+        }
+    }
+
+    pub async fn request_typed<T>(&self, request: ClientRequest) -> Result<T, TypedRequestError>
+    where
+        T: DeserializeOwned,
+    {
+        match self {
+            Self::InProcess(handle) => handle.request_typed(request).await,
+            Self::Remote(handle) => handle.request_typed(request).await,
+        }
+    }
+}
+
+impl AppServerClient {
+    pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
+        match self {
+            Self::InProcess(client) => client.request(request).await,
+            Self::Remote(client) => client.request(request).await,
+        }
+    }
+
+    pub async fn request_typed<T>(&self, request: ClientRequest) -> Result<T, TypedRequestError>
+    where
+        T: DeserializeOwned,
+    {
+        match self {
+            Self::InProcess(client) => client.request_typed(request).await,
+            Self::Remote(client) => client.request_typed(request).await,
+        }
+    }
+
+    pub async fn notify(&self, notification: ClientNotification) -> IoResult<()> {
+        match self {
+            Self::InProcess(client) => client.notify(notification).await,
+            Self::Remote(client) => client.notify(notification).await,
+        }
+    }
+
+    pub async fn resolve_server_request(
+        &self,
+        request_id: RequestId,
+        result: JsonRpcResult,
+    ) -> IoResult<()> {
+        match self {
+            Self::InProcess(client) => client.resolve_server_request(request_id, result).await,
+            Self::Remote(client) => client.resolve_server_request(request_id, result).await,
+        }
+    }
+
+    pub async fn reject_server_request(
+        &self,
+        request_id: RequestId,
+        error: JSONRPCErrorError,
+    ) -> IoResult<()> {
+        match self {
+            Self::InProcess(client) => client.reject_server_request(request_id, error).await,
+            Self::Remote(client) => client.reject_server_request(request_id, error).await,
+        }
+    }
+
+    pub async fn next_event(&mut self) -> Option<AppServerEvent> {
+        match self {
+            Self::InProcess(client) => client.next_event().await.map(Into::into),
+            Self::Remote(client) => client.next_event().await,
+        }
+    }
+
+    pub async fn shutdown(self) -> IoResult<()> {
+        match self {
+            Self::InProcess(client) => client.shutdown().await,
+            Self::Remote(client) => client.shutdown().await,
+        }
+    }
+
+    pub fn request_handle(&self) -> AppServerRequestHandle {
+        match self {
+            Self::InProcess(client) => AppServerRequestHandle::InProcess(client.request_handle()),
+            Self::Remote(client) => AppServerRequestHandle::Remote(client.request_handle()),
+        }
+    }
+}
+
 /// Extracts the JSON-RPC method name for diagnostics without extending the
 /// protocol crate with in-process-only helpers.
-fn request_method_name(request: &ClientRequest) -> String {
+pub(crate) fn request_method_name(request: &ClientRequest) -> String {
     serde_json::to_value(request)
         .ok()
         .and_then(|value| {
@@ -713,16 +844,29 @@ fn request_method_name(request: &ClientRequest) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_app_server_protocol::AccountUpdatedNotification;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
+    use codex_app_server_protocol::GetAccountResponse;
+    use codex_app_server_protocol::JSONRPCMessage;
+    use codex_app_server_protocol::JSONRPCRequest;
+    use codex_app_server_protocol::JSONRPCResponse;
+    use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
+    use codex_app_server_protocol::ToolRequestUserInputParams;
+    use codex_app_server_protocol::ToolRequestUserInputQuestion;
     use codex_core::AuthManager;
     use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
+    use futures::SinkExt;
+    use futures::StreamExt;
     use pretty_assertions::assert_eq;
+    use tokio::net::TcpListener;
     use tokio::time::Duration;
     use tokio::time::timeout;
+    use tokio_tungstenite::accept_async;
+    use tokio_tungstenite::tungstenite::Message;
 
     async fn build_test_config() -> Config {
         match ConfigBuilder::default().build().await {
@@ -758,6 +902,97 @@ mod tests {
 
     async fn start_test_client(session_source: SessionSource) -> InProcessAppServerClient {
         start_test_client_with_capacity(session_source, DEFAULT_IN_PROCESS_CHANNEL_CAPACITY).await
+    }
+
+    async fn start_test_remote_server<F, Fut>(handler: F) -> String
+    where
+        F: FnOnce(tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) -> Fut
+            + Send
+            + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let addr = listener.local_addr().expect("listener address");
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept should succeed");
+            let websocket = accept_async(stream)
+                .await
+                .expect("websocket upgrade should succeed");
+            handler(websocket).await;
+        });
+        format!("ws://{addr}")
+    }
+
+    async fn expect_remote_initialize(
+        websocket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    ) {
+        let JSONRPCMessage::Request(request) = read_websocket_message(websocket).await else {
+            panic!("expected initialize request");
+        };
+        assert_eq!(request.method, "initialize");
+        write_websocket_message(
+            websocket,
+            JSONRPCMessage::Response(JSONRPCResponse {
+                id: request.id,
+                result: serde_json::json!({}),
+            }),
+        )
+        .await;
+
+        let JSONRPCMessage::Notification(notification) = read_websocket_message(websocket).await
+        else {
+            panic!("expected initialized notification");
+        };
+        assert_eq!(notification.method, "initialized");
+    }
+
+    async fn read_websocket_message(
+        websocket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    ) -> JSONRPCMessage {
+        loop {
+            let frame = websocket
+                .next()
+                .await
+                .expect("frame should be available")
+                .expect("frame should decode");
+            match frame {
+                Message::Text(text) => {
+                    return serde_json::from_str::<JSONRPCMessage>(&text)
+                        .expect("text frame should be valid JSON-RPC");
+                }
+                Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {
+                    continue;
+                }
+                Message::Close(_) => panic!("unexpected close frame"),
+            }
+        }
+    }
+
+    async fn write_websocket_message(
+        websocket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+        message: JSONRPCMessage,
+    ) {
+        websocket
+            .send(Message::Text(
+                serde_json::to_string(&message)
+                    .expect("message should serialize")
+                    .into(),
+            ))
+            .await
+            .expect("message should send");
+    }
+
+    fn test_remote_connect_args(websocket_url: String) -> RemoteAppServerConnectArgs {
+        RemoteAppServerConnectArgs {
+            websocket_url,
+            client_name: "codex-app-server-client-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 8,
+        }
     }
 
     #[tokio::test]
@@ -855,6 +1090,154 @@ mod tests {
             .await
             .expect("typed request should succeed");
         client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
+    async fn remote_typed_request_roundtrip_works() {
+        let websocket_url = start_test_remote_server(|mut websocket| async move {
+            expect_remote_initialize(&mut websocket).await;
+            let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected account/read request");
+            };
+            assert_eq!(request.method, "account/read");
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(GetAccountResponse {
+                        account: None,
+                        requires_openai_auth: false,
+                    })
+                    .expect("response should serialize"),
+                }),
+            )
+            .await;
+        })
+        .await;
+        let client = RemoteAppServerClient::connect(test_remote_connect_args(websocket_url))
+            .await
+            .expect("remote client should connect");
+
+        let response: GetAccountResponse = client
+            .request_typed(ClientRequest::GetAccount {
+                request_id: RequestId::Integer(1),
+                params: codex_app_server_protocol::GetAccountParams {
+                    refresh_token: false,
+                },
+            })
+            .await
+            .expect("typed request should succeed");
+        assert_eq!(response.account, None);
+
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
+    async fn remote_notifications_arrive_over_websocket() {
+        let websocket_url = start_test_remote_server(|mut websocket| async move {
+            expect_remote_initialize(&mut websocket).await;
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Notification(
+                    serde_json::from_value(
+                        serde_json::to_value(ServerNotification::AccountUpdated(
+                            AccountUpdatedNotification {
+                                auth_mode: None,
+                                plan_type: None,
+                            },
+                        ))
+                        .expect("notification should serialize"),
+                    )
+                    .expect("notification should convert to JSON-RPC"),
+                ),
+            )
+            .await;
+        })
+        .await;
+        let mut client = RemoteAppServerClient::connect(test_remote_connect_args(websocket_url))
+            .await
+            .expect("remote client should connect");
+
+        let event = client.next_event().await.expect("event should arrive");
+        assert!(matches!(
+            event,
+            AppServerEvent::ServerNotification(ServerNotification::AccountUpdated(_))
+        ));
+
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
+    async fn remote_server_request_resolution_roundtrip_works() {
+        let websocket_url = start_test_remote_server(|mut websocket| async move {
+            expect_remote_initialize(&mut websocket).await;
+            let request_id = RequestId::String("srv-1".to_string());
+            let server_request = JSONRPCRequest {
+                id: request_id.clone(),
+                method: "item/tool/requestUserInput".to_string(),
+                params: Some(
+                    serde_json::to_value(ToolRequestUserInputParams {
+                        thread_id: "thread-1".to_string(),
+                        turn_id: "turn-1".to_string(),
+                        item_id: "call-1".to_string(),
+                        questions: vec![ToolRequestUserInputQuestion {
+                            id: "question-1".to_string(),
+                            header: "Mode".to_string(),
+                            question: "Pick one".to_string(),
+                            is_other: false,
+                            is_secret: false,
+                            options: Some(vec![]),
+                        }],
+                    })
+                    .expect("params should serialize"),
+                ),
+                trace: None,
+            };
+            write_websocket_message(&mut websocket, JSONRPCMessage::Request(server_request)).await;
+
+            let JSONRPCMessage::Response(response) = read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected server request response");
+            };
+            assert_eq!(response.id, request_id);
+        })
+        .await;
+        let mut client = RemoteAppServerClient::connect(test_remote_connect_args(websocket_url))
+            .await
+            .expect("remote client should connect");
+
+        let AppServerEvent::ServerRequest(request) = client
+            .next_event()
+            .await
+            .expect("request event should arrive")
+        else {
+            panic!("expected server request event");
+        };
+        client
+            .resolve_server_request(request.id().clone(), serde_json::json!({}))
+            .await
+            .expect("server request should resolve");
+
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
+    async fn remote_disconnect_surfaces_as_event() {
+        let websocket_url = start_test_remote_server(|mut websocket| async move {
+            expect_remote_initialize(&mut websocket).await;
+            websocket.close(None).await.expect("close should succeed");
+        })
+        .await;
+        let mut client = RemoteAppServerClient::connect(test_remote_connect_args(websocket_url))
+            .await
+            .expect("remote client should connect");
+
+        let event = client
+            .next_event()
+            .await
+            .expect("disconnect event should arrive");
+        assert!(matches!(event, AppServerEvent::Disconnected { .. }));
     }
 
     #[test]

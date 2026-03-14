@@ -1,6 +1,6 @@
-use codex_app_server_client::InProcessAppServerClient;
-use codex_app_server_client::InProcessAppServerRequestHandle;
-use codex_app_server_client::InProcessServerEvent;
+use codex_app_server_client::AppServerClient;
+use codex_app_server_client::AppServerEvent;
+use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
@@ -95,7 +95,7 @@ pub(crate) struct AppServerBootstrap {
 }
 
 pub(crate) struct AppServerSession {
-    client: InProcessAppServerClient,
+    client: AppServerClient,
     next_request_id: i64,
 }
 
@@ -104,7 +104,7 @@ pub(crate) struct AppServerStartedThread {
 }
 
 impl AppServerSession {
-    pub(crate) fn new(client: InProcessAppServerClient) -> Self {
+    pub(crate) fn new(client: AppServerClient) -> Self {
         Self {
             client,
             next_request_id: 1,
@@ -225,7 +225,7 @@ impl AppServerSession {
         })
     }
 
-    pub(crate) async fn next_event(&mut self) -> Option<InProcessServerEvent> {
+    pub(crate) async fn next_event(&mut self) -> Option<AppServerEvent> {
         self.client.next_event().await
     }
 
@@ -613,7 +613,7 @@ impl AppServerSession {
         self.client.shutdown().await
     }
 
-    pub(crate) fn request_handle(&self) -> InProcessAppServerRequestHandle {
+    pub(crate) fn request_handle(&self) -> AppServerRequestHandle {
         self.client.request_handle()
     }
 

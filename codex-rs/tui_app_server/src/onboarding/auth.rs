@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_app_server_client::InProcessAppServerRequestHandle;
+use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
@@ -216,7 +216,7 @@ pub(crate) struct AuthModeWidget {
     pub codex_home: PathBuf,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub login_status: LoginStatus,
-    pub app_server_request_handle: InProcessAppServerRequestHandle,
+    pub app_server_request_handle: AppServerRequestHandle,
     pub forced_chatgpt_workspace_id: Option<String>,
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub animations_enabled: bool,
@@ -885,6 +885,7 @@ impl WidgetRef for AuthModeWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_app_server_client::AppServerRequestHandle;
     use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
     use codex_app_server_client::InProcessAppServerClient;
     use codex_app_server_client::InProcessClientStartArgs;
@@ -936,7 +937,7 @@ mod tests {
             codex_home: codex_home_path.clone(),
             cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             login_status: LoginStatus::NotAuthenticated,
-            app_server_request_handle: client.request_handle(),
+            app_server_request_handle: AppServerRequestHandle::InProcess(client.request_handle()),
             forced_chatgpt_workspace_id: None,
             forced_login_method: Some(ForcedLoginMethod::Chatgpt),
             animations_enabled: true,

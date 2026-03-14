@@ -1,5 +1,5 @@
-use codex_app_server_client::InProcessAppServerRequestHandle;
-use codex_app_server_client::InProcessServerEvent;
+use codex_app_server_client::AppServerEvent;
+use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ServerNotification;
 use codex_core::config::Config;
 #[cfg(target_os = "windows")]
@@ -67,7 +67,7 @@ pub(crate) struct OnboardingScreenArgs {
     pub show_trust_screen: bool,
     pub show_login_screen: bool,
     pub login_status: LoginStatus,
-    pub app_server_request_handle: Option<InProcessAppServerRequestHandle>,
+    pub app_server_request_handle: Option<AppServerRequestHandle>,
     pub config: Config,
 }
 
@@ -495,8 +495,18 @@ pub(crate) async fn run_onboarding_app(
                     None => None,
                 }
             }, if app_server.is_some() => {
-                if let Some(InProcessServerEvent::ServerNotification(notification)) = event {
-                    onboarding_screen.handle_app_server_notification(notification);
+                if let Some(event) = event {
+                    match event {
+                        AppServerEvent::ServerNotification(notification) => {
+                            onboarding_screen.handle_app_server_notification(notification);
+                        }
+                        AppServerEvent::Disconnected { message } => {
+                            return Err(color_eyre::eyre::eyre!(message));
+                        }
+                        AppServerEvent::Lagged { .. }
+                        | AppServerEvent::LegacyNotification(_)
+                        | AppServerEvent::ServerRequest(_) => {}
+                    }
                 }
             }
         }

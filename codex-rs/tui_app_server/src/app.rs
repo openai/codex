@@ -897,6 +897,7 @@ pub(crate) struct App {
     pub(crate) backtrack_render_pending: bool,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     feedback_audience: FeedbackAudience,
+    remote_app_server_url: Option<String>,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
@@ -2497,6 +2498,7 @@ impl App {
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
+        remote_app_server_url: Option<String>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -2711,6 +2713,7 @@ impl App {
             backtrack_render_pending: false,
             feedback: feedback.clone(),
             feedback_audience,
+            remote_app_server_url,
             pending_update_action: None,
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
@@ -2953,16 +2956,23 @@ impl App {
                     .await;
             }
             AppEvent::OpenResumePicker => {
-                let picker_app_server =
-                    match crate::start_embedded_app_server_for_picker(&self.config).await {
-                        Ok(app_server) => app_server,
-                        Err(err) => {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to start app-server-backed session picker: {err}"
-                            ));
-                            return Ok(AppRunControl::Continue);
-                        }
-                    };
+                let picker_app_server = match crate::start_app_server_for_picker(
+                    &self.config,
+                    &match self.remote_app_server_url.clone() {
+                        Some(websocket_url) => crate::AppServerTarget::Remote(websocket_url),
+                        None => crate::AppServerTarget::Embedded,
+                    },
+                )
+                .await
+                {
+                    Ok(app_server) => app_server,
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to start app-server-backed session picker: {err}"
+                        ));
+                        return Ok(AppRunControl::Continue);
+                    }
+                };
                 match crate::resume_picker::run_resume_picker_with_app_server(
                     tui,
                     &self.config,
@@ -2973,21 +2983,25 @@ impl App {
                 {
                     SessionSelection::Resume(target_session) => {
                         let current_cwd = self.config.cwd.clone();
-                        let resume_cwd = match crate::resolve_cwd_for_resume_or_fork(
-                            tui,
-                            &self.config,
-                            &current_cwd,
-                            target_session.thread_id,
-                            target_session.path.as_deref(),
-                            CwdPromptAction::Resume,
-                            true,
-                        )
-                        .await?
-                        {
-                            crate::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
-                            crate::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
-                            crate::ResolveCwdOutcome::Exit => {
-                                return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+                        let resume_cwd = if self.remote_app_server_url.is_some() {
+                            current_cwd.clone()
+                        } else {
+                            match crate::resolve_cwd_for_resume_or_fork(
+                                tui,
+                                &self.config,
+                                &current_cwd,
+                                target_session.thread_id,
+                                target_session.path.as_deref(),
+                                CwdPromptAction::Resume,
+                                true,
+                            )
+                            .await?
+                            {
+                                crate::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
+                                crate::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
+                                crate::ResolveCwdOutcome::Exit => {
+                                    return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+                                }
                             }
                         };
                         let mut resume_config = match self
@@ -6851,6 +6865,7 @@ smart_approvals = true
             backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
+            remote_app_server_url: None,
             pending_update_action: None,
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
@@ -6903,6 +6918,7 @@ smart_approvals = true
                 backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
                 feedback_audience: FeedbackAudience::External,
+                remote_app_server_url: None,
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
                 pending_shutdown_exit_thread_id: None,

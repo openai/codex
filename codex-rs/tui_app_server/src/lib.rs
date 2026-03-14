@@ -8,9 +8,12 @@ use app::App;
 pub use app::AppExitInfo;
 pub use app::ExitReason;
 use app_server_session::AppServerSession;
+use codex_app_server_client::AppServerClient;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
+use codex_app_server_client::RemoteAppServerClient;
+use codex_app_server_client::RemoteAppServerConnectArgs;
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::Thread as AppServerThread;
@@ -62,6 +65,7 @@ use tracing::warn;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
+use url::Url;
 use uuid::Uuid;
 
 mod additional_dirs;
@@ -258,10 +262,78 @@ async fn start_embedded_app_server(
     .await
 }
 
-pub(crate) async fn start_embedded_app_server_for_picker(
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AppServerTarget {
+    Embedded,
+    Remote(String),
+}
+
+pub fn normalize_remote_addr(addr: &str) -> color_eyre::Result<String> {
+    let parsed = match Url::parse(addr) {
+        Ok(parsed) => parsed,
+        Err(_) => {
+            color_eyre::eyre::bail!("invalid remote address `{addr}`; expected `ws://host:port`");
+        }
+    };
+    if parsed.scheme() == "ws"
+        && parsed.host_str().is_some()
+        && parsed.port().is_some()
+        && parsed.path() == "/"
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+    {
+        return Ok(parsed.to_string());
+    }
+
+    color_eyre::eyre::bail!("invalid remote address `{addr}`; expected `ws://host:port`");
+}
+
+async fn connect_remote_app_server(websocket_url: String) -> color_eyre::Result<AppServerClient> {
+    let app_server = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+        websocket_url,
+        client_name: "codex-tui".to_string(),
+        client_version: env!("CARGO_PKG_VERSION").to_string(),
+        experimental_api: true,
+        opt_out_notification_methods: Vec::new(),
+        channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+    })
+    .await
+    .wrap_err("failed to connect to remote app server")?;
+    Ok(AppServerClient::Remote(app_server))
+}
+
+async fn start_app_server(
+    target: &AppServerTarget,
+    arg0_paths: Arg0DispatchPaths,
+    config: Config,
+    cli_kv_overrides: Vec<(String, toml::Value)>,
+    loader_overrides: LoaderOverrides,
+    cloud_requirements: CloudRequirementsLoader,
+    feedback: codex_feedback::CodexFeedback,
+) -> color_eyre::Result<AppServerClient> {
+    match target {
+        AppServerTarget::Embedded => start_embedded_app_server(
+            arg0_paths,
+            config,
+            cli_kv_overrides,
+            loader_overrides,
+            cloud_requirements,
+            feedback,
+        )
+        .await
+        .map(AppServerClient::InProcess),
+        AppServerTarget::Remote(websocket_url) => {
+            connect_remote_app_server(websocket_url.clone()).await
+        }
+    }
+}
+
+pub(crate) async fn start_app_server_for_picker(
     config: &Config,
+    target: &AppServerTarget,
 ) -> color_eyre::Result<AppServerSession> {
-    let app_server = start_embedded_app_server(
+    let app_server = start_app_server(
+        target,
         Arg0DispatchPaths::default(),
         config.clone(),
         Vec::new(),
@@ -271,6 +343,13 @@ pub(crate) async fn start_embedded_app_server_for_picker(
     )
     .await?;
     Ok(AppServerSession::new(app_server))
+}
+
+#[cfg(test)]
+pub(crate) async fn start_embedded_app_server_for_picker(
+    config: &Config,
+) -> color_eyre::Result<AppServerSession> {
+    start_app_server_for_picker(config, &AppServerTarget::Embedded).await
 }
 
 async fn start_embedded_app_server_with<F, Fut>(
@@ -435,7 +514,13 @@ pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
+    remote: Option<String>,
 ) -> std::io::Result<AppExitInfo> {
+    let remote_url = remote;
+    let app_server_target = remote_url
+        .clone()
+        .map(AppServerTarget::Remote)
+        .unwrap_or(AppServerTarget::Embedded);
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),
@@ -725,11 +810,13 @@ pub async fn run_main(
         cli,
         arg0_paths,
         loader_overrides,
+        app_server_target,
         config,
         overrides,
         cli_kv_overrides,
         cloud_requirements,
         feedback,
+        remote_url,
     )
     .await
     .map_err(|err| std::io::Error::other(err.to_string()))
@@ -740,12 +827,15 @@ async fn run_ratatui_app(
     cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
+    app_server_target: AppServerTarget,
     initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     mut cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
+    remote_url: Option<String>,
 ) -> color_eyre::Result<AppExitInfo> {
+    let remote_mode = matches!(&app_server_target, AppServerTarget::Remote(_));
     color_eyre::install()?;
 
     tooltips::announcement::prewarm();
@@ -789,13 +879,14 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
-    let should_show_trust_screen_flag = should_show_trust_screen(&initial_config);
+    let should_show_trust_screen_flag = !remote_mode && should_show_trust_screen(&initial_config);
     let mut trust_decision_was_made = false;
     let needs_onboarding_app_server =
         should_show_trust_screen_flag || initial_config.model_provider.requires_openai_auth;
     let mut onboarding_app_server = if needs_onboarding_app_server {
         Some(AppServerSession::new(
-            start_embedded_app_server(
+            start_app_server(
+                &app_server_target,
                 arg0_paths.clone(),
                 initial_config.clone(),
                 cli_kv_overrides.clone(),
@@ -855,7 +946,7 @@ async fn run_ratatui_app(
         // If this onboarding run included the login step, always refresh cloud requirements and
         // rebuild config. This avoids missing newly available cloud requirements due to login
         // status detection edge cases.
-        if show_login_screen {
+        if show_login_screen && !remote_mode {
             cloud_requirements = cloud_requirements_loader_for_storage(
                 initial_config.codex_home.clone(),
                 false,
@@ -866,7 +957,9 @@ async fn run_ratatui_app(
 
         // If the user made an explicit trust decision, or we showed the login flow, reload config
         // so current process state reflects persisted trust/auth changes.
-        if onboarding_result.directory_trust_decision.is_some() || show_login_screen {
+        if onboarding_result.directory_trust_decision.is_some()
+            || (show_login_screen && !remote_mode)
+        {
             load_config_or_exit(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
@@ -906,7 +999,8 @@ async fn run_ratatui_app(
         || cli.fork_picker;
     let mut session_lookup_app_server = if needs_app_server_session_lookup {
         Some(AppServerSession::new(
-            start_embedded_app_server(
+            start_app_server(
+                &app_server_target,
                 arg0_paths.clone(),
                 config.clone(),
                 cli_kv_overrides.clone(),
@@ -1024,7 +1118,7 @@ async fn run_ratatui_app(
     shutdown_app_server_if_present(session_lookup_app_server.take()).await;
 
     let current_cwd = config.cwd.clone();
-    let allow_prompt = cli.cwd.is_none();
+    let allow_prompt = !remote_mode && cli.cwd.is_none();
     let action_and_target_session_if_resume_or_fork = match &session_selection {
         resume_picker::SessionSelection::Resume(target_session) => {
             Some((CwdPromptAction::Resume, target_session))
@@ -1036,28 +1130,32 @@ async fn run_ratatui_app(
     };
     let fallback_cwd = match action_and_target_session_if_resume_or_fork {
         Some((action, target_session)) => {
-            match resolve_cwd_for_resume_or_fork(
-                &mut tui,
-                &config,
-                &current_cwd,
-                target_session.thread_id,
-                target_session.path.as_deref(),
-                action,
-                allow_prompt,
-            )
-            .await?
-            {
-                ResolveCwdOutcome::Continue(cwd) => cwd,
-                ResolveCwdOutcome::Exit => {
-                    restore();
-                    session_log::log_session_end();
-                    return Ok(AppExitInfo {
-                        token_usage: codex_protocol::protocol::TokenUsage::default(),
-                        thread_id: None,
-                        thread_name: None,
-                        update_action: None,
-                        exit_reason: ExitReason::UserRequested,
-                    });
+            if remote_mode {
+                Some(current_cwd.clone())
+            } else {
+                match resolve_cwd_for_resume_or_fork(
+                    &mut tui,
+                    &config,
+                    &current_cwd,
+                    target_session.thread_id,
+                    target_session.path.as_deref(),
+                    action,
+                    allow_prompt,
+                )
+                .await?
+                {
+                    ResolveCwdOutcome::Continue(cwd) => cwd,
+                    ResolveCwdOutcome::Exit => {
+                        restore();
+                        session_log::log_session_end();
+                        return Ok(AppExitInfo {
+                            token_usage: codex_protocol::protocol::TokenUsage::default(),
+                            thread_id: None,
+                            thread_name: None,
+                            update_action: None,
+                            exit_reason: ExitReason::UserRequested,
+                        });
+                    }
                 }
             }
         }
@@ -1103,7 +1201,8 @@ async fn run_ratatui_app(
 
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
-    let app_server = match start_embedded_app_server(
+    let app_server = match start_app_server(
+        &app_server_target,
         arg0_paths,
         config.clone(),
         cli_kv_overrides.clone(),
@@ -1134,6 +1233,7 @@ async fn run_ratatui_app(
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
         should_prompt_windows_sandbox_nux_at_startup,
+        remote_url,
     )
     .await;
 
@@ -1425,6 +1525,28 @@ mod tests {
         };
 
         assert_eq!(target.display_label(), format!("thread {thread_id}"));
+    }
+
+    #[test]
+    fn normalize_remote_addr_accepts_websocket_url() {
+        assert_eq!(
+            normalize_remote_addr("ws://127.0.0.1:4500").expect("ws URL should normalize"),
+            "ws://127.0.0.1:4500/"
+        );
+    }
+
+    #[test]
+    fn normalize_remote_addr_rejects_invalid_input() {
+        let err = normalize_remote_addr("https://127.0.0.1:4500")
+            .expect_err("https URLs should be rejected");
+        assert!(err.to_string().contains("expected `ws://host:port`"));
+    }
+
+    #[test]
+    fn normalize_remote_addr_rejects_host_port_shortcut() {
+        let err =
+            normalize_remote_addr("127.0.0.1:4500").expect_err("host:port should be rejected");
+        assert!(err.to_string().contains("expected `ws://host:port`"));
     }
 
     #[tokio::test]
