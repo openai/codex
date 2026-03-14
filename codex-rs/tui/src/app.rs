@@ -7002,7 +7002,7 @@ smart_approvals = true
     #[tokio::test]
     async fn thread_start_params_from_config_preserves_effective_session_config() -> Result<()> {
         let app = make_test_app().await;
-        let mut config = app.config.clone();
+        let mut config = app.config;
         config.model = Some("config-model".to_string());
         config.model_provider_id = "custom-provider".to_string();
         config.service_tier = Some(codex_protocol::config_types::ServiceTier::Flex);
