@@ -1820,6 +1820,7 @@ impl App {
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
+        self.suppress_shutdown_complete = false;
         self.pending_primary_events.clear();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
@@ -4982,6 +4983,19 @@ mod tests {
             .await
             .expect("timed out waiting for listener task abort")
             .expect("listener task drop notification should succeed");
+    }
+
+    #[tokio::test]
+    async fn reset_thread_event_state_clears_stale_shutdown_suppression() {
+        let mut app = make_test_app().await;
+        app.suppress_shutdown_complete = true;
+
+        app.reset_thread_event_state();
+
+        assert!(
+            !app.suppress_shutdown_complete,
+            "thread-state reset should clear stale shutdown suppression so a new primary thread can exit cleanly"
+        );
     }
 
     #[tokio::test]
