@@ -50,12 +50,10 @@ python scripts/update_sdk_artifacts.py generate-types
 python scripts/update_sdk_artifacts.py \
   stage-sdk-core \
   /tmp/codex-python-release/codex-app-server-sdk-core \
-  --skip-generate-types \
   --sdk-version 1.2.3
 python scripts/update_sdk_artifacts.py \
   stage-sdk \
   /tmp/codex-python-release/codex-app-server-sdk \
-  --skip-generate-types \
   --sdk-version 1.2.3 \
   --runtime-version 1.2.3
 python scripts/update_sdk_artifacts.py \

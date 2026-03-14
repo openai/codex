@@ -318,50 +318,6 @@ def test_stage_sdk_core_runs_type_generation_before_staging(tmp_path: Path) -> N
     assert calls == ["generate_types", "stage_sdk_core"]
 
 
-def test_stage_sdk_core_can_skip_type_generation(tmp_path: Path) -> None:
-    script = _load_update_script_module()
-    calls: list[str] = []
-    args = script.parse_args(
-        [
-            "stage-sdk-core",
-            str(tmp_path / "sdk-core-stage"),
-            "--skip-generate-types",
-        ]
-    )
-
-    def fake_generate_types() -> None:
-        calls.append("generate_types")
-
-    def fake_stage_core_sdk_package(_staging_dir: Path, _sdk_version: str) -> Path:
-        calls.append("stage_sdk_core")
-        return tmp_path / "sdk-core-stage"
-
-    def fake_stage_sdk_package(
-        _staging_dir: Path, _sdk_version: str, _runtime_version: str
-    ) -> Path:
-        raise AssertionError("bundled sdk staging should not run for stage-sdk-core")
-
-    def fake_stage_runtime_package(
-        _staging_dir: Path, _runtime_version: str, _runtime_binary: Path
-    ) -> Path:
-        raise AssertionError("runtime staging should not run for stage-sdk-core")
-
-    def fake_current_sdk_version() -> str:
-        return "0.2.0"
-
-    ops = script.CliOps(
-        generate_types=fake_generate_types,
-        stage_python_core_sdk_package=fake_stage_core_sdk_package,
-        stage_python_sdk_package=fake_stage_sdk_package,
-        stage_python_runtime_package=fake_stage_runtime_package,
-        current_sdk_version=fake_current_sdk_version,
-    )
-
-    script.run_command(args, ops)
-
-    assert calls == ["stage_sdk_core"]
-
-
 def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
     script = _load_update_script_module()
     calls: list[str] = []
@@ -405,52 +361,6 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
     script.run_command(args, ops)
 
     assert calls == ["generate_types", "stage_sdk"]
-
-
-def test_stage_sdk_can_skip_type_generation(tmp_path: Path) -> None:
-    script = _load_update_script_module()
-    calls: list[str] = []
-    args = script.parse_args(
-        [
-            "stage-sdk",
-            str(tmp_path / "sdk-stage"),
-            "--runtime-version",
-            "1.2.3",
-            "--skip-generate-types",
-        ]
-    )
-
-    def fake_generate_types() -> None:
-        calls.append("generate_types")
-
-    def fake_stage_core_sdk_package(_staging_dir: Path, _sdk_version: str) -> Path:
-        raise AssertionError("core sdk staging should not run for stage-sdk")
-
-    def fake_stage_sdk_package(
-        _staging_dir: Path, _sdk_version: str, _runtime_version: str
-    ) -> Path:
-        calls.append("stage_sdk")
-        return tmp_path / "sdk-stage"
-
-    def fake_stage_runtime_package(
-        _staging_dir: Path, _runtime_version: str, _runtime_binary: Path
-    ) -> Path:
-        raise AssertionError("runtime staging should not run for stage-sdk")
-
-    def fake_current_sdk_version() -> str:
-        return "0.2.0"
-
-    ops = script.CliOps(
-        generate_types=fake_generate_types,
-        stage_python_core_sdk_package=fake_stage_core_sdk_package,
-        stage_python_sdk_package=fake_stage_sdk_package,
-        stage_python_runtime_package=fake_stage_runtime_package,
-        current_sdk_version=fake_current_sdk_version,
-    )
-
-    script.run_command(args, ops)
-
-    assert calls == ["stage_sdk"]
 
 
 def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> None:

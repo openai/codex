@@ -981,11 +981,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--sdk-version",
         help="Version to write into the staged core SDK package (defaults to sdk/python current version)",
     )
-    stage_sdk_core_parser.add_argument(
-        "--skip-generate-types",
-        action="store_true",
-        help="Skip type generation before staging when artifacts were generated earlier in the workflow",
-    )
 
     stage_sdk_parser = subparsers.add_parser(
         "stage-sdk",
@@ -1004,11 +999,6 @@ def build_parser() -> argparse.ArgumentParser:
     stage_sdk_parser.add_argument(
         "--sdk-version",
         help="Version to write into the staged bundled SDK package (defaults to sdk/python current version)",
-    )
-    stage_sdk_parser.add_argument(
-        "--skip-generate-types",
-        action="store_true",
-        help="Skip type generation before staging when artifacts were generated earlier in the workflow",
     )
 
     stage_runtime_parser = subparsers.add_parser(
@@ -1051,15 +1041,13 @@ def run_command(args: argparse.Namespace, ops: CliOps) -> None:
     if args.command == "generate-types":
         ops.generate_types()
     elif args.command == "stage-sdk-core":
-        if not args.skip_generate_types:
-            ops.generate_types()
+        ops.generate_types()
         ops.stage_python_core_sdk_package(
             args.staging_dir,
             args.sdk_version or ops.current_sdk_version(),
         )
     elif args.command == "stage-sdk":
-        if not args.skip_generate_types:
-            ops.generate_types()
+        ops.generate_types()
         ops.stage_python_sdk_package(
             args.staging_dir,
             args.sdk_version or ops.current_sdk_version(),

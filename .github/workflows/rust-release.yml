@@ -611,7 +611,6 @@ jobs:
           python sdk/python/scripts/update_sdk_artifacts.py \
             stage-sdk-core \
             "${core_staging_dir}" \
-            --skip-generate-types \
             --sdk-version "${version}"
 
           python -m build --outdir "${core_out_dir}" "${core_staging_dir}"
@@ -619,7 +618,6 @@ jobs:
           python sdk/python/scripts/update_sdk_artifacts.py \
             stage-sdk \
             "${bundled_staging_dir}" \
-            --skip-generate-types \
             --sdk-version "${version}" \
             --runtime-version "${version}"
 
