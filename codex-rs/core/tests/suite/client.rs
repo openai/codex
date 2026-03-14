@@ -1741,7 +1741,8 @@ async fn includes_developer_instructions_message_in_request() {
     assert!(
         developer_messages
             .iter()
-            .any(|item| message_input_texts(item).contains(&"be useful")),
+            .flat_map(|item| message_input_texts(item))
+            .any(|text| text.contains("be useful")),
         "expected developer instructions in a developer message, got {:?}",
         request_body["input"]
     );

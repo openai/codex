@@ -24,23 +24,23 @@ use tempfile::TempDir;
 fn permissions_texts(input: &[serde_json::Value]) -> Vec<String> {
     input
         .iter()
-        .filter_map(|item| {
+        .flat_map(|item| {
             let role = item.get("role")?.as_str()?;
             if role != "developer" {
-                return None;
+                return Some(Vec::new());
             }
-            let text = item
+            let texts = item
                 .get("content")?
                 .as_array()?
-                .first()?
-                .get("text")?
-                .as_str()?;
-            if text.contains("<permissions instructions>") {
-                Some(text.to_string())
-            } else {
-                None
-            }
+                .iter()
+                .filter_map(|content| content.get("text").and_then(serde_json::Value::as_str))
+                .filter(|text| text.contains("<permissions instructions>"))
+                .map(str::trim_end)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            Some(texts)
         })
+        .flatten()
         .collect()
 }
 
