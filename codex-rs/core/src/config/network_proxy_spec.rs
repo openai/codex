@@ -17,6 +17,7 @@ use codex_network_proxy::host_and_port_from_network_addr;
 use codex_network_proxy::normalize_host;
 use codex_network_proxy::validate_policy_against_constraints;
 use codex_protocol::protocol::SandboxPolicy;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -298,26 +299,37 @@ impl NetworkProxySpec {
 
 fn apply_exec_policy_network_rules(config: &mut NetworkProxyConfig, exec_policy: &Policy) {
     let (allowed_domains, denied_domains) = exec_policy.compiled_network_domains();
-    for host in allowed_domains {
-        upsert_network_domain(
-            &mut config.network.allowed_domains,
-            &mut config.network.denied_domains,
-            host,
-        );
-    }
-    for host in denied_domains {
-        upsert_network_domain(
-            &mut config.network.denied_domains,
-            &mut config.network.allowed_domains,
-            host,
-        );
-    }
+    upsert_network_domains(
+        &mut config.network.allowed_domains,
+        &mut config.network.denied_domains,
+        allowed_domains,
+    );
+    upsert_network_domains(
+        &mut config.network.denied_domains,
+        &mut config.network.allowed_domains,
+        denied_domains,
+    );
 }
 
-fn upsert_network_domain(target: &mut Vec<String>, opposite: &mut Vec<String>, host: String) {
-    opposite.retain(|entry| normalize_host(entry) != host);
-    target.retain(|entry| normalize_host(entry) != host);
-    target.push(host);
+fn upsert_network_domains(
+    target: &mut Vec<String>,
+    opposite: &mut Vec<String>,
+    hosts: Vec<String>,
+) {
+    let mut incoming = HashSet::new();
+    let mut deduped_hosts = Vec::new();
+    for host in hosts {
+        if incoming.insert(host.clone()) {
+            deduped_hosts.push(host);
+        }
+    }
+    if incoming.is_empty() {
+        return;
+    }
+
+    opposite.retain(|entry| !incoming.contains(&normalize_host(entry)));
+    target.retain(|entry| !incoming.contains(&normalize_host(entry)));
+    target.extend(deduped_hosts);
 }
 
 #[cfg(test)]
