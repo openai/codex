@@ -378,7 +378,7 @@ impl FileSystemSandboxPolicy {
                 .filter(|entry| self.can_read_path_with_cwd(entry.path.as_path(), cwd))
                 .map(|entry| entry.path)
                 .collect(),
-            true,
+            /*normalize_effective_paths*/ true,
         )
     }
 
@@ -397,7 +397,7 @@ impl FileSystemSandboxPolicy {
                 .filter(|entry| !self.can_write_path_with_cwd(entry.path.as_path(), cwd))
                 .map(|entry| entry.path.clone())
                 .collect(),
-            true,
+            /*normalize_effective_paths*/ true,
         );
 
         dedup_absolute_paths(
@@ -407,7 +407,7 @@ impl FileSystemSandboxPolicy {
                 .filter(|entry| self.can_write_path_with_cwd(entry.path.as_path(), cwd))
                 .map(|entry| entry.path)
                 .collect(),
-            true,
+            /*normalize_effective_paths*/ true,
         )
         .into_iter()
         .map(|root| {
@@ -427,7 +427,10 @@ impl FileSystemSandboxPolicy {
                 // Preserve literal in-root protected paths like `.git` and
                 // `.codex` so downstream sandboxes can still detect and mask
                 // the symlink itself instead of only its resolved target.
-                read_only_subpaths: dedup_absolute_paths(read_only_subpaths, false),
+                read_only_subpaths: dedup_absolute_paths(
+                    read_only_subpaths,
+                    /*normalize_effective_paths*/ false,
+                ),
             }
         })
         .collect()
@@ -454,7 +457,7 @@ impl FileSystemSandboxPolicy {
                 .filter(|entry| root.as_ref() != Some(&entry.path))
                 .map(|entry| entry.path.clone())
                 .collect(),
-            true,
+            /*normalize_effective_paths*/ true,
         )
     }
 
@@ -587,13 +590,19 @@ impl FileSystemSandboxPolicy {
                 } else {
                     ReadOnlyAccess::Restricted {
                         include_platform_defaults,
-                        readable_roots: dedup_absolute_paths(readable_roots, false),
+                        readable_roots: dedup_absolute_paths(
+                            readable_roots,
+                            /*normalize_effective_paths*/ false,
+                        ),
                     }
                 };
 
                 if workspace_root_writable {
                     SandboxPolicy::WorkspaceWrite {
-                        writable_roots: dedup_absolute_paths(writable_roots, false),
+                        writable_roots: dedup_absolute_paths(
+                            writable_roots,
+                            /*normalize_effective_paths*/ false,
+                        ),
                         read_only_access,
                         network_access: network_policy.is_enabled(),
                         exclude_tmpdir_env_var: !tmpdir_writable,
@@ -999,7 +1008,7 @@ fn default_read_only_subpaths_for_writable_root(
         }
     }
 
-    dedup_absolute_paths(subpaths, false)
+    dedup_absolute_paths(subpaths, /*normalize_effective_paths*/ false)
 }
 
 fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
