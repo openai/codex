@@ -12,6 +12,12 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
+    /// Fork from an existing session id (or thread name) before sending the prompt.
+    ///
+    /// This creates a new session with copied history, similar to `codex fork`.
+    #[arg(long = "fork", value_name = "SESSION_ID")]
+    pub fork_session_id: Option<String>,
+
     /// Optional image(s) to attach to the initial prompt.
     #[arg(
         long = "image",
@@ -112,6 +118,19 @@ pub struct Cli {
     /// if `-` is used), instructions are read from stdin.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,
+}
+
+impl Cli {
+    pub fn validate(self) -> Result<Self, clap::Error> {
+        if self.fork_session_id.is_some() && self.command.is_some() {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--fork cannot be used with subcommands",
+            ));
+        }
+
+        Ok(self)
+    }
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -314,5 +333,24 @@ mod tests {
         };
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some(PROMPT));
+    }
+
+    #[test]
+    fn fork_option_parses_prompt() {
+        const PROMPT: &str = "echo fork-non-interactive";
+        let cli = Cli::parse_from(["codex-exec", "--fork", "session-123", "--json", PROMPT]);
+
+        assert_eq!(cli.fork_session_id.as_deref(), Some("session-123"));
+        assert_eq!(cli.prompt.as_deref(), Some(PROMPT));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn fork_option_conflicts_with_subcommands() {
+        let err = Cli::try_parse_from(["codex-exec", "--fork", "session-123", "resume"])
+            .and_then(Cli::validate)
+            .expect_err("fork should conflict with subcommands");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 }
