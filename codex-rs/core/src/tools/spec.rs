@@ -366,6 +366,7 @@ pub(crate) struct ToolsConfig {
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
     pub multi_agent_v2: bool,
+    pub agent_watchdog: bool,
     pub request_user_input: bool,
     pub default_mode_request_user_input: bool,
     pub experimental_supported_tools: Vec<String>,
@@ -415,6 +416,8 @@ impl ToolsConfig {
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
+        let include_agent_watchdog =
+            include_collab_tools && features.enabled(Feature::AgentWatchdog);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
         let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
         let include_default_mode_request_user_input =
@@ -500,6 +503,7 @@ impl ToolsConfig {
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
             multi_agent_v2: include_multi_agent_v2,
+            agent_watchdog: include_agent_watchdog,
             request_user_input: include_request_user_input,
             default_mode_request_user_input: include_default_mode_request_user_input,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
@@ -1133,7 +1137,7 @@ fn spawn_agent_common_properties(config: &ToolsConfig) -> BTreeMap<String, JsonS
             "fork_context".to_string(),
             JsonSchema::Boolean {
                 description: Some(
-                    "When true, fork the current thread history into the new agent before sending the initial prompt. This must be used when you want the new agent to have exactly the same context as you."
+                    "When true, fork the current thread history into the new agent before sending the initial prompt. This must be used when you want the new agent to have exactly the same context as you. Forked agents always inherit the parent thread's model and reasoning effort, ignoring any child `model` or `reasoning_effort` overrides."
                         .to_string(),
                 ),
             },
@@ -1142,7 +1146,7 @@ fn spawn_agent_common_properties(config: &ToolsConfig) -> BTreeMap<String, JsonS
             "model".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Optional model override for the new agent. Replaces the inherited model."
+                    "Optional model override for the new agent. Replaces the inherited model unless `fork_context` is true."
                         .to_string(),
                 ),
             },
@@ -1151,7 +1155,7 @@ fn spawn_agent_common_properties(config: &ToolsConfig) -> BTreeMap<String, JsonS
             "reasoning_effort".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort."
+                    "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort unless `fork_context` is true."
                         .to_string(),
                 ),
             },
@@ -1637,7 +1641,7 @@ fn create_wait_agent_tool_v2() -> ToolSpec {
     })
 }
 
-fn create_list_agents_tool() -> ToolSpec {
+fn create_list_agents_tool_v2() -> ToolSpec {
     let properties = BTreeMap::from([(
         "path_prefix".to_string(),
         JsonSchema::String {
@@ -1660,6 +1664,91 @@ fn create_list_agents_tool() -> ToolSpec {
             additional_properties: Some(false.into()),
         },
         output_schema: Some(list_agents_output_schema()),
+    })
+}
+
+fn create_compact_parent_context_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "reason".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional short reason describing why the parent appears stuck.".to_string(),
+                ),
+            },
+        ),
+        (
+            "evidence".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional concrete evidence of non-progress, such as repeated identical replies with no tool or file actions.".to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "compact_parent_context".to_string(),
+        description: "Watchdog-only: request compaction for the watchdog helper's parent thread when it is idle and appears stuck."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(send_input_output_schema()),
+    })
+}
+
+fn create_list_agents_tool(agent_watchdog: bool) -> ToolSpec {
+    let description = if agent_watchdog {
+        "List agents spawned by an agent, optionally recursively. This is a status view; polling it will not make a watchdog fire."
+    } else {
+        "List agents spawned by an agent, optionally recursively."
+    };
+    let properties = BTreeMap::from([
+        (
+            "id".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Identifier of the parent agent whose spawned agents to list. Defaults to the current agent."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "recursive".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true (default), include all descendants recursively. When false, include only direct children."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "all".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, ignore id/recursive and return all tracked open agents that currently count toward this session's agent limit."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "list_agents".to_string(),
+        description: description.to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
     })
 }
 
@@ -2425,6 +2514,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
     use crate::tools::handlers::multi_agents::CloseAgentHandler;
+    use crate::tools::handlers::multi_agents::CompactParentContextHandler;
+    use crate::tools::handlers::multi_agents::ListAgentsHandler;
     use crate::tools::handlers::multi_agents::ResumeAgentHandler;
     use crate::tools::handlers::multi_agents::SendInputHandler;
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
@@ -2807,7 +2898,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             );
             push_tool_spec(
                 &mut builder,
-                create_list_agents_tool(),
+                create_list_agents_tool_v2(),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
@@ -2849,9 +2940,30 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
+            if config.agent_watchdog {
+                push_tool_spec(
+                    &mut builder,
+                    create_list_agents_tool(config.agent_watchdog),
+                    /*supports_parallel_tool_calls*/ false,
+                    config.code_mode_enabled,
+                );
+                push_tool_spec(
+                    &mut builder,
+                    create_compact_parent_context_tool(),
+                    /*supports_parallel_tool_calls*/ false,
+                    config.code_mode_enabled,
+                );
+            }
             builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
             builder.register_handler("send_input", Arc::new(SendInputHandler));
             builder.register_handler("wait_agent", Arc::new(WaitAgentHandler));
+            if config.agent_watchdog {
+                builder.register_handler("list_agents", Arc::new(ListAgentsHandler));
+                builder.register_handler(
+                    "compact_parent_context",
+                    Arc::new(CompactParentContextHandler),
+                );
+            }
             builder.register_handler("close_agent", Arc::new(CloseAgentHandler));
         }
     }
