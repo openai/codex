@@ -70,6 +70,13 @@ impl GuardianSubagent {
 }
 
 impl GuardianSubagentManager {
+    pub(crate) async fn shutdown(&self) {
+        let subagent = self.state.lock().await.take();
+        if let Some(subagent) = subagent {
+            subagent.shutdown().await;
+        }
+    }
+
     pub(crate) async fn run_review(
         &self,
         params: GuardianSubagentRunParams,
@@ -185,6 +192,14 @@ impl GuardianSubagentManager {
             subagent.shutdown_in_background();
         }
         outcome
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn cache_for_test(&self, codex: Codex) {
+        *self.state.lock().await = Some(GuardianSubagent {
+            codex,
+            live_network_config: None,
+        });
     }
 }
 

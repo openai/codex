@@ -4350,6 +4350,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             break;
         }
     }
+    // Also drain cached guardian state if the submission loop exits because
+    // the channel closed without receiving an explicit shutdown op.
+    sess.guardian_subagent.shutdown().await;
     debug!("Agent loop exited");
 }
 
@@ -5159,6 +5162,7 @@ mod handlers {
             .unified_exec_manager
             .terminate_all_processes()
             .await;
+        sess.guardian_subagent.shutdown().await;
         info!("Shutting down Codex instance");
         let history = sess.clone_history().await;
         let turn_count = history
