@@ -887,6 +887,7 @@ impl App {
             .await
         {
             Ok(resumed) => {
+                let input_state = self.chat_widget.capture_thread_input_state();
                 self.shutdown_current_thread().await;
                 self.config = resume_config;
                 tui.set_notification_method(self.config.tui_notification_method);
@@ -904,6 +905,7 @@ impl App {
                     }
                     self.chat_widget.add_plain_history_lines(lines);
                 }
+                self.restore_input_state_after_thread_switch(input_state);
             }
             Err(err) => {
                 let path_display = target_session.path.display();
@@ -1883,6 +1885,11 @@ impl App {
         self.sync_active_agent_label();
     }
 
+    fn restore_input_state_after_thread_switch(&mut self, input_state: Option<ThreadInputState>) {
+        self.chat_widget.restore_thread_input_state(input_state);
+        self.chat_widget.drain_queued_inputs_until_blocked();
+    }
+
     async fn start_fresh_session_with_summary_hint(&mut self, tui: &mut tui::Tui) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history.
@@ -1895,6 +1902,7 @@ impl App {
             self.chat_widget.thread_id(),
             self.chat_widget.thread_name(),
         );
+        let input_state = self.chat_widget.capture_thread_input_state();
         self.shutdown_current_thread().await;
         let report = self
             .server
@@ -1934,6 +1942,7 @@ impl App {
             }
             self.chat_widget.add_plain_history_lines(lines);
         }
+        self.restore_input_state_after_thread_switch(input_state);
         tui.frame_requester().schedule_frame();
     }
 
@@ -2564,6 +2573,7 @@ impl App {
                             .await
                         {
                             Ok(forked) => {
+                                let input_state = self.chat_widget.capture_thread_input_state();
                                 self.shutdown_current_thread().await;
                                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                     tui,
@@ -2587,6 +2597,7 @@ impl App {
                                     }
                                     self.chat_widget.add_plain_history_lines(lines);
                                 }
+                                self.restore_input_state_after_thread_switch(input_state);
                             }
                             Err(err) => {
                                 let path_display = path.display();
@@ -4726,6 +4737,60 @@ mod tests {
             },
             true,
         );
+
+        match next_user_turn_op(&mut new_op_rx) {
+            Op::UserTurn { items, .. } => assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "queued follow-up".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            ),
+            other => panic!("expected queued follow-up submission, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn thread_switch_restores_and_drains_queued_follow_up() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let session_configured = Event {
+            id: "session-configured".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        };
+        app.chat_widget
+            .apply_external_edit("queued follow-up".to_string());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let input_state = app
+            .chat_widget
+            .capture_thread_input_state()
+            .expect("expected queued follow-up state");
+
+        let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
+            make_chatwidget_manual_with_sender().await;
+        app.chat_widget = chat_widget;
+        app.chat_widget.handle_codex_event(session_configured);
+        while new_op_rx.try_recv().is_ok() {}
+
+        app.restore_input_state_after_thread_switch(Some(input_state));
 
         match next_user_turn_op(&mut new_op_rx) {
             Op::UserTurn { items, .. } => assert_eq!(
