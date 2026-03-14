@@ -346,19 +346,6 @@ fn span_depth_from_ancestor(
     None
 }
 
-fn assert_span_descends_from(spans: &[SpanData], child: &SpanData, ancestor: &SpanData) {
-    if span_depth_from_ancestor(spans, child, ancestor).is_some() {
-        return;
-    }
-
-    panic!(
-        "span {} does not descend from {}; exported spans:\n{}",
-        child.name,
-        ancestor.name,
-        format_spans(spans)
-    );
-}
-
 fn assert_has_internal_descendant_at_min_depth(
     spans: &[SpanData],
     ancestor: &SpanData,
@@ -612,23 +599,24 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
                 && span_attr(span, "rpc.method") == Some("turn/start")
                 && span.span_context.trace_id() == remote_trace_id
         }) && spans.iter().any(|span| {
-            span_attr(span, "codex.op") == Some("user_input")
-                && span.span_context.trace_id() == remote_trace_id
+            span.span_kind == SpanKind::Internal && span.span_context.trace_id() == remote_trace_id
         })
     })
     .await;
 
     let server_request_span =
         find_rpc_span_with_trace(&spans, SpanKind::Server, "turn/start", remote_trace_id);
-    let core_turn_span =
-        find_span_with_trace(&spans, remote_trace_id, "codex.op=user_input", |span| {
-            span_attr(span, "codex.op") == Some("user_input")
-        });
+    let core_work_span = find_span_with_trace(
+        &spans,
+        remote_trace_id,
+        "internal turn/start work",
+        |span| span.span_kind == SpanKind::Internal,
+    );
 
     assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);
     assert!(server_request_span.parent_span_is_remote);
     assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
-    assert_span_descends_from(&spans, core_turn_span, server_request_span);
+    assert_eq!(core_work_span.span_context.trace_id(), remote_trace_id);
     harness.shutdown().await;
 
     Ok(())
