@@ -98,7 +98,7 @@ impl ModelsManager {
             auth_manager,
             model_catalog,
             collaboration_modes_config,
-            ModelProviderInfo::create_openai_provider(None),
+            ModelProviderInfo::create_openai_provider(/* base_url */ None),
         )
     }
 
