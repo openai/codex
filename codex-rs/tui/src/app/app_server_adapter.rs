@@ -18,6 +18,8 @@ use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessServerEvent;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ServerNotification;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::Event;
 
 impl App {
     pub(super) async fn handle_app_server_event(
@@ -37,7 +39,14 @@ impl App {
                     self.app_event_tx.send(AppEvent::RefreshSkillsList);
                 }
             }
-            InProcessServerEvent::LegacyNotification(_) => {}
+            InProcessServerEvent::LegacyNotification(notification) => {
+                if let Some((thread_id, event)) =
+                    Self::legacy_notification_to_thread_event(notification)
+                {
+                    self.app_event_tx
+                        .send(AppEvent::ThreadEvent { thread_id, event });
+                }
+            }
             InProcessServerEvent::ServerRequest(request) => {
                 let request_id = request.id().clone();
                 tracing::warn!(
@@ -56,6 +65,16 @@ impl App {
                 }
             }
         }
+    }
+
+    fn legacy_notification_to_thread_event(
+        notification: codex_app_server_protocol::JSONRPCNotification,
+    ) -> Option<(ThreadId, Event)> {
+        let params = notification.params?;
+        let thread_id = params.get("conversationId")?.as_str()?;
+        let thread_id = ThreadId::from_string(thread_id).ok()?;
+        let event: Event = serde_json::from_value(params).ok()?;
+        Some((thread_id, event))
     }
 
     async fn reject_app_server_request(

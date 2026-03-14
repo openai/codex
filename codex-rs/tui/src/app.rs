@@ -41,8 +41,11 @@ use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessAppServerRequester;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
@@ -643,6 +646,7 @@ pub(crate) struct App {
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) active_profile: Option<String>,
+    app_server_requester: InProcessAppServerRequester,
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
     runtime_approval_policy_override: Option<AskForApproval>,
@@ -1225,6 +1229,53 @@ impl App {
         }
     }
 
+    fn register_thread_event_channel(
+        &mut self,
+        thread_id: ThreadId,
+        session: SessionConfiguredEvent,
+    ) {
+        let event = Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(session),
+        };
+        self.thread_event_channels.insert(
+            thread_id,
+            ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event),
+        );
+    }
+
+    fn spawn_direct_thread_event_listener(
+        &mut self,
+        thread_id: ThreadId,
+        thread: Arc<codex_core::CodexThread>,
+    ) {
+        let app_event_tx = self.app_event_tx.clone();
+        let handle = tokio::spawn(async move {
+            while let Ok(event) = thread.next_event().await {
+                app_event_tx.send(AppEvent::ThreadEvent { thread_id, event });
+            }
+        });
+        self.thread_event_listener_tasks.insert(thread_id, handle);
+    }
+
+    fn attach_app_server_managed_thread(
+        &mut self,
+        thread_id: ThreadId,
+        session: SessionConfiguredEvent,
+    ) {
+        self.register_thread_event_channel(thread_id, session);
+    }
+
+    fn attach_direct_thread(
+        &mut self,
+        thread_id: ThreadId,
+        thread: Arc<codex_core::CodexThread>,
+        session: SessionConfiguredEvent,
+    ) {
+        self.register_thread_event_channel(thread_id, session);
+        self.spawn_direct_thread_event_listener(thread_id, thread);
+    }
+
     async fn activate_thread_channel(&mut self, thread_id: ThreadId) {
         if self.active_thread_id.is_some() {
             return;
@@ -1757,6 +1808,74 @@ impl App {
         self.sync_active_agent_label();
     }
 
+    async fn build_fresh_app_server_session(
+        requester: InProcessAppServerRequester,
+        server: Arc<ThreadManager>,
+        init: crate::chatwidget::ChatWidgetInit,
+    ) -> Result<(ChatWidget, ThreadId, SessionConfiguredEvent)> {
+        let response: ThreadStartResponse = requester
+            .request_typed_with_generated_id(|request_id| ClientRequest::ThreadStart {
+                request_id,
+                params: ThreadStartParams {
+                    model: init.model.clone(),
+                    cwd: Some(init.config.cwd.to_string_lossy().into_owned()),
+                    service_tier: Some(init.config.service_tier),
+                    ..ThreadStartParams::default()
+                },
+            })
+            .await
+            .wrap_err("thread/start failed")?;
+
+        let thread_id = ThreadId::from_string(&response.thread.id)
+            .wrap_err("thread/start returned invalid thread id")?;
+
+        let thread = server
+            .get_thread(thread_id)
+            .await
+            .wrap_err_with(|| format!("failed to fetch started thread {thread_id}"))?;
+
+        let session_configured =
+            Self::session_configured_from_thread_start_response(thread.as_ref(), response)?;
+
+        let widget = ChatWidget::new_from_existing_app_server(
+            init,
+            thread,
+            crate::chatwidget::ExistingThreadBootstrap {
+                session: session_configured.clone(),
+                transport: crate::chatwidget::ThreadTransport::AppServerManaged,
+            },
+        );
+
+        Ok((widget, thread_id, session_configured))
+    }
+
+    fn session_configured_from_thread_start_response(
+        thread: &codex_core::CodexThread,
+        response: ThreadStartResponse,
+    ) -> Result<SessionConfiguredEvent> {
+        let thread_id = ThreadId::from_string(&response.thread.id)
+            .wrap_err("thread/start returned invalid thread id")?;
+
+        Ok(SessionConfiguredEvent {
+            session_id: thread_id,
+            forked_from_id: None,
+            thread_name: response.thread.name,
+            model: response.model,
+            model_provider_id: response.model_provider,
+            service_tier: response.service_tier,
+            approval_policy: response.approval_policy.to_core(),
+            approvals_reviewer: response.approvals_reviewer.to_core(),
+            sandbox_policy: response.sandbox.to_core(),
+            cwd: response.cwd,
+            reasoning_effort: response.reasoning_effort,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: thread.rollout_path(),
+        })
+    }
+
     async fn start_fresh_session_with_summary_hint(&mut self, tui: &mut tui::Tui) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history.
@@ -1781,11 +1900,11 @@ impl App {
                 "failed to close all threads"
             );
         }
+
         let init = crate::chatwidget::ChatWidgetInit {
             config,
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
-            // New sessions start without prefilled message content.
             initial_user_message: None,
             enhanced_keys_supported: self.enhanced_keys_supported,
             auth_manager: self.auth_manager.clone(),
@@ -1798,16 +1917,36 @@ impl App {
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             session_telemetry: self.session_telemetry.clone(),
         };
-        self.chat_widget = ChatWidget::new(init, self.server.clone());
-        self.reset_thread_event_state();
-        if let Some(summary) = summary {
-            let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
-            if let Some(command) = summary.resume_command {
-                let spans = vec!["To continue this session, run ".into(), command.cyan()];
-                lines.push(spans.into());
+
+        match Self::build_fresh_app_server_session(
+            self.app_server_requester.clone(),
+            self.server.clone(),
+            init,
+        )
+        .await
+        {
+            Ok((chat_widget, thread_id, session_configured)) => {
+                self.chat_widget = chat_widget;
+                self.reset_thread_event_state();
+                self.primary_thread_id = Some(thread_id);
+                self.primary_session_configured = Some(session_configured.clone());
+                self.attach_app_server_managed_thread(thread_id, session_configured);
+
+                if let Some(summary) = summary {
+                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
+                    if let Some(command) = summary.resume_command {
+                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
+                        lines.push(spans.into());
+                    }
+                    self.chat_widget.add_plain_history_lines(lines);
+                }
             }
-            self.chat_widget.add_plain_history_lines(lines);
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to start new session: {err}"));
+            }
         }
+
         tui.frame_requester().schedule_frame();
     }
 
@@ -2006,6 +2145,12 @@ impl App {
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
             Self::should_wait_for_initial_session(&session_selection);
+        let mut initial_direct_bootstrap: Option<(
+            ThreadId,
+            SessionConfiguredEvent,
+            Arc<codex_core::CodexThread>,
+        )> = None;
+        let mut fresh_app_server_bootstrap: Option<(ThreadId, SessionConfiguredEvent)> = None;
         let mut chat_widget = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let startup_tooltip_override =
@@ -2018,7 +2163,6 @@ impl App {
                     initial_user_message: crate::chatwidget::create_initial_user_message(
                         initial_prompt.clone(),
                         initial_images.clone(),
-                        // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
                     ),
                     enhanced_keys_supported,
@@ -2032,7 +2176,16 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                ChatWidget::new(init, thread_manager.clone())
+
+                let (widget, thread_id, session_configured) = Self::build_fresh_app_server_session(
+                    app_server.requester(),
+                    thread_manager.clone(),
+                    init,
+                )
+                .await?;
+
+                fresh_app_server_bootstrap = Some((thread_id, session_configured));
+                widget
             }
             SessionSelection::Resume(target_session) => {
                 let resumed = thread_manager
@@ -2068,7 +2221,15 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
+                let session_configured = resumed.session_configured;
+                let thread_id = session_configured.session_id;
+                let thread = resumed.thread.clone();
+                let bootstrap = crate::chatwidget::ExistingThreadBootstrap {
+                    session: session_configured.clone(),
+                    transport: crate::chatwidget::ThreadTransport::DirectCore,
+                };
+                initial_direct_bootstrap = Some((thread_id, session_configured, thread));
+                ChatWidget::new_from_existing_direct(init, resumed.thread, bootstrap)
             }
             SessionSelection::Fork(target_session) => {
                 session_telemetry.counter("codex.thread.fork", 1, &[("source", "cli_subcommand")]);
@@ -2106,7 +2267,15 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
+                let session_configured = forked.session_configured;
+                let thread_id = session_configured.session_id;
+                let thread = forked.thread.clone();
+                let bootstrap = crate::chatwidget::ExistingThreadBootstrap {
+                    session: session_configured.clone(),
+                    transport: crate::chatwidget::ThreadTransport::DirectCore,
+                };
+                initial_direct_bootstrap = Some((thread_id, session_configured, thread));
+                ChatWidget::new_from_existing_direct(init, forked.thread, bootstrap)
             }
         };
 
@@ -2125,6 +2294,7 @@ impl App {
             auth_manager: auth_manager.clone(),
             config,
             active_profile,
+            app_server_requester: app_server.requester(),
             cli_kv_overrides,
             harness_overrides,
             runtime_approval_policy_override: None,
@@ -2156,6 +2326,18 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
         };
+        if let Some((thread_id, session_configured)) = fresh_app_server_bootstrap {
+            app.primary_thread_id = Some(thread_id);
+            app.primary_session_configured = Some(session_configured.clone());
+            app.attach_app_server_managed_thread(thread_id, session_configured);
+            app.activate_thread_channel(thread_id).await;
+        }
+        if let Some((thread_id, session_configured, thread)) = initial_direct_bootstrap {
+            app.primary_thread_id = Some(thread_id);
+            app.primary_session_configured = Some(session_configured.clone());
+            app.attach_direct_thread(thread_id, thread, session_configured);
+            app.activate_thread_channel(thread_id).await;
+        }
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -2508,12 +2690,23 @@ impl App {
                                     tui,
                                     self.config.clone(),
                                 );
-                                self.chat_widget = ChatWidget::new_from_existing(
+                                let session_configured = resumed.session_configured;
+                                let thread_id = session_configured.session_id;
+                                let thread = resumed.thread.clone();
+                                let bootstrap = crate::chatwidget::ExistingThreadBootstrap {
+                                    session: session_configured.clone(),
+                                    transport: crate::chatwidget::ThreadTransport::DirectCore,
+                                };
+                                self.chat_widget = ChatWidget::new_from_existing_direct(
                                     init,
                                     resumed.thread,
-                                    resumed.session_configured,
+                                    bootstrap,
                                 );
                                 self.reset_thread_event_state();
+                                self.primary_thread_id = Some(thread_id);
+                                self.primary_session_configured = Some(session_configured.clone());
+                                self.attach_direct_thread(thread_id, thread, session_configured);
+                                self.activate_thread_channel(thread_id).await;
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
                                         vec![summary.usage_line.clone().into()];
@@ -2573,12 +2766,23 @@ impl App {
                                     tui,
                                     self.config.clone(),
                                 );
-                                self.chat_widget = ChatWidget::new_from_existing(
+                                let session_configured = forked.session_configured;
+                                let thread_id = session_configured.session_id;
+                                let thread = forked.thread.clone();
+                                let bootstrap = crate::chatwidget::ExistingThreadBootstrap {
+                                    session: session_configured.clone(),
+                                    transport: crate::chatwidget::ThreadTransport::DirectCore,
+                                };
+                                self.chat_widget = ChatWidget::new_from_existing_direct(
                                     init,
                                     forked.thread,
-                                    forked.session_configured,
+                                    bootstrap,
                                 );
                                 self.reset_thread_event_state();
+                                self.primary_thread_id = Some(thread_id);
+                                self.primary_session_configured = Some(session_configured.clone());
+                                self.attach_direct_thread(thread_id, thread, session_configured);
+                                self.activate_thread_channel(thread_id).await;
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
                                         vec![summary.usage_line.clone().into()];
@@ -2675,9 +2879,6 @@ impl App {
             }
             AppEvent::Exit(mode) => {
                 return Ok(self.handle_exit_mode(mode));
-            }
-            AppEvent::FatalExitRequest(message) => {
-                return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
                 let replay_state_op =
@@ -3866,6 +4067,7 @@ impl App {
         if self.thread_event_channels.contains_key(&thread_id) {
             return Ok(());
         }
+
         let thread = match self.server.get_thread(thread_id).await {
             Ok(thread) => thread,
             Err(err) => {
@@ -3873,6 +4075,7 @@ impl App {
                 return Ok(());
             }
         };
+
         let config_snapshot = thread.config_snapshot().await;
         self.upsert_agent_picker_thread(
             thread_id,
@@ -3880,45 +4083,27 @@ impl App {
             config_snapshot.session_source.get_agent_role(),
             false,
         );
-        let event = Event {
-            id: String::new(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: None,
-                model: config_snapshot.model,
-                model_provider_id: config_snapshot.model_provider_id,
-                service_tier: config_snapshot.service_tier,
-                approval_policy: config_snapshot.approval_policy,
-                approvals_reviewer: config_snapshot.approvals_reviewer,
-                sandbox_policy: config_snapshot.sandbox_policy,
-                cwd: config_snapshot.cwd,
-                reasoning_effort: config_snapshot.reasoning_effort,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: thread.rollout_path(),
-            }),
+
+        let session_configured = SessionConfiguredEvent {
+            session_id: thread_id,
+            forked_from_id: None,
+            thread_name: None,
+            model: config_snapshot.model,
+            model_provider_id: config_snapshot.model_provider_id,
+            service_tier: config_snapshot.service_tier,
+            approval_policy: config_snapshot.approval_policy,
+            approvals_reviewer: config_snapshot.approvals_reviewer,
+            sandbox_policy: config_snapshot.sandbox_policy,
+            cwd: config_snapshot.cwd,
+            reasoning_effort: config_snapshot.reasoning_effort,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: thread.rollout_path(),
         };
-        let channel =
-            ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
-        let app_event_tx = self.app_event_tx.clone();
-        self.thread_event_channels.insert(thread_id, channel);
-        let listener_handle = tokio::spawn(async move {
-            loop {
-                let event = match thread.next_event().await {
-                    Ok(event) => event,
-                    Err(err) => {
-                        tracing::debug!("external thread {thread_id} listener stopped: {err}");
-                        break;
-                    }
-                };
-                app_event_tx.send(AppEvent::ThreadEvent { thread_id, event });
-            }
-        });
-        self.thread_event_listener_tasks
-            .insert(thread_id, listener_handle);
+
+        self.attach_direct_thread(thread_id, thread, session_configured);
         Ok(())
     }
 
@@ -6396,6 +6581,8 @@ smart_approvals = true
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
+        let app_server = start_test_app_server_client(config.clone()).await;
+        let app_server_requester = app_server.requester();
 
         App {
             server,
@@ -6405,6 +6592,7 @@ smart_approvals = true
             auth_manager,
             config,
             active_profile: None,
+            app_server_requester,
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),
             runtime_approval_policy_override: None,
@@ -6458,6 +6646,9 @@ smart_approvals = true
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
 
+        let app_server = start_test_app_server_client(config.clone()).await;
+        let app_server_requester = app_server.requester();
+
         (
             App {
                 server,
@@ -6467,6 +6658,7 @@ smart_approvals = true
                 auth_manager,
                 config,
                 active_profile: None,
+                app_server_requester,
                 cli_kv_overrides: Vec::new(),
                 harness_overrides: ConfigOverrides::default(),
                 runtime_approval_policy_override: None,
