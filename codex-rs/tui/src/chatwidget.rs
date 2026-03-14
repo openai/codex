@@ -8813,17 +8813,18 @@ impl ChatWidget {
             .as_ref()
             .map(|preset| Self::approval_preset_actions(preset.id, &["--confirm-world-writable"]))
             .unwrap_or_default();
-        let accept_and_remember_actions = if let Some(preset) = preset.as_ref() {
-            Self::approval_preset_actions(
-                preset.id,
-                &["--confirm-world-writable", "--remember-world-writable"],
-            )
-        } else {
-            vec![Box::new(|tx| {
-                tx.send(AppEvent::UpdateWorldWritableWarningAcknowledged(true));
-                tx.send(AppEvent::PersistWorldWritableWarningAcknowledged);
-            })]
-        };
+        let accept_and_remember_actions: Vec<SelectionAction> =
+            if let Some(preset) = preset.as_ref() {
+                Self::approval_preset_actions(
+                    preset.id,
+                    &["--confirm-world-writable", "--remember-world-writable"],
+                )
+            } else {
+                vec![Box::new(|tx| {
+                    tx.send(AppEvent::UpdateWorldWritableWarningAcknowledged(true));
+                    tx.send(AppEvent::PersistWorldWritableWarningAcknowledged);
+                })]
+            };
 
         let items = vec![
             SelectionItem {
