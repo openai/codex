@@ -229,12 +229,10 @@ fn guardian_assessment_action_value_redacts_apply_patch_patch_text() {
     } else {
         AbsolutePathBuf::try_from("/tmp/guardian.txt").expect("absolute path")
     };
-    let expected_cwd = serde_json::to_value(&cwd).expect("serialize cwd");
-    let expected_file = serde_json::to_value(&file).expect("serialize file");
     let action = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
-        cwd,
-        files: vec![file],
+        cwd: cwd.clone(),
+        files: vec![file.clone()],
         change_count: 1usize,
         patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+secret\n*** End Patch"
             .to_string(),
@@ -244,8 +242,8 @@ fn guardian_assessment_action_value_redacts_apply_patch_patch_text() {
         guardian_assessment_action_value(&action),
         serde_json::json!({
             "tool": "apply_patch",
-            "cwd": expected_cwd,
-            "files": [expected_file],
+            "cwd": cwd,
+            "files": [file],
             "change_count": 1,
         })
     );
