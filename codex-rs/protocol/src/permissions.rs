@@ -405,6 +405,8 @@ impl FileSystemSandboxPolicy {
         .map(|root| {
             // Filesystem-root policies stay in their effective canonical form
             // so root-wide aliases do not create duplicate top-level masks.
+            // Example: keep `/var/...` normalized under `/` instead of
+            // materializing both `/var/...` and `/private/var/...`.
             let preserve_raw_carveout_paths = root.as_path().parent().is_some();
             let raw_writable_roots: Vec<&AbsolutePathBuf> = writable_entries
                 .iter()
@@ -416,6 +418,8 @@ impl FileSystemSandboxPolicy {
             // as separate WritableRoot values and are checked independently.
             // Preserve symlink path components that live under the writable root
             // so downstream sandboxes can still mask the symlink inode itself.
+            // Example: if `<root>/.codex -> <root>/decoy`, bwrap must still see
+            // `<root>/.codex`, not only the resolved `<root>/decoy`.
             read_only_subpaths.extend(
                 resolved_entries
                     .iter()
@@ -428,6 +432,10 @@ impl FileSystemSandboxPolicy {
                         // if following symlinks would resolve back to the root
                         // or escape outside it. Downstream sandboxes need that
                         // raw path so they can mask the symlink inode itself.
+                        // Examples:
+                        // - `<root>/linked-private -> <root>/decoy-private`
+                        // - `<root>/linked-private -> /tmp/outside-private`
+                        // - `<root>/alias-root -> <root>`
                         let raw_carveout_path = if preserve_raw_carveout_paths {
                             if entry.path == root {
                                 None
