@@ -2397,7 +2397,6 @@ impl App {
         generation: u64,
         result: std::result::Result<SkillsListResponse, String>,
     ) -> Result<()> {
-        let event = result.map_err(|err| color_eyre::eyre::eyre!(err))?;
         let current_cwd = self.chat_widget.config_ref().cwd.clone();
 
         if !requested_cwds.contains(&current_cwd) {
@@ -2413,6 +2412,7 @@ impl App {
             return Ok(());
         }
 
+        let event = result.map_err(|err| color_eyre::eyre::eyre!(err))?;
         emit_skill_load_warnings(&self.app_event_tx, &errors_for_cwd(&current_cwd, &event));
         self.chat_widget.set_skills_from_response(&event);
         self.chat_widget.refresh_plugin_mentions();
@@ -7187,6 +7187,50 @@ guardian_approval = true
             1,
             Ok(test_skill_response(cwd, "old-skill")),
         )?;
+        assert_eq!(app.chat_widget.loaded_skill_names(), vec!["new-skill"]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stale_skills_list_loaded_error_for_same_cwd_is_ignored() -> Result<()> {
+        let mut app = make_test_app().await;
+        let cwd_tmp = tempdir()?;
+        let cwd = cwd_tmp.path().to_path_buf();
+
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: cwd.clone(),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        app.latest_skills_list_generation_by_cwd
+            .insert(cwd.clone(), 2);
+
+        app.handle_skills_list_loaded(
+            vec![cwd.clone()],
+            2,
+            Ok(test_skill_response(cwd.clone(), "new-skill")),
+        )?;
+        assert_eq!(app.chat_widget.loaded_skill_names(), vec!["new-skill"]);
+
+        app.handle_skills_list_loaded(vec![cwd], 1, Err("stale skills/list failure".to_string()))?;
         assert_eq!(app.chat_widget.loaded_skill_names(), vec!["new-skill"]);
 
         Ok(())
