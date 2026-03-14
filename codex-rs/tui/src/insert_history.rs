@@ -29,11 +29,30 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollRegionMode {
+    Enabled,
+    Disabled,
+}
+
 /// Insert `lines` above the viewport using the terminal's backend writer
 /// (avoids direct stdout references).
 pub fn insert_history_lines<B>(
     terminal: &mut crate::custom_terminal::Terminal<B>,
     lines: Vec<Line>,
+) -> io::Result<()>
+where
+    B: Backend + Write,
+{
+    insert_history_lines_with_mode(terminal, lines, ScrollRegionMode::Enabled)
+}
+
+/// Insert `lines` above the viewport using the terminal's backend writer,
+/// optionally disabling scroll-region sequences.
+pub fn insert_history_lines_with_mode<B>(
+    terminal: &mut crate::custom_terminal::Terminal<B>,
+    lines: Vec<Line>,
+    mode: ScrollRegionMode,
 ) -> io::Result<()>
 where
     B: Backend + Write,
@@ -74,6 +93,63 @@ where
         wrapped.extend(line_wrapped);
     }
     let wrapped_lines = wrapped_rows as u16;
+
+    if mode == ScrollRegionMode::Disabled {
+        if area.is_empty() || wrapped_lines == 0 {
+            return Ok(());
+        }
+
+        let viewport_height = area.height.min(screen_size.height);
+        area.y = screen_size.height.saturating_sub(viewport_height);
+
+        // Clear the viewport so existing UI content does not leak into scrollback.
+        queue!(writer, MoveTo(0, area.top()))?;
+        queue!(writer, Clear(ClearType::FromCursorDown))?;
+
+        // Append history lines at the bottom without using scroll regions.
+        queue!(writer, MoveTo(0, screen_size.height.saturating_sub(1)))?;
+        for line in wrapped {
+            queue!(writer, Print("\r\n"))?;
+            let physical_rows = line.width().max(1).div_ceil(wrap_width);
+            if physical_rows > 1 {
+                queue!(writer, SavePosition)?;
+                for _ in 1..physical_rows {
+                    queue!(writer, MoveDown(1), MoveToColumn(0))?;
+                    queue!(writer, Clear(ClearType::UntilNewLine))?;
+                }
+                queue!(writer, RestorePosition)?;
+            }
+            queue!(
+                writer,
+                SetColors(Colors::new(
+                    line.style
+                        .fg
+                        .map(std::convert::Into::into)
+                        .unwrap_or(CColor::Reset),
+                    line.style
+                        .bg
+                        .map(std::convert::Into::into)
+                        .unwrap_or(CColor::Reset)
+                ))
+            )?;
+            queue!(writer, Clear(ClearType::UntilNewLine))?;
+            let merged_spans: Vec<Span> = line
+                .spans
+                .iter()
+                .map(|s| Span {
+                    style: s.style.patch(line.style),
+                    content: s.content.clone(),
+                })
+                .collect();
+            write_spans(writer, merged_spans.iter())?;
+        }
+
+        queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
+        terminal.set_viewport_area(area);
+        terminal.note_history_rows_inserted(wrapped_lines);
+        return Ok(());
+    }
+
     let cursor_top = if area.bottom() < screen_size.height {
         // If the viewport is not at the bottom of the screen, scroll it down to make room.
         // Don't scroll it past the bottom of the screen.
@@ -333,9 +409,76 @@ where
 mod tests {
     use super::*;
     use crate::markdown_render::render_markdown_text;
+    use crate::test_backend::RecordingBackend;
     use crate::test_backend::VT100Backend;
+    use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
+
+    fn contains_scroll_region_sequence(output: &str) -> bool {
+        let bytes = output.as_bytes();
+        let mut idx = 0;
+        while idx + 2 < bytes.len() {
+            if bytes[idx] == b'\x1b' && bytes[idx + 1] == b'[' {
+                let mut j = idx + 2;
+                let mut saw_param = false;
+                while j < bytes.len() {
+                    let byte = bytes[j];
+                    if byte.is_ascii_digit() || byte == b';' {
+                        saw_param = true;
+                        j += 1;
+                        continue;
+                    }
+                    if byte == b'r' && saw_param {
+                        return true;
+                    }
+                    break;
+                }
+            }
+            idx += 1;
+        }
+        false
+    }
+
+    #[test]
+    fn tmux_mode_avoids_scroll_region_sequences() {
+        let width: u16 = 20;
+        let height: u16 = 8;
+        let backend = RecordingBackend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(0, height - 2, width, 2);
+        term.set_viewport_area(viewport);
+
+        insert_history_lines_with_mode(
+            &mut term,
+            vec![Line::from("hello")],
+            ScrollRegionMode::Disabled,
+        )
+        .expect("insert history");
+
+        let output = String::from_utf8_lossy(term.backend().output());
+        assert_eq!(contains_scroll_region_sequence(&output), false);
+    }
+
+    #[test]
+    fn default_mode_emits_scroll_region_sequences() {
+        let width: u16 = 20;
+        let height: u16 = 8;
+        let backend = RecordingBackend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(0, height - 2, width, 2);
+        term.set_viewport_area(viewport);
+
+        insert_history_lines_with_mode(
+            &mut term,
+            vec![Line::from("hello")],
+            ScrollRegionMode::Enabled,
+        )
+        .expect("insert history");
+
+        let output = String::from_utf8_lossy(term.backend().output());
+        assert_eq!(contains_scroll_region_sequence(&output), true);
+    }
 
     #[test]
     fn writes_bold_then_regular_spans() {

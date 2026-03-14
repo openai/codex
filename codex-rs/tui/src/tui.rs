@@ -39,6 +39,7 @@ use tokio_stream::Stream;
 pub use self::frame_requester::FrameRequester;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
+use crate::insert_history::ScrollRegionMode;
 use crate::notifications::DesktopNotificationBackend;
 use crate::notifications::detect_backend;
 use crate::tui::event_stream::EventBroker;
@@ -59,6 +60,28 @@ pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
+
+fn is_tmux_terminal(terminal_info: &codex_core::terminal::TerminalInfo) -> bool {
+    matches!(terminal_info.multiplexer, Some(Multiplexer::Tmux { .. }))
+}
+
+fn min_frame_interval_for_terminal(terminal_info: &codex_core::terminal::TerminalInfo) -> Duration {
+    if is_tmux_terminal(terminal_info) {
+        Duration::ZERO
+    } else {
+        frame_rate_limiter::MIN_FRAME_INTERVAL
+    }
+}
+
+fn scroll_region_mode_for_terminal(
+    terminal_info: &codex_core::terminal::TerminalInfo,
+) -> ScrollRegionMode {
+    if is_tmux_terminal(terminal_info) {
+        ScrollRegionMode::Disabled
+    } else {
+        ScrollRegionMode::Enabled
+    }
+}
 
 pub fn set_modes() -> Result<()> {
     execute!(stdout(), EnableBracketedPaste)?;
@@ -264,12 +287,8 @@ impl Tui {
     pub fn new(terminal: Terminal) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
         let terminal_info = codex_core::terminal::terminal_info();
-        let is_tmux = matches!(terminal_info.multiplexer, Some(Multiplexer::Tmux { .. }));
-        let min_frame_interval = if is_tmux {
-            Duration::from_millis(100)
-        } else {
-            frame_rate_limiter::MIN_FRAME_INTERVAL
-        };
+        let min_frame_interval = min_frame_interval_for_terminal(&terminal_info);
+        let scroll_region_mode = scroll_region_mode_for_terminal(&terminal_info);
         let frame_requester = FrameRequester::new(draw_tx.clone(), min_frame_interval);
 
         // Detect keyboard enhancement support before any EventStream is created so the
@@ -293,7 +312,7 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             alt_screen_enabled: true,
-            disable_scroll_region_up: is_tmux,
+            disable_scroll_region_up: scroll_region_mode == ScrollRegionMode::Disabled,
         }
     }
 
@@ -509,9 +528,15 @@ impl Tui {
             }
 
             if !self.pending_history_lines.is_empty() {
-                crate::insert_history::insert_history_lines(
+                let mode = if self.disable_scroll_region_up {
+                    ScrollRegionMode::Disabled
+                } else {
+                    ScrollRegionMode::Enabled
+                };
+                crate::insert_history::insert_history_lines_with_mode(
                     terminal,
                     self.pending_history_lines.clone(),
+                    mode,
                 )?;
                 self.pending_history_lines.clear();
             }
@@ -555,5 +580,30 @@ impl Tui {
             }
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::terminal::TerminalInfo;
+    use codex_core::terminal::TerminalName;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn tmux_disables_scroll_region_and_deferred_frames() {
+        let info = TerminalInfo {
+            name: TerminalName::Unknown,
+            term_program: None,
+            version: None,
+            term: None,
+            multiplexer: Some(Multiplexer::Tmux { version: None }),
+        };
+
+        assert_eq!(min_frame_interval_for_terminal(&info), Duration::ZERO);
+        assert_eq!(
+            scroll_region_mode_for_terminal(&info),
+            ScrollRegionMode::Disabled
+        );
     }
 }

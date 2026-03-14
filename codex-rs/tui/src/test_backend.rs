@@ -123,3 +123,107 @@ impl Backend for VT100Backend {
         self.crossterm_backend.scroll_region_down(region, scroll_by)
     }
 }
+
+/// Recording backend for asserting emitted ANSI sequences in unit tests.
+pub struct RecordingBackend {
+    buffer: Vec<u8>,
+    size: Size,
+    cursor: Position,
+}
+
+impl RecordingBackend {
+    pub fn new(width: u16, height: u16) -> Self {
+        Self {
+            buffer: Vec::new(),
+            size: Size::new(width, height),
+            cursor: Position { x: 0, y: 0 },
+        }
+    }
+
+    pub fn output(&self) -> &[u8] {
+        &self.buffer
+    }
+}
+
+impl Write for RecordingBackend {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.buffer.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Backend for RecordingBackend {
+    fn draw<'a, I>(&mut self, _content: I) -> io::Result<()>
+    where
+        I: Iterator<Item = (u16, u16, &'a Cell)>,
+    {
+        Ok(())
+    }
+
+    fn hide_cursor(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn show_cursor(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn get_cursor_position(&mut self) -> io::Result<Position> {
+        Ok(self.cursor)
+    }
+
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
+        self.cursor = position.into();
+        Ok(())
+    }
+
+    fn clear(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn clear_region(&mut self, _clear_type: ClearType) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn append_lines(&mut self, _line_count: u16) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn size(&self) -> io::Result<Size> {
+        Ok(self.size)
+    }
+
+    fn window_size(&mut self) -> io::Result<WindowSize> {
+        Ok(WindowSize {
+            columns_rows: self.size,
+            pixels: Size {
+                width: 640,
+                height: 480,
+            },
+        })
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn scroll_region_up(
+        &mut self,
+        _region: std::ops::Range<u16>,
+        _scroll_by: u16,
+    ) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn scroll_region_down(
+        &mut self,
+        _region: std::ops::Range<u16>,
+        _scroll_by: u16,
+    ) -> io::Result<()> {
+        Ok(())
+    }
+}

@@ -29,6 +29,9 @@ In the codex-rs folder where the rust code lives:
 - On Termux/Android, use `scripts/termux/build-safe.sh` for Codex builds. It forces serialized rustc
   work (`CARGO_BUILD_JOBS=1`) and disables Cargo pipelining to avoid overlapping compiler/linker
   pressure.
+- On Termux/Android, keep rustc serialized and avoid rustc+linker overlap for tests/builds by
+  reusing the safe env settings (`CARGO_BUILD_JOBS=1`, `CARGO_BUILD_PIPELINING=false`) from
+  `scripts/termux/build-safe.sh`.
 
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 

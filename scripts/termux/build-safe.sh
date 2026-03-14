@@ -43,7 +43,8 @@ fi
 echo "[termux-build-safe] target: $TARGET"
 echo "[termux-build-safe] cores: $cores"
 echo "[termux-build-safe] MemAvailable: ${mem_kb} kB"
-echo "[termux-build-safe] CARGO_BUILD_JOBS=$jobs (forced serial rustc/link)"
+echo "[termux-build-safe] CARGO_BUILD_JOBS=$jobs (forced serial rustc/link; no parallel rustc)"
+echo "[termux-build-safe] CARGO_BUILD_PIPELINING=false (avoid rustc/link overlap)"
 if [ "$PROFILE" = "release" ]; then
   echo "[termux-build-safe] release overrides: opt-level=2, LTO=off, codegen-units=2, debug=0"
 fi
@@ -59,26 +60,27 @@ echo "[termux-build-safe] rustflags: $RUSTFLAGS"
 
 cd "$ROOT_DIR/codex-rs"
 
-if [ "$PROFILE" = "release" ]; then
+run_cargo() {
   CARGO_BUILD_JOBS="$jobs" \
   CARGO_BUILD_PIPELINING=false \
   RUSTFLAGS="$RUSTFLAGS" \
+  "$@"
+}
+
+if [ "$PROFILE" = "release" ]; then
   CARGO_PROFILE_RELEASE_OPT_LEVEL=2 \
   CARGO_PROFILE_RELEASE_LTO=off \
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS=2 \
   CARGO_PROFILE_RELEASE_DEBUG=0 \
-  cargo build --release -p codex-cli -p codex-exec --target "$TARGET"
+  run_cargo cargo build --release -p codex-cli -p codex-exec --target "$TARGET"
 else
-  CARGO_BUILD_JOBS="$jobs" \
-  CARGO_BUILD_PIPELINING=false \
-  RUSTFLAGS="$RUSTFLAGS" \
   CARGO_PROFILE_DEV_DEBUG=0 \
   CARGO_PROFILE_DEV_INCREMENTAL=false \
   CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false \
   CARGO_PROFILE_DEV_OVERFLOW_CHECKS=false \
   CARGO_PROFILE_DEV_PANIC=abort \
   CARGO_PROFILE_DEV_CODEGEN_UNITS=1 \
-  cargo build -p codex-cli -p codex-exec --target "$TARGET"
+  run_cargo cargo build -p codex-cli -p codex-exec --target "$TARGET"
 fi
 
 echo "[termux-build-safe] done"
