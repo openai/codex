@@ -1765,7 +1765,7 @@ async fn helpers_are_available_and_do_not_panic() {
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
-    let mut w = ChatWidget::new(init, thread_manager);
+    let mut w = ChatWidget::new_with_op_sender(init, unbounded_channel::<Op>().0);
     // Basic construction sanity.
     let _ = &mut w;
 }
@@ -1895,7 +1895,6 @@ async fn make_chatwidget_manual(
         pending_steers: VecDeque::new(),
         submit_pending_steers_after_interrupt: false,
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
-        suppress_session_configured_redraw: false,
         pending_notification: None,
         quit_shortcut_expires_at: None,
         quit_shortcut_key: None,
@@ -5630,7 +5629,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         session_telemetry,
     };
 
-    let chat = ChatWidget::new(init, thread_manager);
+    let chat = ChatWidget::new_with_op_sender(init, unbounded_channel::<Op>().0);
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
     assert_eq!(chat.current_model(), resolved_model);
 }
@@ -5680,7 +5679,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         session_telemetry,
     };
 
-    let chat = ChatWidget::new(init, thread_manager);
+    let chat = ChatWidget::new_with_op_sender(init, unbounded_channel::<Op>().0);
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
     assert_eq!(chat.current_model(), resolved_model);
 }
