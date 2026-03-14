@@ -233,6 +233,7 @@ use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core::plugins::load_plugin_apps;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
+use codex_core::resolve_fork_reference_rollout_path;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_core::skills::remote::export_remote_skill;
@@ -7923,13 +7924,17 @@ pub(crate) async fn read_summary_from_rollout(
         .unwrap_or_else(|| fallback_provider.to_string());
     let git_info = git.as_ref().map(map_git_info);
     let updated_at = updated_at.or_else(|| timestamp.clone());
+    let preview = read_rollout_items_from_rollout(path)
+        .await
+        .map(|items| preview_from_rollout_items(&items))
+        .unwrap_or_default();
 
     Ok(ConversationSummary {
         conversation_id: session_meta.id,
         timestamp,
         updated_at,
         path: path.to_path_buf(),
-        preview: String::new(),
+        preview,
         model_provider,
         cwd: session_meta.cwd,
         cli_version: session_meta.cli_version,
@@ -7947,7 +7952,7 @@ pub(crate) async fn read_rollout_items_from_rollout(
         InitialHistory::Resumed(resumed) => resumed.history,
     };
 
-    Ok(items)
+    Ok(materialize_rollout_items_for_replay(codex_home_from_rollout_path(path), &items).await)
 }
 
 fn extract_conversation_summary(
@@ -8046,6 +8051,137 @@ fn preview_from_rollout_items(items: &[RolloutItem]) -> String {
             None => preview,
         })
         .unwrap_or_default()
+}
+
+fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize> {
+    let mut user_positions = Vec::new();
+    for (idx, item) in items.iter().enumerate() {
+        match item {
+            RolloutItem::ResponseItem(item)
+                if matches!(
+                    codex_core::parse_turn_item(item),
+                    Some(TurnItem::UserMessage(_))
+                ) =>
+            {
+                user_positions.push(idx);
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                let new_len = user_positions.len().saturating_sub(num_turns);
+                user_positions.truncate(new_len);
+            }
+            RolloutItem::ResponseItem(_) => {}
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::ForkReference(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::EventMsg(_) => {}
+        }
+    }
+    user_positions
+}
+
+fn truncate_rollout_before_nth_user_message_from_start(
+    items: &[RolloutItem],
+    n_from_start: usize,
+) -> Vec<RolloutItem> {
+    if n_from_start == usize::MAX {
+        return items.to_vec();
+    }
+
+    let user_positions = user_message_positions_in_rollout(items);
+    if user_positions.len() <= n_from_start {
+        return Vec::new();
+    }
+
+    let cut_idx = user_positions[n_from_start];
+    items[..cut_idx].to_vec()
+}
+
+fn codex_home_from_rollout_path(path: &Path) -> Option<&Path> {
+    path.ancestors().find_map(|ancestor| {
+        let name = ancestor.file_name().and_then(OsStr::to_str)?;
+        if name == codex_core::SESSIONS_SUBDIR || name == codex_core::ARCHIVED_SESSIONS_SUBDIR {
+            ancestor.parent()
+        } else {
+            None
+        }
+    })
+}
+
+async fn materialize_rollout_items_for_replay(
+    codex_home: Option<&Path>,
+    rollout_items: &[RolloutItem],
+) -> Vec<RolloutItem> {
+    const MAX_FORK_REFERENCE_DEPTH: usize = 8;
+
+    let mut materialized = Vec::new();
+    let mut stack: Vec<(Vec<RolloutItem>, usize, usize)> = vec![(rollout_items.to_vec(), 0, 0)];
+
+    while let Some((items, mut idx, depth)) = stack.pop() {
+        while idx < items.len() {
+            match &items[idx] {
+                RolloutItem::ForkReference(reference) => {
+                    if depth >= MAX_FORK_REFERENCE_DEPTH {
+                        warn!(
+                            "skipping fork reference recursion at depth {} for {:?}",
+                            depth, reference.rollout_path
+                        );
+                        idx += 1;
+                        continue;
+                    }
+
+                    let resolved_rollout_path = if let Some(codex_home) = codex_home {
+                        match resolve_fork_reference_rollout_path(
+                            codex_home,
+                            &reference.rollout_path,
+                        )
+                        .await
+                        {
+                            Ok(path) => path,
+                            Err(err) => {
+                                warn!(
+                                    "failed to resolve fork reference rollout {:?}: {err}",
+                                    reference.rollout_path
+                                );
+                                idx += 1;
+                                continue;
+                            }
+                        }
+                    } else {
+                        reference.rollout_path.clone()
+                    };
+                    let parent_history = match RolloutRecorder::get_rollout_history(
+                        &resolved_rollout_path,
+                    )
+                    .await
+                    {
+                        Ok(history) => history,
+                        Err(err) => {
+                            warn!(
+                                "failed to load fork reference rollout {:?} (resolved from {:?}): {err}",
+                                resolved_rollout_path, reference.rollout_path
+                            );
+                            idx += 1;
+                            continue;
+                        }
+                    };
+                    let parent_items = truncate_rollout_before_nth_user_message_from_start(
+                        &parent_history.get_rollout_items(),
+                        reference.nth_user_message,
+                    );
+
+                    stack.push((items, idx + 1, depth));
+                    stack.push((parent_items, 0, depth + 1));
+                    break;
+                }
+                item => materialized.push(item.clone()),
+            }
+            idx += 1;
+        }
+    }
+
+    materialized
 }
 
 fn with_thread_spawn_agent_metadata(
