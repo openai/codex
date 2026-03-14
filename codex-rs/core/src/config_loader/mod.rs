@@ -630,37 +630,35 @@ impl ProjectTrustContext {
         }
     }
 
-    fn disabled_reason_for_dir(&self, dir: &AbsolutePathBuf) -> Option<String> {
-        let decision = self.decision_for_dir(dir);
+    fn disabled_reason_for_decision(&self, decision: &ProjectTrustDecision) -> Option<String> {
         if decision.is_trusted() {
             return None;
         }
 
+        let gated_features = "project-local config, hooks, and exec policies";
         let trust_key = decision.trust_key.as_str();
         let user_config_file = self.user_config_file.as_path().display();
         match decision.trust_level {
             Some(TrustLevel::Untrusted) => Some(format!(
-                "{trust_key} is marked as untrusted in {user_config_file}. To load config.toml, mark it trusted."
+                "{trust_key} is marked as untrusted in {user_config_file}. To load {gated_features}, mark it trusted."
             )),
             _ => Some(format!(
-                "To load config.toml, add {trust_key} as a trusted project in {user_config_file}."
+                "To load {gated_features}, add {trust_key} as a trusted project in {user_config_file}."
             )),
         }
     }
 }
 
 fn project_layer_entry(
-    trust_context: &ProjectTrustContext,
     dot_codex_folder: &AbsolutePathBuf,
-    layer_dir: &AbsolutePathBuf,
     config: TomlValue,
-    config_toml_exists: bool,
+    disabled_reason: Option<String>,
 ) -> ConfigLayerEntry {
     let source = ConfigLayerSource::Project {
         dot_codex_folder: dot_codex_folder.clone(),
     };
 
-    if config_toml_exists && let Some(reason) = trust_context.disabled_reason_for_dir(layer_dir) {
+    if let Some(reason) = disabled_reason {
         ConfigLayerEntry::new_disabled(source, config, reason)
     } else {
         ConfigLayerEntry::new(source, config)
@@ -827,6 +825,7 @@ async fn load_project_layers(
 
         let layer_dir = AbsolutePathBuf::from_absolute_path(dir)?;
         let decision = trust_context.decision_for_dir(&layer_dir);
+        let disabled_reason = trust_context.disabled_reason_for_decision(&decision);
         let dot_codex_abs = AbsolutePathBuf::from_absolute_path(&dot_codex)?;
         let dot_codex_normalized =
             normalize_path(dot_codex_abs.as_path()).unwrap_or_else(|_| dot_codex_abs.to_path_buf());
@@ -849,19 +848,16 @@ async fn load_project_layers(
                             ));
                         }
                         layers.push(project_layer_entry(
-                            trust_context,
                             &dot_codex_abs,
-                            &layer_dir,
                             TomlValue::Table(toml::map::Map::new()),
-                            true,
+                            disabled_reason.clone(),
                         ));
                         continue;
                     }
                 };
                 let config =
                     resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
-                let entry =
-                    project_layer_entry(trust_context, &dot_codex_abs, &layer_dir, config, true);
+                let entry = project_layer_entry(&dot_codex_abs, config, disabled_reason.clone());
                 layers.push(entry);
             }
             Err(err) => {
@@ -870,11 +866,9 @@ async fn load_project_layers(
                     // for this project layer, as this may still have subfolders
                     // that are significant in the overall ConfigLayerStack.
                     layers.push(project_layer_entry(
-                        trust_context,
                         &dot_codex_abs,
-                        &layer_dir,
                         TomlValue::Table(toml::map::Map::new()),
-                        false,
+                        disabled_reason,
                     ));
                 } else {
                     let config_file_display = config_file.as_path().display();
@@ -889,7 +883,6 @@ async fn load_project_layers(
 
     Ok(layers)
 }
-
 /// The legacy mechanism for specifying admin-enforced configuration is to read
 /// from a file like `/etc/codex/managed_config.toml` that has the same
 /// structure as `config.toml` where fields like `approval_policy` can specify

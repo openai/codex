@@ -1,9 +1,11 @@
 use super::*;
+use crate::config::ConfigBuilder;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -58,6 +60,33 @@ fn host_program_path(name: &str) -> String {
 
 fn starlark_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+async fn write_project_trust_config(
+    codex_home: &Path,
+    trusted_projects: &[(&Path, TrustLevel)],
+) -> std::io::Result<()> {
+    tokio::fs::write(
+        codex_home.join(codex_config::CONFIG_TOML_FILE),
+        toml::to_string(&crate::config::ConfigToml {
+            projects: Some(
+                trusted_projects
+                    .iter()
+                    .map(|(project, trust_level)| {
+                        (
+                            project.to_string_lossy().to_string(),
+                            crate::config::ProjectConfig {
+                                trust_level: Some(*trust_level),
+                            },
+                        )
+                    })
+                    .collect::<std::collections::HashMap<_, _>>(),
+            ),
+            ..Default::default()
+        })
+        .expect("serialize config"),
+    )
+    .await
 }
 
 fn read_only_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
@@ -1591,4 +1620,160 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
         r#"On all platforms, a forbidden command should require approval
             (unless AskForApproval::Never is specified)."#
     );
+}
+
+#[tokio::test]
+async fn exec_policies_only_load_from_trusted_project_layers() -> std::io::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let codex_home = temp.path().join("home_execpolicy_nested");
+    let project_root = temp.path().join("project_execpolicy_nested");
+    let nested = project_root.join("nested");
+    let root_rules = project_root.join(".codex").join(RULES_DIR_NAME);
+    let nested_rules = nested.join(".codex").join(RULES_DIR_NAME);
+
+    fs::create_dir_all(&codex_home)?;
+    fs::create_dir_all(&nested_rules)?;
+    fs::write(project_root.join(".git"), "gitdir: here")?;
+    fs::create_dir_all(&root_rules)?;
+    fs::write(
+        root_rules.join("deny-rm.rules"),
+        r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
+    )?;
+    fs::write(
+        nested_rules.join("deny-mv.rules"),
+        r#"prefix_rule(pattern=["mv"], decision="forbidden")"#,
+    )?;
+    write_project_trust_config(&codex_home, &[(&nested, TrustLevel::Trusted)]).await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(nested))
+        .build()
+        .await?;
+
+    let policy = load_exec_policy(&config.config_layer_stack)
+        .await
+        .map_err(std::io::Error::other)?;
+    assert_eq!(
+        policy
+            .check_multiple([vec!["rm".to_string()]].iter(), &|_| Decision::Allow)
+            .decision,
+        Decision::Allow,
+    );
+    assert_eq!(
+        policy
+            .check_multiple([vec!["mv".to_string()]].iter(), &|_| Decision::Allow)
+            .decision,
+        Decision::Forbidden,
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn exec_policies_require_project_trust_without_config_toml() -> std::io::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let project_root = temp.path().join("project_execpolicy");
+    let nested = project_root.join("nested");
+    let rules_dir = project_root.join(".codex").join(RULES_DIR_NAME);
+    fs::create_dir_all(&nested)?;
+    fs::write(project_root.join(".git"), "gitdir: here")?;
+    fs::create_dir_all(&rules_dir)?;
+    fs::write(
+        rules_dir.join("deny-rm.rules"),
+        r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
+    )?;
+
+    let cases = [
+        (
+            "unknown",
+            Vec::<(&Path, TrustLevel)>::new(),
+            Decision::Allow,
+        ),
+        (
+            "untrusted",
+            vec![(&project_root as &Path, TrustLevel::Untrusted)],
+            Decision::Allow,
+        ),
+        (
+            "trusted",
+            vec![(&project_root as &Path, TrustLevel::Trusted)],
+            Decision::Forbidden,
+        ),
+    ];
+
+    for (name, trust_entries, expected_decision) in cases {
+        let codex_home = temp.path().join(format!("home_execpolicy_{name}"));
+        fs::create_dir_all(&codex_home)?;
+        write_project_trust_config(&codex_home, &trust_entries).await?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home)
+            .fallback_cwd(Some(nested.clone()))
+            .build()
+            .await?;
+
+        let policy = load_exec_policy(&config.config_layer_stack)
+            .await
+            .map_err(std::io::Error::other)?;
+        assert_eq!(
+            policy
+                .check_multiple([vec!["rm".to_string()]].iter(), &|_| Decision::Allow)
+                .decision,
+            expected_decision,
+            "unexpected execpolicy decision for {name}",
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn exec_policy_warnings_ignore_untrusted_project_rules_without_config_toml()
+-> std::io::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let project_root = temp.path().join("project_execpolicy_warning");
+    let nested = project_root.join("nested");
+    let rules_dir = project_root.join(".codex").join(RULES_DIR_NAME);
+    fs::create_dir_all(&nested)?;
+    fs::write(project_root.join(".git"), "gitdir: here")?;
+    fs::create_dir_all(&rules_dir)?;
+    fs::write(rules_dir.join("broken.rules"), "prefix_rule(")?;
+
+    let cases = [
+        ("unknown", Vec::<(&Path, TrustLevel)>::new(), false),
+        (
+            "untrusted",
+            vec![(&project_root as &Path, TrustLevel::Untrusted)],
+            false,
+        ),
+        (
+            "trusted",
+            vec![(&project_root as &Path, TrustLevel::Trusted)],
+            true,
+        ),
+    ];
+
+    for (name, trust_entries, expect_warning) in cases {
+        let codex_home = temp.path().join(format!("home_execpolicy_warning_{name}"));
+        fs::create_dir_all(&codex_home)?;
+        write_project_trust_config(&codex_home, &trust_entries).await?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home)
+            .fallback_cwd(Some(nested.clone()))
+            .build()
+            .await?;
+
+        let warning = check_execpolicy_for_warnings(&config.config_layer_stack)
+            .await
+            .map_err(std::io::Error::other)?;
+        assert_eq!(
+            matches!(warning, Some(ExecPolicyError::ParsePolicy { .. })),
+            expect_warning,
+            "unexpected execpolicy warning state for {name}",
+        );
+    }
+
+    Ok(())
 }
