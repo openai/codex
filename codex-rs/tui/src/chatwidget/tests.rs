@@ -8658,9 +8658,25 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
         .sandbox_policy
         .set(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
+    chat.set_approvals_reviewer(ApprovalsReviewer::User);
 
     chat.open_permissions_popup();
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup
+            .lines()
+            .any(|line| line.contains("Default (current)") && line.contains('›')),
+        "expected permissions popup to open with Default selected: {popup}"
+    );
+
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup
+            .lines()
+            .any(|line| line.contains("Smart Approvals") && line.contains('›')),
+        "expected one Down from Default to select Smart Approvals: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let op = std::iter::from_fn(|| rx.try_recv().ok())
@@ -8669,18 +8685,13 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             _ => None,
         })
         .expect("expected OverrideTurnContext op");
-    let expected_approvals_reviewer = if cfg!(target_os = "windows") {
-        ApprovalsReviewer::User
-    } else {
-        ApprovalsReviewer::GuardianSubagent
-    };
 
     assert_eq!(
         op,
         Op::OverrideTurnContext {
             cwd: None,
             approval_policy: Some(AskForApproval::OnRequest),
-            approvals_reviewer: Some(expected_approvals_reviewer),
+            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
             sandbox_policy: Some(SandboxPolicy::new_workspace_write_policy()),
             windows_sandbox_level: None,
             model: None,
