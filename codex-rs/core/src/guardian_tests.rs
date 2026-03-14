@@ -219,13 +219,8 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() {
 
 #[test]
 fn guardian_assessment_action_value_redacts_apply_patch_patch_text() {
-    let (cwd, file) = if cfg!(windows) {
-        (r"C:\tmp", r"C:\tmp\guardian.txt")
-    } else {
-        ("/tmp", "/tmp/guardian.txt")
-    };
-    let cwd = PathBuf::from(cwd);
-    let file = AbsolutePathBuf::try_from(file).expect("absolute path");
+    let cwd = PathBuf::from("/tmp");
+    let file = AbsolutePathBuf::try_from(cwd.join("guardian.txt")).expect("absolute path");
     let action = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
         cwd: cwd.clone(),
@@ -239,8 +234,8 @@ fn guardian_assessment_action_value_redacts_apply_patch_patch_text() {
         guardian_assessment_action_value(&action),
         serde_json::json!({
             "tool": "apply_patch",
-            "cwd": cwd,
-            "files": [file],
+            "cwd": cwd.display().to_string(),
+            "files": [file.display().to_string()],
             "change_count": 1,
         })
     );
