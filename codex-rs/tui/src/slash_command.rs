@@ -186,7 +186,7 @@ impl SlashCommand {
             SlashCommand::Fast => &["", "<on|off|status>"],
             SlashCommand::Approvals | SlashCommand::Permissions => &[
                 "",
-                "<read-only|auto|full-access> [--confirm-full-access] [--remember-full-access] [--confirm-world-writable] [--remember-world-writable] [--enable-windows-sandbox=elevated|legacy]",
+                "<read-only|auto|full-access> [--smart-approvals] [--confirm-full-access] [--remember-full-access] [--confirm-world-writable] [--remember-world-writable] [--enable-windows-sandbox=elevated|legacy]",
             ],
             SlashCommand::ElevateSandbox => &[""],
             SlashCommand::SandboxReadRoot => &["<absolute-directory-path>"],

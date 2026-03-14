@@ -4548,7 +4548,10 @@ impl ChatWidget {
                         &[],
                     );
                     self.app_event_tx
-                        .send(AppEvent::BeginWindowsSandboxElevatedSetup { preset });
+                        .send(AppEvent::BeginWindowsSandboxElevatedSetup {
+                            preset,
+                            approvals_reviewer: self.config.approvals_reviewer,
+                        });
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
@@ -4814,7 +4817,7 @@ impl ChatWidget {
             SlashCommand::Approvals | SlashCommand::Permissions => {
                 let args = match SlashCommandInvocation::parse_args(
                     &args_message.text,
-                    "Usage: /approvals <read-only|auto|full-access> [--confirm-full-access] [--remember-full-access] [--confirm-world-writable] [--remember-world-writable] [--enable-windows-sandbox=elevated|legacy]",
+                    "Usage: /approvals <read-only|auto|full-access> [--smart-approvals] [--confirm-full-access] [--remember-full-access] [--confirm-world-writable] [--remember-world-writable] [--enable-windows-sandbox=elevated|legacy]",
                 ) {
                     Ok(args) => args,
                     Err(message) => {
@@ -4829,7 +4832,7 @@ impl ChatWidget {
                     return self.restore_invalid_inline_slash_command(
                         cmd,
                         args_message,
-                        "Usage: /approvals <read-only|auto|full-access> [--confirm-full-access] [--remember-full-access] [--confirm-world-writable] [--remember-world-writable] [--enable-windows-sandbox=elevated|legacy]".to_string(),
+                        "Usage: /approvals <read-only|auto|full-access> [--smart-approvals] [--confirm-full-access] [--remember-full-access] [--confirm-world-writable] [--remember-world-writable] [--enable-windows-sandbox=elevated|legacy]".to_string(),
                     );
                 }
                 let preset_id = args[0].as_str();
@@ -4848,9 +4851,11 @@ impl ChatWidget {
                 let mut remember_full_access = false;
                 let mut confirm_world_writable = false;
                 let mut remember_world_writable = false;
+                let mut smart_approvals = false;
                 let mut windows_sandbox_mode = None;
                 for token in args.iter().skip(1) {
                     match token.as_str() {
+                        "--smart-approvals" => smart_approvals = true,
                         "--confirm-full-access" => confirm_full_access = true,
                         "--remember-full-access" => remember_full_access = true,
                         "--confirm-world-writable" => confirm_world_writable = true,
@@ -4870,6 +4875,25 @@ impl ChatWidget {
                         }
                     }
                 }
+                if smart_approvals && preset.id != "auto" {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Smart Approvals is only available for Default permissions.".to_string(),
+                    );
+                }
+                if smart_approvals && !self.config.features.enabled(Feature::GuardianApproval) {
+                    return self.restore_invalid_inline_slash_command(
+                        cmd,
+                        args_message,
+                        "Smart Approvals is not enabled in this session.".to_string(),
+                    );
+                }
+                let approvals_reviewer = if smart_approvals {
+                    ApprovalsReviewer::GuardianSubagent
+                } else {
+                    ApprovalsReviewer::User
+                };
                 #[cfg(not(target_os = "windows"))]
                 let _ = windows_sandbox_mode;
 
@@ -4900,6 +4924,11 @@ impl ChatWidget {
                 };
                 #[cfg(not(target_os = "windows"))]
                 let label = preset.label.to_string();
+                let label = if smart_approvals {
+                    "Smart Approvals".to_string()
+                } else {
+                    label
+                };
 
                 if preset.id == "full-access"
                     && !confirm_full_access
@@ -4932,12 +4961,19 @@ impl ChatWidget {
                         };
                         match mode {
                             WindowsSandboxEnableMode::Elevated => {
-                                self.app_event_tx
-                                    .send(AppEvent::BeginWindowsSandboxElevatedSetup { preset });
+                                self.app_event_tx.send(
+                                    AppEvent::BeginWindowsSandboxElevatedSetup {
+                                        preset,
+                                        approvals_reviewer,
+                                    },
+                                );
                             }
                             WindowsSandboxEnableMode::Legacy => {
                                 self.app_event_tx
-                                    .send(AppEvent::BeginWindowsSandboxLegacySetup { preset });
+                                    .send(AppEvent::BeginWindowsSandboxLegacySetup {
+                                        preset,
+                                        approvals_reviewer,
+                                    });
                             }
                         }
                         return QueueReplayControl::Stop;
@@ -4977,7 +5013,7 @@ impl ChatWidget {
                     .send(AppEvent::CodexOp(Op::OverrideTurnContext {
                         cwd: None,
                         approval_policy: Some(preset.approval),
-                        approvals_reviewer: Some(ApprovalsReviewer::User),
+                        approvals_reviewer: Some(approvals_reviewer),
                         sandbox_policy: Some(sandbox.clone()),
                         windows_sandbox_level: None,
                         model: None,
@@ -4992,7 +5028,7 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::UpdateSandboxPolicy(sandbox));
                 self.app_event_tx
-                    .send(AppEvent::UpdateApprovalsReviewer(ApprovalsReviewer::User));
+                    .send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
                 self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                     history_cell::new_info_event(format!("Permissions updated to {label}"), None),
                 )));
@@ -5677,10 +5713,21 @@ impl ChatWidget {
         }
     }
 
-    fn approval_preset_draft(preset_id: &str, flags: &[&str]) -> UserMessage {
+    fn approval_preset_draft_for_reviewer(
+        preset_id: &str,
+        approvals_reviewer: ApprovalsReviewer,
+        flags: &[&str],
+    ) -> UserMessage {
         let mut args = vec![preset_id.to_string()];
+        if approvals_reviewer == ApprovalsReviewer::GuardianSubagent {
+            args.push("--smart-approvals".to_string());
+        }
         args.extend(flags.iter().map(|flag| (*flag).to_string()));
         SlashCommandInvocation::with_args(SlashCommand::Approvals, args).into_user_message()
+    }
+
+    fn approval_preset_draft(preset_id: &str, flags: &[&str]) -> UserMessage {
+        Self::approval_preset_draft_for_reviewer(preset_id, ApprovalsReviewer::User, flags)
     }
 
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
@@ -8475,6 +8522,7 @@ impl ChatWidget {
                             vec![Box::new(move |tx| {
                                 tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
                                     preset: preset_clone.clone(),
+                                    approvals_reviewer: ApprovalsReviewer::User,
                                 });
                             })]
                         }
@@ -8485,6 +8533,7 @@ impl ChatWidget {
                         vec![Box::new(move |tx| {
                             tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
                                 preset: Some(preset_clone.clone()),
+                                approvals_reviewer: Some(ApprovalsReviewer::User),
                                 sample_paths: sample_paths.clone(),
                                 extra_count,
                                 failed_scan,
@@ -8515,6 +8564,63 @@ impl ChatWidget {
 
                 if guardian_approval_enabled {
                     let guardian_preset = preset.clone();
+                    let guardian_actions: Vec<SelectionAction> = {
+                        #[cfg(target_os = "windows")]
+                        {
+                            if WindowsSandboxLevel::from_config(&self.config)
+                                == WindowsSandboxLevel::Disabled
+                            {
+                                let preset_clone = guardian_preset.clone();
+                                if codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                                    && codex_core::windows_sandbox::sandbox_setup_is_complete(
+                                        self.config.codex_home.as_path(),
+                                    )
+                                {
+                                    Self::approval_preset_actions_for_reviewer(
+                                        guardian_preset.id,
+                                        ApprovalsReviewer::GuardianSubagent,
+                                        &["--enable-windows-sandbox=elevated"],
+                                    )
+                                } else {
+                                    vec![Box::new(move |tx| {
+                                        tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
+                                            preset: preset_clone.clone(),
+                                            approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+                                        });
+                                    })]
+                                }
+                            } else if let Some((sample_paths, extra_count, failed_scan)) =
+                                self.world_writable_warning_details()
+                            {
+                                let preset_clone = guardian_preset.clone();
+                                vec![Box::new(move |tx| {
+                                    tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
+                                        preset: Some(preset_clone.clone()),
+                                        approvals_reviewer: Some(
+                                            ApprovalsReviewer::GuardianSubagent,
+                                        ),
+                                        sample_paths: sample_paths.clone(),
+                                        extra_count,
+                                        failed_scan,
+                                    });
+                                })]
+                            } else {
+                                Self::approval_preset_actions_for_reviewer(
+                                    guardian_preset.id,
+                                    ApprovalsReviewer::GuardianSubagent,
+                                    &[],
+                                )
+                            }
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        {
+                            Self::approval_preset_actions_for_reviewer(
+                                guardian_preset.id,
+                                ApprovalsReviewer::GuardianSubagent,
+                                &[],
+                            )
+                        }
+                    };
                     items.push(SelectionItem {
                         name: "Smart Approvals".to_string(),
                         description: Some(
@@ -8527,37 +8633,7 @@ impl ChatWidget {
                                 current_sandbox,
                                 &preset,
                             ),
-                        actions: vec![Box::new(move |tx| {
-                            let sandbox = guardian_preset.sandbox.clone();
-                            tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                                cwd: None,
-                                approval_policy: Some(guardian_preset.approval),
-                                approvals_reviewer: Some(
-                                    ApprovalsReviewer::GuardianSubagent,
-                                ),
-                                sandbox_policy: Some(sandbox.clone()),
-                                windows_sandbox_level: None,
-                                model: None,
-                                effort: None,
-                                summary: None,
-                                service_tier: None,
-                                collaboration_mode: None,
-                                personality: None,
-                            }));
-                            tx.send(AppEvent::UpdateAskForApprovalPolicy(
-                                guardian_preset.approval,
-                            ));
-                            tx.send(AppEvent::UpdateSandboxPolicy(sandbox));
-                            tx.send(AppEvent::UpdateApprovalsReviewer(
-                                ApprovalsReviewer::GuardianSubagent,
-                            ));
-                            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                history_cell::new_info_event(
-                                    "Permissions updated to Smart Approvals".to_string(),
-                                    None,
-                                ),
-                            )));
-                        })],
+                        actions: guardian_actions,
                         dismiss_on_select: true,
                         disabled_reason: approval_disabled_reason
                             .or_else(|| guardian_disabled_reason(true)),
@@ -8626,6 +8702,18 @@ impl ChatWidget {
         vec![Box::new(move |tx| {
             tx.send(AppEvent::HandleSlashCommandDraft(
                 Self::approval_preset_draft(preset_id, flags),
+            ));
+        })]
+    }
+
+    fn approval_preset_actions_for_reviewer(
+        preset_id: &'static str,
+        approvals_reviewer: ApprovalsReviewer,
+        flags: &'static [&'static str],
+    ) -> Vec<SelectionAction> {
+        vec![Box::new(move |tx| {
+            tx.send(AppEvent::HandleSlashCommandDraft(
+                Self::approval_preset_draft_for_reviewer(preset_id, approvals_reviewer, flags),
             ));
         })]
     }
@@ -8764,6 +8852,7 @@ impl ChatWidget {
     pub(crate) fn open_world_writable_warning_confirmation(
         &mut self,
         preset: Option<ApprovalPreset>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
         sample_paths: Vec<String>,
         extra_count: usize,
         failed_scan: bool,
@@ -8813,12 +8902,19 @@ impl ChatWidget {
         // so downstream policy-change hooks don't re-trigger the warning.
         let accept_actions = preset
             .as_ref()
-            .map(|preset| Self::approval_preset_actions(preset.id, &["--confirm-world-writable"]))
+            .map(|preset| {
+                Self::approval_preset_actions_for_reviewer(
+                    preset.id,
+                    approvals_reviewer.unwrap_or(ApprovalsReviewer::User),
+                    &["--confirm-world-writable"],
+                )
+            })
             .unwrap_or_default();
         let accept_and_remember_actions: Vec<SelectionAction> =
             if let Some(preset) = preset.as_ref() {
-                Self::approval_preset_actions(
+                Self::approval_preset_actions_for_reviewer(
                     preset.id,
+                    approvals_reviewer.unwrap_or(ApprovalsReviewer::User),
                     &["--confirm-world-writable", "--remember-world-writable"],
                 )
             } else {
@@ -8857,6 +8953,7 @@ impl ChatWidget {
     pub(crate) fn open_world_writable_warning_confirmation(
         &mut self,
         _preset: Option<ApprovalPreset>,
+        _approvals_reviewer: Option<ApprovalsReviewer>,
         _sample_paths: Vec<String>,
         _extra_count: usize,
         _failed_scan: bool,
@@ -8864,7 +8961,11 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "windows")]
-    pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, preset: ApprovalPreset) {
+    pub(crate) fn open_windows_sandbox_enable_prompt(
+        &mut self,
+        preset: ApprovalPreset,
+        approvals_reviewer: ApprovalsReviewer,
+    ) {
         use ratatui_macros::line;
 
         if !codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED {
@@ -8887,6 +8988,7 @@ impl ChatWidget {
                     actions: vec![Box::new(move |tx| {
                         tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
                             preset: preset_clone.clone(),
+                            approvals_reviewer,
                         });
                     })],
                     dismiss_on_select: true,
@@ -8935,8 +9037,9 @@ impl ChatWidget {
                 actions: vec![Box::new(move |tx| {
                     accept_otel.counter("codex.windows_sandbox.elevated_prompt_accept", 1, &[]);
                     tx.send(AppEvent::HandleSlashCommandDraft(
-                        Self::approval_preset_draft(
+                        Self::approval_preset_draft_for_reviewer(
                             preset.id,
+                            approvals_reviewer,
                             &["--enable-windows-sandbox=elevated"],
                         ),
                     ));
@@ -8950,8 +9053,9 @@ impl ChatWidget {
                 actions: vec![Box::new(move |tx| {
                     legacy_otel.counter("codex.windows_sandbox.elevated_prompt_use_legacy", 1, &[]);
                     tx.send(AppEvent::HandleSlashCommandDraft(
-                        Self::approval_preset_draft(
+                        Self::approval_preset_draft_for_reviewer(
                             legacy_preset.id,
+                            approvals_reviewer,
                             &["--enable-windows-sandbox=legacy"],
                         ),
                     ));
@@ -8981,10 +9085,19 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "windows"))]
-    pub(crate) fn open_windows_sandbox_enable_prompt(&mut self, _preset: ApprovalPreset) {}
+    pub(crate) fn open_windows_sandbox_enable_prompt(
+        &mut self,
+        _preset: ApprovalPreset,
+        _approvals_reviewer: ApprovalsReviewer,
+    ) {
+    }
 
     #[cfg(target_os = "windows")]
-    pub(crate) fn open_windows_sandbox_fallback_prompt(&mut self, preset: ApprovalPreset) {
+    pub(crate) fn open_windows_sandbox_fallback_prompt(
+        &mut self,
+        preset: ApprovalPreset,
+        approvals_reviewer: ApprovalsReviewer,
+    ) {
         use ratatui_macros::line;
 
         let mut lines = Vec::new();
@@ -9015,8 +9128,9 @@ impl ChatWidget {
                     move |tx| {
                         otel.counter("codex.windows_sandbox.fallback_retry_elevated", 1, &[]);
                         tx.send(AppEvent::HandleSlashCommandDraft(
-                            Self::approval_preset_draft(
+                            Self::approval_preset_draft_for_reviewer(
                                 preset.id,
+                                approvals_reviewer,
                                 &["--enable-windows-sandbox=elevated"],
                             ),
                         ));
@@ -9034,8 +9148,9 @@ impl ChatWidget {
                     move |tx| {
                         otel.counter("codex.windows_sandbox.fallback_use_legacy", 1, &[]);
                         tx.send(AppEvent::HandleSlashCommandDraft(
-                            Self::approval_preset_draft(
+                            Self::approval_preset_draft_for_reviewer(
                                 preset.id,
+                                approvals_reviewer,
                                 &["--enable-windows-sandbox=legacy"],
                             ),
                         ));
@@ -9066,7 +9181,12 @@ impl ChatWidget {
     }
 
     #[cfg(not(target_os = "windows"))]
-    pub(crate) fn open_windows_sandbox_fallback_prompt(&mut self, _preset: ApprovalPreset) {}
+    pub(crate) fn open_windows_sandbox_fallback_prompt(
+        &mut self,
+        _preset: ApprovalPreset,
+        _approvals_reviewer: ApprovalsReviewer,
+    ) {
+    }
 
     #[cfg(target_os = "windows")]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self, show_now: bool) {

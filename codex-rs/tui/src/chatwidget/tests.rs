@@ -9181,7 +9181,10 @@ async fn approvals_elevated_inline_args_start_windows_sandbox_setup() {
 
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::BeginWindowsSandboxElevatedSetup { preset }) if preset.id == "auto"
+        Ok(AppEvent::BeginWindowsSandboxElevatedSetup {
+            preset,
+            approvals_reviewer: ApprovalsReviewer::User,
+        }) if preset.id == "auto"
     );
 }
 
@@ -9197,7 +9200,31 @@ async fn approvals_legacy_inline_args_start_windows_sandbox_setup() {
 
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::BeginWindowsSandboxLegacySetup { preset }) if preset.id == "auto"
+        Ok(AppEvent::BeginWindowsSandboxLegacySetup {
+            preset,
+            approvals_reviewer: ApprovalsReviewer::User,
+        }) if preset.id == "auto"
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn approvals_smart_inline_args_preserve_guardian_reviewer_through_windows_setup() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::GuardianApproval, true);
+    chat.set_windows_sandbox_mode(None);
+    chat.handle_serialized_slash_command(ChatWidget::approval_preset_draft_for_reviewer(
+        "auto",
+        ApprovalsReviewer::GuardianSubagent,
+        &["--enable-windows-sandbox=elevated"],
+    ));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::BeginWindowsSandboxElevatedSetup {
+            preset,
+            approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+        }) if preset.id == "auto"
     );
 }
 
@@ -9578,7 +9605,7 @@ async fn permissions_selection_can_disable_smart_approvals() {
 }
 
 #[tokio::test]
-async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context() {
+async fn permissions_selection_emits_smart_approvals_draft_before_replay() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     #[cfg(target_os = "windows")]
     {
@@ -9618,12 +9645,26 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
+    let draft = match rx.try_recv() {
+        Ok(AppEvent::HandleSlashCommandDraft(draft)) => draft,
+        other => panic!("expected serialized smart approvals draft, got {other:?}"),
+    };
+    assert_eq!(
+        draft,
+        ChatWidget::approval_preset_draft_for_reviewer(
+            "auto",
+            ApprovalsReviewer::GuardianSubagent,
+            &[],
+        )
+    );
+    chat.handle_serialized_slash_command(draft);
+
     let op = std::iter::from_fn(|| rx.try_recv().ok())
         .find_map(|event| match event {
             AppEvent::CodexOp(op @ Op::OverrideTurnContext { .. }) => Some(op),
             _ => None,
         })
-        .expect("expected OverrideTurnContext op");
+        .expect("expected OverrideTurnContext op after replay");
 
     assert_eq!(
         op,

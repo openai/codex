@@ -29,17 +29,17 @@ expression: popup
     choose what Codex is allowed to do
     Usage:
         /approvals
-        /approvals <read-only|auto|full-access> [--confirm-full-access] [--remember-full-access]
-          [--confirm-world-writable] [--remember-world-writable] [--enable-windows-
-          sandbox=elevated|legacy]
+        /approvals <read-only|auto|full-access> [--smart-approvals] [--confirm-full-access]
+          [--remember-full-access] [--confirm-world-writable] [--remember-world-writable]
+          [--enable-windows-sandbox=elevated|legacy]
 
   /permissions
     choose what Codex is allowed to do
     Usage:
         /permissions
-        /permissions <read-only|auto|full-access> [--confirm-full-access] [--remember-full-access]
-          [--confirm-world-writable] [--remember-world-writable] [--enable-windows-
-          sandbox=elevated|legacy]
+        /permissions <read-only|auto|full-access> [--smart-approvals] [--confirm-full-access]
+          [--remember-full-access] [--confirm-world-writable] [--remember-world-writable]
+          [--enable-windows-sandbox=elevated|legacy]
 
   /setup-default-sandbox
     set up elevated agent sandbox

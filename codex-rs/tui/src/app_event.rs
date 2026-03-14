@@ -268,6 +268,7 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWorldWritableWarningConfirmation {
         preset: Option<ApprovalPreset>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
         /// Up to 3 sample world-writable directories to display in the warning.
         sample_paths: Vec<String>,
         /// If there are more than `sample_paths`, this carries the remaining count.
@@ -280,30 +281,35 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWindowsSandboxEnablePrompt {
         preset: ApprovalPreset,
+        approvals_reviewer: ApprovalsReviewer,
     },
 
     /// Open the Windows sandbox fallback prompt after declining or failing elevation.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWindowsSandboxFallbackPrompt {
         preset: ApprovalPreset,
+        approvals_reviewer: ApprovalsReviewer,
     },
 
     /// Begin the elevated Windows sandbox setup flow.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     BeginWindowsSandboxElevatedSetup {
         preset: ApprovalPreset,
+        approvals_reviewer: ApprovalsReviewer,
     },
 
     /// Begin the non-elevated Windows sandbox setup flow.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     BeginWindowsSandboxLegacySetup {
         preset: ApprovalPreset,
+        approvals_reviewer: ApprovalsReviewer,
     },
 
     /// Result of the non-elevated Windows sandbox setup flow.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     WindowsSandboxLegacySetupCompleted {
         preset: ApprovalPreset,
+        approvals_reviewer: ApprovalsReviewer,
         error: Option<String>,
     },
 
@@ -325,6 +331,7 @@ pub(crate) enum AppEvent {
     EnableWindowsSandboxForAgentMode {
         preset: ApprovalPreset,
         mode: WindowsSandboxEnableMode,
+        approvals_reviewer: ApprovalsReviewer,
     },
 
     /// Update the Windows sandbox feature mode without changing approval presets.
