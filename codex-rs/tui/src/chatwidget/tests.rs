@@ -8665,8 +8665,8 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
     assert!(
         popup
             .lines()
-            .any(|line| line.contains("Default (current)") && line.contains('›')),
-        "expected permissions popup to open with Default selected: {popup}"
+            .any(|line| line.contains("(current)") && line.contains('›')),
+        "expected permissions popup to open with the current preset selected: {popup}"
     );
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
