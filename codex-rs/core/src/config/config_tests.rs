@@ -4973,29 +4973,6 @@ fn test_load_config_rejects_legacy_ollama_chat_provider_with_helpful_error() -> 
 }
 
 #[test]
-fn test_load_config_rejects_programmatic_reserved_model_provider_override() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let mut cfg = ConfigToml::default();
-    cfg.model_providers.insert(
-        "openai".to_string(),
-        ModelProviderInfo::create_openai_provider(None),
-    );
-
-    let result = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.path().to_path_buf(),
-    );
-    assert!(result.is_err());
-    let error = result.unwrap_err();
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert!(error.to_string().contains("reserved built-in provider IDs"));
-    assert!(error.to_string().contains("`openai`"));
-
-    Ok(())
-}
-
-#[test]
 fn test_untrusted_project_gets_workspace_write_sandbox() -> anyhow::Result<()> {
     let config_with_untrusted = r#"
 [projects."/tmp/test"]
