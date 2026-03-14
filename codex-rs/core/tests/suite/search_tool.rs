@@ -13,6 +13,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_RESOURCE_URI;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -403,6 +404,19 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
                 "starts_at": "2026-03-10T12:00:00Z"
             })),
         }
+    );
+    assert_eq!(
+        end.result
+            .as_ref()
+            .expect("tool call should succeed")
+            .structured_content,
+        Some(json!({
+            "_codex_apps": {
+                "resource_uri": CALENDAR_CREATE_EVENT_RESOURCE_URI,
+                "contains_mcp_source": true,
+                "connector_id": "calendar",
+            },
+        }))
     );
 
     wait_for_event(&test.codex, |event| {
