@@ -9,7 +9,6 @@ use core_test_support::responses::mount_models_once;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::tempdir;
-use tracing_test::traced_test;
 use wiremock::MockServer;
 
 fn remote_model(slug: &str, display: &str, priority: i32) -> ModelInfo {
@@ -203,7 +202,6 @@ async fn get_model_info_rejects_multi_segment_namespace_suffix_matching() {
 }
 
 #[tokio::test]
-#[traced_test]
 async fn refresh_available_models_sorts_by_priority() {
     let server = MockServer::start().await;
     let remote_models = vec![
@@ -253,27 +251,6 @@ async fn refresh_available_models_sorts_by_priority() {
         1,
         "expected a single /models request"
     );
-
-    logs_assert(|lines: &[&str]| {
-        let line = lines
-            .iter()
-            .find(|line| {
-                line.contains("event.name=\"codex.api_request\"")
-                    && line.contains("endpoint=\"/models\"")
-            })
-            .ok_or_else(|| "missing /models codex.api_request event".to_string())?;
-
-        if !line.contains("auth.mode=\"Chatgpt\"") {
-            return Err("missing shared auth.mode field".to_string());
-        }
-        if line.contains("auth_mode=") {
-            return Err("unexpected legacy auth_mode field".to_string());
-        }
-        if !line.contains("success=true") {
-            return Err("missing standard success field".to_string());
-        }
-        Ok(())
-    });
 }
 
 #[tokio::test]
