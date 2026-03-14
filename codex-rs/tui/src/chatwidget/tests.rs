@@ -2009,6 +2009,114 @@ pub(crate) async fn make_chatwidget_manual_with_sender() -> (
     (widget, app_event_tx, rx, op_rx)
 }
 
+#[tokio::test]
+async fn session_configured_bootstrap_updates_state_and_requests_prompts_and_skills() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let thread_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().expect("rollout file");
+
+    let configured = SessionConfiguredEvent {
+        session_id: thread_id,
+        forked_from_id: None,
+        thread_name: Some("bootstrap thread".to_string()),
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/tmp/bootstrap"),
+        reasoning_effort: None,
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+
+    chat.on_session_configured(configured.clone());
+
+    assert_eq!(chat.thread_id(), Some(thread_id));
+    assert_eq!(chat.thread_name(), configured.thread_name.clone());
+    assert_eq!(chat.current_cwd, Some(configured.cwd.clone()));
+    assert_eq!(chat.rollout_path(), configured.rollout_path.clone());
+
+    assert_matches!(op_rx.try_recv(), Ok(Op::ListCustomPrompts));
+    let mut saw_skills_request = false;
+    while let Ok(event) = rx.try_recv() {
+        if matches!(
+            event,
+            AppEvent::CodexOp(Op::ListSkills {
+                cwds,
+                force_reload,
+            }) if cwds.is_empty() && force_reload
+        ) {
+            saw_skills_request = true;
+            break;
+        }
+    }
+    assert_eq!(saw_skills_request, true);
+}
+
+#[tokio::test]
+async fn app_server_existing_thread_constructor_applies_bootstrap_state() {
+    let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+    let app_event_tx = AppEventSender::new(tx_raw);
+    let mut cfg = test_config().await;
+    let resolved_model = codex_core::test_support::get_model_offline(cfg.model.as_deref());
+    cfg.model = Some(resolved_model.clone());
+
+    let thread_manager = Arc::new(
+        codex_core::test_support::thread_manager_with_models_provider(
+            CodexAuth::from_api_key("test"),
+            cfg.model_provider.clone(),
+        ),
+    );
+    let auth_manager =
+        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
+    let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
+
+    let init = ChatWidgetInit {
+        config: cfg.clone(),
+        frame_requester: FrameRequester::test_dummy(),
+        app_event_tx,
+        initial_user_message: None,
+        enhanced_keys_supported: false,
+        auth_manager,
+        models_manager: thread_manager.get_models_manager(),
+        feedback: codex_feedback::CodexFeedback::new(),
+        is_first_run: true,
+        feedback_audience: FeedbackAudience::External,
+        model: Some(resolved_model),
+        startup_tooltip_override: None,
+        status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        session_telemetry,
+    };
+
+    let codex_core::NewThread {
+        thread,
+        session_configured,
+        ..
+    } = thread_manager
+        .start_thread(cfg)
+        .await
+        .expect("thread should start");
+
+    let chat = ChatWidget::new_from_existing_app_server(
+        init,
+        thread,
+        ExistingThreadBootstrap {
+            session: session_configured.clone(),
+            transport: ThreadTransport::AppServerManaged,
+        },
+    );
+
+    assert_eq!(chat.thread_id(), Some(session_configured.session_id));
+    assert_eq!(chat.thread_name(), session_configured.thread_name.clone());
+    assert_eq!(chat.current_cwd, Some(session_configured.cwd.clone()));
+    assert_eq!(chat.rollout_path(), session_configured.rollout_path.clone());
+}
+
 fn drain_insert_history(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
 ) -> Vec<Vec<ratatui::text::Line<'static>>> {
