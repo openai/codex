@@ -1016,23 +1016,15 @@ fn guardian_assessment_action_value(action: &GuardianApprovalRequest) -> Value {
             files,
             change_count,
             ..
-        } => {
-            let normalize_path = |path: String| {
-                if path.len() > 2 && path.as_bytes()[1] == b':' && path.as_bytes()[2] == b'/' {
-                    return path[2..].to_string();
-                }
-                path
-            };
-            serde_json::json!({
-                "tool": "apply_patch",
-                "cwd": normalize_path(cwd.to_string_lossy().replace('\\', "/")),
-                "files": files
-                    .iter()
-                    .map(|path| normalize_path(path.to_string_lossy().replace('\\', "/")))
-                    .collect::<Vec<_>>(),
-                "change_count": change_count,
-            })
-        }
+        } => serde_json::json!({
+            "tool": "apply_patch",
+            "cwd": cwd.to_string_lossy().replace('\\', "/"),
+            "files": files
+                .iter()
+                .map(|path| path.to_string_lossy().replace('\\', "/"))
+                .collect::<Vec<_>>(),
+            "change_count": change_count,
+        }),
         GuardianApprovalRequest::NetworkAccess {
             id: _,
             turn_id: _,
