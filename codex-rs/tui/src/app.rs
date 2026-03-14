@@ -4757,7 +4757,7 @@ mod tests {
         let new_thread = app.server.start_thread(app.config.clone()).await?;
         let thread_id = new_thread.thread_id;
         let thread = new_thread.thread.clone();
-        let session = new_thread.session_configured.clone();
+        let session = new_thread.session_configured;
 
         app.attach_direct_thread(thread_id, thread, session);
 
