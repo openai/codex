@@ -261,7 +261,7 @@ impl ThreadStateManager {
         {
             let mut thread_state_guard = thread_state.lock().await;
             if experimental_raw_events {
-                thread_state_guard.set_experimental_raw_events(true);
+                thread_state_guard.set_experimental_raw_events(/*enabled*/ true);
             }
         }
         Some(thread_state)

@@ -125,7 +125,7 @@ pub async fn load_tasks(
     // In later milestones, add a small debounce, spinner, and error display.
     let tasks = tokio::time::timeout(
         Duration::from_secs(5),
-        backend.list_tasks(env, Some(20), None),
+        backend.list_tasks(env, Some(20), /*cursor*/ None),
     )
     .await??;
     // Hide review-only tasks from the main list.

@@ -285,7 +285,7 @@ impl CloudRequirementsService {
             .map_err(|_| {
                 CloudRequirementsLoadError::new(
                     CloudRequirementsLoadErrorCode::Timeout,
-                    None,
+                    /*status_code*/ None,
                     format!(
                         "timed out waiting for cloud requirements after {}s",
                         self.timeout.as_secs()
@@ -367,7 +367,9 @@ impl CloudRequirementsService {
         while attempt <= CLOUD_REQUIREMENTS_MAX_ATTEMPTS {
             let contents = match self.fetcher.fetch_requirements(&auth).await {
                 Ok(contents) => {
-                    emit_fetch_attempt_metric(trigger, attempt, "success", None);
+                    emit_fetch_attempt_metric(
+                        trigger, attempt, "success", /*status_code*/ None,
+                    );
                     contents
                 }
                 Err(FetchAttemptError::Retryable(status)) => {
@@ -487,7 +489,7 @@ impl CloudRequirementsService {
                         );
                         return Err(CloudRequirementsLoadError::new(
                             CloudRequirementsLoadErrorCode::Parse,
-                            None,
+                            /*status_code*/ None,
                             CLOUD_REQUIREMENTS_LOAD_FAILED_MESSAGE,
                         ));
                     }
@@ -500,7 +502,9 @@ impl CloudRequirementsService {
                 tracing::warn!(error = %err, "Failed to write cloud requirements cache");
             }
 
-            emit_fetch_final_metric(trigger, "success", "none", attempt, None);
+            emit_fetch_final_metric(
+                trigger, "success", "none", attempt, /*status_code*/ None,
+            );
             return Ok(requirements);
         }
 
@@ -708,7 +712,7 @@ pub fn cloud_requirements_loader(
             tracing::error!(error = %err, "Cloud requirements task failed");
             CloudRequirementsLoadError::new(
                 CloudRequirementsLoadErrorCode::Internal,
-                None,
+                /*status_code*/ None,
                 format!("cloud requirements load failed: {err}"),
             )
         })?
@@ -792,7 +796,7 @@ fn emit_metric(metric_name: &str, tags: Vec<(&str, String)>) {
             .iter()
             .map(|(key, value)| (*key, value.as_str()))
             .collect::<Vec<_>>();
-        let _ = metrics.counter(metric_name, 1, &tag_refs);
+        let _ = metrics.counter(metric_name, /*inc*/ 1, &tag_refs);
     }
 }
 

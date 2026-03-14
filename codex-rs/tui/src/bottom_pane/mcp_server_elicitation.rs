@@ -1093,24 +1093,25 @@ impl McpServerElicitationOverlay {
         }
         self.validation_error = None;
         if self.request.response_mode == McpServerElicitationResponseMode::ApprovalAction {
-            let (decision, meta) = match self.field_value(0).as_ref().and_then(Value::as_str) {
-                Some(APPROVAL_ACCEPT_ONCE_VALUE) => (ElicitationAction::Accept, None),
-                Some(APPROVAL_ACCEPT_SESSION_VALUE) => (
-                    ElicitationAction::Accept,
-                    Some(serde_json::json!({
-                        APPROVAL_PERSIST_KEY: APPROVAL_PERSIST_SESSION_VALUE,
-                    })),
-                ),
-                Some(APPROVAL_ACCEPT_ALWAYS_VALUE) => (
-                    ElicitationAction::Accept,
-                    Some(serde_json::json!({
-                        APPROVAL_PERSIST_KEY: APPROVAL_PERSIST_ALWAYS_VALUE,
-                    })),
-                ),
-                Some(APPROVAL_DECLINE_VALUE) => (ElicitationAction::Decline, None),
-                Some(APPROVAL_CANCEL_VALUE) => (ElicitationAction::Cancel, None),
-                _ => (ElicitationAction::Cancel, None),
-            };
+            let (decision, meta) =
+                match self.field_value(/*idx*/ 0).as_ref().and_then(Value::as_str) {
+                    Some(APPROVAL_ACCEPT_ONCE_VALUE) => (ElicitationAction::Accept, None),
+                    Some(APPROVAL_ACCEPT_SESSION_VALUE) => (
+                        ElicitationAction::Accept,
+                        Some(serde_json::json!({
+                            APPROVAL_PERSIST_KEY: APPROVAL_PERSIST_SESSION_VALUE,
+                        })),
+                    ),
+                    Some(APPROVAL_ACCEPT_ALWAYS_VALUE) => (
+                        ElicitationAction::Accept,
+                        Some(serde_json::json!({
+                            APPROVAL_PERSIST_KEY: APPROVAL_PERSIST_ALWAYS_VALUE,
+                        })),
+                    ),
+                    Some(APPROVAL_DECLINE_VALUE) => (ElicitationAction::Decline, None),
+                    Some(APPROVAL_CANCEL_VALUE) => (ElicitationAction::Cancel, None),
+                    _ => (ElicitationAction::Cancel, None),
+                };
             self.app_event_tx.send(AppEvent::SubmitThreadOp {
                 thread_id: self.request.thread_id,
                 op: Op::ResolveElicitation {
@@ -1160,7 +1161,7 @@ impl McpServerElicitationOverlay {
         if self.current_index() + 1 >= self.field_count() {
             self.submit_answers();
         } else {
-            self.move_field(true);
+            self.move_field(/*next*/ true);
         }
     }
 
@@ -1455,7 +1456,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.move_field(false);
+                self.move_field(/*next*/ false);
                 return;
             }
             KeyEvent {
@@ -1468,7 +1469,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.move_field(true);
+                self.move_field(/*next*/ true);
                 return;
             }
             KeyEvent {
@@ -1476,7 +1477,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.current_field_is_select() => {
-                self.move_field(false);
+                self.move_field(/*next*/ false);
                 return;
             }
             KeyEvent {
@@ -1484,7 +1485,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.current_field_is_select() => {
-                self.move_field(true);
+                self.move_field(/*next*/ true);
                 return;
             }
             _ => {}
@@ -1507,10 +1508,10 @@ impl BottomPaneView for McpServerElicitationOverlay {
                     }
                 }
                 KeyCode::Backspace | KeyCode::Delete => self.clear_selection(),
-                KeyCode::Char(' ') => self.select_current_option(true),
+                KeyCode::Char(' ') => self.select_current_option(/*committed*/ true),
                 KeyCode::Enter => {
                     if self.selected_option_index().is_some() {
-                        self.select_current_option(true);
+                        self.select_current_option(/*committed*/ true);
                     }
                     self.go_next_or_submit();
                 }
@@ -1519,7 +1520,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                         if let Some(answer) = self.current_answer_mut() {
                             answer.selection.selected_idx = Some(option_idx);
                         }
-                        self.select_current_option(true);
+                        self.select_current_option(/*committed*/ true);
                         self.go_next_or_submit();
                     }
                 }

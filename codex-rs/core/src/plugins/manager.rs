@@ -434,7 +434,11 @@ impl PluginsManager {
     }
 
     pub fn plugins_for_config(&self, config: &Config) -> PluginLoadOutcome {
-        self.plugins_for_layer_stack(&config.cwd, &config.config_layer_stack, false)
+        self.plugins_for_layer_stack(
+            &config.cwd,
+            &config.config_layer_stack,
+            /*force_reload*/ false,
+        )
     }
 
     pub fn plugins_for_layer_stack(

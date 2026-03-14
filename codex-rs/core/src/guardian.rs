@@ -382,7 +382,7 @@ pub(crate) async fn review_approval_request(
         Arc::clone(turn),
         request,
         retry_reason,
-        None,
+        /*external_cancel*/ None,
     )
     .await
 }
@@ -716,7 +716,7 @@ async fn run_guardian_subagent(
         turn,
         child_cancel.clone(),
         SubAgentSource::Other(GUARDIAN_SUBAGENT_NAME.to_string()),
-        None,
+        /*initial_history*/ None,
     )
     .await?;
     // Preserve exact session-scoped network approvals after spawn so their

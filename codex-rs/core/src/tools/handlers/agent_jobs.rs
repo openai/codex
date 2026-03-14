@@ -584,7 +584,13 @@ async fn run_agent_job_loop(
     .await?;
     let initial_progress = db.get_agent_job_progress(job_id.as_str()).await?;
     progress_emitter
-        .maybe_emit(&session, &turn, job_id.as_str(), &initial_progress, true)
+        .maybe_emit(
+            &session,
+            &turn,
+            job_id.as_str(),
+            &initial_progress,
+            /*force*/ true,
+        )
         .await?;
 
     let mut cancel_requested = db.is_agent_job_cancelled(job_id.as_str()).await?;
@@ -633,7 +639,7 @@ async fn run_agent_job_loop(
                         db.mark_agent_job_item_pending(
                             job_id.as_str(),
                             item.item_id.as_str(),
-                            None,
+                            /*error_message*/ None,
                         )
                         .await?;
                         break;
@@ -719,7 +725,13 @@ async fn run_agent_job_loop(
             active_items.remove(&thread_id);
             let progress = db.get_agent_job_progress(job_id.as_str()).await?;
             progress_emitter
-                .maybe_emit(&session, &turn, job_id.as_str(), &progress, false)
+                .maybe_emit(
+                    &session,
+                    &turn,
+                    job_id.as_str(),
+                    &progress,
+                    /*force*/ false,
+                )
                 .await?;
         }
     }
@@ -738,7 +750,13 @@ async fn run_agent_job_loop(
             format!("agent job {job_id} cancelled with {pending_items} unprocessed items");
         let _ = session.notify_background_event(&turn, message).await;
         progress_emitter
-            .maybe_emit(&session, &turn, job_id.as_str(), &progress, true)
+            .maybe_emit(
+                &session,
+                &turn,
+                job_id.as_str(),
+                &progress,
+                /*force*/ true,
+            )
             .await?;
         return Ok(());
     }
@@ -750,7 +768,13 @@ async fn run_agent_job_loop(
     db.mark_agent_job_completed(job_id.as_str()).await?;
     let progress = db.get_agent_job_progress(job_id.as_str()).await?;
     progress_emitter
-        .maybe_emit(&session, &turn, job_id.as_str(), &progress, true)
+        .maybe_emit(
+            &session,
+            &turn,
+            job_id.as_str(),
+            &progress,
+            /*force*/ true,
+        )
         .await?;
     Ok(())
 }
@@ -759,7 +783,9 @@ async fn export_job_csv_snapshot(
     db: Arc<codex_state::StateRuntime>,
     job: &codex_state::AgentJob,
 ) -> anyhow::Result<()> {
-    let items = db.list_agent_job_items(job.id.as_str(), None, None).await?;
+    let items = db
+        .list_agent_job_items(job.id.as_str(), /*status*/ None, /*limit*/ None)
+        .await?;
     let csv_content = render_job_csv(job.input_headers.as_slice(), items.as_slice())
         .map_err(|err| anyhow::anyhow!("failed to render job csv for auto-export: {err}"))?;
     let output_path = PathBuf::from(job.output_csv_path.clone());
@@ -778,7 +804,11 @@ async fn recover_running_items(
     runtime_timeout: Duration,
 ) -> anyhow::Result<()> {
     let running_items = db
-        .list_agent_job_items(job_id, Some(codex_state::AgentJobItemStatus::Running), None)
+        .list_agent_job_items(
+            job_id,
+            Some(codex_state::AgentJobItemStatus::Running),
+            /*limit*/ None,
+        )
         .await?;
     for item in running_items {
         if is_item_stale(&item, runtime_timeout) {

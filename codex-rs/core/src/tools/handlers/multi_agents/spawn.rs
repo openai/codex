@@ -127,8 +127,11 @@ impl ToolHandler for Handler {
             .await;
         let new_thread_id = result?;
         let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
-        turn.session_telemetry
-            .counter("codex.multi_agent.spawn", 1, &[("role", role_tag)]);
+        turn.session_telemetry.counter(
+            "codex.multi_agent.spawn",
+            /*inc*/ 1,
+            &[("role", role_tag)],
+        );
 
         Ok(SpawnAgentResult {
             agent_id: new_thread_id.to_string(),

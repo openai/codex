@@ -1819,9 +1819,10 @@ fn resolve_permission_config_syntax(
     }
 
     let mut selection = None;
-    for layer in
-        config_layer_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false)
-    {
+    for layer in config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    ) {
         let Ok(layer_selection) = layer.config.clone().try_into::<PermissionSelectionToml>() else {
             continue;
         };

@@ -375,7 +375,7 @@ fn emit_windows_sandbox_setup_success_metrics(
     );
     let _ = metrics.counter(
         "codex.windows_sandbox.setup_success",
-        1,
+        /*inc*/ 1,
         &[("originator", originator_tag), ("mode", mode_tag)],
     );
 }
@@ -401,7 +401,7 @@ fn emit_windows_sandbox_setup_failure_metrics(
     );
     let _ = metrics.counter(
         "codex.windows_sandbox.setup_failure",
-        1,
+        /*inc*/ 1,
         &[("originator", originator_tag), ("mode", mode_tag)],
     );
 
@@ -426,7 +426,7 @@ fn emit_windows_sandbox_setup_failure_metrics(
     } else {
         let _ = metrics.counter(
             "codex.windows_sandbox.legacy_setup_preflight_failed",
-            1,
+            /*inc*/ 1,
             &[("originator", originator_tag)],
         );
     }

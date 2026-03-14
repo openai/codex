@@ -399,7 +399,7 @@ impl Client {
         let plan_type = Some(Self::map_plan_type(payload.plan_type));
         let mut snapshots = vec![Self::make_rate_limit_snapshot(
             Some("codex".to_string()),
-            None,
+            /*limit_name*/ None,
             payload.rate_limit.flatten().map(|details| *details),
             payload.credits.flatten().map(|details| *details),
             plan_type,
@@ -410,7 +410,7 @@ impl Client {
                     Some(details.metered_feature),
                     Some(details.limit_name),
                     details.rate_limit.flatten().map(|rate_limit| *rate_limit),
-                    None,
+                    /*credits*/ None,
                     plan_type,
                 )
             }));

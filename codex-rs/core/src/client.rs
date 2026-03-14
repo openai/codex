@@ -680,9 +680,11 @@ impl ModelClientSession {
         let Some(last_response) = self.get_last_response() else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
-        let Some(incremental_items) =
-            self.get_incremental_items(request, Some(&last_response), true)
-        else {
+        let Some(incremental_items) = self.get_incremental_items(
+            request,
+            Some(&last_response),
+            /*allow_empty_delta*/ true,
+        ) else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
 
@@ -726,7 +728,7 @@ impl ModelClientSession {
                 client_setup.api_provider,
                 client_setup.api_auth,
                 Some(Arc::clone(&self.turn_state)),
-                None,
+                /*turn_metadata_header*/ None,
             )
             .await?;
         self.websocket_session.connection = Some(connection);
@@ -1024,7 +1026,7 @@ impl ModelClientSession {
                 summary,
                 service_tier,
                 turn_metadata_header,
-                true,
+                /*warmup*/ true,
             )
             .await
         {
@@ -1077,7 +1079,7 @@ impl ModelClientSession {
                             summary,
                             service_tier,
                             turn_metadata_header,
-                            false,
+                            /*warmup*/ false,
                         )
                         .await?
                     {
@@ -1119,7 +1121,7 @@ impl ModelClientSession {
             warn!("falling back to HTTP");
             session_telemetry.counter(
                 "codex.transport.fallback_to_http",
-                1,
+                /*inc*/ 1,
                 &[("from_wire_api", "responses_websocket")],
             );
 

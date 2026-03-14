@@ -341,7 +341,7 @@ impl Features {
             if self.enabled(feature.id) != feature.default_enabled {
                 otel.counter(
                     "codex.feature.state",
-                    1,
+                    /*inc*/ 1,
                     &[
                         ("feature", feature.key),
                         ("value", &self.enabled(feature.id).to_string()),

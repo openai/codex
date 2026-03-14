@@ -140,7 +140,7 @@ pub fn run_main() -> ! {
             &sandbox_policy,
             network_sandbox_policy,
             &sandbox_policy_cwd,
-            false,
+            /*apply_landlock_fs*/ false,
             allow_network_for_proxy,
             proxy_routing_active,
         ) {
@@ -154,9 +154,9 @@ pub fn run_main() -> ! {
             &sandbox_policy,
             network_sandbox_policy,
             &sandbox_policy_cwd,
-            false,
+            /*apply_landlock_fs*/ false,
             allow_network_for_proxy,
-            false,
+            /*proxy_routed_network*/ false,
         ) {
             panic!("error applying Linux sandbox restrictions: {e:?}");
         }
@@ -199,9 +199,9 @@ pub fn run_main() -> ! {
         &sandbox_policy,
         network_sandbox_policy,
         &sandbox_policy_cwd,
-        true,
+        /*apply_landlock_fs*/ true,
         allow_network_for_proxy,
-        false,
+        /*proxy_routed_network*/ false,
     ) {
         panic!("error applying legacy Linux sandbox restrictions: {e:?}");
     }

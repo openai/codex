@@ -147,7 +147,13 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session
-                    .request_patch_approval(turn, call_id, changes.clone(), Some(reason), None)
+                    .request_patch_approval(
+                        turn,
+                        call_id,
+                        changes.clone(),
+                        Some(reason),
+                        /*grant_root*/ None,
+                    )
                     .await;
                 return rx_approve.await.unwrap_or_default();
             }
@@ -158,7 +164,9 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                 approval_keys,
                 || async move {
                     let rx_approve = session
-                        .request_patch_approval(turn, call_id, changes, None, None)
+                        .request_patch_approval(
+                            turn, call_id, changes, /*reason*/ None, /*grant_root*/ None,
+                        )
                         .await;
                     rx_approve.await.unwrap_or_default()
                 },
@@ -198,7 +206,7 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
     ) -> Result<ExecToolCallOutput, ToolError> {
         let spec = Self::build_command_spec(req, &ctx.turn.config.codex_home)?;
         let env = attempt
-            .env_for(spec, None)
+            .env_for(spec, /*network*/ None)
             .map_err(|err| ToolError::Codex(err.into()))?;
         let out = execute_env(env, Self::stdout_stream(ctx))
             .await

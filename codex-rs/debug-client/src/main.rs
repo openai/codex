@@ -219,7 +219,7 @@ fn handle_command(
             true
         }
         UserCommand::RefreshThread => {
-            match client.request_thread_list(None) {
+            match client.request_thread_list(/*cursor*/ None) {
                 Ok(request_id) => {
                     output
                         .client_line(&format!("requested thread list ({request_id:?})"))

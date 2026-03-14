@@ -45,8 +45,13 @@ pub async fn spawn_command_under_seatbelt(
     network: Option<&NetworkProxy>,
     mut env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
-    let args =
-        create_seatbelt_command_args(command, sandbox_policy, sandbox_policy_cwd, false, network);
+    let args = create_seatbelt_command_args(
+        command,
+        sandbox_policy,
+        sandbox_policy_cwd,
+        /*enforce_managed_network*/ false,
+        network,
+    );
     let arg0 = None;
     env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
     spawn_child_async(SpawnChildRequest {
@@ -338,7 +343,7 @@ pub(crate) fn create_seatbelt_command_args(
         sandbox_policy_cwd,
         enforce_managed_network,
         network,
-        None,
+        /*extensions*/ None,
     )
 }
 

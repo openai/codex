@@ -92,20 +92,23 @@ impl Default for ConfigRequirements {
         Self {
             approval_policy: ConstrainedWithSource::new(
                 Constrained::allow_any_from_default(),
-                None,
+                /*source*/ None,
             ),
             sandbox_policy: ConstrainedWithSource::new(
                 Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-                None,
+                /*source*/ None,
             ),
             web_search_mode: ConstrainedWithSource::new(
                 Constrained::allow_any(WebSearchMode::Cached),
-                None,
+                /*source*/ None,
             ),
             feature_requirements: None,
             mcp_servers: None,
             exec_policy: None,
-            enforce_residency: ConstrainedWithSource::new(Constrained::allow_any(None), None),
+            enforce_residency: ConstrainedWithSource::new(
+                Constrained::allow_any(/*initial_value*/ None),
+                /*source*/ None,
+            ),
             network: None,
         }
     }
@@ -508,7 +511,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 })?;
                 ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
-            None => ConstrainedWithSource::new(Constrained::allow_any_from_default(), None),
+            None => ConstrainedWithSource::new(
+                Constrained::allow_any_from_default(),
+                /*source*/ None,
+            ),
         };
 
         // TODO(gt): `ConfigRequirementsToml` should let the author specify the
@@ -559,7 +565,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
             None => {
-                ConstrainedWithSource::new(Constrained::allow_any(default_sandbox_policy), None)
+                ConstrainedWithSource::new(
+                    Constrained::allow_any(default_sandbox_policy),
+                    /*source*/ None,
+                )
             }
         };
         let exec_policy = match rules {
@@ -612,7 +621,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 })?;
                 ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
-            None => ConstrainedWithSource::new(Constrained::allow_any(WebSearchMode::Cached), None),
+            None => ConstrainedWithSource::new(
+                Constrained::allow_any(WebSearchMode::Cached),
+                /*source*/ None,
+            ),
         };
         let feature_requirements =
             feature_requirements.filter(|requirements| !requirements.value.is_empty());
@@ -638,7 +650,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 })?;
                 ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
-            None => ConstrainedWithSource::new(Constrained::allow_any(None), None),
+            None => ConstrainedWithSource::new(
+                Constrained::allow_any(/*initial_value*/ None),
+                /*source*/ None,
+            ),
         };
         let network = network.map(|sourced_network| {
             let Sourced { value, source } = sourced_network;

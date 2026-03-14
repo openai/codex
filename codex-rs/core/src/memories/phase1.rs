@@ -96,7 +96,7 @@ pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
     if claimed_candidates.is_empty() {
         session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_ONE_JOBS,
-            1,
+            /*inc*/ 1,
             &[("status", "skipped_no_candidates")],
         );
         return;
@@ -210,7 +210,7 @@ async fn claim_startup_jobs(
             warn!("state db claim_stage1_jobs_for_startup failed during memories startup: {err}");
             session.services.session_telemetry.counter(
                 metrics::MEMORY_PHASE_ONE_JOBS,
-                1,
+                /*inc*/ 1,
                 &[("status", "failed_claim")],
             );
             None

@@ -125,7 +125,7 @@ impl LMStudioClient {
 
     // Find lms, checking fallback paths if not in PATH
     fn find_lms() -> std::io::Result<String> {
-        Self::find_lms_with_home_dir(None)
+        Self::find_lms_with_home_dir(/*home_dir*/ None)
     }
 
     fn find_lms_with_home_dir(home_dir: Option<&str>) -> std::io::Result<String> {

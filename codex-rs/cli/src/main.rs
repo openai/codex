@@ -770,7 +770,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 &mut apply_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            run_apply_command(apply_cli, None).await?;
+            run_apply_command(apply_cli, /*cwd*/ None).await?;
         }
         Some(Subcommand::ResponsesApiProxy(args)) => {
             tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
@@ -841,7 +841,7 @@ async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow
     let codex_home = find_codex_home()?;
     ConfigEditsBuilder::new(&codex_home)
         .with_profile(interactive.config_profile.as_deref())
-        .set_feature_enabled(feature, true)
+        .set_feature_enabled(feature, /*enabled*/ true)
         .apply()
         .await?;
     println!("Enabled feature `{feature}` in config.toml.");
@@ -854,7 +854,7 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
     let codex_home = find_codex_home()?;
     ConfigEditsBuilder::new(&codex_home)
         .with_profile(interactive.config_profile.as_deref())
-        .set_feature_enabled(feature, false)
+        .set_feature_enabled(feature, /*enabled*/ false)
         .apply()
         .await?;
     println!("Disabled feature `{feature}` in config.toml.");

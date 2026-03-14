@@ -374,14 +374,14 @@ impl NetworkApprovalService {
                 .request_command_approval(
                     turn_context.as_ref(),
                     approval_id,
-                    None,
+                    /*approval_id*/ None,
                     prompt_command,
                     turn_context.cwd.clone(),
                     Some(prompt_reason),
                     Some(network_approval_context.clone()),
-                    None,
-                    None,
-                    None,
+                    /*proposed_execpolicy_amendment*/ None,
+                    /*additional_permissions*/ None,
+                    /*skill_metadata*/ None,
                     available_decisions,
                 )
                 .await

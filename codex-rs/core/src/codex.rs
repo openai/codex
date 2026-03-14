@@ -628,7 +628,7 @@ impl Codex {
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
-        self.submit_with_trace(op, None).await
+        self.submit_with_trace(op, /*trace*/ None).await
     }
 
     pub async fn submit_with_trace(
@@ -852,9 +852,11 @@ impl TurnContext {
         };
         config.model_reasoning_effort = reasoning_effort;
 
-        let collaboration_mode =
-            self.collaboration_mode
-                .with_updates(Some(model.clone()), Some(reasoning_effort), None);
+        let collaboration_mode = self.collaboration_mode.with_updates(
+            Some(model.clone()),
+            Some(reasoning_effort),
+            /*developer_instructions*/ None,
+        );
         let features = self.features.clone();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
@@ -1586,7 +1588,7 @@ impl Session {
         config.features.emit_metrics(&session_telemetry);
         session_telemetry.counter(
             THREAD_STARTED_METRIC,
-            1,
+            /*inc*/ 1,
             &[(
                 "is_git",
                 if get_git_repo_root(&session_configuration.cwd).is_some() {
@@ -1718,7 +1720,8 @@ impl Session {
                 (None, None)
             };
 
-        let mut hook_shell_argv = default_shell.derive_exec_args("", false);
+        let mut hook_shell_argv =
+            default_shell.derive_exec_args("", /*use_login_shell*/ false);
         let hook_shell_program = hook_shell_argv.remove(0);
         let _ = hook_shell_argv.pop();
         let hooks = Hooks::new(HooksConfig {
@@ -2067,7 +2070,8 @@ impl Session {
             InitialHistory::New => {
                 // Defer initial context insertion until the first real turn starts so
                 // turn/start overrides can be merged before we write model-visible context.
-                self.set_previous_turn_settings(None).await;
+                self.set_previous_turn_settings(/*previous_turn_settings*/ None)
+                    .await;
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
@@ -2351,7 +2355,7 @@ impl Session {
         let skills_outcome = Arc::new(
             self.services
                 .skills_manager
-                .skills_for_cwd(&session_configuration.cwd, false)
+                .skills_for_cwd(&session_configuration.cwd, /*force_reload*/ false)
                 .await,
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
@@ -2445,7 +2449,7 @@ impl Session {
             startup_turn_context.as_ref(),
             &[],
             &HashSet::new(),
-            None,
+            /*skills_outcome*/ None,
             &startup_cancellation_token,
         )
         .await?;
@@ -2531,8 +2535,13 @@ impl Session {
             let state = self.state.lock().await;
             state.session_configuration.clone()
         };
-        self.new_turn_from_configuration(sub_id, session_configuration, None, false)
-            .await
+        self.new_turn_from_configuration(
+            sub_id,
+            session_configuration,
+            /*final_output_json_schema*/ None,
+            /*sandbox_policy_changed*/ false,
+        )
+        .await
     }
 
     async fn build_settings_update_items(
@@ -3280,7 +3289,7 @@ impl Session {
     pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
         self.services
             .session_telemetry
-            .counter("codex.model_warning", 1, &[]);
+            .counter("codex.model_warning", /*inc*/ 1, &[]);
         let item = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -4181,7 +4190,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         state.session_configuration.collaboration_mode.with_updates(
                             model.clone(),
                             effort,
-                            None,
+                            /*developer_instructions*/ None,
                         )
                     };
                     handlers::override_turn_context(
@@ -4528,7 +4537,9 @@ mod handlers {
         current_context.session_telemetry.user_prompt(&items);
 
         // Attempt to inject input into current task.
-        if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
+        if let Err(SteerInputError::NoActiveTurn(items)) =
+            sess.steer_input(items, /*expected_turn_id*/ None).await
+        {
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
             let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
@@ -5272,7 +5283,7 @@ async fn spawn_review_thread(
         sess.services.shell_zsh_path.as_ref(),
         sess.services.main_execve_wrapper_exe.as_ref(),
     )
-    .with_web_search_config(None)
+    .with_web_search_config(/*web_search_config*/ None)
     .with_allow_login_shell(config.permissions.allow_login_shell)
     .with_agent_roles(config.agent_roles.clone());
 
@@ -5955,7 +5966,7 @@ pub(crate) async fn run_turn(
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
-                let event = EventMsg::Error(e.to_error_event(None));
+                let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
                 sess.send_event(&turn_context, event).await;
                 // let the user continue the conversation
                 break;
@@ -7009,7 +7020,8 @@ async fn handle_assistant_item_done_in_plan_mode(
     {
         maybe_complete_plan_item_from_message(sess, turn_context, state, item).await;
 
-        if let Some(turn_item) = handle_non_tool_response_item(sess, turn_context, item, true).await
+        if let Some(turn_item) =
+            handle_non_tool_response_item(sess, turn_context, item, /*plan_mode*/ true).await
         {
             emit_turn_item_in_plan_mode(
                 sess,
@@ -7022,7 +7034,7 @@ async fn handle_assistant_item_done_in_plan_mode(
         }
 
         record_completed_response_item(sess, turn_context, item).await;
-        if let Some(agent_message) = last_assistant_message_from_item(item, true) {
+        if let Some(agent_message) = last_assistant_message_from_item(item, /*plan_mode*/ true) {
             *last_agent_message = Some(agent_message);
         }
         return true;
@@ -7393,7 +7405,7 @@ async fn try_run_sampling_request(
 
 pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {
     for item in responses.iter().rev() {
-        if let Some(message) = last_assistant_message_from_item(item, false) {
+        if let Some(message) = last_assistant_message_from_item(item, /*plan_mode*/ false) {
             return Some(message);
         }
     }

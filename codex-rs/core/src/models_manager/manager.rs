@@ -98,7 +98,7 @@ impl ModelsManager {
             auth_manager,
             model_catalog,
             collaboration_modes_config,
-            ModelProviderInfo::create_openai_provider(/* base_url */ None),
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
         )
     }
 
@@ -433,7 +433,7 @@ impl ModelsManager {
         Self::new_with_provider(
             codex_home,
             auth_manager,
-            None,
+            /*model_catalog*/ None,
             CollaborationModesConfig::default(),
             provider,
         )

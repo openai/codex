@@ -56,12 +56,13 @@ pub(super) async fn load_config_layers_internal(
         managed_config_path.unwrap_or_else(|| managed_config_default_path(codex_home)),
     )?;
 
-    let managed_config = read_config_from_path(&managed_config_path, false)
-        .await?
-        .map(|managed_config| MangedConfigFromFile {
-            managed_config,
-            file: managed_config_path.clone(),
-        });
+    let managed_config =
+        read_config_from_path(&managed_config_path, /*log_missing_as_info*/ false)
+            .await?
+            .map(|managed_config| MangedConfigFromFile {
+                managed_config,
+                file: managed_config_path.clone(),
+            });
 
     #[cfg(target_os = "macos")]
     let managed_preferences =

@@ -224,7 +224,7 @@ pub(crate) fn interaction_end(ev: CollabAgentInteractionEndEvent) -> PlainHistor
             nickname: receiver_agent_nickname.as_deref(),
             role: receiver_agent_role.as_deref(),
         },
-        None,
+        /*spawn_request*/ None,
     );
 
     let mut details = Vec::new();
@@ -244,7 +244,11 @@ pub(crate) fn waiting_begin(ev: CollabWaitingBeginEvent) -> PlainHistoryCell {
     let receiver_agents = merge_wait_receivers(&receiver_thread_ids, receiver_agents);
 
     let title = match receiver_agents.as_slice() {
-        [receiver] => title_with_agent("Waiting for", agent_label_from_ref(receiver), None),
+        [receiver] => title_with_agent(
+            "Waiting for",
+            agent_label_from_ref(receiver),
+            /*spawn_request*/ None,
+        ),
         [] => title_text("Waiting for agents"),
         _ => title_text(format!("Waiting for {} agents", receiver_agents.len())),
     };
@@ -290,7 +294,7 @@ pub(crate) fn close_end(ev: CollabCloseEndEvent) -> PlainHistoryCell {
                 nickname: receiver_agent_nickname.as_deref(),
                 role: receiver_agent_role.as_deref(),
             },
-            None,
+            /*spawn_request*/ None,
         ),
         Vec::new(),
     )
@@ -313,7 +317,7 @@ pub(crate) fn resume_begin(ev: CollabResumeBeginEvent) -> PlainHistoryCell {
                 nickname: receiver_agent_nickname.as_deref(),
                 role: receiver_agent_role.as_deref(),
             },
-            None,
+            /*spawn_request*/ None,
         ),
         Vec::new(),
     )
@@ -337,7 +341,7 @@ pub(crate) fn resume_end(ev: CollabResumeEndEvent) -> PlainHistoryCell {
                 nickname: receiver_agent_nickname.as_deref(),
                 role: receiver_agent_role.as_deref(),
             },
-            None,
+            /*spawn_request*/ None,
         ),
         vec![status_summary_line(&status)],
     )

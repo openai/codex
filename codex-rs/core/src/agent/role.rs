@@ -101,7 +101,10 @@ pub(crate) async fn apply_role_to_config(
 
     let mut layers: Vec<ConfigLayerEntry> = config
         .config_layer_stack
-        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+        .get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ true,
+        )
         .into_iter()
         .cloned()
         .collect();
