@@ -126,6 +126,8 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
     );
 
     let policy = seatbelt_policy_arg(&args);
+    let unreadable_roots = file_system_policy.get_unreadable_roots_with_cwd(Path::new("/"));
+    let unreadable_root = unreadable_roots.first().expect("expected unreadable root");
     assert!(
         policy.contains("(require-not (subpath (param \"READABLE_ROOT_0_RO_0\")))"),
         "expected read carveout in policy:\n{policy}"
@@ -136,12 +138,12 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
     );
     assert!(
         args.iter()
-            .any(|arg| arg == "-DREADABLE_ROOT_0_RO_0=/tmp/codex-unreadable"),
+            .any(|arg| arg == &format!("-DREADABLE_ROOT_0_RO_0={}", unreadable_root.display())),
         "expected read carveout parameter in args: {args:#?}"
     );
     assert!(
         args.iter()
-            .any(|arg| arg == "-DWRITABLE_ROOT_0_RO_0=/tmp/codex-unreadable"),
+            .any(|arg| arg == &format!("-DWRITABLE_ROOT_0_RO_0={}", unreadable_root.display())),
         "expected write carveout parameter in args: {args:#?}"
     );
 }
@@ -172,18 +174,22 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
     );
 
     let policy = seatbelt_policy_arg(&args);
+    let readable_roots = file_system_policy.get_readable_roots_with_cwd(Path::new("/"));
+    let readable_root = readable_roots.first().expect("expected readable root");
+    let unreadable_roots = file_system_policy.get_unreadable_roots_with_cwd(Path::new("/"));
+    let unreadable_root = unreadable_roots.first().expect("expected unreadable root");
     assert!(
         policy.contains("(require-not (subpath (param \"READABLE_ROOT_0_RO_0\")))"),
         "expected read carveout in policy:\n{policy}"
     );
     assert!(
         args.iter()
-            .any(|arg| arg == "-DREADABLE_ROOT_0=/tmp/codex-readable"),
+            .any(|arg| arg == &format!("-DREADABLE_ROOT_0={}", readable_root.display())),
         "expected readable root parameter in args: {args:#?}"
     );
     assert!(
         args.iter()
-            .any(|arg| arg == "-DREADABLE_ROOT_0_RO_0=/tmp/codex-readable/private"),
+            .any(|arg| arg == &format!("-DREADABLE_ROOT_0_RO_0={}", unreadable_root.display())),
         "expected read carveout parameter in args: {args:#?}"
     );
 }
