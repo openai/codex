@@ -4796,6 +4796,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn activate_primary_app_server_thread_registers_active_receiver() -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let session = SessionConfiguredEvent {
+            session_id: thread_id,
+            forked_from_id: None,
+            thread_name: Some("app-server".to_string()),
+            model: "gpt-test".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: PathBuf::from("/tmp/project"),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::from("/tmp/project/rollout.jsonl")),
+        };
+
+        app.activate_primary_app_server_thread(thread_id, session.clone())
+            .await;
+
+        assert_eq!(app.primary_thread_id, Some(thread_id));
+        assert_eq!(
+            app.primary_session_configured
+                .as_ref()
+                .map(|session| session.session_id),
+            Some(thread_id)
+        );
+        assert_eq!(app.active_thread_id, Some(thread_id));
+        assert_eq!(
+            app.thread_event_listener_tasks.contains_key(&thread_id),
+            false
+        );
+
+        let first_event = time::timeout(
+            Duration::from_millis(50),
+            app.active_thread_rx
+                .as_mut()
+                .expect("primary thread receiver should be active")
+                .recv(),
+        )
+        .await
+        .expect("timed out waiting for session configured event")
+        .expect("channel closed unexpectedly");
+
+        assert!(matches!(
+            first_event.msg,
+            EventMsg::SessionConfigured(received) if received == session
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn attach_direct_thread_registers_channel_and_listener() -> Result<()> {
         let mut app = make_test_app().await;
         let new_thread = app.server.start_thread(app.config.clone()).await?;
@@ -7597,6 +7655,53 @@ guardian_approval = true
 
         app.handle_skills_list_loaded(vec![cwd], 1, Err("stale skills/list failure".to_string()))?;
         assert_eq!(app.chat_widget.loaded_skill_names(), vec!["new-skill"]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn current_skills_list_loaded_error_for_same_cwd_is_nonfatal() -> Result<()> {
+        let mut app = make_test_app().await;
+        let cwd_tmp = tempdir()?;
+        let cwd = cwd_tmp.path().to_path_buf();
+
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: cwd.clone(),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        app.latest_skills_list_generation_by_cwd
+            .insert(cwd.clone(), 1);
+        app.handle_skills_list_loaded(
+            vec![cwd.clone()],
+            1,
+            Ok(test_skill_response(cwd.clone(), "current-skill")),
+        )?;
+        assert_eq!(app.chat_widget.loaded_skill_names(), vec!["current-skill"]);
+
+        app.handle_skills_list_loaded(
+            vec![cwd],
+            1,
+            Err("current skills/list failure".to_string()),
+        )?;
+        assert_eq!(app.chat_widget.loaded_skill_names(), vec!["current-skill"]);
 
         Ok(())
     }
