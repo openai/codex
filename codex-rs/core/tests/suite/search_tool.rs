@@ -31,8 +31,9 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 
-const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 1] = [
-    "Tools of the apps (Calendar) are hidden until you search for them with this tool (`tool_search`).",
+const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
+    "You have access to all the tools of the following apps/connectors",
+    "- Calendar: Plan events and manage your calendar.",
 ];
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
 const CALENDAR_CREATE_TOOL: &str = "mcp__codex_apps__calendar_create_event";
@@ -89,10 +90,6 @@ fn configure_apps(config: &mut Config, apps_base_url: &str) {
     config
         .features
         .enable(Feature::Apps)
-        .expect("test config should allow feature update");
-    config
-        .features
-        .disable(Feature::AppsMcpGateway)
         .expect("test config should allow feature update");
     config.chatgpt_base_url = apps_base_url.to_string();
     config.model = Some("gpt-5-codex".to_string());

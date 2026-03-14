@@ -338,9 +338,6 @@
             "apps": {
               "type": "boolean"
             },
-            "apps_mcp_gateway": {
-              "type": "boolean"
-            },
             "artifact": {
               "type": "boolean"
             },
@@ -1888,9 +1885,6 @@
           "type": "boolean"
         },
         "apps": {
-          "type": "boolean"
-        },
-        "apps_mcp_gateway": {
           "type": "boolean"
         },
         "artifact": {

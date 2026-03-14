@@ -943,10 +943,6 @@ async fn includes_apps_guidance_as_developer_message_for_chatgpt_auth() {
                 .features
                 .enable(Feature::Apps)
                 .expect("test config should allow feature update");
-            config
-                .features
-                .disable(Feature::AppsMcpGateway)
-                .expect("test config should allow feature update");
             config.chatgpt_base_url = apps_base_url;
         });
     let codex = builder
@@ -971,7 +967,8 @@ async fn includes_apps_guidance_as_developer_message_for_chatgpt_auth() {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
     let input = request_body["input"].as_array().expect("input array");
-    let apps_snippet = "Apps are mentioned in user messages in the format";
+    let apps_snippet =
+        "Apps (Connectors) can be explicitly triggered in user messages in the format";
 
     let has_developer_apps_guidance = input.iter().any(|item| {
         item.get("role").and_then(|value| value.as_str()) == Some("developer")
@@ -1034,10 +1031,6 @@ async fn omits_apps_guidance_for_api_key_auth_even_when_feature_enabled() {
                 .features
                 .enable(Feature::Apps)
                 .expect("test config should allow feature update");
-            config
-                .features
-                .disable(Feature::AppsMcpGateway)
-                .expect("test config should allow feature update");
             config.chatgpt_base_url = apps_base_url;
         });
     let codex = builder
@@ -1062,7 +1055,8 @@ async fn omits_apps_guidance_for_api_key_auth_even_when_feature_enabled() {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
     let input = request_body["input"].as_array().expect("input array");
-    let apps_snippet = "Apps are mentioned in the prompt in the format";
+    let apps_snippet =
+        "Apps (Connectors) can be explicitly triggered in user messages in the format";
 
     let has_apps_guidance = input.iter().any(|item| {
         item.get("content")
