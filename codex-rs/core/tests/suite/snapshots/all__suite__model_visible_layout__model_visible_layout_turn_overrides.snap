@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/model_visible_layout.rs
+assertion_line: 138
 expression: "format_labeled_requests_snapshot(\"Second turn changes cwd, approval policy, and personality while keeping model constant.\",\n&[(\"First Request (Baseline)\", &requests[0]),\n(\"Second Request (Turn Overrides)\", &requests[1]),])"
 ---
 Scenario: Second turn changes cwd, approval policy, and personality while keeping model constant.
@@ -8,14 +9,14 @@ Scenario: Second turn changes cwd, approval policy, and personality while keepin
 00:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <SKILLS_INSTRUCTIONS>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 02:message/user:first turn
 
 ## Second Request (Turn Overrides)
 00:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <SKILLS_INSTRUCTIONS>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 02:message/user:first turn
 03:message/assistant:turn one complete
 04:message/developer[2]:

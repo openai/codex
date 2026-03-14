@@ -6,13 +6,13 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
 use crate::file_watcher::WatchRegistration;
+use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::protocol::Event;
 use crate::protocol::Op;
 use crate::protocol::Submission;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -25,6 +25,11 @@ use codex_protocol::user_input::UserInput;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
+
+#[cfg(test)]
+use codex_protocol::models::ContentItem;
+#[cfg(test)]
+use codex_protocol::models::MessageRole;
 
 use crate::state_db::StateDbHandle;
 
@@ -120,17 +125,30 @@ impl CodexThread {
         self.codex.session.total_token_usage().await
     }
 
-    /// Records a user-role session-prefix message without creating a new user turn boundary.
-    pub(crate) async fn inject_user_message_without_turn(&self, message: String) {
-        let pending_item = ResponseInputItem::Message {
-            role: "user".to_string(),
+    pub(crate) async fn inject_model_visible_fragment_without_turn(
+        &self,
+        fragment: impl ModelVisibleContextFragment,
+    ) {
+        // Runtime/session-prefix path: inject one typed model-visible fragment
+        // without opening a real user turn boundary.
+        self.inject_response_input_item_without_turn(fragment.into_response_input_item())
+            .await;
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn inject_message_without_turn(&self, role: MessageRole, message: String) {
+        self.inject_response_input_item_without_turn(ResponseInputItem::Message {
+            role: role.to_string(),
             content: vec![ContentItem::InputText { text: message }],
-        };
-        let pending_items = vec![pending_item];
+        })
+        .await;
+    }
+
+    async fn inject_response_input_item_without_turn(&self, pending_item: ResponseInputItem) {
         let Err(items_without_active_turn) = self
             .codex
             .session
-            .inject_response_items(pending_items)
+            .inject_response_items(vec![pending_item])
             .await
         else {
             return;

@@ -21,7 +21,6 @@ fn serialize_workspace_write_environment_context() {
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         None,
-        None,
     );
 
     let expected = format!(
@@ -34,7 +33,7 @@ fn serialize_workspace_write_environment_context() {
         cwd = cwd.display(),
     );
 
-    assert_eq!(context.serialize_to_xml(), expected);
+    assert_eq!(context.render_text(), expected);
 }
 
 #[test]
@@ -49,7 +48,6 @@ fn serialize_environment_context_with_network() {
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         Some(network),
-        None,
     );
 
     let expected = format!(
@@ -67,7 +65,7 @@ fn serialize_environment_context_with_network() {
         test_path_buf("/repo").display()
     );
 
-    assert_eq!(context.serialize_to_xml(), expected);
+    assert_eq!(context.render_text(), expected);
 }
 
 #[test]
@@ -78,7 +76,6 @@ fn serialize_read_only_environment_context() {
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         None,
-        None,
     );
 
     let expected = r#"<environment_context>
@@ -87,7 +84,7 @@ fn serialize_read_only_environment_context() {
   <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
-    assert_eq!(context.serialize_to_xml(), expected);
+    assert_eq!(context.render_text(), expected);
 }
 
 #[test]
@@ -98,7 +95,6 @@ fn serialize_external_sandbox_environment_context() {
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         None,
-        None,
     );
 
     let expected = r#"<environment_context>
@@ -107,7 +103,7 @@ fn serialize_external_sandbox_environment_context() {
   <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
-    assert_eq!(context.serialize_to_xml(), expected);
+    assert_eq!(context.render_text(), expected);
 }
 
 #[test]
@@ -118,7 +114,6 @@ fn serialize_external_sandbox_with_restricted_network_environment_context() {
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         None,
-        None,
     );
 
     let expected = r#"<environment_context>
@@ -127,7 +122,7 @@ fn serialize_external_sandbox_with_restricted_network_environment_context() {
   <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
-    assert_eq!(context.serialize_to_xml(), expected);
+    assert_eq!(context.render_text(), expected);
 }
 
 #[test]
@@ -138,7 +133,6 @@ fn serialize_full_access_environment_context() {
         Some("2026-02-26".to_string()),
         Some("America/Los_Angeles".to_string()),
         None,
-        None,
     );
 
     let expected = r#"<environment_context>
@@ -147,48 +141,24 @@ fn serialize_full_access_environment_context() {
   <timezone>America/Los_Angeles</timezone>
 </environment_context>"#;
 
-    assert_eq!(context.serialize_to_xml(), expected);
+    assert_eq!(context.render_text(), expected);
 }
 
 #[test]
 fn equals_except_shell_compares_cwd() {
-    let context1 = EnvironmentContext::new(
-        Some(PathBuf::from("/repo")),
-        fake_shell(),
-        None,
-        None,
-        None,
-        None,
-    );
-    let context2 = EnvironmentContext::new(
-        Some(PathBuf::from("/repo")),
-        fake_shell(),
-        None,
-        None,
-        None,
-        None,
-    );
+    let context1 =
+        EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None, None, None);
+    let context2 =
+        EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None, None, None);
     assert!(context1.equals_except_shell(&context2));
 }
 
 #[test]
 fn equals_except_shell_ignores_sandbox_policy() {
-    let context1 = EnvironmentContext::new(
-        Some(PathBuf::from("/repo")),
-        fake_shell(),
-        None,
-        None,
-        None,
-        None,
-    );
-    let context2 = EnvironmentContext::new(
-        Some(PathBuf::from("/repo")),
-        fake_shell(),
-        None,
-        None,
-        None,
-        None,
-    );
+    let context1 =
+        EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None, None, None);
+    let context2 =
+        EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None, None, None);
 
     assert!(context1.equals_except_shell(&context2));
 }
@@ -201,12 +171,10 @@ fn equals_except_shell_compares_cwd_differences() {
         None,
         None,
         None,
-        None,
     );
     let context2 = EnvironmentContext::new(
         Some(PathBuf::from("/repo2")),
         fake_shell(),
-        None,
         None,
         None,
         None,
@@ -227,7 +195,6 @@ fn equals_except_shell_ignores_shell() {
         None,
         None,
         None,
-        None,
     );
     let context2 = EnvironmentContext::new(
         Some(PathBuf::from("/repo")),
@@ -239,36 +206,7 @@ fn equals_except_shell_ignores_shell() {
         None,
         None,
         None,
-        None,
     );
 
     assert!(context1.equals_except_shell(&context2));
-}
-
-#[test]
-fn serialize_environment_context_with_subagents() {
-    let context = EnvironmentContext::new(
-        Some(test_path_buf("/repo")),
-        fake_shell(),
-        Some("2026-02-26".to_string()),
-        Some("America/Los_Angeles".to_string()),
-        None,
-        Some("- agent-1: atlas\n- agent-2".to_string()),
-    );
-
-    let expected = format!(
-        r#"<environment_context>
-  <cwd>{}</cwd>
-  <shell>bash</shell>
-  <current_date>2026-02-26</current_date>
-  <timezone>America/Los_Angeles</timezone>
-  <subagents>
-    - agent-1: atlas
-    - agent-2
-  </subagents>
-</environment_context>"#,
-        test_path_buf("/repo").display()
-    );
-
-    assert_eq!(context.serialize_to_xml(), expected);
 }

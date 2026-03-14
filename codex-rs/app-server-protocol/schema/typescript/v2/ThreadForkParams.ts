@@ -27,7 +27,11 @@ model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier 
  * Override where approval requests are routed for review on this thread
  * and subsequent turns.
  */
-approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, ephemeral?: boolean, /**
+approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, /**
+ * Custom developer override for this thread session.
+ * Takes precedence over `~/.codex/config.toml` `developer_instructions`.
+ */
+developerInstructions?: string | null, ephemeral?: boolean, /**
  * If true, persist additional rollout EventMsg variants required to
  * reconstruct a richer thread history on subsequent resume/fork/read.
  */
