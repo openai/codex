@@ -3177,7 +3177,7 @@ impl App {
                 self.handle_routed_thread_event(thread_id, event).await?;
             }
             AppEvent::Exit(mode) => {
-                return Ok(self.handle_exit_mode(mode));
+                return Ok(self.handle_exit_mode(app_server, mode).await);
             }
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
@@ -4265,19 +4265,22 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
-    fn handle_exit_mode(&mut self, mode: ExitMode) -> AppRunControl {
+    async fn handle_exit_mode(
+        &mut self,
+        app_server: &mut AppServerSession,
+        mode: ExitMode,
+    ) -> AppRunControl {
         match mode {
             ExitMode::ShutdownFirst => {
                 // Mark the thread we are explicitly shutting down for exit so
                 // its shutdown completion does not trigger agent failover.
                 self.pending_shutdown_exit_thread_id =
                     self.active_thread_id.or(self.chat_widget.thread_id());
-                if self.chat_widget.submit_op(AppCommand::shutdown()) {
-                    AppRunControl::Continue
-                } else {
-                    self.pending_shutdown_exit_thread_id = None;
-                    AppRunControl::Exit(ExitReason::UserRequested)
+                if self.pending_shutdown_exit_thread_id.is_some() {
+                    self.shutdown_current_thread(app_server).await;
                 }
+                self.pending_shutdown_exit_thread_id = None;
+                AppRunControl::Exit(ExitReason::UserRequested)
             }
             ExitMode::Immediate => {
                 self.pending_shutdown_exit_thread_id = None;
@@ -8038,7 +8041,13 @@ smart_approvals = true
         let thread_id = ThreadId::new();
         app.active_thread_id = Some(thread_id);
 
-        let control = app.handle_exit_mode(ExitMode::ShutdownFirst);
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let control = app
+            .handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)
+            .await;
 
         assert_eq!(app.pending_shutdown_exit_thread_id, None);
         assert!(matches!(
@@ -8048,16 +8057,28 @@ smart_approvals = true
     }
 
     #[tokio::test]
-    async fn shutdown_first_exit_waits_for_shutdown_when_submit_succeeds() {
+    async fn shutdown_first_exit_uses_app_server_shutdown_without_submitting_op() {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
         app.active_thread_id = Some(thread_id);
 
-        let control = app.handle_exit_mode(ExitMode::ShutdownFirst);
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let control = app
+            .handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst)
+            .await;
 
-        assert_eq!(app.pending_shutdown_exit_thread_id, Some(thread_id));
-        assert!(matches!(control, AppRunControl::Continue));
-        assert_eq!(op_rx.try_recv(), Ok(Op::Shutdown));
+        assert_eq!(app.pending_shutdown_exit_thread_id, None);
+        assert!(matches!(
+            control,
+            AppRunControl::Exit(ExitReason::UserRequested)
+        ));
+        assert!(
+            op_rx.try_recv().is_err(),
+            "shutdown should not submit Op::Shutdown"
+        );
     }
 
     #[tokio::test]

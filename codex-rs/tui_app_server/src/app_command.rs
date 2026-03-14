@@ -250,10 +250,6 @@ impl AppCommand {
         Self(Op::SetThreadName { name })
     }
 
-    pub(crate) fn shutdown() -> Self {
-        Self(Op::Shutdown)
-    }
-
     pub(crate) fn thread_rollback(num_turns: u32) -> Self {
         Self(Op::ThreadRollback { num_turns })
     }
