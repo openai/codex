@@ -7,8 +7,8 @@ expression: "render_overlay_lines(&view, 120)"
 
   Reason: need macOS automation
 
-  Permission rule: macOS preferences readwrite; macOS automation com.apple.Calendar, com.apple.Notes; macOS
-  accessibility; macOS calendar; macOS reminders
+  Permission rule: macOS preferences readwrite; macOS automation com.apple.Calendar, com.apple.Notes; macOS mach
+  services com.vendor.helper; macOS accessibility; macOS calendar; macOS reminders
 
   $ osascript -e 'tell application'
 

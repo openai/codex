@@ -202,6 +202,7 @@ fn seatbelt_args_include_macos_permission_extensions() {
             macos_automation: MacOsAutomationPermission::BundleIds(vec![
                 "com.apple.Notes".to_string(),
             ]),
+            macos_mach_services: vec!["com.apple.logd".to_string()],
             macos_launch_services: true,
             macos_accessibility: true,
             macos_calendar: true,
@@ -213,6 +214,7 @@ fn seatbelt_args_include_macos_permission_extensions() {
 
     assert!(policy.contains("(allow user-preference-write)"));
     assert!(policy.contains("(appleevent-destination \"com.apple.Notes\")"));
+    assert!(policy.contains("com.apple.logd"));
     assert!(policy.contains("com.apple.axserver"));
     assert!(policy.contains("com.apple.CalendarAgent"));
 }

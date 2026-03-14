@@ -5,4 +5,4 @@ import type { MacOsAutomationPermission } from "../MacOsAutomationPermission";
 import type { MacOsContactsPermission } from "../MacOsContactsPermission";
 import type { MacOsPreferencesPermission } from "../MacOsPreferencesPermission";
 
-export type AdditionalMacOsPermissions = { preferences: MacOsPreferencesPermission, automations: MacOsAutomationPermission, launchServices: boolean, accessibility: boolean, calendar: boolean, reminders: boolean, contacts: MacOsContactsPermission, };
+export type AdditionalMacOsPermissions = { preferences: MacOsPreferencesPermission, automations: MacOsAutomationPermission, machServices: Array<string>, launchServices: boolean, accessibility: boolean, calendar: boolean, reminders: boolean, contacts: MacOsContactsPermission, };

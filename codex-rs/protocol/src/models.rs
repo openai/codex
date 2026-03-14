@@ -197,6 +197,8 @@ pub struct MacOsSeatbeltProfileExtensions {
     pub macos_preferences: MacOsPreferencesPermission,
     #[serde(alias = "automations")]
     pub macos_automation: MacOsAutomationPermission,
+    #[serde(alias = "mach_services")]
+    pub macos_mach_services: Vec<String>,
     #[serde(alias = "launch_services")]
     pub macos_launch_services: bool,
     #[serde(alias = "accessibility")]
@@ -1657,6 +1659,7 @@ mod tests {
                     macos_automation: MacOsAutomationPermission::BundleIds(vec![
                         "com.apple.Notes".to_string(),
                     ]),
+                    macos_mach_services: Vec::new(),
                     macos_launch_services: true,
                     macos_accessibility: true,
                     macos_calendar: true,
@@ -1684,6 +1687,7 @@ mod tests {
                 macos: Some(MacOsSeatbeltProfileExtensions {
                     macos_preferences: MacOsPreferencesPermission::ReadOnly,
                     macos_automation: MacOsAutomationPermission::None,
+                    macos_mach_services: Vec::new(),
                     macos_launch_services: false,
                     macos_accessibility: false,
                     macos_calendar: false,
@@ -1709,6 +1713,7 @@ mod tests {
                 macos_automation: MacOsAutomationPermission::BundleIds(vec![
                     "com.apple.Notes".to_string(),
                 ]),
+                macos_mach_services: Vec::new(),
                 macos_launch_services: false,
                 macos_accessibility: false,
                 macos_calendar: false,
@@ -1724,6 +1729,7 @@ mod tests {
             serde_json::from_value::<MacOsSeatbeltProfileExtensions>(serde_json::json!({
                 "preferences": "read_write",
                 "automations": ["com.apple.Notes"],
+                "mach_services": ["com.vendor.helper"],
                 "launch_services": true,
                 "accessibility": true,
                 "calendar": true,
@@ -1739,11 +1745,41 @@ mod tests {
                 macos_automation: MacOsAutomationPermission::BundleIds(vec![
                     "com.apple.Notes".to_string(),
                 ]),
+                macos_mach_services: vec!["com.vendor.helper".to_string()],
                 macos_launch_services: true,
                 macos_accessibility: true,
                 macos_calendar: true,
                 macos_reminders: true,
                 macos_contacts: MacOsContactsPermission::ReadOnly,
+            }
+        );
+    }
+
+    #[test]
+    fn macos_seatbelt_profile_extensions_deserializes_mach_services() {
+        let permissions =
+            serde_json::from_value::<MacOsSeatbeltProfileExtensions>(serde_json::json!({
+                "mach_services": [
+                    "com.vendor.helper",
+                    "com.apple.logd",
+                ]
+            }))
+            .expect("deserialize macos mach services");
+
+        assert_eq!(
+            permissions,
+            MacOsSeatbeltProfileExtensions {
+                macos_preferences: MacOsPreferencesPermission::ReadOnly,
+                macos_automation: MacOsAutomationPermission::None,
+                macos_mach_services: vec![
+                    "com.vendor.helper".to_string(),
+                    "com.apple.logd".to_string(),
+                ],
+                macos_launch_services: false,
+                macos_accessibility: false,
+                macos_calendar: false,
+                macos_reminders: false,
+                macos_contacts: MacOsContactsPermission::None,
             }
         );
     }

@@ -17,6 +17,7 @@ fn merge_extensions_widens_permissions() {
         macos_automation: MacOsAutomationPermission::BundleIds(vec![
             "com.apple.Calendar".to_string(),
         ]),
+        macos_mach_services: vec!["com.apple.logd".to_string()],
         macos_launch_services: false,
         macos_accessibility: false,
         macos_calendar: false,
@@ -29,6 +30,10 @@ fn merge_extensions_widens_permissions() {
             "com.apple.Notes".to_string(),
             "com.apple.Calendar".to_string(),
         ]),
+        macos_mach_services: vec![
+            "com.vendor.helper".to_string(),
+            "com.apple.logd".to_string(),
+        ],
         macos_launch_services: true,
         macos_accessibility: true,
         macos_calendar: true,
@@ -47,6 +52,10 @@ fn merge_extensions_widens_permissions() {
                 "com.apple.Calendar".to_string(),
                 "com.apple.Notes".to_string(),
             ]),
+            macos_mach_services: vec![
+                "com.apple.logd".to_string(),
+                "com.vendor.helper".to_string(),
+            ],
             macos_launch_services: true,
             macos_accessibility: true,
             macos_calendar: true,
@@ -97,6 +106,7 @@ fn intersect_macos_seatbelt_profile_extensions_preserves_default_grant() {
     let requested = MacOsSeatbeltProfileExtensions {
         macos_preferences: MacOsPreferencesPermission::ReadWrite,
         macos_automation: MacOsAutomationPermission::BundleIds(vec!["com.apple.Notes".to_string()]),
+        macos_mach_services: vec!["com.apple.logd".to_string()],
         macos_launch_services: false,
         macos_accessibility: true,
         macos_calendar: true,

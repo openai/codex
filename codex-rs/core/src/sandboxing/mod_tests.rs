@@ -265,6 +265,7 @@ fn intersect_permission_profiles_preserves_default_macos_grants() {
             macos_automation: MacOsAutomationPermission::BundleIds(vec![
                 "com.apple.Notes".to_string(),
             ]),
+            macos_mach_services: vec!["com.apple.logd".to_string()],
             macos_launch_services: false,
             macos_accessibility: true,
             macos_calendar: true,
@@ -300,6 +301,7 @@ fn normalize_additional_permissions_preserves_macos_permissions() {
             macos_automation: MacOsAutomationPermission::BundleIds(vec![
                 "com.apple.Notes".to_string(),
             ]),
+            macos_mach_services: vec!["com.apple.logd".to_string()],
             macos_launch_services: true,
             macos_accessibility: true,
             macos_calendar: true,
@@ -317,6 +319,7 @@ fn normalize_additional_permissions_preserves_macos_permissions() {
             macos_automation: MacOsAutomationPermission::BundleIds(vec![
                 "com.apple.Notes".to_string(),
             ]),
+            macos_mach_services: vec!["com.apple.logd".to_string()],
             macos_launch_services: true,
             macos_accessibility: true,
             macos_calendar: true,
@@ -385,6 +388,7 @@ fn effective_permissions_merge_macos_extensions_with_additional_permissions() {
             macos_automation: MacOsAutomationPermission::BundleIds(vec![
                 "com.apple.Calendar".to_string(),
             ]),
+            macos_mach_services: vec!["com.apple.logd".to_string()],
             macos_launch_services: false,
             macos_accessibility: false,
             macos_calendar: false,
@@ -401,6 +405,7 @@ fn effective_permissions_merge_macos_extensions_with_additional_permissions() {
                 macos_automation: MacOsAutomationPermission::BundleIds(vec![
                     "com.apple.Notes".to_string(),
                 ]),
+                macos_mach_services: vec!["com.vendor.helper".to_string()],
                 macos_launch_services: true,
                 macos_accessibility: true,
                 macos_calendar: true,
@@ -419,6 +424,10 @@ fn effective_permissions_merge_macos_extensions_with_additional_permissions() {
                 "com.apple.Calendar".to_string(),
                 "com.apple.Notes".to_string(),
             ]),
+            macos_mach_services: vec![
+                "com.apple.logd".to_string(),
+                "com.vendor.helper".to_string(),
+            ],
             macos_launch_services: true,
             macos_accessibility: true,
             macos_calendar: true,

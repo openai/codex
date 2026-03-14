@@ -26,6 +26,7 @@ fn normalized_extensions(
             MacOsAutomationPermission::BundleIds(bundle_ids)
         };
     }
+    normalized.macos_mach_services = normalize_mach_services(&extensions.macos_mach_services);
 
     normalized
 }
@@ -94,6 +95,16 @@ pub(crate) fn build_seatbelt_extensions(
                 clauses.push(format!("(allow appleevent-send\n{destinations}\n)"));
             }
         }
+    }
+
+    if !extensions.macos_mach_services.is_empty() {
+        let services = extensions
+            .macos_mach_services
+            .iter()
+            .map(|service| format!("  (global-name \"{service}\")"))
+            .collect::<Vec<String>>()
+            .join("\n");
+        clauses.push(format!("(allow mach-lookup\n{services}\n)"));
     }
 
     if extensions.macos_launch_services {
@@ -178,11 +189,31 @@ fn normalize_bundle_ids(bundle_ids: &[String]) -> Vec<String> {
     unique.into_iter().collect()
 }
 
+fn normalize_mach_services(mach_services: &[String]) -> Vec<String> {
+    let mut unique = BTreeSet::new();
+    for mach_service in mach_services {
+        let candidate = mach_service.trim();
+        if is_valid_mach_service(candidate) {
+            unique.insert(candidate.to_string());
+        }
+    }
+    unique.into_iter().collect()
+}
+
 fn is_valid_bundle_id(bundle_id: &str) -> bool {
     if bundle_id.len() < 3 || !bundle_id.contains('.') {
         return false;
     }
     bundle_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+}
+
+fn is_valid_mach_service(mach_service: &str) -> bool {
+    if mach_service.len() < 3 || !mach_service.contains('.') {
+        return false;
+    }
+    mach_service
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
 }

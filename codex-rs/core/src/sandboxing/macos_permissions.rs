@@ -25,6 +25,10 @@ pub(crate) fn merge_macos_seatbelt_profile_extensions(
                 &base.macos_automation,
                 &permissions.macos_automation,
             ),
+            macos_mach_services: union_string_permissions(
+                &base.macos_mach_services,
+                &permissions.macos_mach_services,
+            ),
             macos_launch_services: base.macos_launch_services || permissions.macos_launch_services,
             macos_accessibility: base.macos_accessibility || permissions.macos_accessibility,
             macos_calendar: base.macos_calendar || permissions.macos_calendar,
@@ -52,6 +56,10 @@ pub(crate) fn intersect_macos_seatbelt_profile_extensions(
             Some(MacOsSeatbeltProfileExtensions {
                 macos_preferences: requested.macos_preferences.min(granted.macos_preferences),
                 macos_automation,
+                macos_mach_services: intersect_string_permissions(
+                    &requested.macos_mach_services,
+                    &granted.macos_mach_services,
+                ),
                 macos_launch_services: requested.macos_launch_services
                     && granted.macos_launch_services,
                 macos_accessibility: requested.macos_accessibility && granted.macos_accessibility,
@@ -88,6 +96,15 @@ fn union_macos_contacts_permission(
     } else {
         base.clone()
     }
+}
+
+fn union_string_permissions(base: &[String], requested: &[String]) -> Vec<String> {
+    base.iter()
+        .chain(requested.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// Unions two automation permissions by keeping the more permissive result.
@@ -147,6 +164,15 @@ fn intersect_macos_automation_permission(
             }
         }
     }
+}
+
+fn intersect_string_permissions(requested: &[String], granted: &[String]) -> Vec<String> {
+    let granted = granted.iter().collect::<BTreeSet<_>>();
+    requested
+        .iter()
+        .filter(|value| granted.contains(value))
+        .cloned()
+        .collect()
 }
 
 #[cfg(all(test, target_os = "macos"))]
