@@ -403,6 +403,8 @@ impl FileSystemSandboxPolicy {
         )
         .into_iter()
         .map(|root| {
+            // Filesystem-root policies stay in their effective canonical form
+            // so root-wide aliases do not create duplicate top-level masks.
             let preserve_raw_carveout_paths = root.as_path().parent().is_some();
             let raw_writable_roots: Vec<&AbsolutePathBuf> = writable_entries
                 .iter()
@@ -421,36 +423,44 @@ impl FileSystemSandboxPolicy {
                     .filter(|entry| !self.can_write_path_with_cwd(entry.path.as_path(), cwd))
                     .filter_map(|entry| {
                         let effective_path = normalize_effective_absolute_path(entry.path.clone());
+                        // Preserve the literal in-root path whenever the
+                        // carveout itself lives under this writable root, even
+                        // if following symlinks would resolve back to the root
+                        // or escape outside it. Downstream sandboxes need that
+                        // raw path so they can mask the symlink inode itself.
+                        let raw_carveout_path = if preserve_raw_carveout_paths {
+                            if entry.path == root {
+                                None
+                            } else if entry.path.as_path().starts_with(root.as_path()) {
+                                Some(entry.path.clone())
+                            } else {
+                                raw_writable_roots.iter().find_map(|raw_root| {
+                                    let suffix = entry
+                                        .path
+                                        .as_path()
+                                        .strip_prefix(raw_root.as_path())
+                                        .ok()?;
+                                    if suffix.as_os_str().is_empty() {
+                                        return None;
+                                    }
+                                    root.join(suffix).ok()
+                                })
+                            }
+                        } else {
+                            None
+                        };
+
+                        if let Some(raw_carveout_path) = raw_carveout_path {
+                            return Some(raw_carveout_path);
+                        }
+
                         if effective_path == root
                             || !effective_path.as_path().starts_with(root.as_path())
                         {
                             return None;
                         }
 
-                        if !preserve_raw_carveout_paths {
-                            return Some(effective_path);
-                        }
-
-                        if entry.path.as_path().starts_with(root.as_path()) {
-                            return Some(entry.path.clone());
-                        }
-
-                        Some(
-                            raw_writable_roots
-                                .iter()
-                                .find_map(|raw_root| {
-                                    let suffix = entry
-                                        .path
-                                        .as_path()
-                                        .strip_prefix(raw_root.as_path())
-                                        .ok()?;
-                                    let candidate = root.join(suffix).ok()?;
-                                    (normalize_effective_absolute_path(candidate.clone())
-                                        == effective_path)
-                                        .then_some(candidate)
-                                })
-                                .unwrap_or(effective_path),
-                        )
+                        Some(effective_path)
                     }),
             );
             WritableRoot {
@@ -1302,6 +1312,96 @@ mod tests {
                 .read_only_subpaths
                 .contains(&unexpected_decoy)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writable_roots_preserve_explicit_symlinked_carveouts_that_escape_root() {
+        let cwd = TempDir::new().expect("tempdir");
+        let real_root = cwd.path().join("real");
+        let link_root = cwd.path().join("link");
+        let decoy = cwd.path().join("outside-private");
+        let linked_private = real_root.join("linked-private");
+        fs::create_dir_all(&decoy).expect("create decoy");
+        fs::create_dir_all(&real_root).expect("create real root");
+        symlink_dir(&real_root, &link_root).expect("create symlinked root");
+        symlink_dir(&decoy, &linked_private).expect("create linked-private symlink");
+
+        let link_root =
+            AbsolutePathBuf::from_absolute_path(&link_root).expect("absolute symlinked root");
+        let link_private = link_root
+            .join("linked-private")
+            .expect("symlinked linked-private path");
+        let expected_root = AbsolutePathBuf::from_absolute_path(
+            real_root.canonicalize().expect("canonicalize real root"),
+        )
+        .expect("absolute canonical root");
+        let expected_linked_private = expected_root
+            .join("linked-private")
+            .expect("expected linked-private path");
+        let unexpected_decoy =
+            AbsolutePathBuf::from_absolute_path(decoy.canonicalize().expect("canonicalize decoy"))
+                .expect("absolute canonical decoy");
+
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: link_root },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: link_private },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        assert_eq!(writable_roots.len(), 1);
+        assert_eq!(writable_roots[0].root, expected_root);
+        assert_eq!(
+            writable_roots[0].read_only_subpaths,
+            vec![expected_linked_private]
+        );
+        assert!(
+            !writable_roots[0]
+                .read_only_subpaths
+                .contains(&unexpected_decoy)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writable_roots_preserve_explicit_symlinked_carveouts_that_alias_root() {
+        let cwd = TempDir::new().expect("tempdir");
+        let root = cwd.path().join("root");
+        let alias = root.join("alias-root");
+        fs::create_dir_all(&root).expect("create root");
+        symlink_dir(&root, &alias).expect("create alias symlink");
+
+        let root = AbsolutePathBuf::from_absolute_path(&root).expect("absolute root");
+        let alias = root.join("alias-root").expect("alias root path");
+        let expected_root = AbsolutePathBuf::from_absolute_path(
+            root.as_path().canonicalize().expect("canonicalize root"),
+        )
+        .expect("absolute canonical root");
+        let expected_alias = expected_root
+            .join("alias-root")
+            .expect("expected alias path");
+
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: root },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: alias },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        assert_eq!(writable_roots.len(), 1);
+        assert_eq!(writable_roots[0].root, expected_root);
+        assert_eq!(writable_roots[0].read_only_subpaths, vec![expected_alias]);
     }
 
     #[cfg(unix)]
