@@ -258,6 +258,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
+use crate::history_cell::SubagentStatusCell;
 use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -674,6 +675,7 @@ pub(crate) struct ChatWidget {
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
+    subagent_panel: Option<SubagentStatusCell>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
     ///
     /// The transcript overlay appends a cached "live tail" for the current active cell. Most
@@ -2998,7 +3000,7 @@ impl ChatWidget {
     }
 
     fn on_hook_started(&mut self, event: codex_protocol::protocol::HookStartedEvent) {
-        let label = format!("{:?}", event.run.event_name);
+        let label = hook_event_label(event.run.event_name);
         let mut message = format!("Running {label} hook");
         if let Some(status_message) = event.run.status_message
             && !status_message.is_empty()
@@ -3012,7 +3014,7 @@ impl ChatWidget {
 
     fn on_hook_completed(&mut self, event: codex_protocol::protocol::HookCompletedEvent) {
         let status = format!("{:?}", event.run.status).to_lowercase();
-        let label = format!("{:?}", event.run.event_name);
+        let label = hook_event_label(event.run.event_name);
         let header = format!("{label} hook ({status})");
         let mut lines: Vec<ratatui::text::Line<'static>> = vec![header.into()];
         for entry in event.run.entries {
@@ -3099,6 +3101,35 @@ impl ChatWidget {
     /// catch-up mode drains larger batches to reduce queue lag.
     pub(crate) fn on_commit_tick(&mut self) {
         self.run_commit_tick();
+    }
+
+    pub(crate) fn on_subagent_panel_updated(&mut self, panel: Arc<SubagentStatusCell>) {
+        let state_handle = panel.state_handle();
+
+        if let Some(existing) = self.subagent_panel.as_mut() {
+            if existing.matches_state(&state_handle) {
+                self.request_redraw();
+                return;
+            }
+            *existing = panel.as_ref().clone();
+            self.request_redraw();
+            return;
+        }
+
+        self.subagent_panel = Some(panel.as_ref().clone());
+        self.request_redraw();
+    }
+
+    pub(crate) fn clear_subagent_panel(&mut self) {
+        if self.subagent_panel.take().is_some() {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn on_subagent_tick(&mut self) {
+        if self.subagent_panel.is_some() {
+            self.request_redraw();
+        }
     }
 
     /// Runs a regular periodic commit tick.
@@ -3643,6 +3674,7 @@ impl ChatWidget {
                 skills: None,
             }),
             active_cell,
+            subagent_panel: None,
             active_cell_revision: 0,
             config,
             skills_all: Vec::new(),
@@ -3830,6 +3862,7 @@ impl ChatWidget {
                 skills: None,
             }),
             active_cell,
+            subagent_panel: None,
             active_cell_revision: 0,
             config,
             skills_all: Vec::new(),
@@ -4009,6 +4042,7 @@ impl ChatWidget {
                 skills: None,
             }),
             active_cell: None,
+            subagent_panel: None,
             active_cell_revision: 0,
             config,
             skills_all: Vec::new(),
@@ -4873,6 +4907,14 @@ impl ChatWidget {
 
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
+            // Subagent status is a transient panel, not transcript history. If we
+            // flush it into history every time another cell is inserted, the
+            // transcript gets spammed with repeated identical "Subagents ..." blocks.
+            // Keep the panel mounted so later transcript cells do not make it disappear.
+            if active.as_any().is::<SubagentStatusCell>() {
+                self.active_cell = Some(active);
+                return;
+            }
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
@@ -9252,8 +9294,13 @@ impl ChatWidget {
             Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(1, 0, 0, 0)),
             None => RenderableItem::Owned(Box::new(())),
         };
+        let subagent_panel_renderable = match &self.subagent_panel {
+            Some(panel) => RenderableItem::Borrowed(panel).inset(Insets::tlbr(1, 0, 0, 0)),
+            None => RenderableItem::Owned(Box::new(())),
+        };
         let mut flex = FlexRenderable::new();
         flex.push(1, active_cell_renderable);
+        flex.push(0, subagent_panel_renderable);
         flex.push(
             0,
             RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(1, 0, 0, 0)),
@@ -9452,6 +9499,13 @@ const PLACEHOLDERS: [&str; 8] = [
     "Run /review on my current changes",
     "Use /skills to list available skills",
 ];
+
+fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
+    match event_name {
+        codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
+        codex_protocol::protocol::HookEventName::Stop => "Stop",
+    }
+}
 
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSnapshot> {
     match BackendClient::from_auth(base_url, &auth) {

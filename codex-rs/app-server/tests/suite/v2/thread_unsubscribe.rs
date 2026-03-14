@@ -195,6 +195,10 @@ async fn thread_unsubscribe_during_turn_interrupts_turn_and_emits_thread_closed(
         wait_for_command_execution_item_started(&mut mcp),
     )
     .await??;
+    // `item/started` can arrive before the spawned command reports a process id.
+    // Give the runtime a brief moment to finish wiring the command so unsubscribe
+    // consistently exercises the shutdown path on slower CI runners.
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
     let unsubscribe_id = mcp
         .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
