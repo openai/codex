@@ -205,11 +205,16 @@ fn message_input_texts(body: &Value) -> Vec<String> {
     };
     items
         .iter()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
+        .filter(|item| {
+            item.get("role").and_then(Value::as_str).is_some()
+                || item.get("type").and_then(Value::as_str) == Some("message")
+        })
         .filter_map(|item| item.get("content").and_then(Value::as_array))
         .flatten()
-        .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
-        .filter_map(|span| span.get("text").and_then(Value::as_str))
+        .filter_map(|span| match span.get("type").and_then(Value::as_str) {
+            Some("input_text") | None => span.get("text").and_then(Value::as_str),
+            _ => None,
+        })
         .map(str::to_string)
         .collect()
 }
@@ -320,9 +325,31 @@ async fn spawn_agents_on_csv_runs_and_exports() -> Result<()> {
     test.submit_turn("run batch job").await?;
 
     let output = fs::read_to_string(&output_path)?;
-    assert!(output.contains("result_json"));
-    assert!(output.contains("item_id"));
-    assert!(output.contains("\"item_id\""));
+    let mut lines = output.lines();
+    let headers = lines.next().expect("csv headers");
+    let header_cols = parse_simple_csv_line(headers);
+    let status_index = header_cols
+        .iter()
+        .position(|header| header == "status")
+        .expect("status column");
+    let result_json_index = header_cols
+        .iter()
+        .position(|header| header == "result_json")
+        .expect("result_json column");
+    assert!(header_cols.iter().any(|header| header == "result_json"));
+    assert!(header_cols.iter().any(|header| header == "item_id"));
+    let rows: Vec<Vec<String>> = lines.map(parse_simple_csv_line).collect();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows.iter()
+            .map(|cols| cols[status_index].as_str())
+            .collect::<Vec<_>>(),
+        vec!["completed", "completed"]
+    );
+    assert!(
+        rows.iter()
+            .all(|cols| !cols[result_json_index].trim().is_empty())
+    );
     Ok(())
 }
 
@@ -423,21 +450,28 @@ async fn spawn_agents_on_csv_stop_halts_future_items() -> Result<()> {
     test.submit_turn("run job").await?;
 
     let output = fs::read_to_string(&output_path)?;
-    let rows: Vec<&str> = output.lines().skip(1).collect();
+    let mut lines = output.lines();
+    let headers = lines.next().expect("csv headers");
+    let header_cols = parse_simple_csv_line(headers);
+    let job_id_index = header_cols
+        .iter()
+        .position(|header| header == "job_id")
+        .expect("job_id column");
+    let rows: Vec<&str> = lines.collect();
     assert_eq!(rows.len(), 3);
-    let job_id = rows
+    let job_id: String = rows
         .first()
-        .and_then(|line| {
-            parse_simple_csv_line(line)
-                .iter()
-                .find(|value| value.len() == 36)
-                .cloned()
-        })
+        .map(|line| parse_simple_csv_line(line))
+        .and_then(|cols| cols.get(job_id_index).cloned())
         .expect("job_id from csv");
     let db = test.codex.state_db().expect("state db");
     let job = db.get_agent_job(job_id.as_str()).await?.expect("job");
-    assert_eq!(job.status, codex_state::AgentJobStatus::Cancelled);
     let progress = db.get_agent_job_progress(job_id.as_str()).await?;
+    assert_eq!(
+        job.status,
+        codex_state::AgentJobStatus::Cancelled,
+        "unexpected final job state: job={job:?} progress={progress:?} output={output}"
+    );
     assert_eq!(progress.total_items, 3);
     assert_eq!(progress.completed_items, 1);
     assert_eq!(progress.failed_items, 0);

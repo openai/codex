@@ -215,9 +215,12 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
         ]),
         &zsh_path,
     )?;
+    // This flow can require several sequential approval round-trips on slower
+    // macOS runners before the parent command reaches a terminal state.
+    let read_timeout = std::time::Duration::from_secs(20);
 
     let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(read_timeout, mcp.initialize()).await??;
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -227,7 +230,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
         })
         .await?;
     let start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
+        read_timeout,
         mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
     )
     .await??;
@@ -348,9 +351,12 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
         ]),
         &zsh_path,
     )?;
+    // This flow can require several sequential approval round-trips on slower
+    // macOS runners before the parent command reaches a terminal state.
+    let read_timeout = std::time::Duration::from_secs(20);
 
     let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(read_timeout, mcp.initialize()).await??;
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -360,7 +366,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
         })
         .await?;
     let start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
+        read_timeout,
         mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
     )
     .await??;
@@ -507,9 +513,10 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
         ]),
         &zsh_path,
     )?;
+    let read_timeout = std::time::Duration::from_secs(20);
 
     let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(read_timeout, mcp.initialize()).await??;
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -519,7 +526,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
         })
         .await?;
     let start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
+        read_timeout,
         mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
     )
     .await??;
@@ -548,7 +555,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
         })
         .await?;
     let turn_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
+        read_timeout,
         mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
     )
     .await??;
@@ -566,11 +573,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     let second_file_str = second_file.to_string_lossy().into_owned();
     let parent_shell_hint = format!("&& {}", &first_file_str);
     while target_decision_index < target_decisions.len() || !saw_parent_approval {
-        let server_req = timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_request_message(),
-        )
-        .await??;
+        let server_req = timeout(read_timeout, mcp.read_stream_until_request_message()).await??;
         let ServerRequest::CommandExecutionRequestApproval { request_id, params } = server_req
         else {
             panic!("expected CommandExecutionRequestApproval request");
@@ -640,7 +643,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     assert_eq!(approved_subcommand_strings.len(), 2);
     assert!(approved_subcommand_strings[0].contains(&first_file.display().to_string()));
     assert!(approved_subcommand_strings[1].contains(&second_file.display().to_string()));
-    let parent_completed_command_execution = timeout(DEFAULT_READ_TIMEOUT, async {
+    let parent_completed_command_execution = timeout(read_timeout, async {
         loop {
             let completed_notif = mcp
                 .read_stream_until_notification_message("item/completed")
@@ -682,7 +685,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             }
 
             match timeout(
-                DEFAULT_READ_TIMEOUT,
+                read_timeout,
                 mcp.read_stream_until_notification_message("turn/completed"),
             )
             .await
@@ -705,7 +708,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
                     mcp.interrupt_turn_and_wait_for_aborted(
                         thread.id.clone(),
                         turn.id.clone(),
-                        DEFAULT_READ_TIMEOUT,
+                        read_timeout,
                     )
                     .await?;
                 }
@@ -718,7 +721,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             // sandbox failures can also complete the turn before the parent
             // completion item is observed.
             let completed_notif = timeout(
-                DEFAULT_READ_TIMEOUT,
+                read_timeout,
                 mcp.read_stream_until_notification_message("turn/completed"),
             )
             .await??;

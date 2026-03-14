@@ -7,6 +7,7 @@
 //! which role to use; the multi-agent tool handler owns that orchestration.
 
 use crate::config::AgentRoleConfig;
+use crate::config::AgentRoleSpawnMode;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
 use crate::config::agent_roles::parse_agent_role_file_contents;
@@ -26,6 +27,16 @@ use toml::Value as TomlValue;
 pub const DEFAULT_ROLE_NAME: &str = "default";
 const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
 
+pub(crate) fn default_spawn_mode_for_role(
+    config: &Config,
+    role_name: Option<&str>,
+) -> AgentRoleSpawnMode {
+    let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
+    resolve_role_config(config, role_name)
+        .and_then(|role| role.spawn_mode)
+        .unwrap_or_default()
+}
+
 /// Applies a named role layer to `config` while preserving caller-owned model selection.
 ///
 /// The role layer is inserted at session-flag precedence so it can override persisted config, but
@@ -40,10 +51,12 @@ pub(crate) async fn apply_role_to_config(
 ) -> Result<(), String> {
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
     let is_built_in = !config.agent_roles.contains_key(role_name);
-    let (config_file, is_built_in) = resolve_role_config(config, role_name)
-        .map(|role| (&role.config_file, is_built_in))
+    let role = resolve_role_config(config, role_name)
         .ok_or_else(|| format!("unknown agent_type '{role_name}'"))?;
-    let Some(config_file) = config_file.as_ref() else {
+    let Some(config_file) = role.config_file.as_ref() else {
+        if let Some(model) = &role.model {
+            config.model = Some(model.clone());
+        }
         return Ok(());
     };
 
@@ -77,8 +90,14 @@ pub(crate) async fn apply_role_to_config(
     };
     deserialize_config_toml_with_base(role_config_toml.clone(), role_config_base)
         .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
-    let role_layer_toml = resolve_relative_paths_in_config_toml(role_config_toml, role_config_base)
-        .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+    let mut role_layer_toml =
+        resolve_relative_paths_in_config_toml(role_config_toml, role_config_base)
+            .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+    if let Some(model) = &role.model
+        && let Some(table) = role_layer_toml.as_table_mut()
+    {
+        table.insert("model".to_string(), TomlValue::String(model.clone()));
+    }
     let role_selects_provider = role_layer_toml.get("model_provider").is_some();
     let role_selects_profile = role_layer_toml.get("profile").is_some();
     let role_updates_active_profile_provider = config
@@ -186,45 +205,55 @@ pub(crate) mod spawn_tool_spec {
     }
 
     fn format_role(name: &str, declaration: &AgentRoleConfig) -> String {
+        let mut body = Vec::new();
         if let Some(description) = &declaration.description {
-            let locked_settings_note = declaration
-                .config_file
-                .as_ref()
-                .and_then(|config_file| {
-                    built_in::config_file_contents(config_file)
-                        .map(str::to_owned)
-                        .or_else(|| std::fs::read_to_string(config_file).ok())
-                })
-                .and_then(|contents| toml::from_str::<TomlValue>(&contents).ok())
-                .map(|role_toml| {
-                    let model = role_toml
-                        .get("model")
-                        .and_then(TomlValue::as_str);
-                    let reasoning_effort = role_toml
-                        .get("model_reasoning_effort")
-                        .and_then(TomlValue::as_str);
+            body.push(description.clone());
+        }
+        let locked_settings_note = declaration
+            .config_file
+            .as_ref()
+            .and_then(|config_file| {
+                built_in::config_file_contents(config_file)
+                    .map(str::to_owned)
+                    .or_else(|| std::fs::read_to_string(config_file).ok())
+            })
+            .and_then(|contents| toml::from_str::<TomlValue>(&contents).ok())
+            .and_then(|role_toml| {
+                let model = role_toml.get("model").and_then(TomlValue::as_str);
+                let reasoning_effort = role_toml
+                    .get("model_reasoning_effort")
+                    .and_then(TomlValue::as_str);
 
-                    match (model, reasoning_effort) {
-                        (Some(model), Some(reasoning_effort)) => format!(
-                            "\n- This role's model is set to `{model}` and its reasoning effort is set to `{reasoning_effort}`. These settings cannot be changed."
-                        ),
-                        (Some(model), None) => {
-                            format!(
-                                "\n- This role's model is set to `{model}` and cannot be changed."
-                            )
-                        }
-                        (None, Some(reasoning_effort)) => {
-                            format!(
-                                "\n- This role's reasoning effort is set to `{reasoning_effort}` and cannot be changed."
-                            )
-                        }
-                        (None, None) => String::new(),
-                    }
-                })
-                .unwrap_or_default();
-            format!("{name}: {{\n{description}{locked_settings_note}\n}}")
-        } else {
+                match (model, reasoning_effort) {
+                    (Some(model), Some(reasoning_effort)) => Some(format!(
+                        "- This role's model is set to `{model}` and its reasoning effort is set to `{reasoning_effort}`. These settings cannot be changed."
+                    )),
+                    (Some(model), None) => Some(format!(
+                        "- This role's model is set to `{model}` and cannot be changed."
+                    )),
+                    (None, Some(reasoning_effort)) => Some(format!(
+                        "- This role's reasoning effort is set to `{reasoning_effort}` and cannot be changed."
+                    )),
+                    (None, None) => None,
+                }
+            });
+        if let Some(locked_settings_note) = locked_settings_note {
+            body.push(locked_settings_note);
+        }
+        if let Some(spawn_mode) = declaration.spawn_mode {
+            let default_spawn_mode = match spawn_mode {
+                AgentRoleSpawnMode::Spawn => "spawn",
+                AgentRoleSpawnMode::Fork => "fork",
+            };
+            body.push(format!("Default spawn mode: {default_spawn_mode}"));
+        }
+        if let Some(model) = &declaration.model {
+            body.push(format!("Model override: {model}"));
+        }
+        if body.is_empty() {
             format!("{name}: no description")
+        } else {
+            format!("{name}: {{\n{}\n}}", body.join("\n"))
         }
     }
 }
@@ -241,8 +270,10 @@ mod built_in {
                     AgentRoleConfig {
                         description: Some("Default agent.".to_string()),
                         config_file: None,
+                        model: None,
+                        spawn_mode: None,
                         nickname_candidates: None,
-                    }
+                    },
                 ),
                 (
                     "explorer".to_string(),
@@ -253,10 +284,32 @@ They must be used to ask specific, well-scoped questions on the codebase.
 Rules:
 - In order to avoid redundant work, you should avoid exploring the same problem that explorers have already covered. Typically, you should trust the explorer results without additional verification. You are still allowed to inspect the code yourself to gain the needed context!
 - You are encouraged to spawn up multiple explorers in parallel when you have multiple distinct questions to ask about the codebase that can be answered independently. This allows you to get more information faster without waiting for one question to finish before asking the next. While waiting for the explorer results, you can continue working on other local tasks that do not depend on those results. This parallelism is a key advantage of delegation, so use it whenever you have multiple questions to ask.
-- Reuse existing explorers for related questions."#.to_string()),
+- Reuse existing explorers for related questions."#
+                            .to_string()),
+                        model: None,
                         config_file: Some("explorer.toml".to_string().parse().unwrap_or_default()),
+                        spawn_mode: None,
                         nickname_candidates: None,
-                    }
+                    },
+                ),
+                (
+                    "fast-worker".to_string(),
+                    AgentRoleConfig {
+                        description: Some(r#"Use `fast-worker` for tightly constrained problems.
+Typical tasks:
+- Make a small, localized code change
+- Execute a narrowly scoped command sequence
+- Handle an isolated fix from a self-contained prompt
+Rules:
+- Keep scope tight and avoid broad repo exploration.
+- Treat the prompt as self-contained and do not assume shared context.
+- Prefer direct execution over extended analysis."#
+                            .to_string()),
+                        config_file: None,
+                        model: None,
+                        spawn_mode: None,
+                        nickname_candidates: None,
+                    },
                 ),
                 (
                     "worker".to_string(),
@@ -268,29 +321,33 @@ Typical tasks:
 - Split large refactors into independent chunks
 Rules:
 - Explicitly assign **ownership** of the task (files / responsibility). When the subtask involves code changes, you should clearly specify which files or modules the worker is responsible for. This helps avoid merge conflicts and ensures accountability. For example, you can say "Worker 1 is responsible for updating the authentication module, while Worker 2 will handle the database layer." By defining clear ownership, you can delegate more effectively and reduce coordination overhead.
-- Always tell workers they are **not alone in the codebase**, and they should not revert the edits made by others, and they should adjust their implementation to accommodate the changes made by others. This is important because there may be multiple workers making changes in parallel, and they need to be aware of each other's work to avoid conflicts and ensure a cohesive final product."#.to_string()),
+- Always tell workers they are **not alone in the codebase**, and they should not revert the edits made by others, and they should adjust their implementation to accommodate the changes made by others. This is important because there may be multiple workers making changes in parallel, and they need to be aware of each other's work to avoid conflicts and ensure a cohesive final product."#
+                            .to_string()),
                         config_file: None,
+                        model: None,
+                        spawn_mode: None,
                         nickname_candidates: None,
-                    }
+                    },
                 ),
-                // Awaiter is temp removed
-//                 (
-//                     "awaiter".to_string(),
-//                     AgentRoleConfig {
-//                         description: Some(r#"Use an `awaiter` agent EVERY TIME you must run a command that will take some very long time.
-// This includes, but not only:
-// * testing
-// * monitoring of a long running process
-// * explicit ask to wait for something
-//
-// Rules:
-// - When an awaiter is running, you can work on something else. If you need to wait for its completion, use the largest possible timeout.
-// - Be patient with the `awaiter`.
-// - Do not use an awaiter for every compilation/test if it won't take time. Only use if for long running commands.
-// - Close the awaiter when you're done with it."#.to_string()),
-//                         config_file: Some("awaiter.toml".to_string().parse().unwrap_or_default()),
-//                     }
-//                 )
+                (
+                    "awaiter".to_string(),
+                    AgentRoleConfig {
+                        description: Some(r#"Use an `awaiter` agent EVERY TIME you must run a command that might take some time.
+This includes, but is not limited to:
+* testing
+* monitoring of a long-running process
+* explicit ask to wait for something
+
+Rules:
+- When you wait for the `awaiter` to be done, use the largest possible timeout.
+- Only use `awaiter` for commands that may take time."#
+                            .to_string()),
+                        config_file: Some("awaiter.toml".to_string().parse().unwrap_or_default()),
+                        model: None,
+                        spawn_mode: None,
+                        nickname_candidates: None,
+                    },
+                ),
             ])
         });
         &CONFIG

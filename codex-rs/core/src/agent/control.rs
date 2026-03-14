@@ -1,8 +1,12 @@
+use super::watchdog::RemovedWatchdog;
+use super::watchdog::WatchdogManager;
+use super::watchdog::WatchdogRegistration;
 use crate::agent::AgentStatus;
 use crate::agent::guards::Guards;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
+use crate::config::Config;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::find_thread_path_by_id_str;
@@ -28,8 +32,12 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
+use tokio::sync::Mutex;
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -72,21 +80,68 @@ fn agent_nickname_candidates(
 /// An `AgentControl` instance is shared per "user session" which means the same `AgentControl`
 /// is used for every sub-agent spawned by Codex. By doing so, we make sure the guards are
 /// scoped to a user session.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct AgentControl {
     /// Weak handle back to the global thread registry/state.
     /// This is `Weak` to avoid reference cycles and shadow persistence of the form
     /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
     manager: Weak<ThreadManagerState>,
-    state: Arc<Guards>,
+    guards: Arc<Guards>,
+    watchdogs: Arc<WatchdogManager>,
+    watchdog_compactions_in_progress: Arc<Mutex<HashSet<ThreadId>>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AgentListing {
+    pub(crate) thread_id: ThreadId,
+    pub(crate) parent_thread_id: Option<ThreadId>,
+    pub(crate) status: AgentStatus,
+    pub(crate) depth: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WatchdogParentCompactionResult {
+    NotWatchdogHelper,
+    ParentBusy {
+        parent_thread_id: ThreadId,
+    },
+    AlreadyInProgress {
+        parent_thread_id: ThreadId,
+    },
+    Submitted {
+        parent_thread_id: ThreadId,
+        submission_id: String,
+    },
+}
+
+impl Default for AgentControl {
+    fn default() -> Self {
+        let manager = Weak::new();
+        let guards = Arc::new(Guards::default());
+        let watchdogs = WatchdogManager::new(manager.clone(), Arc::clone(&guards));
+        Self::from_parts(manager, guards, watchdogs)
+    }
 }
 
 impl AgentControl {
     /// Construct a new `AgentControl` that can spawn/message agents via the given manager state.
     pub(crate) fn new(manager: Weak<ThreadManagerState>) -> Self {
+        let guards = Arc::new(Guards::default());
+        let watchdogs = WatchdogManager::new(manager.clone(), Arc::clone(&guards));
+        watchdogs.start();
+        Self::from_parts(manager, guards, watchdogs)
+    }
+
+    pub(crate) fn from_parts(
+        manager: Weak<ThreadManagerState>,
+        guards: Arc<Guards>,
+        watchdogs: Arc<WatchdogManager>,
+    ) -> Self {
         Self {
             manager,
-            ..Default::default()
+            guards,
+            watchdogs,
+            watchdog_compactions_in_progress: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -103,13 +158,15 @@ impl AgentControl {
 
     pub(crate) async fn spawn_agent_with_options(
         &self,
-        config: crate::config::Config,
+        config: Config,
         items: Vec<UserInput>,
         session_source: Option<SessionSource>,
         options: SpawnAgentOptions,
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
-        let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let mut reservation = self
+            .reserve_spawn_slot_with_reconcile(&state, config.agent_max_threads)
+            .await?;
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
             .await;
@@ -172,10 +229,9 @@ impl AgentControl {
                                 "parent thread rollout unavailable for fork: {parent_thread_id}"
                             ))
                         })?;
-                    let mut forked_rollout_items =
-                        RolloutRecorder::get_rollout_history(&rollout_path)
-                            .await?
-                            .get_rollout_items();
+                    let mut forked_rollout_items = RolloutRecorder::get_fork_history(&rollout_path)
+                        .await?
+                        .get_rollout_items();
                     if forked_rollout_items
                         .iter()
                         .any(|item| matches!(item, RolloutItem::ForkReference(_)))
@@ -240,15 +296,108 @@ impl AgentControl {
         Ok(new_thread.thread_id)
     }
 
+    pub(crate) async fn spawn_agent_handle(
+        &self,
+        config: Config,
+        session_source: Option<SessionSource>,
+    ) -> CodexResult<ThreadId> {
+        let state = self.upgrade()?;
+        let reservation = self
+            .reserve_spawn_slot_with_reconcile(&state, config.agent_max_threads)
+            .await?;
+        let inherited_shell_snapshot = self
+            .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
+            .await;
+
+        let new_thread = match session_source {
+            Some(session_source) => {
+                state
+                    .spawn_new_thread_with_source(
+                        config,
+                        self.clone(),
+                        session_source,
+                        false,
+                        None,
+                        inherited_shell_snapshot,
+                    )
+                    .await?
+            }
+            None => state.spawn_new_thread(config, self.clone()).await?,
+        };
+        reservation.commit(new_thread.thread_id);
+        state.notify_thread_created(new_thread.thread_id);
+        Ok(new_thread.thread_id)
+    }
+
+    pub(crate) async fn fork_agent(
+        &self,
+        config: Config,
+        items: Vec<UserInput>,
+        parent_thread_id: ThreadId,
+        _nth_user_message: usize,
+        session_source: SessionSource,
+    ) -> CodexResult<ThreadId> {
+        let state = self.upgrade()?;
+        let reservation = self
+            .reserve_spawn_slot_with_reconcile(&state, config.agent_max_threads)
+            .await?;
+        let inherited_shell_snapshot = self
+            .inherited_shell_snapshot_for_source(&state, Some(&session_source))
+            .await;
+
+        let parent_thread = state.get_thread(parent_thread_id).await.ok();
+        if let Some(parent_thread) = parent_thread.as_ref() {
+            parent_thread
+                .codex
+                .session
+                .ensure_rollout_materialized()
+                .await;
+            parent_thread.codex.session.flush_rollout().await;
+        }
+        let rollout_path = parent_thread
+            .as_ref()
+            .and_then(|thread| thread.rollout_path())
+            .or(find_thread_path_by_id_str(
+                config.codex_home.as_path(),
+                &parent_thread_id.to_string(),
+            )
+            .await?)
+            .ok_or_else(|| {
+                CodexErr::UnsupportedOperation(format!(
+                    "rollout history unavailable for thread {parent_thread_id}"
+                ))
+            })?;
+        // Fork helpers must start as distinct child threads. Reusing the resume loader here
+        // preserves the parent conversation id and can cause the owner to resume itself.
+        let initial_history = RolloutRecorder::get_fork_history(&rollout_path).await?;
+
+        let new_thread = state
+            .fork_thread_with_source(
+                config,
+                initial_history,
+                self.clone(),
+                session_source,
+                false,
+                inherited_shell_snapshot,
+            )
+            .await?;
+        reservation.commit(new_thread.thread_id);
+        state.notify_thread_created(new_thread.thread_id);
+        self.send_input(new_thread.thread_id, items).await?;
+        Ok(new_thread.thread_id)
+    }
+
     /// Resume an existing agent thread from a recorded rollout file.
     pub(crate) async fn resume_agent_from_rollout(
         &self,
-        config: crate::config::Config,
+        config: Config,
         thread_id: ThreadId,
         session_source: SessionSource,
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
-        let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let mut reservation = self
+            .reserve_spawn_slot_with_reconcile(&state, config.agent_max_threads)
+            .await?;
         let session_source = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -315,6 +464,21 @@ impl AgentControl {
         Ok(resumed_thread.thread_id)
     }
 
+    pub(crate) async fn send_prompt(
+        &self,
+        agent_id: ThreadId,
+        prompt: String,
+    ) -> CodexResult<String> {
+        self.send_input(
+            agent_id,
+            vec![UserInput::Text {
+                text: prompt,
+                text_elements: Vec::new(),
+            }],
+        )
+        .await
+    }
+
     /// Send rich user input items to an existing agent thread.
     pub(crate) async fn send_input(
         &self,
@@ -333,26 +497,16 @@ impl AgentControl {
             .await;
         if matches!(result, Err(CodexErr::InternalAgentDied)) {
             let _ = state.remove_thread(&agent_id).await;
-            self.state.release_spawned_thread(agent_id);
+            self.guards.release_spawned_thread(agent_id);
         }
         result
     }
 
-    pub(crate) async fn send_prompt(
-        &self,
-        agent_id: ThreadId,
-        prompt: String,
-    ) -> CodexResult<String> {
-        self.send_input(
-            agent_id,
-            vec![UserInput::Text {
-                text: prompt,
-                text_elements: Vec::new(),
-            }],
-        )
-        .await
-    }
-
+    /// Deliver inbox input to an existing agent thread.
+    ///
+    /// Watchdog helpers rely on this as the mandatory fallback wake-up path when
+    /// a check-in reaches a terminal state without explicitly calling
+    /// `send_input`.
     pub(crate) async fn send_agent_message(
         &self,
         agent_id: ThreadId,
@@ -368,23 +522,38 @@ impl AgentControl {
             return self.send_prompt(agent_id, message).await;
         }
 
-        let prepend_turn_start_user_message =
-            { !thread.codex.session.active_turn.lock().await.is_some() };
-        let result = state
-            .send_op(
-                agent_id,
-                Op::InjectResponseItems {
-                    items: build_agent_inbox_items(
-                        sender_thread_id,
-                        message,
-                        prepend_turn_start_user_message,
-                    )?,
-                },
-            )
-            .await;
+        let result =
+            inject_agent_message(&state, &thread, agent_id, sender_thread_id, message).await;
         if matches!(result, Err(CodexErr::InternalAgentDied)) {
             let _ = state.remove_thread(&agent_id).await;
-            self.state.release_spawned_thread(agent_id);
+            self.guards.release_spawned_thread(agent_id);
+        }
+        result
+    }
+
+    /// Deliver watchdog wake-up input to an owner thread.
+    ///
+    /// This intentionally bypasses `agent_use_function_call_inbox` for
+    /// non-subagent owners. Watchdog check-ins must wake the owner exactly
+    /// once; the injected inbox path reliably starts or resumes the owner's
+    /// next turn while preserving helper identity in history.
+    pub(crate) async fn send_watchdog_wakeup(
+        &self,
+        agent_id: ThreadId,
+        sender_thread_id: ThreadId,
+        message: String,
+    ) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        let thread = state.get_thread(agent_id).await?;
+        let snapshot = thread.config_snapshot().await;
+        let result = if matches!(snapshot.session_source, SessionSource::SubAgent(_)) {
+            self.send_prompt(agent_id, message).await
+        } else {
+            inject_agent_message(&state, &thread, agent_id, sender_thread_id, message).await
+        };
+        if matches!(result, Err(CodexErr::InternalAgentDied)) {
+            let _ = state.remove_thread(&agent_id).await;
+            self.guards.release_spawned_thread(agent_id);
         }
         result
     }
@@ -417,9 +586,30 @@ impl AgentControl {
     /// Submit a shutdown request to an existing agent thread.
     pub(crate) async fn shutdown_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
+        let mut descendants = self.collect_descendants(&state, agent_id).await;
+        descendants.reverse();
+        for descendant_id in descendants {
+            if let Some(removed_watchdog) = self.watchdogs.unregister(descendant_id).await
+                && let Some(helper_id) = removed_watchdog.active_helper_id
+            {
+                let _ = state.send_op(helper_id, Op::Shutdown {}).await;
+                let _ = state.remove_thread(&helper_id).await;
+                self.guards.release_spawned_thread(helper_id);
+            }
+            let _ = state.send_op(descendant_id, Op::Shutdown {}).await;
+            let _ = state.remove_thread(&descendant_id).await;
+            self.guards.release_spawned_thread(descendant_id);
+        }
+        if let Some(removed_watchdog) = self.watchdogs.unregister(agent_id).await
+            && let Some(helper_id) = removed_watchdog.active_helper_id
+        {
+            let _ = state.send_op(helper_id, Op::Shutdown {}).await;
+            let _ = state.remove_thread(&helper_id).await;
+            self.guards.release_spawned_thread(helper_id);
+        }
         let result = state.send_op(agent_id, Op::Shutdown {}).await;
         let _ = state.remove_thread(&agent_id).await;
-        self.state.release_spawned_thread(agent_id);
+        self.guards.release_spawned_thread(agent_id);
         result
     }
 
@@ -556,6 +746,202 @@ impl AgentControl {
         });
     }
 
+    pub(crate) async fn watchdog_targets(&self, agent_ids: &[ThreadId]) -> HashSet<ThreadId> {
+        self.watchdogs.registered_targets(agent_ids).await
+    }
+
+    pub(crate) async fn register_watchdog(
+        &self,
+        registration: WatchdogRegistration,
+    ) -> CodexResult<Vec<RemovedWatchdog>> {
+        self.watchdogs.register(registration).await
+    }
+
+    pub(crate) async fn unregister_watchdog(
+        &self,
+        target_thread_id: ThreadId,
+    ) -> Option<RemovedWatchdog> {
+        self.watchdogs.unregister(target_thread_id).await
+    }
+
+    pub(crate) async fn unregister_watchdogs_for_owner(
+        &self,
+        owner_thread_id: ThreadId,
+    ) -> Vec<RemovedWatchdog> {
+        self.watchdogs.take_for_owner(owner_thread_id).await
+    }
+
+    pub(crate) async fn compact_parent_for_watchdog_helper(
+        &self,
+        helper_thread_id: ThreadId,
+    ) -> CodexResult<WatchdogParentCompactionResult> {
+        let Some(parent_thread_id) = self
+            .watchdogs
+            .owner_for_active_helper(helper_thread_id)
+            .await
+        else {
+            return Ok(WatchdogParentCompactionResult::NotWatchdogHelper);
+        };
+        let state = self.upgrade()?;
+        let parent_thread = state.get_thread(parent_thread_id).await?;
+
+        {
+            let mut compacting = self.watchdog_compactions_in_progress.lock().await;
+            if compacting.contains(&parent_thread_id) {
+                return Ok(WatchdogParentCompactionResult::AlreadyInProgress { parent_thread_id });
+            }
+            compacting.insert(parent_thread_id);
+        }
+
+        if parent_thread.has_active_turn().await {
+            let mut compacting = self.watchdog_compactions_in_progress.lock().await;
+            compacting.remove(&parent_thread_id);
+            return Ok(WatchdogParentCompactionResult::ParentBusy { parent_thread_id });
+        }
+
+        match state.send_op(parent_thread_id, Op::Compact).await {
+            Ok(submission_id) => Ok(WatchdogParentCompactionResult::Submitted {
+                parent_thread_id,
+                submission_id,
+            }),
+            Err(err) => {
+                let mut compacting = self.watchdog_compactions_in_progress.lock().await;
+                compacting.remove(&parent_thread_id);
+                Err(err)
+            }
+        }
+    }
+
+    pub(crate) async fn finish_watchdog_parent_compaction(&self, parent_thread_id: ThreadId) {
+        let mut compacting = self.watchdog_compactions_in_progress.lock().await;
+        compacting.remove(&parent_thread_id);
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn run_watchdogs_once_for_tests(&self) {
+        self.watchdogs.run_once().await;
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn force_watchdog_due_for_tests(&self, target_thread_id: ThreadId) {
+        self.watchdogs.force_due_for_tests(target_thread_id).await;
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn set_watchdog_active_helper_for_tests(
+        &self,
+        target_thread_id: ThreadId,
+        helper_thread_id: ThreadId,
+    ) {
+        self.watchdogs
+            .set_active_helper_for_tests(target_thread_id, helper_thread_id)
+            .await;
+    }
+
+    pub(crate) async fn watchdog_owner_for_active_helper(
+        &self,
+        helper_thread_id: ThreadId,
+    ) -> Option<ThreadId> {
+        self.watchdogs
+            .owner_for_active_helper(helper_thread_id)
+            .await
+    }
+
+    pub(crate) async fn list_agents(
+        &self,
+        owner_thread_id: ThreadId,
+        recursive: bool,
+        all: bool,
+    ) -> CodexResult<Vec<AgentListing>> {
+        let state = self.upgrade()?;
+        let thread_ids = state.list_thread_ids().await;
+
+        let mut parent_by_thread = HashMap::with_capacity(thread_ids.len());
+        let mut status_by_thread = HashMap::with_capacity(thread_ids.len());
+        let mut depth_by_thread = HashMap::with_capacity(thread_ids.len());
+
+        for thread_id in &thread_ids {
+            let Ok(thread) = state.get_thread(*thread_id).await else {
+                continue;
+            };
+            let snapshot = thread.config_snapshot().await;
+            let (parent_thread_id, depth) = match snapshot.session_source {
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id,
+                    depth,
+                    ..
+                }) => (
+                    Some(parent_thread_id),
+                    usize::try_from(depth).unwrap_or_default(),
+                ),
+                _ => (None, 0),
+            };
+            parent_by_thread.insert(*thread_id, parent_thread_id);
+            status_by_thread.insert(*thread_id, thread.agent_status().await);
+            depth_by_thread.insert(*thread_id, depth);
+        }
+
+        let mut children_by_parent: HashMap<ThreadId, Vec<ThreadId>> = HashMap::new();
+        for (thread_id, parent_thread_id) in &parent_by_thread {
+            if let Some(parent_thread_id) = parent_thread_id {
+                children_by_parent
+                    .entry(*parent_thread_id)
+                    .or_default()
+                    .push(*thread_id);
+            }
+        }
+        for children in children_by_parent.values_mut() {
+            children.sort_by_key(ToString::to_string);
+        }
+
+        let mut listings = Vec::new();
+        if all {
+            let mut all_thread_ids = thread_ids.into_iter().collect::<HashSet<_>>();
+            all_thread_ids.extend(self.guards.tracked_thread_ids());
+            let mut all_thread_ids = all_thread_ids.into_iter().collect::<Vec<_>>();
+            all_thread_ids.sort_by_key(ToString::to_string);
+            for thread_id in all_thread_ids {
+                listings.push(AgentListing {
+                    thread_id,
+                    parent_thread_id: parent_by_thread.get(&thread_id).copied().flatten(),
+                    status: status_by_thread
+                        .get(&thread_id)
+                        .cloned()
+                        .unwrap_or(AgentStatus::NotFound),
+                    depth: depth_by_thread.get(&thread_id).copied().unwrap_or_default(),
+                });
+            }
+            return Ok(listings);
+        }
+
+        let mut queue = VecDeque::new();
+        if let Some(children) = children_by_parent.get(&owner_thread_id) {
+            for child in children {
+                queue.push_back((*child, 1));
+            }
+        }
+
+        while let Some((thread_id, depth)) = queue.pop_front() {
+            listings.push(AgentListing {
+                thread_id,
+                parent_thread_id: parent_by_thread.get(&thread_id).copied().flatten(),
+                status: status_by_thread
+                    .get(&thread_id)
+                    .cloned()
+                    .unwrap_or(AgentStatus::NotFound),
+                depth,
+            });
+
+            if recursive && let Some(children) = children_by_parent.get(&thread_id) {
+                for child in children {
+                    queue.push_back((*child, depth + 1));
+                }
+            }
+        }
+
+        Ok(listings)
+    }
+
     fn upgrade(&self) -> CodexResult<Arc<ThreadManagerState>> {
         self.manager
             .upgrade()
@@ -577,6 +963,79 @@ impl AgentControl {
         let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
         parent_thread.codex.session.user_shell().shell_snapshot()
     }
+
+    async fn reserve_spawn_slot_with_reconcile(
+        &self,
+        state: &ThreadManagerState,
+        max_threads: Option<usize>,
+    ) -> CodexResult<crate::agent::guards::SpawnReservation> {
+        self.reconcile_stale_guard_slots(state).await;
+        match self.guards.reserve_spawn_slot(max_threads) {
+            Ok(reservation) => Ok(reservation),
+            Err(CodexErr::AgentLimitReached { .. }) => {
+                self.reconcile_stale_guard_slots(state).await;
+                self.guards.reserve_spawn_slot(max_threads)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn reconcile_stale_guard_slots(&self, state: &ThreadManagerState) {
+        let live_thread_ids: HashSet<ThreadId> =
+            state.list_thread_ids().await.into_iter().collect();
+        for tracked_thread_id in self.guards.tracked_thread_ids() {
+            if !live_thread_ids.contains(&tracked_thread_id) {
+                self.guards.release_spawned_thread(tracked_thread_id);
+            }
+        }
+    }
+
+    async fn collect_descendants(
+        &self,
+        state: &ThreadManagerState,
+        owner_thread_id: ThreadId,
+    ) -> Vec<ThreadId> {
+        let thread_ids = state.list_thread_ids().await;
+        let mut children_by_parent: HashMap<ThreadId, Vec<ThreadId>> = HashMap::new();
+        for thread_id in thread_ids {
+            let Ok(thread) = state.get_thread(thread_id).await else {
+                continue;
+            };
+            let snapshot = thread.config_snapshot().await;
+            if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            }) = snapshot.session_source
+            {
+                children_by_parent
+                    .entry(parent_thread_id)
+                    .or_default()
+                    .push(thread_id);
+            }
+        }
+
+        for children in children_by_parent.values_mut() {
+            children.sort_by_key(ToString::to_string);
+        }
+
+        let mut descendants = Vec::new();
+        let mut queue = VecDeque::new();
+        if let Some(children) = children_by_parent.get(&owner_thread_id) {
+            for child in children {
+                queue.push_back(*child);
+            }
+        }
+
+        while let Some(thread_id) = queue.pop_front() {
+            descendants.push(thread_id);
+            if let Some(children) = children_by_parent.get(&thread_id) {
+                for child in children {
+                    queue.push_back(*child);
+                }
+            }
+        }
+
+        descendants
+    }
 }
 
 fn build_agent_inbox_items(
@@ -593,7 +1052,6 @@ fn build_agent_inbox_items(
             }],
         });
     }
-
     let call_id = format!("agent_inbox_{}", Uuid::new_v4());
     let output = serde_json::to_string(&AgentInboxPayload::new(sender_thread_id, message))
         .map_err(|err| {
@@ -616,10 +1074,30 @@ fn build_agent_inbox_items(
             },
         },
     ]);
-
     Ok(items)
 }
 
+async fn inject_agent_message(
+    state: &ThreadManagerState,
+    thread: &Arc<crate::CodexThread>,
+    agent_id: ThreadId,
+    sender_thread_id: ThreadId,
+    message: String,
+) -> CodexResult<String> {
+    let prepend_turn_start_user_message = !thread.codex.session.active_turn.lock().await.is_some();
+    state
+        .send_op(
+            agent_id,
+            Op::InjectResponseItems {
+                items: build_agent_inbox_items(
+                    sender_thread_id,
+                    message,
+                    prepend_turn_start_user_message,
+                )?,
+            },
+        )
+        .await
+}
 #[cfg(test)]
 #[path = "control_tests.rs"]
 mod tests;
@@ -636,11 +1114,13 @@ mod fork_reference_tests {
     use crate::config_loader::LoaderOverrides;
     use crate::contextual_user_message::SUBAGENT_NOTIFICATION_OPEN_TAG;
     use crate::features::Feature;
+    use crate::rollout::recorder::RolloutRecorder;
     use assert_matches::assert_matches;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseInputItem;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::AgentInboxPayload;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::SessionSource;
@@ -684,6 +1164,15 @@ mod fork_reference_tests {
             text: text.to_string(),
             text_elements: Vec::new(),
         }]
+    }
+
+    fn thread_spawn_source(parent_thread_id: ThreadId) -> SessionSource {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth: 1,
+            agent_nickname: None,
+            agent_role: None,
+        })
     }
 
     struct AgentControlHarness {
@@ -885,6 +1374,50 @@ mod fork_reference_tests {
         }
     }
 
+    #[tokio::test]
+    async fn send_watchdog_wakeup_to_root_thread_injects_response_items_by_default() {
+        let harness = AgentControlHarness::new().await;
+        let (receiver_thread_id, _thread) = harness.start_thread().await;
+        let sender_thread_id = ThreadId::new();
+
+        let submission_id = harness
+            .control
+            .send_watchdog_wakeup(
+                receiver_thread_id,
+                sender_thread_id,
+                "watchdog update".to_string(),
+            )
+            .await
+            .expect("send_watchdog_wakeup should succeed");
+        assert!(!submission_id.is_empty());
+
+        let captured = harness
+            .manager
+            .captured_ops()
+            .into_iter()
+            .find(|(thread_id, op)| {
+                *thread_id == receiver_thread_id && matches!(op, Op::InjectResponseItems { .. })
+            })
+            .expect("expected injected watchdog wake-up op");
+
+        let Op::InjectResponseItems { items } = captured.1 else {
+            unreachable!("matched above");
+        };
+        assert_eq!(items.len(), 3);
+        match &items[2] {
+            ResponseInputItem::FunctionCallOutput { output, .. } => {
+                let output_text = output
+                    .body
+                    .to_text()
+                    .expect("payload should convert to text");
+                let payload: AgentInboxPayload =
+                    serde_json::from_str(&output_text).expect("payload should be valid json");
+                assert_eq!(payload.sender_thread_id, sender_thread_id);
+                assert_eq!(payload.message, "watchdog update");
+            }
+            other => panic!("expected function call output item, got {other:?}"),
+        }
+    }
     fn has_subagent_notification(history_items: &[ResponseItem]) -> bool {
         history_items.iter().any(|item| {
             let ResponseItem::Message { role, content, .. } = item else {
@@ -1409,25 +1942,25 @@ mod fork_reference_tests {
     }
 
     #[tokio::test]
-    async fn spawn_agent_fork_persists_fork_reference_instead_of_parent_history() {
+    async fn fork_agent_uses_distinct_thread_id_and_marks_parent() {
         let harness = AgentControlHarness::new().await;
         let (parent_thread_id, parent_thread) = harness.start_thread().await;
-        parent_thread
-            .inject_user_message_without_turn("parent seed context".to_string())
-            .await;
         let turn_context = parent_thread.codex.session.new_default_turn().await;
-        let parent_spawn_call_id = "spawn-call-dedup".to_string();
-        let parent_spawn_call = ResponseItem::FunctionCall {
-            id: None,
-            name: "spawn_agent".to_string(),
-            arguments: "{}".to_string(),
-            call_id: parent_spawn_call_id.clone(),
-            namespace: None,
-        };
         parent_thread
             .codex
             .session
-            .record_conversation_items(turn_context.as_ref(), &[parent_spawn_call])
+            .record_conversation_items(
+                turn_context.as_ref(),
+                &[ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "parent seed context".to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                }],
+            )
             .await;
         parent_thread
             .codex
@@ -1435,79 +1968,44 @@ mod fork_reference_tests {
             .ensure_rollout_materialized()
             .await;
         parent_thread.codex.session.flush_rollout().await;
-        let parent_rollout_path = parent_thread
-            .rollout_path()
-            .expect("parent rollout path should be available");
 
         let child_thread_id = harness
             .control
-            .spawn_agent_with_options(
+            .fork_agent(
                 harness.config.clone(),
-                text_input("child task"),
-                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                text_input("watchdog helper"),
+                parent_thread_id,
+                usize::MAX,
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id,
                     depth: 1,
                     agent_nickname: None,
                     agent_role: None,
-                })),
-                SpawnAgentOptions {
-                    fork_parent_spawn_call_id: Some(parent_spawn_call_id),
-                },
+                }),
             )
             .await
-            .expect("forked spawn should succeed");
+            .expect("fork_agent should spawn a distinct child thread");
+
+        assert_ne!(child_thread_id, parent_thread_id);
 
         let child_thread = harness
             .manager
             .get_thread(child_thread_id)
             .await
             .expect("child thread should be registered");
-        let child_rollout_path = child_thread
-            .rollout_path()
-            .expect("child rollout path should be available");
-        let InitialHistory::Resumed(resumed) =
-            RolloutRecorder::get_rollout_history(child_rollout_path.as_path())
-                .await
-                .expect("child rollout should load")
-        else {
-            panic!("child rollout should include session metadata");
-        };
-
-        assert!(
-            resumed.history.iter().any(|item| {
-                matches!(
-                    item,
-                    RolloutItem::ForkReference(ForkReferenceItem {
-                        rollout_path,
-                        nth_user_message,
-                    }) if rollout_path == &parent_rollout_path && *nth_user_message == usize::MAX
-                )
-            }),
-            "child rollout should persist a fork reference to the parent rollout"
-        );
-
-        let raw_response_items: Vec<ResponseItem> = resumed
-            .history
-            .iter()
-            .filter_map(|item| match item {
-                RolloutItem::ResponseItem(response_item) => Some(response_item.clone()),
-                RolloutItem::SessionMeta(_)
-                | RolloutItem::ForkReference(_)
-                | RolloutItem::Compacted(_)
-                | RolloutItem::TurnContext(_)
-                | RolloutItem::EventMsg(_) => None,
-            })
-            .collect();
-        assert!(
-            !history_contains_text(&raw_response_items, "parent seed context"),
-            "child rollout should not duplicate the parent's raw transcript"
-        );
-
         let history = child_thread.codex.session.clone_history().await;
         assert!(history_contains_text(
             history.raw_items(),
             "parent seed context"
         ));
+
+        let child_rollout_path = child_thread
+            .rollout_path()
+            .expect("forked child should have a rollout path");
+        let child_history = RolloutRecorder::get_rollout_history(&child_rollout_path)
+            .await
+            .expect("child rollout should load");
+        assert_eq!(child_history.forked_from_id(), Some(parent_thread_id));
 
         let _ = harness
             .control
@@ -1850,7 +2348,9 @@ mod fork_reference_tests {
             "researcher".to_string(),
             AgentRoleConfig {
                 description: Some("Research role".to_string()),
+                model: None,
                 config_file: None,
+                spawn_mode: None,
                 nickname_candidates: Some(vec!["Atlas".to_string()]),
             },
         );
@@ -2017,5 +2517,429 @@ mod fork_reference_tests {
             .shutdown_agent(resumed_thread_id)
             .await
             .expect("resumed child shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn run_watchdogs_once_cleans_up_handle_and_helper_after_owner_shutdown() {
+        let (home, config) = test_config_with_cli_overrides(vec![(
+            "agents.max_threads".to_string(),
+            TomlValue::Integer(2),
+        )])
+        .await;
+        let manager = ThreadManager::with_models_provider_and_home_for_tests(
+            CodexAuth::from_api_key("dummy"),
+            config.model_provider.clone(),
+            config.codex_home.clone(),
+        );
+        let control = manager.agent_control();
+        let harness = AgentControlHarness {
+            _home: home,
+            config,
+            manager,
+            control,
+        };
+        let (owner_thread_id, owner_thread) = harness.start_thread().await;
+        let watchdog_handle_id = harness
+            .control
+            .spawn_agent_handle(
+                harness.config.clone(),
+                Some(thread_spawn_source(owner_thread_id)),
+            )
+            .await
+            .expect("watchdog handle should spawn");
+        let helper_thread_id = harness
+            .control
+            .spawn_agent_handle(
+                harness.config.clone(),
+                Some(thread_spawn_source(owner_thread_id)),
+            )
+            .await
+            .expect("watchdog helper should spawn");
+        let removed = harness
+            .control
+            .register_watchdog(WatchdogRegistration {
+                owner_thread_id,
+                target_thread_id: watchdog_handle_id,
+                child_depth: 1,
+                interval_s: 1,
+                prompt: "check in".to_string(),
+                config: harness.config.clone(),
+            })
+            .await
+            .expect("watchdog registration should succeed");
+        assert_eq!(removed, Vec::<RemovedWatchdog>::new());
+        harness
+            .control
+            .set_watchdog_active_helper_for_tests(watchdog_handle_id, helper_thread_id)
+            .await;
+        assert_eq!(
+            harness
+                .control
+                .watchdog_owner_for_active_helper(helper_thread_id)
+                .await,
+            Some(owner_thread_id)
+        );
+        let tracked_before = harness.control.guards.tracked_thread_ids();
+        assert_eq!(tracked_before.contains(&watchdog_handle_id), true);
+        assert_eq!(tracked_before.contains(&helper_thread_id), true);
+
+        let mut owner_status_rx = harness
+            .control
+            .subscribe_status(owner_thread_id)
+            .await
+            .expect("owner status subscription should succeed");
+        let _ = owner_thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("owner shutdown should submit");
+        timeout(Duration::from_secs(2), async {
+            loop {
+                if matches!(owner_status_rx.borrow().clone(), AgentStatus::Shutdown) {
+                    break;
+                }
+                owner_status_rx
+                    .changed()
+                    .await
+                    .expect("owner status should reach shutdown");
+            }
+        })
+        .await
+        .expect("owner should reach shutdown");
+
+        harness.control.run_watchdogs_once_for_tests().await;
+
+        assert_eq!(
+            harness.control.get_status(watchdog_handle_id).await,
+            AgentStatus::NotFound
+        );
+        assert_eq!(
+            harness.control.get_status(helper_thread_id).await,
+            AgentStatus::NotFound
+        );
+        assert_eq!(
+            harness
+                .control
+                .watchdog_owner_for_active_helper(helper_thread_id)
+                .await,
+            None
+        );
+        let tracked_after = harness.control.guards.tracked_thread_ids();
+        assert_eq!(tracked_after.contains(&watchdog_handle_id), false);
+        assert_eq!(tracked_after.contains(&helper_thread_id), false);
+
+        let replacement_thread_id = harness
+            .control
+            .spawn_agent_handle(harness.config.clone(), None)
+            .await
+            .expect("cleanup should release watchdog helper slots");
+        let ops = harness.manager.captured_ops();
+        assert_eq!(
+            ops.iter()
+                .any(|(thread_id, op)| *thread_id == watchdog_handle_id
+                    && matches!(op, Op::Shutdown)),
+            true
+        );
+        assert_eq!(
+            ops.iter()
+                .any(|(thread_id, op)| *thread_id == helper_thread_id && matches!(op, Op::Shutdown)),
+            true
+        );
+
+        let _ = harness
+            .control
+            .shutdown_agent(replacement_thread_id)
+            .await
+            .expect("replacement thread shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn run_watchdogs_once_wakes_owner_when_helper_exits_without_send_input() {
+        let harness = AgentControlHarness::new().await;
+        let (owner_thread_id, owner_thread) = harness.start_thread().await;
+        let watchdog_handle_id = harness
+            .control
+            .spawn_agent_handle(
+                harness.config.clone(),
+                Some(thread_spawn_source(owner_thread_id)),
+            )
+            .await
+            .expect("watchdog handle should spawn");
+        let helper_thread_id = harness
+            .control
+            .spawn_agent_handle(
+                harness.config.clone(),
+                Some(thread_spawn_source(owner_thread_id)),
+            )
+            .await
+            .expect("watchdog helper should spawn");
+        let removed = harness
+            .control
+            .register_watchdog(WatchdogRegistration {
+                owner_thread_id,
+                target_thread_id: watchdog_handle_id,
+                child_depth: 1,
+                interval_s: 1,
+                prompt: "check in".to_string(),
+                config: harness.config.clone(),
+            })
+            .await
+            .expect("watchdog registration should succeed");
+        assert_eq!(removed, Vec::<RemovedWatchdog>::new());
+        harness
+            .control
+            .set_watchdog_active_helper_for_tests(watchdog_handle_id, helper_thread_id)
+            .await;
+        harness
+            .control
+            .force_watchdog_due_for_tests(watchdog_handle_id)
+            .await;
+
+        let mut helper_status_rx = harness
+            .control
+            .subscribe_status(helper_thread_id)
+            .await
+            .expect("helper status subscription should succeed");
+        let _ = harness
+            .control
+            .shutdown_agent(helper_thread_id)
+            .await
+            .expect("helper shutdown should submit");
+        timeout(Duration::from_secs(2), async {
+            loop {
+                if matches!(helper_status_rx.borrow().clone(), AgentStatus::Shutdown) {
+                    break;
+                }
+                helper_status_rx
+                    .changed()
+                    .await
+                    .expect("helper status should reach shutdown");
+            }
+        })
+        .await
+        .expect("helper should reach shutdown");
+        harness.control.run_watchdogs_once_for_tests().await;
+
+        let payload = timeout(Duration::from_secs(2), async {
+            loop {
+                let history = owner_thread.codex.session.clone_history().await;
+                if let Some(payload) = history.raw_items().iter().find_map(|item| match item {
+                    ResponseItem::FunctionCallOutput { output, .. } => output
+                        .text_content()
+                        .and_then(|text| serde_json::from_str::<AgentInboxPayload>(text).ok()),
+                    _ => None,
+                }) {
+                    break payload;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("owner should receive fallback agent inbox payload");
+        assert_eq!(payload.sender_thread_id, helper_thread_id);
+        assert!(
+            payload.message.starts_with("Watchdog check-in "),
+            "expected watchdog fallback prefix, got {:?}",
+            payload.message
+        );
+        assert!(
+            payload.message.ends_with("before calling send_input."),
+            "expected watchdog fallback suffix, got {:?}",
+            payload.message
+        );
+    }
+
+    #[tokio::test]
+    async fn compact_parent_for_watchdog_helper_blocks_duplicates_until_finish() {
+        let harness = AgentControlHarness::new().await;
+        let (owner_thread_id, _owner_thread) = harness.start_thread().await;
+        let watchdog_handle_id = harness
+            .control
+            .spawn_agent_handle(
+                harness.config.clone(),
+                Some(thread_spawn_source(owner_thread_id)),
+            )
+            .await
+            .expect("watchdog handle should spawn");
+        let helper_thread_id = harness
+            .control
+            .spawn_agent_handle(
+                harness.config.clone(),
+                Some(thread_spawn_source(owner_thread_id)),
+            )
+            .await
+            .expect("watchdog helper should spawn");
+        let removed = harness
+            .control
+            .register_watchdog(WatchdogRegistration {
+                owner_thread_id,
+                target_thread_id: watchdog_handle_id,
+                child_depth: 1,
+                interval_s: 1,
+                prompt: "compact if needed".to_string(),
+                config: harness.config.clone(),
+            })
+            .await
+            .expect("watchdog registration should succeed");
+        assert_eq!(removed, Vec::<RemovedWatchdog>::new());
+        harness
+            .control
+            .set_watchdog_active_helper_for_tests(watchdog_handle_id, helper_thread_id)
+            .await;
+        let result = harness
+            .control
+            .compact_parent_for_watchdog_helper(helper_thread_id)
+            .await
+            .expect("first compact request should submit");
+        let submission_id = match result {
+            WatchdogParentCompactionResult::Submitted {
+                parent_thread_id,
+                submission_id,
+            } => {
+                assert_eq!(parent_thread_id, owner_thread_id);
+                submission_id
+            }
+            other => panic!("expected submitted compaction result, got {other:?}"),
+        };
+        assert_eq!(submission_id.is_empty(), false);
+        assert_eq!(
+            harness
+                .manager
+                .captured_ops()
+                .iter()
+                .filter(|(thread_id, op)| *thread_id == owner_thread_id && matches!(op, Op::Compact))
+                .count(),
+            1
+        );
+
+        let result = harness
+            .control
+            .compact_parent_for_watchdog_helper(helper_thread_id)
+            .await
+            .expect("duplicate compact should be blocked");
+        assert_eq!(
+            result,
+            WatchdogParentCompactionResult::AlreadyInProgress {
+                parent_thread_id: owner_thread_id,
+            }
+        );
+
+        harness
+            .control
+            .finish_watchdog_parent_compaction(owner_thread_id)
+            .await;
+
+        let result = harness
+            .control
+            .compact_parent_for_watchdog_helper(helper_thread_id)
+            .await
+            .expect("completed compact should unblock later requests");
+        let resubmitted_id = match result {
+            WatchdogParentCompactionResult::Submitted {
+                parent_thread_id,
+                submission_id,
+            } => {
+                assert_eq!(parent_thread_id, owner_thread_id);
+                submission_id
+            }
+            other => panic!("expected submitted compaction result after finish, got {other:?}"),
+        };
+        assert_eq!(resubmitted_id.is_empty(), false);
+        assert_eq!(
+            harness
+                .manager
+                .captured_ops()
+                .iter()
+                .filter(|(thread_id, op)| *thread_id == owner_thread_id && matches!(op, Op::Compact))
+                .count(),
+            2
+        );
+
+        let _ = harness
+            .control
+            .shutdown_agent(watchdog_handle_id)
+            .await
+            .expect("watchdog handle shutdown should submit");
+        let _ = harness
+            .control
+            .shutdown_agent(owner_thread_id)
+            .await
+            .expect("owner shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn compact_parent_for_watchdog_helper_releases_marker_when_parent_is_busy() {
+        let harness = AgentControlHarness::new().await;
+        let (owner_thread_id, owner_thread) = harness.start_thread().await;
+        let watchdog_handle_id = harness
+            .control
+            .spawn_agent_handle(
+                harness.config.clone(),
+                Some(thread_spawn_source(owner_thread_id)),
+            )
+            .await
+            .expect("watchdog handle should spawn");
+        let helper_thread_id = harness
+            .control
+            .spawn_agent_handle(
+                harness.config.clone(),
+                Some(thread_spawn_source(owner_thread_id)),
+            )
+            .await
+            .expect("watchdog helper should spawn");
+        let removed = harness
+            .control
+            .register_watchdog(WatchdogRegistration {
+                owner_thread_id,
+                target_thread_id: watchdog_handle_id,
+                child_depth: 1,
+                interval_s: 1,
+                prompt: "compact if needed".to_string(),
+                config: harness.config.clone(),
+            })
+            .await
+            .expect("watchdog registration should succeed");
+        assert_eq!(removed, Vec::<RemovedWatchdog>::new());
+        harness
+            .control
+            .set_watchdog_active_helper_for_tests(watchdog_handle_id, helper_thread_id)
+            .await;
+
+        owner_thread
+            .codex
+            .session
+            .active_turn
+            .lock()
+            .await
+            .replace(crate::state::ActiveTurn::default());
+
+        let result = harness
+            .control
+            .compact_parent_for_watchdog_helper(helper_thread_id)
+            .await
+            .expect("busy parent should not error");
+        assert_eq!(
+            result,
+            WatchdogParentCompactionResult::ParentBusy {
+                parent_thread_id: owner_thread_id
+            }
+        );
+
+        owner_thread.codex.session.active_turn.lock().await.take();
+
+        let result = harness
+            .control
+            .compact_parent_for_watchdog_helper(helper_thread_id)
+            .await
+            .expect("busy result should not leave stale marker");
+        match result {
+            WatchdogParentCompactionResult::Submitted {
+                parent_thread_id, ..
+            } => {
+                assert_eq!(parent_thread_id, owner_thread_id);
+            }
+            other => panic!(
+                "expected submitted compaction result after busy parent clears, got {other:?}"
+            ),
+        }
     }
 }

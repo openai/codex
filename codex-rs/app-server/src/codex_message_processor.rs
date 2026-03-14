@@ -3160,8 +3160,18 @@ impl CodexMessageProcessor {
         } else {
             read_summary_from_state_db_by_thread_id(&self.config, thread_uuid).await
         };
+        let loaded_rollout_path = loaded_thread
+            .as_ref()
+            .and_then(|thread| thread.rollout_path());
         let mut rollout_path = db_summary.as_ref().map(|summary| summary.path.clone());
-        if rollout_path.is_none() || include_turns {
+        if rollout_path.is_none()
+            && let Some(path) = loaded_rollout_path.as_ref()
+            && tokio::fs::try_exists(path).await.unwrap_or(false)
+        {
+            rollout_path = Some(path.clone());
+        }
+        let should_lookup_rollout = rollout_path.is_none() && loaded_thread.is_none();
+        if should_lookup_rollout {
             rollout_path =
                 match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
                     .await
@@ -3222,7 +3232,6 @@ impl CodexMessageProcessor {
                 return;
             };
             let config_snapshot = thread.config_snapshot().await;
-            let loaded_rollout_path = thread.rollout_path();
             if include_turns && loaded_rollout_path.is_none() {
                 self.send_invalid_request_error(
                     request_id,
