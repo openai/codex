@@ -1,4 +1,10 @@
 use super::*;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AGENT_INBOX_MESSAGE_PREFIX;
+use codex_protocol::protocol::AgentInboxPayload;
+use codex_protocol::protocol::RawResponseItemEvent;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -103,6 +109,65 @@ async fn thread_snapshot_replay_does_not_duplicate_agent_message_history() {
     assert!(
         rendered.contains("assistant reply"),
         "expected replayed assistant message, got {rendered:?}"
+    );
+}
+
+fn agent_inbox_function_call_output(sender: ThreadId, message: &str) -> ResponseItem {
+    let payload = serde_json::to_string(&AgentInboxPayload::new(sender, message.to_string()))
+        .expect("agent inbox payload should serialize");
+    ResponseItem::FunctionCallOutput {
+        call_id: "call-agent-inbox".to_string(),
+        output: FunctionCallOutputPayload::from_text(payload),
+    }
+}
+
+fn agent_inbox_message(sender: ThreadId, message: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: format!("{AGENT_INBOX_MESSAGE_PREFIX}{sender}] {message}"),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
+#[tokio::test]
+async fn thread_snapshot_replay_deduplicates_agent_inbox_compatibility_items() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let sender =
+        ThreadId::from_string("019cbff7-558b-77d3-8653-8238ab5361ec").expect("valid thread id");
+    let message = "Please review the latest diff";
+
+    chat.handle_codex_event_replay(Event {
+        id: "evt-agent-output".into(),
+        msg: EventMsg::RawResponseItem(RawResponseItemEvent {
+            item: agent_inbox_function_call_output(sender, message),
+        }),
+    });
+    chat.handle_codex_event_replay(Event {
+        id: "evt-agent-message".into(),
+        msg: EventMsg::RawResponseItem(RawResponseItemEvent {
+            item: agent_inbox_message(sender, message),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected replayed agent inbox compatibility items to render one history row"
+    );
+    let rendered = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_chatwidget_snapshot!(
+        "thread_snapshot_replay_agent_inbox_dedupes_compatibility_items",
+        rendered
     );
 }
 

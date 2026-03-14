@@ -128,11 +128,21 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
+#[cfg(test)]
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
+#[cfg(test)]
+use codex_protocol::models::ResponseItem;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
+#[cfg(test)]
+use codex_protocol::protocol::AGENT_INBOX_KIND;
+#[cfg(test)]
+use codex_protocol::protocol::AGENT_INBOX_MESSAGE_PREFIX;
+#[cfg(test)]
+use codex_protocol::protocol::AgentInboxPayload;
 #[cfg(test)]
 use codex_protocol::protocol::AgentMessageDeltaEvent;
 #[cfg(test)]
@@ -145,6 +155,7 @@ use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::AgentReasoningRawContentDeltaEvent;
 #[cfg(test)]
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
+use codex_protocol::protocol::AgentSpawnMode;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 #[cfg(test)]
@@ -188,6 +199,8 @@ use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
+#[cfg(test)]
+use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -445,6 +458,38 @@ fn is_unified_exec_source(source: ExecCommandSource) -> bool {
         source,
         ExecCommandSource::UnifiedExecStartup | ExecCommandSource::UnifiedExecInteraction
     )
+}
+
+#[cfg(test)]
+fn agent_inbox_message_from_item(item: &ResponseItem) -> Option<(Option<String>, String)> {
+    match item {
+        ResponseItem::FunctionCallOutput { output, .. } => {
+            let text = output.body.to_text()?;
+            let payload: AgentInboxPayload = serde_json::from_str(&text).ok()?;
+            if !payload.injected || payload.kind != AGENT_INBOX_KIND {
+                return None;
+            }
+            Some((Some(payload.sender_thread_id.to_string()), payload.message))
+        }
+        ResponseItem::Message { content, .. } => {
+            let text = content.iter().find_map(|item| match item {
+                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                    Some(text.as_str())
+                }
+                _ => None,
+            })?;
+            let rest = text.strip_prefix(AGENT_INBOX_MESSAGE_PREFIX)?;
+            let (sender, message) = rest.split_once(']')?;
+            let message = message.trim_start().to_string();
+            let sender = sender.trim().to_string();
+            if sender.is_empty() {
+                Some((None, message))
+            } else {
+                Some((Some(sender), message))
+            }
+        }
+        _ => None,
+    }
 }
 
 fn is_standard_tool_call(parsed_cmd: &[ParsedCommand]) -> bool {
@@ -953,6 +998,8 @@ pub(crate) struct ChatWidget {
     status_line_branch_lookup_complete: bool,
     external_editor_state: ExternalEditorState,
     realtime_conversation: RealtimeConversationUiState,
+    #[cfg(test)]
+    last_replayed_agent_inbox_message: Option<(Option<String>, String)>,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
     last_non_retry_error: Option<(String, String)>,
 }
@@ -3700,6 +3747,32 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
+    fn on_raw_response_item(&mut self, event: RawResponseItemEvent, from_replay: bool) {
+        let Some((sender, message)) = agent_inbox_message_from_item(&event.item) else {
+            if from_replay {
+                self.last_replayed_agent_inbox_message = None;
+            }
+            return;
+        };
+
+        let replay_key = (sender.clone(), message.clone());
+        if from_replay {
+            if self.last_replayed_agent_inbox_message.as_ref() == Some(&replay_key) {
+                return;
+            }
+            self.last_replayed_agent_inbox_message = Some(replay_key);
+        } else {
+            self.last_replayed_agent_inbox_message = None;
+        }
+
+        let hint = sender.map(|sender| format!("from {sender}"));
+        self.add_to_history(history_cell::new_info_event(
+            format!("Agent message: {message}"),
+            hint,
+        ));
+    }
+
     fn on_collab_agent_tool_call(&mut self, item: ThreadItem) {
         let ThreadItem::CollabAgentToolCall {
             id,
@@ -3762,6 +3835,7 @@ impl ChatWidget {
                             prompt: prompt.unwrap_or_default(),
                             model: String::new(),
                             reasoning_effort: ReasoningEffortConfig::Medium,
+                            spawn_mode: AgentSpawnMode::Spawn,
                             status: first_receiver
                                 .as_ref()
                                 .and_then(|thread_id| agents_states.get(&thread_id.to_string()))
@@ -4712,6 +4786,8 @@ impl ChatWidget {
             status_line_branch_lookup_complete: false,
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
+            #[cfg(test)]
+            last_replayed_agent_inbox_message: None,
             last_rendered_user_message_event: None,
             last_non_retry_error: None,
         };
@@ -6799,6 +6875,9 @@ impl ChatWidget {
         if !is_resume_initial_replay && !is_stream_error {
             self.restore_retry_status_header_if_present();
         }
+        if !from_replay || !matches!(&msg, EventMsg::RawResponseItem(_)) {
+            self.last_replayed_agent_inbox_message = None;
+        }
 
         match msg {
             EventMsg::AgentMessageDelta(_)
@@ -7006,8 +7085,8 @@ impl ChatWidget {
                     });
                 }
             }
-            EventMsg::RawResponseItem(_)
-            | EventMsg::ItemStarted(_)
+            EventMsg::RawResponseItem(ev) => self.on_raw_response_item(ev, from_replay),
+            EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
