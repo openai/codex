@@ -371,7 +371,7 @@ impl FileSystemSandboxPolicy {
             return Vec::new();
         }
 
-        dedup_absolute_paths(
+        dedup_normalized_absolute_paths(
             self.resolved_entries_with_cwd(cwd)
                 .into_iter()
                 .filter(|entry| entry.access.can_read())
@@ -389,7 +389,7 @@ impl FileSystemSandboxPolicy {
         }
 
         let resolved_entries = self.resolved_entries_with_cwd(cwd);
-        let read_only_roots = dedup_absolute_paths(
+        let read_only_roots = dedup_normalized_absolute_paths(
             resolved_entries
                 .iter()
                 .filter(|entry| !entry.access.can_write())
@@ -398,7 +398,7 @@ impl FileSystemSandboxPolicy {
                 .collect(),
         );
 
-        dedup_absolute_paths(
+        dedup_normalized_absolute_paths(
             resolved_entries
                 .into_iter()
                 .filter(|entry| entry.access.can_write())
@@ -421,7 +421,7 @@ impl FileSystemSandboxPolicy {
             );
             WritableRoot {
                 root,
-                read_only_subpaths: dedup_absolute_paths(read_only_subpaths),
+                read_only_subpaths: dedup_normalized_absolute_paths(read_only_subpaths),
             }
         })
         .collect()
@@ -437,7 +437,7 @@ impl FileSystemSandboxPolicy {
             .ok()
             .map(|cwd| absolute_root_path_for_cwd(&cwd));
 
-        dedup_absolute_paths(
+        dedup_normalized_absolute_paths(
             self.resolved_entries_with_cwd(cwd)
                 .iter()
                 .filter(|entry| entry.access == FileSystemAccessMode::None)
@@ -933,6 +933,33 @@ fn dedup_absolute_paths(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
     deduped
 }
 
+fn normalize_effective_absolute_path(path: AbsolutePathBuf) -> AbsolutePathBuf {
+    let raw_path = path.to_path_buf();
+    for ancestor in raw_path.ancestors() {
+        let Ok(canonical_ancestor) = ancestor.canonicalize() else {
+            continue;
+        };
+        let Ok(suffix) = raw_path.strip_prefix(ancestor) else {
+            continue;
+        };
+        if let Ok(normalized_path) =
+            AbsolutePathBuf::from_absolute_path(canonical_ancestor.join(suffix))
+        {
+            return normalized_path;
+        }
+    }
+    path
+}
+
+fn dedup_normalized_absolute_paths(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
+    dedup_absolute_paths(
+        paths
+            .into_iter()
+            .map(normalize_effective_absolute_path)
+            .collect(),
+    )
+}
+
 fn default_read_only_subpaths_for_writable_root(
     writable_root: &AbsolutePathBuf,
 ) -> Vec<AbsolutePathBuf> {
@@ -1038,7 +1065,14 @@ fn resolve_gitdir_from_file(dot_git: &AbsolutePathBuf) -> Option<AbsolutePathBuf
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    fn symlink_dir(original: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(original, link)
+    }
 
     #[test]
     fn unknown_special_paths_are_ignored_by_legacy_bridge() -> std::io::Result<()> {
@@ -1065,6 +1099,66 @@ mod tests {
             }
         );
         Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn effective_runtime_roots_canonicalize_symlinked_paths() {
+        let cwd = TempDir::new().expect("tempdir");
+        let real_root = cwd.path().join("real");
+        let link_root = cwd.path().join("link");
+        let blocked = real_root.join("blocked");
+        let codex_dir = real_root.join(".codex");
+
+        fs::create_dir_all(&blocked).expect("create blocked");
+        fs::create_dir_all(&codex_dir).expect("create .codex");
+        symlink_dir(&real_root, &link_root).expect("create symlinked root");
+
+        let link_root =
+            AbsolutePathBuf::from_absolute_path(&link_root).expect("absolute symlinked root");
+        let link_blocked = link_root.join("blocked").expect("symlinked blocked path");
+        let expected_root = AbsolutePathBuf::from_absolute_path(
+            real_root.canonicalize().expect("canonicalize real root"),
+        )
+        .expect("absolute canonical root");
+        let expected_blocked = AbsolutePathBuf::from_absolute_path(
+            blocked.canonicalize().expect("canonicalize blocked"),
+        )
+        .expect("absolute canonical blocked");
+        let expected_codex = AbsolutePathBuf::from_absolute_path(
+            codex_dir.canonicalize().expect("canonicalize .codex"),
+        )
+        .expect("absolute canonical .codex");
+
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: link_root },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: link_blocked },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        assert_eq!(
+            policy.get_unreadable_roots_with_cwd(cwd.path()),
+            vec![expected_blocked.clone()]
+        );
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        assert_eq!(writable_roots.len(), 1);
+        assert_eq!(writable_roots[0].root, expected_root);
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .contains(&expected_blocked)
+        );
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .contains(&expected_codex)
+        );
     }
 
     #[test]
@@ -1183,6 +1277,13 @@ mod tests {
         let cwd = TempDir::new().expect("tempdir");
         let docs =
             AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
+        let expected_docs = AbsolutePathBuf::from_absolute_path(
+            cwd.path()
+                .canonicalize()
+                .expect("canonicalize cwd")
+                .join("docs"),
+        )
+        .expect("canonical docs");
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -1200,7 +1301,10 @@ mod tests {
             policy.resolve_access_with_cwd(docs.as_path(), cwd.path()),
             FileSystemAccessMode::Read
         );
-        assert_eq!(policy.get_readable_roots_with_cwd(cwd.path()), vec![docs]);
+        assert_eq!(
+            policy.get_readable_roots_with_cwd(cwd.path()),
+            vec![expected_docs]
+        );
         assert!(policy.get_unreadable_roots_with_cwd(cwd.path()).is_empty());
     }
 
