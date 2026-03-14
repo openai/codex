@@ -80,8 +80,30 @@ impl App {
     ) -> Option<(ThreadId, Event)> {
         let params = notification.params?;
         let thread_id = params.get("conversationId")?.as_str()?;
-        let thread_id = ThreadId::from_string(thread_id).ok()?;
-        let event: Event = serde_json::from_value(params).ok()?;
+        let thread_id = match ThreadId::from_string(thread_id) {
+            Ok(thread_id) => thread_id,
+            Err(err) => {
+                tracing::warn!(
+                    method = notification.method,
+                    conversation_id = thread_id,
+                    %err,
+                    "failed to parse legacy notification thread id"
+                );
+                return None;
+            }
+        };
+        let event: Event = match serde_json::from_value(params) {
+            Ok(event) => event,
+            Err(err) => {
+                tracing::warn!(
+                    method = notification.method,
+                    thread_id = %thread_id,
+                    %err,
+                    "failed to deserialize legacy notification into thread event"
+                );
+                return None;
+            }
+        };
         Some((thread_id, event))
     }
 
@@ -163,6 +185,20 @@ mod tests {
             method: "codex/event/shutdownComplete".to_string(),
             params: Some(json!({
                 "conversationId": thread_id.to_string(),
+            })),
+        });
+
+        assert!(parsed.is_none());
+    }
+
+    #[test]
+    fn legacy_notification_to_thread_event_returns_none_for_invalid_thread_id() {
+        let parsed = App::legacy_notification_to_thread_event(JSONRPCNotification {
+            method: "codex/event/shutdownComplete".to_string(),
+            params: Some(json!({
+                "conversationId": "not-a-thread-id",
+                "id": "ev-1",
+                "msg": "shutdown_complete",
             })),
         });
 
