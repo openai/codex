@@ -1344,6 +1344,7 @@ pub enum EventMsg {
 #[serde(rename_all = "snake_case")]
 pub enum HookEventName {
     SessionStart,
+    UserPromptSubmit,
     Stop,
 }
 

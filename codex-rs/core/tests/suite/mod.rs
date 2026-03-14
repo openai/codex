@@ -138,6 +138,7 @@ mod undo;
 mod unified_exec;
 mod unstable_features_warning;
 mod user_notification;
+mod user_prompt_submit_hooks;
 mod user_shell_cmd;
 mod view_image;
 mod web_search;

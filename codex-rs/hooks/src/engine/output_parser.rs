@@ -13,6 +13,12 @@ pub(crate) struct SessionStartOutput {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct UserPromptSubmitOutput {
+    pub universal: UniversalOutput,
+    pub additional_context: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct StopOutput {
     pub universal: UniversalOutput,
     pub should_block: bool,
@@ -20,10 +26,11 @@ pub(crate) struct StopOutput {
     pub invalid_block_reason: Option<String>,
 }
 
+use crate::schema::BlockDecisionWire;
 use crate::schema::HookUniversalOutputWire;
 use crate::schema::SessionStartCommandOutputWire;
 use crate::schema::StopCommandOutputWire;
-use crate::schema::StopDecisionWire;
+use crate::schema::UserPromptSubmitCommandOutputWire;
 
 pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
     let wire: SessionStartCommandOutputWire = parse_json(stdout)?;
@@ -36,9 +43,25 @@ pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
     })
 }
 
+pub(crate) fn parse_user_prompt_submit(stdout: &str) -> Option<UserPromptSubmitOutput> {
+    let wire: UserPromptSubmitCommandOutputWire = parse_json(stdout)?;
+    let mut universal = UniversalOutput::from(wire.universal);
+    if matches!(wire.decision, Some(BlockDecisionWire::Block)) {
+        universal.continue_processing = false;
+        universal.stop_reason = wire.reason.or(universal.stop_reason);
+    }
+    let additional_context = wire
+        .hook_specific_output
+        .and_then(|output| output.additional_context);
+    Some(UserPromptSubmitOutput {
+        universal,
+        additional_context,
+    })
+}
+
 pub(crate) fn parse_stop(stdout: &str) -> Option<StopOutput> {
     let wire: StopCommandOutputWire = parse_json(stdout)?;
-    let should_block = matches!(wire.decision, Some(StopDecisionWire::Block));
+    let should_block = matches!(wire.decision, Some(BlockDecisionWire::Block));
     let invalid_block_reason = if should_block
         && match wire.reason.as_deref() {
             Some(reason) => reason.trim().is_empty(),
