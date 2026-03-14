@@ -52,6 +52,7 @@ must be idle before a check-in helper is spawned when the `agent_watchdog` featu
 ```toml
 watchdog_interval_s = 60
 ```
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.
