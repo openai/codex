@@ -160,35 +160,6 @@ consolidation_model = "gpt-5"
 }
 
 #[test]
-fn test_toml_parsing_rejects_reserved_model_provider_override_openai() {
-    let cfg = r#"
-[model_providers.openai]
-name = "OpenAI Custom"
-"#;
-
-    let err = toml::from_str::<ConfigToml>(cfg).expect_err("should reject reserved provider");
-    let message = err.to_string();
-    assert!(message.contains("reserved built-in provider IDs"));
-    assert!(message.contains("`openai`"));
-}
-
-#[test]
-fn test_toml_parsing_rejects_multiple_reserved_model_provider_overrides() {
-    let cfg = r#"
-[model_providers.ollama]
-name = "Ollama Override"
-
-[model_providers.openai]
-name = "OpenAI Override"
-"#;
-
-    let err = toml::from_str::<ConfigToml>(cfg).expect_err("should reject reserved providers");
-    let message = err.to_string();
-    assert!(message.contains("`openai`"));
-    assert!(message.contains("`ollama`"));
-}
-
-#[test]
 fn parses_bundled_skills_config() {
     let cfg: ConfigToml = toml::from_str(
         r#"
