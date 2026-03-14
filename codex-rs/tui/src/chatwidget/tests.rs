@@ -8870,9 +8870,16 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
         "expected permissions popup to open with the current preset selected: {popup}"
     );
 
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    #[cfg(target_os = "windows")]
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    for _ in 0..4 {
+        let popup = render_bottom_popup(&chat, 120);
+        if popup
+            .lines()
+            .any(|line| line.contains("Smart Approvals") && line.contains('›'))
+        {
+            break;
+        }
+        chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    }
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let op = std::iter::from_fn(|| rx.try_recv().ok())
