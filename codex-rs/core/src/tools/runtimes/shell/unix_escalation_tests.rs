@@ -730,6 +730,7 @@ async fn prepare_escalated_exec_permissions_preserve_macos_seatbelt_extensions()
         allow_login_shell: true,
         shell_environment_policy: ShellEnvironmentPolicy::default(),
         windows_sandbox_mode: None,
+        windows_sandbox_private_desktop: false,
         macos_seatbelt_profile_extensions: Some(MacOsSeatbeltProfileExtensions {
             macos_preferences: MacOsPreferencesPermission::ReadWrite,
             ..Default::default()

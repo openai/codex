@@ -58,6 +58,7 @@ use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
+use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::AltScreenMode;
@@ -97,6 +98,7 @@ use crate::config::profile::ConfigProfile;
 use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
+use toml_edit::value;
 
 pub(crate) mod agent_roles;
 pub mod edit;
@@ -123,6 +125,7 @@ pub use permissions::PermissionsToml;
 pub(crate) use permissions::resolve_permission_profile;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
+pub use types::ApprovalsReviewer;
 
 pub use codex_git::GhostSnapshotConfig;
 
@@ -135,6 +138,7 @@ pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+const OPENAI_BASE_URL_ENV_VAR: &str = "OPENAI_BASE_URL";
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
@@ -189,6 +193,8 @@ pub struct Permissions {
     /// Effective Windows sandbox mode derived from `[windows].sandbox` or
     /// legacy feature keys.
     pub windows_sandbox_mode: Option<WindowsSandboxModeToml>,
+    /// Whether the final Windows sandboxed child should run on a private desktop.
+    pub windows_sandbox_private_desktop: bool,
     /// Optional macOS seatbelt extension profile used to extend default
     /// seatbelt permissions when running under seatbelt.
     pub macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
@@ -230,6 +236,11 @@ pub struct Config {
 
     /// Effective permission configuration for shell tool execution.
     pub permissions: Permissions,
+
+    /// Configures who approval requests are routed to for review once they have
+    /// been escalated. This does not disable separate safety checks such as
+    /// ARC.
+    pub approvals_reviewer: ApprovalsReviewer,
 
     /// enforce_residency means web traffic cannot be routed outside of a
     /// particular geography. HTTP clients should direct their requests
@@ -463,6 +474,9 @@ pub struct Config {
     /// Experimental / do not use. Selects the realtime websocket model/snapshot
     /// used for the `Op::RealtimeConversation` connection.
     pub experimental_realtime_ws_model: Option<String>,
+    /// Experimental / do not use. Realtime websocket session selection.
+    /// `version` controls v1/v2 and `type` controls conversational/transcription.
+    pub realtime: RealtimeConfig,
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport instructions (the `Op::RealtimeConversation`
     /// `/ws` session.update instructions) without changing normal prompts.
@@ -594,6 +608,9 @@ impl ConfigBuilder {
             fallback_cwd,
         } = self;
         let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
+        if let Err(err) = maybe_migrate_guardian_approval_alias(&codex_home).await {
+            tracing::warn!(error = %err, "failed to migrate guardian_approval feature alias");
+        }
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
@@ -639,6 +656,99 @@ impl ConfigBuilder {
             config_layer_stack,
         )
     }
+}
+
+/// Rewrites the legacy `guardian_approval` feature flag to
+/// `smart_approvals` in `config.toml` before normal config loading.
+///
+/// If the old key is present and enabled, this preserves the enabled state by
+/// setting `smart_approvals = true` when the new key is not already present.
+/// Because the deprecated flag historically meant "turn guardian review on",
+/// this migration also backfills `approvals_reviewer = "guardian_subagent"`
+/// in the same scope when that reviewer is not already configured there.
+/// In all cases it removes the deprecated `guardian_approval` entry so future
+/// loads only see the canonical feature flag name.
+async fn maybe_migrate_guardian_approval_alias(codex_home: &Path) -> std::io::Result<bool> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    if !tokio::fs::try_exists(&config_path).await? {
+        return Ok(false);
+    }
+
+    let config_contents = tokio::fs::read_to_string(&config_path).await?;
+    let Ok(config_toml) = toml::from_str::<ConfigToml>(&config_contents) else {
+        return Ok(false);
+    };
+
+    let mut edits = Vec::new();
+
+    if let Some(features) = config_toml.features.as_ref()
+        && let Some(enabled) = features.entries.get("guardian_approval").copied()
+    {
+        if enabled && !features.entries.contains_key("smart_approvals") {
+            edits.push(ConfigEdit::SetPath {
+                segments: vec!["features".to_string(), "smart_approvals".to_string()],
+                value: value(true),
+            });
+        }
+        if enabled && config_toml.approvals_reviewer.is_none() {
+            edits.push(ConfigEdit::SetPath {
+                segments: vec!["approvals_reviewer".to_string()],
+                value: value(ApprovalsReviewer::GuardianSubagent.to_string()),
+            });
+        }
+        edits.push(ConfigEdit::ClearPath {
+            segments: vec!["features".to_string(), "guardian_approval".to_string()],
+        });
+    }
+
+    for (profile_name, profile) in &config_toml.profiles {
+        if let Some(features) = profile.features.as_ref()
+            && let Some(enabled) = features.entries.get("guardian_approval").copied()
+        {
+            if enabled && !features.entries.contains_key("smart_approvals") {
+                edits.push(ConfigEdit::SetPath {
+                    segments: vec![
+                        "profiles".to_string(),
+                        profile_name.clone(),
+                        "features".to_string(),
+                        "smart_approvals".to_string(),
+                    ],
+                    value: value(true),
+                });
+            }
+            if enabled && profile.approvals_reviewer.is_none() {
+                edits.push(ConfigEdit::SetPath {
+                    segments: vec![
+                        "profiles".to_string(),
+                        profile_name.clone(),
+                        "approvals_reviewer".to_string(),
+                    ],
+                    value: value(ApprovalsReviewer::GuardianSubagent.to_string()),
+                });
+            }
+            edits.push(ConfigEdit::ClearPath {
+                segments: vec![
+                    "profiles".to_string(),
+                    profile_name.clone(),
+                    "features".to_string(),
+                    "guardian_approval".to_string(),
+                ],
+            });
+        }
+    }
+
+    if edits.is_empty() {
+        return Ok(false);
+    }
+
+    ConfigEditsBuilder::new(codex_home)
+        .with_edits(edits)
+        .apply()
+        .await
+        .map_err(|err| {
+            std::io::Error::other(format!("failed to migrate smart_approvals alias: {err}"))
+        })?;
+    Ok(true)
 }
 
 impl Config {
@@ -702,6 +812,9 @@ pub async fn load_config_as_toml_with_cli_overrides(
     cwd: &AbsolutePathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
+    if let Err(err) = maybe_migrate_guardian_approval_alias(codex_home).await {
+        tracing::warn!(error = %err, "failed to migrate guardian_approval feature alias");
+    }
     let config_layer_stack = load_config_layers_state(
         codex_home,
         Some(cwd.clone()),
@@ -1053,6 +1166,11 @@ pub struct ConfigToml {
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
 
+    /// Configures who approval requests are routed to for review once they have
+    /// been escalated. This does not disable separate safety checks such as
+    /// ARC.
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
@@ -1226,6 +1344,9 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
+    /// Base URL override for the built-in `openai` model provider.
+    pub openai_base_url: Option<String>,
+
     /// Machine-local realtime audio device preferences used by realtime voice.
     #[serde(default)]
     pub audio: Option<RealtimeAudioToml>,
@@ -1238,6 +1359,10 @@ pub struct ConfigToml {
     /// Experimental / do not use. Selects the realtime websocket model/snapshot
     /// used for the `Op::RealtimeConversation` connection.
     pub experimental_realtime_ws_model: Option<String>,
+    /// Experimental / do not use. Realtime websocket session selection.
+    /// `version` controls v1/v2 and `type` controls conversational/transcription.
+    #[serde(default)]
+    pub realtime: Option<RealtimeToml>,
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport instructions (the `Op::RealtimeConversation`
     /// `/ws` session.update instructions) without changing normal prompts.
@@ -1381,6 +1506,38 @@ impl ProjectConfig {
 pub struct RealtimeAudioConfig {
     pub microphone: Option<String>,
     pub speaker: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RealtimeWsMode {
+    #[default]
+    Conversational,
+    Transcription,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RealtimeWsVersion {
+    #[default]
+    V1,
+    V2,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RealtimeConfig {
+    pub version: RealtimeWsVersion,
+    #[serde(rename = "type")]
+    pub session_type: RealtimeWsMode,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RealtimeToml {
+    pub version: Option<RealtimeWsVersion>,
+    #[serde(rename = "type")]
+    pub session_type: Option<RealtimeWsMode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -1711,6 +1868,7 @@ pub struct ConfigOverrides {
     pub review_model: Option<String>,
     pub cwd: Option<PathBuf>,
     pub approval_policy: Option<AskForApproval>,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
     pub model_provider: Option<String>,
     pub service_tier: Option<Option<ServiceTier>>,
@@ -1875,6 +2033,7 @@ impl Config {
             review_model: override_review_model,
             cwd,
             approval_policy: approval_policy_override,
+            approvals_reviewer: approvals_reviewer_override,
             sandbox_mode,
             model_provider,
             service_tier: service_tier_override,
@@ -1920,6 +2079,8 @@ impl Config {
         let configured_features = Features::from_config(&cfg, &config_profile, feature_overrides);
         let features = ManagedFeatures::from_configured(configured_features, feature_requirements)?;
         let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
+        let windows_sandbox_private_desktop =
+            resolve_windows_sandbox_private_desktop(&cfg, &config_profile);
         let resolved_cwd = normalize_for_native_workdir({
             use std::env;
 
@@ -2081,6 +2242,10 @@ impl Config {
             );
             approval_policy = constrained_approval_policy.value();
         }
+        let approvals_reviewer = approvals_reviewer_override
+            .or(config_profile.approvals_reviewer)
+            .or(cfg.approvals_reviewer)
+            .unwrap_or(ApprovalsReviewer::User);
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
@@ -2088,7 +2253,28 @@ impl Config {
         let agent_roles =
             agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
 
-        let mut model_providers = built_in_model_providers();
+        let openai_base_url = cfg
+            .openai_base_url
+            .clone()
+            .filter(|value| !value.is_empty());
+        let openai_base_url_from_env = std::env::var(OPENAI_BASE_URL_ENV_VAR)
+            .ok()
+            .filter(|value| !value.is_empty());
+        if openai_base_url_from_env.is_some() {
+            if openai_base_url.is_some() {
+                tracing::warn!(
+                    env_var = OPENAI_BASE_URL_ENV_VAR,
+                    "deprecated env var is ignored because `openai_base_url` is set in config.toml"
+                );
+            } else {
+                startup_warnings.push(format!(
+                    "`{OPENAI_BASE_URL_ENV_VAR}` is deprecated. Set `openai_base_url` in config.toml instead."
+                ));
+            }
+        }
+        let effective_openai_base_url = openai_base_url.or(openai_base_url_from_env);
+
+        let mut model_providers = built_in_model_providers(effective_openai_base_url);
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
@@ -2380,8 +2566,10 @@ impl Config {
                 allow_login_shell,
                 shell_environment_policy,
                 windows_sandbox_mode,
+                windows_sandbox_private_desktop,
                 macos_seatbelt_profile_extensions: None,
             },
+            approvals_reviewer,
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
             user_instructions,
@@ -2462,6 +2650,12 @@ impl Config {
                 }),
             experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
             experimental_realtime_ws_model: cfg.experimental_realtime_ws_model,
+            realtime: cfg
+                .realtime
+                .map_or_else(RealtimeConfig::default, |realtime| RealtimeConfig {
+                    version: realtime.version.unwrap_or_default(),
+                    session_type: realtime.session_type.unwrap_or_default(),
+                }),
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
             experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,

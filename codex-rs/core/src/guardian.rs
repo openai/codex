@@ -17,10 +17,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_protocol::approvals::NetworkApprovalProtocol;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GuardianAssessmentEvent;
+use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
@@ -78,11 +82,20 @@ pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = concat!(
     "Otherwise, stop and request user input.",
 );
 
+fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
+    match level {
+        GuardianRiskLevel::Low => "low",
+        GuardianRiskLevel::Medium => "medium",
+        GuardianRiskLevel::High => "high",
+    }
+}
+
 /// Whether this turn should route `on-request` approval prompts through the
-/// guardian reviewer instead of surfacing them to the user.
+/// guardian reviewer instead of surfacing them to the user. ARC may still
+/// block actions earlier in the flow.
 pub(crate) fn routes_approval_to_guardian(turn: &TurnContext) -> bool {
     turn.approval_policy.value() == AskForApproval::OnRequest
-        && turn.features.enabled(Feature::GuardianApproval)
+        && turn.config.approvals_reviewer == ApprovalsReviewer::GuardianSubagent
 }
 
 pub(crate) fn is_guardian_subagent_source(
@@ -93,15 +106,6 @@ pub(crate) fn is_guardian_subagent_source(
         codex_protocol::protocol::SessionSource::SubAgent(SubAgentSource::Other(name))
             if name == GUARDIAN_SUBAGENT_NAME
     )
-}
-
-/// Coarse risk label paired with the numeric `risk_score`.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum GuardianRiskLevel {
-    Low,
-    Medium,
-    High,
 }
 
 /// Evidence item returned by the guardian subagent.
@@ -123,6 +127,7 @@ pub(crate) struct GuardianAssessment {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum GuardianApprovalRequest {
     Shell {
+        id: String,
         command: Vec<String>,
         cwd: PathBuf,
         sandbox_permissions: crate::sandboxing::SandboxPermissions,
@@ -130,6 +135,7 @@ pub(crate) enum GuardianApprovalRequest {
         justification: Option<String>,
     },
     ExecCommand {
+        id: String,
         command: Vec<String>,
         cwd: PathBuf,
         sandbox_permissions: crate::sandboxing::SandboxPermissions,
@@ -139,6 +145,7 @@ pub(crate) enum GuardianApprovalRequest {
     },
     #[cfg(unix)]
     Execve {
+        id: String,
         tool_name: String,
         program: String,
         argv: Vec<String>,
@@ -146,18 +153,22 @@ pub(crate) enum GuardianApprovalRequest {
         additional_permissions: Option<PermissionProfile>,
     },
     ApplyPatch {
+        id: String,
         cwd: PathBuf,
         files: Vec<AbsolutePathBuf>,
         change_count: usize,
         patch: String,
     },
     NetworkAccess {
+        id: String,
+        turn_id: String,
         target: String,
         host: String,
         protocol: NetworkApprovalProtocol,
         port: u16,
     },
     McpToolCall {
+        id: String,
         server: String,
         tool_name: String,
         arguments: Option<Value>,
@@ -226,40 +237,71 @@ async fn run_guardian_review(
     turn: Arc<TurnContext>,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
+    external_cancel: Option<CancellationToken>,
 ) -> ReviewDecision {
+    let assessment_id = guardian_request_id(&request).to_string();
+    let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
+    let action_summary = guardian_assessment_action_value(&request);
     session
-        .notify_background_event(turn.as_ref(), "Reviewing approval request...".to_string())
+        .send_event(
+            turn.as_ref(),
+            EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+                id: assessment_id.clone(),
+                turn_id: assessment_turn_id.clone(),
+                status: GuardianAssessmentStatus::InProgress,
+                risk_score: None,
+                risk_level: None,
+                rationale: None,
+                action: Some(action_summary.clone()),
+            }),
+        )
         .await;
 
+    let terminal_action = action_summary.clone();
     let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, request).await;
     let schema = guardian_output_schema();
     let cancel_token = CancellationToken::new();
-    let review = tokio::select! {
+    enum GuardianReviewOutcome {
+        Completed(anyhow::Result<GuardianAssessment>),
+        TimedOut,
+        Aborted,
+    }
+    let outcome = tokio::select! {
         review = run_guardian_subagent(
             session.clone(),
             turn.clone(),
             prompt_items,
             schema,
             cancel_token.clone(),
-        ) => Some(review),
+        ) => GuardianReviewOutcome::Completed(review),
         _ = tokio::time::sleep(GUARDIAN_REVIEW_TIMEOUT) => {
             // Cancel the delegate token before failing closed so the one-shot
             // subagent tears down its background streams instead of lingering
             // after the caller has already timed out.
             cancel_token.cancel();
-            None
-        }
+            GuardianReviewOutcome::TimedOut
+        },
+        _ = async {
+            if let Some(external_cancel) = external_cancel.as_ref() {
+                external_cancel.cancelled().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => {
+            cancel_token.cancel();
+            GuardianReviewOutcome::Aborted
+        },
     };
 
-    let assessment = match review {
-        Some(Ok(assessment)) => assessment,
-        Some(Err(err)) => GuardianAssessment {
+    let assessment = match outcome {
+        GuardianReviewOutcome::Completed(Ok(assessment)) => assessment,
+        GuardianReviewOutcome::Completed(Err(err)) => GuardianAssessment {
             risk_level: GuardianRiskLevel::High,
             risk_score: 100,
             rationale: format!("Automatic approval review failed: {err}"),
             evidence: vec![],
         },
-        None => GuardianAssessment {
+        GuardianReviewOutcome::TimedOut => GuardianAssessment {
             risk_level: GuardianRiskLevel::High,
             risk_score: 100,
             rationale:
@@ -267,6 +309,23 @@ async fn run_guardian_review(
                     .to_string(),
             evidence: vec![],
         },
+        GuardianReviewOutcome::Aborted => {
+            session
+                .send_event(
+                    turn.as_ref(),
+                    EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+                        id: assessment_id,
+                        turn_id: assessment_turn_id,
+                        status: GuardianAssessmentStatus::Aborted,
+                        risk_score: None,
+                        risk_level: None,
+                        rationale: None,
+                        action: Some(action_summary),
+                    }),
+                )
+                .await;
+            return ReviewDecision::Abort;
+        }
     };
 
     let approved = assessment.risk_score < GUARDIAN_APPROVAL_RISK_THRESHOLD;
@@ -275,13 +334,32 @@ async fn run_guardian_review(
     // guardian decision without needing the full subagent transcript.
     let warning = format!(
         "Automatic approval review {verdict} (risk: {}): {}",
-        assessment.risk_level.as_str(),
+        guardian_risk_level_str(assessment.risk_level),
         assessment.rationale
     );
     session
         .send_event(
             turn.as_ref(),
             EventMsg::Warning(WarningEvent { message: warning }),
+        )
+        .await;
+    let status = if approved {
+        GuardianAssessmentStatus::Approved
+    } else {
+        GuardianAssessmentStatus::Denied
+    };
+    session
+        .send_event(
+            turn.as_ref(),
+            EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+                id: assessment_id,
+                turn_id: assessment_turn_id,
+                status,
+                risk_score: Some(assessment.risk_score),
+                risk_level: Some(assessment.risk_level),
+                rationale: Some(assessment.rationale.clone()),
+                action: Some(terminal_action),
+            }),
         )
         .await;
 
@@ -299,7 +377,31 @@ pub(crate) async fn review_approval_request(
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
 ) -> ReviewDecision {
-    run_guardian_review(Arc::clone(session), Arc::clone(turn), request, retry_reason).await
+    run_guardian_review(
+        Arc::clone(session),
+        Arc::clone(turn),
+        request,
+        retry_reason,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn review_approval_request_with_cancel(
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+    cancel_token: CancellationToken,
+) -> ReviewDecision {
+    run_guardian_review(
+        Arc::clone(session),
+        Arc::clone(turn),
+        request,
+        retry_reason,
+        Some(cancel_token),
+    )
+    .await
 }
 
 /// Builds the guardian user content items from:
@@ -737,6 +839,7 @@ fn truncate_guardian_action_value(value: Value) -> Value {
 pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest) -> Value {
     match action {
         GuardianApprovalRequest::Shell {
+            id: _,
             command,
             cwd,
             sandbox_permissions,
@@ -762,6 +865,7 @@ pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest
             action
         }
         GuardianApprovalRequest::ExecCommand {
+            id: _,
             command,
             cwd,
             sandbox_permissions,
@@ -790,6 +894,7 @@ pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest
         }
         #[cfg(unix)]
         GuardianApprovalRequest::Execve {
+            id: _,
             tool_name,
             program,
             argv,
@@ -811,6 +916,7 @@ pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest
             action
         }
         GuardianApprovalRequest::ApplyPatch {
+            id: _,
             cwd,
             files,
             change_count,
@@ -823,6 +929,8 @@ pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest
             "patch": patch,
         }),
         GuardianApprovalRequest::NetworkAccess {
+            id: _,
+            turn_id: _,
             target,
             host,
             protocol,
@@ -835,6 +943,7 @@ pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest
             "port": port,
         }),
         GuardianApprovalRequest::McpToolCall {
+            id: _,
             server,
             tool_name,
             arguments,
@@ -874,6 +983,93 @@ pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest
             }
             action
         }
+    }
+}
+
+fn guardian_assessment_action_value(action: &GuardianApprovalRequest) -> Value {
+    match action {
+        GuardianApprovalRequest::Shell { command, cwd, .. } => serde_json::json!({
+            "tool": "shell",
+            "command": codex_shell_command::parse_command::shlex_join(command),
+            "cwd": cwd,
+        }),
+        GuardianApprovalRequest::ExecCommand { command, cwd, .. } => serde_json::json!({
+            "tool": "exec_command",
+            "command": codex_shell_command::parse_command::shlex_join(command),
+            "cwd": cwd,
+        }),
+        #[cfg(unix)]
+        GuardianApprovalRequest::Execve {
+            tool_name,
+            program,
+            argv,
+            cwd,
+            ..
+        } => serde_json::json!({
+            "tool": tool_name,
+            "program": program,
+            "argv": argv,
+            "cwd": cwd,
+        }),
+        GuardianApprovalRequest::ApplyPatch {
+            cwd,
+            files,
+            change_count,
+            ..
+        } => serde_json::json!({
+            "tool": "apply_patch",
+            "cwd": cwd,
+            "files": files,
+            "change_count": change_count,
+        }),
+        GuardianApprovalRequest::NetworkAccess {
+            id: _,
+            turn_id: _,
+            target,
+            host,
+            protocol,
+            port,
+        } => serde_json::json!({
+            "tool": "network_access",
+            "target": target,
+            "host": host,
+            "protocol": protocol,
+            "port": port,
+        }),
+        GuardianApprovalRequest::McpToolCall {
+            server, tool_name, ..
+        } => serde_json::json!({
+            "tool": "mcp_tool_call",
+            "server": server,
+            "tool_name": tool_name,
+        }),
+    }
+}
+
+fn guardian_request_id(request: &GuardianApprovalRequest) -> &str {
+    match request {
+        GuardianApprovalRequest::Shell { id, .. }
+        | GuardianApprovalRequest::ExecCommand { id, .. }
+        | GuardianApprovalRequest::ApplyPatch { id, .. }
+        | GuardianApprovalRequest::NetworkAccess { id, .. }
+        | GuardianApprovalRequest::McpToolCall { id, .. } => id,
+        #[cfg(unix)]
+        GuardianApprovalRequest::Execve { id, .. } => id,
+    }
+}
+
+fn guardian_request_turn_id<'a>(
+    request: &'a GuardianApprovalRequest,
+    default_turn_id: &'a str,
+) -> &'a str {
+    match request {
+        GuardianApprovalRequest::NetworkAccess { turn_id, .. } => turn_id,
+        GuardianApprovalRequest::Shell { .. }
+        | GuardianApprovalRequest::ExecCommand { .. }
+        | GuardianApprovalRequest::ApplyPatch { .. }
+        | GuardianApprovalRequest::McpToolCall { .. } => default_turn_id,
+        #[cfg(unix)]
+        GuardianApprovalRequest::Execve { .. } => default_turn_id,
     }
 }
 
@@ -1025,16 +1221,6 @@ fn guardian_output_contract_prompt() -> &'static str {
 fn guardian_policy_prompt() -> String {
     let prompt = include_str!("guardian_prompt.md").trim_end();
     format!("{prompt}\n\n{}\n", guardian_output_contract_prompt())
-}
-
-impl GuardianRiskLevel {
-    fn as_str(self) -> &'static str {
-        match self {
-            GuardianRiskLevel::Low => "low",
-            GuardianRiskLevel::Medium => "medium",
-            GuardianRiskLevel::High => "high",
-        }
-    }
 }
 
 #[cfg(test)]

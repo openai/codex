@@ -12,6 +12,7 @@ mod connection_handling_websocket_unix;
 mod dynamic_tools;
 mod experimental_api;
 mod experimental_feature_list;
+mod fs;
 mod initialize;
 mod mcp_server_elicitation;
 mod model_list;

@@ -51,7 +51,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         vec![],
         vec![
             json!({
-                "type": "conversation.output_audio.delta",
+                "type": "response.output_audio.delta",
                 "delta": "AQID",
                 "sample_rate": 24_000,
                 "channels": 1,
@@ -402,6 +402,10 @@ approval_policy = "never"
 sandbox_mode = "read-only"
 model_provider = "mock_provider"
 experimental_realtime_ws_base_url = "{realtime_server_uri}"
+
+[realtime]
+version = "v2"
+type = "conversational"
 
 [features]
 {realtime_feature_key} = {realtime_enabled}

@@ -56,3 +56,7 @@ common --jobs=30
 common:remote --extra_execution_platforms=//:rbe
 common:remote --remote_executor=grpcs://remote.buildbuddy.io
 common:remote --jobs=800
+# TODO(team): Evaluate if this actually helps, zbarsky is not sure, everything seems bottlenecked on `core` either way.
+# Enable pipelined compilation since we are not bound by local CPU count.
+#common:remote --@rules_rust//rust/settings:pipelined_compilation
+

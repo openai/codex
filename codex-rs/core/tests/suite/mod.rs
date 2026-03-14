@@ -77,6 +77,8 @@ mod exec_policy;
 mod fork_thread;
 mod grep_files;
 mod hierarchical_agents;
+#[cfg(not(target_os = "windows"))]
+mod hooks;
 mod image_rollout;
 mod items;
 mod js_repl;

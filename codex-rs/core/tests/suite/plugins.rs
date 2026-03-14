@@ -26,6 +26,7 @@ use wiremock::MockServer;
 
 const SAMPLE_PLUGIN_CONFIG_NAME: &str = "sample@test";
 const SAMPLE_PLUGIN_DISPLAY_NAME: &str = "sample";
+const SAMPLE_PLUGIN_DESCRIPTION: &str = "inspect sample data";
 
 fn sample_plugin_root(home: &TempDir) -> std::path::PathBuf {
     home.path().join("plugins/cache/test/sample/local")
@@ -36,7 +37,9 @@ fn write_sample_plugin_manifest_and_config(home: &TempDir) -> std::path::PathBuf
     std::fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create plugin manifest dir");
     std::fs::write(
         plugin_root.join(".codex-plugin/plugin.json"),
-        format!(r#"{{"name":"{SAMPLE_PLUGIN_DISPLAY_NAME}"}}"#),
+        format!(
+            r#"{{"name":"{SAMPLE_PLUGIN_DISPLAY_NAME}","description":"{SAMPLE_PLUGIN_DESCRIPTION}"}}"#
+        ),
     )
     .expect("write plugin manifest");
     std::fs::write(
@@ -226,6 +229,14 @@ async fn plugin_skills_append_to_instructions() -> Result<()> {
         "expected enabled plugin name in instructions"
     );
     assert!(
+        instructions_text.contains("`sample`: inspect sample data"),
+        "expected plugin description in instructions"
+    );
+    assert!(
+        instructions_text.contains("skill entries are prefixed with `plugin_name:`"),
+        "expected plugin skill naming guidance"
+    );
+    assert!(
         instructions_text.contains("sample:sample-search: inspect sample data"),
         "expected namespaced plugin skill summary"
     );
@@ -296,7 +307,7 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
     assert!(
         request_tools
             .iter()
-            .any(|name| name == "mcp__codex_apps__google-calendar-create-event"),
+            .any(|name| name == "mcp__codex_apps__google_calendar_create_event"),
         "expected plugin app tools to become visible for this turn: {request_tools:?}"
     );
     let echo_description = tool_description(&request_body, "mcp__sample__echo")
@@ -307,7 +318,7 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
     );
     let calendar_description = tool_description(
         &request_body,
-        "mcp__codex_apps__google-calendar-create-event",
+        "mcp__codex_apps__google_calendar_create_event",
     )
     .expect("plugin app tool description should be present");
     assert!(

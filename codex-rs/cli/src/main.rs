@@ -976,7 +976,12 @@ async fn run_interactive_tui(
         }
     }
 
-    codex_tui::run_main(interactive, arg0_paths).await
+    codex_tui::run_main(
+        interactive,
+        arg0_paths,
+        codex_core::config_loader::LoaderOverrides::default(),
+    )
+    .await
 }
 
 fn confirm(prompt: &str) -> std::io::Result<bool> {

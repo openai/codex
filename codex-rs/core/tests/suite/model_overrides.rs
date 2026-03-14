@@ -28,6 +28,7 @@ async fn override_turn_context_does_not_persist_when_config_exists() {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: Some("o3".to_string()),
@@ -65,6 +66,7 @@ async fn override_turn_context_does_not_create_config_file() {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: Some("o3".to_string()),

@@ -1,3 +1,4 @@
+use crate::desktop::LaunchDesktop;
 use crate::logging;
 use crate::winutil::format_last_error;
 use crate::winutil::quote_windows_arg;
@@ -21,6 +22,12 @@ use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
 use windows_sys::Win32::System::Threading::STARTUPINFOW;
+
+pub struct CreatedProcess {
+    pub process_info: PROCESS_INFORMATION,
+    pub startup_info: STARTUPINFOW,
+    _desktop: LaunchDesktop,
+}
 
 pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
     let mut items: Vec<(String, String)> =
@@ -68,7 +75,8 @@ pub unsafe fn create_process_as_user(
     env_map: &HashMap<String, String>,
     logs_base_dir: Option<&Path>,
     stdio: Option<(HANDLE, HANDLE, HANDLE)>,
-) -> Result<(PROCESS_INFORMATION, STARTUPINFOW)> {
+    use_private_desktop: bool,
+) -> Result<CreatedProcess> {
     let cmdline_str = argv
         .iter()
         .map(|a| quote_windows_arg(a))
@@ -80,9 +88,9 @@ pub unsafe fn create_process_as_user(
     si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
     // Some processes (e.g., PowerShell) can fail with STATUS_DLL_INIT_FAILED
     // if lpDesktop is not set when launching with a restricted token.
-    // Point explicitly at the interactive desktop.
-    let desktop = to_wide("Winsta0\\Default");
-    si.lpDesktop = desktop.as_ptr() as *mut u16;
+    // Point explicitly at the interactive desktop or a private desktop.
+    let desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
+    si.lpDesktop = desktop.startup_info_desktop();
     let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
     // Ensure handles are inheritable when custom stdio is supplied.
     let inherit_handles = match stdio {
@@ -107,6 +115,10 @@ pub unsafe fn create_process_as_user(
         }
     };
 
+    let creation_flags = CREATE_UNICODE_ENVIRONMENT;
+    let cwd_wide = to_wide(cwd);
+    let env_block_len = env_block.len();
+
     let ok = CreateProcessAsUserW(
         h_token,
         std::ptr::null(),
@@ -114,25 +126,30 @@ pub unsafe fn create_process_as_user(
         std::ptr::null_mut(),
         std::ptr::null_mut(),
         inherit_handles as i32,
-        CREATE_UNICODE_ENVIRONMENT,
+        creation_flags,
         env_block.as_ptr() as *mut c_void,
-        to_wide(cwd).as_ptr(),
+        cwd_wide.as_ptr(),
         &si,
         &mut pi,
     );
     if ok == 0 {
         let err = GetLastError() as i32;
         let msg = format!(
-            "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={}",
+            "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
             err,
             format_last_error(err),
             cwd.display(),
             cmdline_str,
-            env_block.len(),
+            env_block_len,
             si.dwFlags,
+            creation_flags,
         );
         logging::debug_log(&msg, logs_base_dir);
         return Err(anyhow!("CreateProcessAsUserW failed: {}", err));
     }
-    Ok((pi, si))
+    Ok(CreatedProcess {
+        process_info: pi,
+        startup_info: si,
+        _desktop: desktop,
+    })
 }

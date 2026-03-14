@@ -310,6 +310,13 @@ impl ExecCommandToolOutput {
     fn response_text(&self) -> String {
         let mut sections = Vec::new();
 
+        if let Some(command) = &self.session_command {
+            sections.push(format!(
+                "Command: {}",
+                codex_shell_command::parse_command::shlex_join(command)
+            ));
+        }
+
         if !self.chunk_id.is_empty() {
             sections.push(format!("Chunk ID: {}", self.chunk_id));
         }

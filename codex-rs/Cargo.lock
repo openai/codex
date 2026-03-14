@@ -1462,6 +1462,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
+ "walkdir",
  "wiremock",
 ]
 
@@ -2495,6 +2496,7 @@ dependencies = [
  "chrono",
  "clap",
  "codex-ansi-escape",
+ "codex-app-server-client",
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-backend-client",

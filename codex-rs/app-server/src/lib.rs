@@ -65,6 +65,7 @@ mod dynamic_tools;
 mod error_code;
 mod external_agent_config_api;
 mod filters;
+mod fs_api;
 mod fuzzy_file_search;
 pub mod in_process;
 mod message_processor;
@@ -607,6 +608,8 @@ pub async fn run_main_with_transport(
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
+            auth_manager: None,
+            thread_manager: None,
             feedback: feedback.clone(),
             log_db,
             config_warnings,

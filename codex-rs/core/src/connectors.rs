@@ -28,6 +28,7 @@ use crate::SandboxState;
 use crate::config::Config;
 use crate::config::types::AppToolApproval;
 use crate::config::types::AppsConfigToml;
+use crate::config_loader::AppsRequirementsToml;
 use crate::default_client::create_client;
 use crate::default_client::is_first_party_chat_originator;
 use crate::default_client::originator;
@@ -592,12 +593,28 @@ pub fn merge_plugin_apps_with_accessible(
 }
 
 pub fn with_app_enabled_state(mut connectors: Vec<AppInfo>, config: &Config) -> Vec<AppInfo> {
-    let apps_config = read_apps_config(config);
-    if let Some(apps_config) = apps_config.as_ref() {
-        for connector in &mut connectors {
+    let user_apps_config = read_user_apps_config(config);
+    let requirements_apps_config = config.config_layer_stack.requirements_toml().apps.as_ref();
+    if user_apps_config.is_none() && requirements_apps_config.is_none() {
+        return connectors;
+    }
+
+    for connector in &mut connectors {
+        if let Some(apps_config) = user_apps_config.as_ref()
+            && (apps_config.default.is_some()
+                || apps_config.apps.contains_key(connector.id.as_str()))
+        {
             connector.is_enabled = app_is_enabled(apps_config, Some(connector.id.as_str()));
         }
+
+        if requirements_apps_config
+            .and_then(|apps| apps.apps.get(connector.id.as_str()))
+            .is_some_and(|app| app.enabled == Some(false))
+        {
+            connector.is_enabled = false;
+        }
     }
+
     connectors
 }
 
@@ -691,9 +708,45 @@ fn is_connector_id_allowed_for_originator(connector_id: &str, originator_value: 
 }
 
 fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {
-    let effective_config = config.config_layer_stack.effective_config();
-    let apps_config = effective_config.as_table()?.get("apps")?.clone();
-    AppsConfigToml::deserialize(apps_config).ok()
+    let apps_config = read_user_apps_config(config);
+    let had_apps_config = apps_config.is_some();
+    let mut apps_config = apps_config.unwrap_or_default();
+    apply_requirements_apps_constraints(
+        &mut apps_config,
+        config.config_layer_stack.requirements_toml().apps.as_ref(),
+    );
+    if had_apps_config || apps_config.default.is_some() || !apps_config.apps.is_empty() {
+        Some(apps_config)
+    } else {
+        None
+    }
+}
+
+fn read_user_apps_config(config: &Config) -> Option<AppsConfigToml> {
+    config
+        .config_layer_stack
+        .effective_config()
+        .as_table()
+        .and_then(|table| table.get("apps"))
+        .cloned()
+        .and_then(|value| AppsConfigToml::deserialize(value).ok())
+}
+
+fn apply_requirements_apps_constraints(
+    apps_config: &mut AppsConfigToml,
+    requirements_apps_config: Option<&AppsRequirementsToml>,
+) {
+    let Some(requirements_apps_config) = requirements_apps_config else {
+        return;
+    };
+
+    for (app_id, requirement) in &requirements_apps_config.apps {
+        if requirement.enabled != Some(false) {
+            continue;
+        }
+        let app = apps_config.apps.entry(app_id.clone()).or_default();
+        app.enabled = false;
+    }
 }
 
 fn app_is_enabled(apps_config: &AppsConfigToml, connector_id: Option<&str>) -> bool {
