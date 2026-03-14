@@ -303,13 +303,13 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
         }
     }
 
+    let path_element = path.display();
     #[cfg(unix)]
     const PATH_SEPARATOR: &str = ":";
 
     #[cfg(windows)]
     const PATH_SEPARATOR: &str = ";";
 
-    let path_element = path.display();
     let updated_path_env_var = match std::env::var("PATH") {
         Ok(existing_path) => {
             format!("{path_element}{PATH_SEPARATOR}{existing_path}")

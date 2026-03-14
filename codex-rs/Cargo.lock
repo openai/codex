@@ -1841,6 +1841,7 @@ dependencies = [
  "codex-file-search",
  "codex-git",
  "codex-hooks",
+ "codex-install-context",
  "codex-keyring-store",
  "codex-network-proxy",
  "codex-otel",
@@ -2091,6 +2092,16 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "codex-install-context"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "serde",
+ "tempfile",
+ "toml 0.9.11+spec-1.1.0",
 ]
 
 [[package]]
@@ -2507,6 +2518,7 @@ dependencies = [
  "codex-core",
  "codex-feedback",
  "codex-file-search",
+ "codex-install-context",
  "codex-login",
  "codex-otel",
  "codex-protocol",
