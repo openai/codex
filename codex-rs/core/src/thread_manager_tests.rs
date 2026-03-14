@@ -10,6 +10,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use core_test_support::responses::mount_models_once;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 use std::time::Duration;
 use tempfile::tempdir;
 use wiremock::MockServer;
@@ -179,6 +180,8 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
         &config,
         auth_manager,
         SessionSource::Exec,
+        None,
+        HashMap::new(),
         CollaborationModesConfig::default(),
     );
 
