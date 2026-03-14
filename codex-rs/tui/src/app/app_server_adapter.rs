@@ -1,14 +1,16 @@
 /*
-This module holds the temporary adapter layer between the TUI and the app
-server during the hybrid migration period.
+Adapter layer between the TUI and the in-process app server.
 
-For now, the TUI still owns its existing direct-core behavior, but startup
-allocates a local in-process app server and drains its event stream. Keeping
-the app-server-specific wiring here keeps that transitional logic out of the
-main `app.rs` orchestration path.
+Fresh sessions are now started via the app-server `thread/start` RPC, and their
+runtime events arrive as `LegacyNotification`s on the app-server event stream.
+This module converts those notifications into `AppEvent::ThreadEvent` so they
+enter the same pipeline as events from direct-core threads.
 
-As more TUI flows move onto the app-server surface directly, this adapter
-should shrink and eventually disappear.
+Resume/fork sessions still use direct `CodexThread` access with a per-thread
+listener task; those events bypass this module entirely.
+
+As more TUI flows migrate to the app-server surface, the legacy-notification
+bridge should shrink and eventually be replaced by typed server notifications.
 */
 
 use crate::app_event::AppEvent;
@@ -67,6 +69,12 @@ impl App {
         }
     }
 
+    /// Extract a `(ThreadId, Event)` pair from a legacy JSON-RPC notification.
+    ///
+    /// Legacy notifications embed the thread id as a `"conversationId"` string
+    /// field alongside the serialized `Event` body. Returns `None` if the
+    /// notification is missing the field, contains an unparseable thread id,
+    /// or fails to deserialize into an `Event`.
     fn legacy_notification_to_thread_event(
         notification: codex_app_server_protocol::JSONRPCNotification,
     ) -> Option<(ThreadId, Event)> {
