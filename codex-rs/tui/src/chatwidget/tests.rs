@@ -9201,6 +9201,82 @@ async fn approvals_legacy_inline_args_start_windows_sandbox_setup() {
     );
 }
 
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn permissions_default_selection_queues_windows_sandbox_enable_draft() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.notices.hide_full_access_warning = Some(true);
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::Never)
+        .expect("set approval policy");
+    chat.config
+        .permissions
+        .sandbox_policy
+        .set(SandboxPolicy::new_read_only_policy())
+        .expect("set sandbox policy");
+    chat.set_windows_sandbox_mode(None);
+
+    let sandbox_dir = chat.config.codex_home.join(".sandbox");
+    std::fs::create_dir_all(&sandbox_dir).expect("create sandbox dir");
+    std::fs::write(
+        sandbox_dir.join("setup_marker.json"),
+        serde_json::to_string(&serde_json::json!({
+            "version": codex_windows_sandbox::SETUP_VERSION,
+            "offline_username": "CodexSandboxOffline",
+            "online_username": "CodexSandboxOnline",
+        }))
+        .expect("serialize setup marker"),
+    )
+    .expect("write setup marker");
+
+    let sandbox_secrets_dir = chat.config.codex_home.join(".sandbox-secrets");
+    std::fs::create_dir_all(&sandbox_secrets_dir).expect("create sandbox secrets dir");
+    std::fs::write(
+        sandbox_secrets_dir.join("sandbox_users.json"),
+        serde_json::to_string(&serde_json::json!({
+            "version": codex_windows_sandbox::SETUP_VERSION,
+            "offline": {
+                "username": "CodexSandboxOffline",
+                "password": "ignored",
+            },
+            "online": {
+                "username": "CodexSandboxOnline",
+                "password": "ignored",
+            },
+        }))
+        .expect("serialize sandbox users"),
+    )
+    .expect("write sandbox users");
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| {
+            matches!(
+                event,
+                AppEvent::HandleSlashCommandDraft(draft)
+                    if *draft
+                        == ChatWidget::approval_preset_draft(
+                            "auto",
+                            &["--enable-windows-sandbox=elevated"],
+                        )
+            )
+        }),
+        "expected selecting Default to emit a serialized approvals draft: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AppEvent::EnableWindowsSandboxForAgentMode { .. })),
+        "expected selecting Default to defer sandbox enable until slash replay: {events:?}"
+    );
+}
+
 #[tokio::test]
 async fn permissions_selection_history_snapshot_after_mode_switch() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;

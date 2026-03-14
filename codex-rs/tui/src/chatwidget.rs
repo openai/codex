@@ -8464,10 +8464,12 @@ impl ChatWidget {
                             )
                         {
                             vec![Box::new(move |tx| {
-                                tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
-                                    preset: preset_clone.clone(),
-                                    mode: WindowsSandboxEnableMode::Elevated,
-                                });
+                                tx.send(AppEvent::HandleSlashCommandDraft(
+                                    Self::approval_preset_draft(
+                                        preset_clone.id,
+                                        &["--enable-windows-sandbox=elevated"],
+                                    ),
+                                ));
                             })]
                         } else {
                             vec![Box::new(move |tx| {
