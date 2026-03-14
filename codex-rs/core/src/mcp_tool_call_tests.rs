@@ -1058,6 +1058,7 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
         connector_description: Some("Manage events".to_string()),
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
+        codex_apps_meta: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
