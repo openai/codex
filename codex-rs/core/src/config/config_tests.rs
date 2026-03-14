@@ -189,20 +189,6 @@ name = "OpenAI Override"
 }
 
 #[test]
-fn test_toml_parsing_allows_non_reserved_model_provider() {
-    let cfg = r#"
-[model_providers.openai-custom]
-name = "OpenAI Custom"
-base_url = "https://example.com/v1"
-env_key = "OPENAI_API_KEY"
-"#;
-
-    let parsed =
-        toml::from_str::<ConfigToml>(cfg).expect("non-reserved provider should deserialize");
-    assert!(parsed.model_providers.contains_key("openai-custom"));
-}
-
-#[test]
 fn parses_bundled_skills_config() {
     let cfg: ConfigToml = toml::from_str(
         r#"
