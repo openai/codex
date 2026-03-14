@@ -11,7 +11,10 @@ use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::model_info;
+use crate::shell::Shell;
+use crate::shell::ShellType;
 use crate::shell::default_user_shell;
+use crate::shell::empty_shell_snapshot_receiver;
 use crate::tools::format_exec_output_str;
 
 use codex_protocol::ThreadId;
@@ -3758,7 +3761,21 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
 
 #[tokio::test]
 async fn run_user_shell_command_does_not_set_reference_context_item() {
-    let (session, _turn_context, rx) = make_session_and_context_with_rx().await;
+    let (mut session, _turn_context, rx) = make_session_and_context_with_rx().await;
+    if cfg!(windows) {
+        // This test only cares that standalone shell commands do not mutate the
+        // prior reference context. Use cmd.exe on Windows so the assertion does
+        // not depend on PowerShell startup behavior.
+        let windows_shell = Arc::new(Shell {
+            shell_type: ShellType::Cmd,
+            shell_path: PathBuf::from("cmd.exe"),
+            shell_snapshot: empty_shell_snapshot_receiver(),
+        });
+        Arc::get_mut(&mut session)
+            .expect("session should be uniquely owned for test setup")
+            .services
+            .user_shell = windows_shell;
+    }
     {
         let mut state = session.state.lock().await;
         state.set_reference_context_item(None);

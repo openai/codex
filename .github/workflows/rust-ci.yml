@@ -598,9 +598,66 @@ jobs:
 
       - name: tests
         id: test
-        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
+        shell: bash
+        run: |
+          set -euo pipefail
+          log_file="$(mktemp)"
+          trap 'rm -f "$log_file"' EXIT
+
+          set +e
+          cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings 2>&1 | tee "$log_file"
+          status=${PIPESTATUS[0]}
+          set -e
+
+          if [[ $status -ne 0 ]]; then
+            summary_lines="$(grep -E '^(FAIL|LEAK)([[:space:]]|$)' "$log_file" || true)"
+            if [[ -n "$summary_lines" ]]; then
+              {
+                echo "### nextest failure summary"
+                echo '```text'
+                printf '%s\n' "$summary_lines"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+
+              while IFS= read -r line; do
+                echo "::error::$line"
+              done <<< "$summary_lines"
+            else
+              {
+                echo "### nextest failure tail"
+                echo '```text'
+                tail -n 200 "$log_file"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::nextest failed without a parsable FAIL/LEAK line; the last 80 log lines were emitted as annotations"
+
+              mapfile -t tail_lines < <(tail -n 80 "$log_file")
+              chunk=""
+              chunk_index=1
+              for i in "${!tail_lines[@]}"; do
+                line=${tail_lines[$i]//%/%25}
+                line=${line//$'\r'/%0D}
+                line=${line//$'\n'/%0A}
+                if [[ -n "$chunk" ]]; then
+                  chunk="${chunk}%0A${line}"
+                else
+                  chunk="$line"
+                fi
+
+                if (( (i + 1) % 10 == 0 || i + 1 == ${#tail_lines[@]} )); then
+                  echo "::error title=nextest failure tail ${chunk_index}::$chunk"
+                  chunk=""
+                  ((chunk_index++))
+                fi
+              done
+            fi
+          fi
+
+          exit $status
         env:
           RUST_BACKTRACE: 1
+          NEXTEST_FAILURE_OUTPUT: final
+          NEXTEST_FINAL_STATUS_LEVEL: fail
           NEXTEST_STATUS_LEVEL: leak
 
       - name: Upload Cargo timings (nextest)

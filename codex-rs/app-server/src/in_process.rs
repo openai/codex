@@ -92,7 +92,24 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Default bounded channel capacity for in-process runtime queues.
 pub const DEFAULT_IN_PROCESS_CHANNEL_CAPACITY: usize = CHANNEL_CAPACITY;
 
-type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorError>;
+/// JSON-RPC application response returned by in-process client requests.
+pub type InProcessRequestResponse = std::result::Result<Result, JSONRPCErrorError>;
+
+/// Handle for a request that has been enqueued but whose response has not yet been awaited.
+pub struct PendingInProcessRequest {
+    response_rx: oneshot::Receiver<InProcessRequestResponse>,
+}
+
+impl PendingInProcessRequest {
+    pub async fn recv(self) -> IoResult<InProcessRequestResponse> {
+        self.response_rx.await.map_err(|err| {
+            IoError::new(
+                ErrorKind::BrokenPipe,
+                format!("in-process request response channel closed: {err}"),
+            )
+        })
+    }
+}
 
 fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
     matches!(notification, ServerNotification::TurnCompleted(_))
@@ -171,7 +188,7 @@ pub enum InProcessServerEvent {
 enum InProcessClientMessage {
     Request {
         request: Box<ClientRequest>,
-        response_tx: oneshot::Sender<PendingClientRequestResponse>,
+        response_tx: oneshot::Sender<InProcessRequestResponse>,
     },
     Notification {
         notification: ClientNotification,
@@ -200,18 +217,17 @@ pub struct InProcessClientSender {
 }
 
 impl InProcessClientSender {
-    pub async fn request(&self, request: ClientRequest) -> IoResult<PendingClientRequestResponse> {
+    pub fn start_request(&self, request: ClientRequest) -> IoResult<PendingInProcessRequest> {
         let (response_tx, response_rx) = oneshot::channel();
         self.try_send_client_message(InProcessClientMessage::Request {
             request: Box::new(request),
             response_tx,
         })?;
-        response_rx.await.map_err(|err| {
-            IoError::new(
-                ErrorKind::BrokenPipe,
-                format!("in-process request response channel closed: {err}"),
-            )
-        })
+        Ok(PendingInProcessRequest { response_rx })
+    }
+
+    pub async fn request(&self, request: ClientRequest) -> IoResult<InProcessRequestResponse> {
+        self.start_request(request)?.recv().await
     }
 
     pub fn notify(&self, notification: ClientNotification) -> IoResult<()> {
@@ -263,6 +279,11 @@ pub struct InProcessClientHandle {
 }
 
 impl InProcessClientHandle {
+    /// Enqueues a typed client request and returns a handle for awaiting the response later.
+    pub fn start_request(&self, request: ClientRequest) -> IoResult<PendingInProcessRequest> {
+        self.client.start_request(request)
+    }
+
     /// Sends a typed client request into the in-process runtime.
     ///
     /// The returned value is a transport-level `IoResult` containing either a
@@ -270,7 +291,7 @@ impl InProcessClientHandle {
     /// request IDs unique among concurrent requests; reusing an in-flight ID
     /// produces an `INVALID_REQUEST` response and can make request routing
     /// ambiguous in the caller.
-    pub async fn request(&self, request: ClientRequest) -> IoResult<PendingClientRequestResponse> {
+    pub async fn request(&self, request: ClientRequest) -> IoResult<InProcessRequestResponse> {
         self.client.request(request).await
     }
 
@@ -489,7 +510,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
             processor.connection_closed(IN_PROCESS_CONNECTION_ID).await;
         });
         let mut pending_request_responses =
-            HashMap::<RequestId, oneshot::Sender<PendingClientRequestResponse>>::new();
+            HashMap::<RequestId, oneshot::Sender<InProcessRequestResponse>>::new();
         let mut shutdown_ack = None;
 
         loop {
