@@ -4579,3 +4579,21 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
 
     pretty_assertions::assert_eq!(output, expected);
 }
+
+// Tests for turn-end guard with running unified_exec processes
+
+#[tokio::test]
+async fn has_running_unified_exec_processes_returns_false_when_no_processes() {
+    let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+
+    let has_running = session
+        .has_running_unified_exec_processes(&turn_context)
+        .await;
+    assert!(
+        !has_running,
+        "should return false when no processes are running"
+    );
+}
+

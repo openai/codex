@@ -109,7 +109,7 @@ pub(crate) struct WriteStdinRequest<'a> {
 
 #[derive(Default)]
 pub(crate) struct ProcessStore {
-    processes: HashMap<i32, ProcessEntry>,
+    pub(crate) processes: HashMap<i32, ProcessEntry>,
     reserved_process_ids: HashSet<i32>,
 }
 
@@ -121,7 +121,7 @@ impl ProcessStore {
 }
 
 pub(crate) struct UnifiedExecProcessManager {
-    process_store: Mutex<ProcessStore>,
+    pub(crate) process_store: Mutex<ProcessStore>,
     max_write_stdin_yield_time_ms: u64,
 }
 
@@ -141,9 +141,9 @@ impl Default for UnifiedExecProcessManager {
     }
 }
 
-struct ProcessEntry {
-    process: Arc<UnifiedExecProcess>,
-    call_id: String,
+pub(crate) struct ProcessEntry {
+    pub(crate) process: Arc<UnifiedExecProcess>,
+    pub(crate) call_id: String,
     process_id: i32,
     command: Vec<String>,
     tty: bool,

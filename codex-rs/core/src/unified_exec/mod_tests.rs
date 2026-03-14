@@ -33,8 +33,10 @@ async fn exec_command(
     cmd: &str,
     yield_time_ms: u64,
 ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
+    // call_id must start with turn.sub_id for has_running_unified_exec_processes to work
+    let call_id = format!("{}-call", turn.sub_id);
     let context =
-        UnifiedExecContext::new(Arc::clone(session), Arc::clone(turn), "call".to_string());
+        UnifiedExecContext::new(Arc::clone(session), Arc::clone(turn), call_id);
     let process_id = session
         .services
         .unified_exec_manager
@@ -337,6 +339,78 @@ async fn reusing_completed_process_returns_unknown_process() -> anyhow::Result<(
             .await
             .processes
             .is_empty()
+    );
+
+    Ok(())
+}
+
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn has_running_unified_exec_processes_detects_running_process() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let (session, turn) = test_session_and_turn().await;
+
+    // Before starting any process, should return false
+    let has_running_before = session
+        .has_running_unified_exec_processes(&turn)
+        .await;
+    assert!(
+        !has_running_before,
+        "should return false before starting any process"
+    );
+
+    // Start a long-running process (bash -i stays open)
+    let open_shell = exec_command(&session, &turn, "bash -i", 2_500).await?;
+    let process_id = open_shell.process_id.expect("expected process_id for long-running command");
+
+    // Now should detect the running process
+    let has_running_during = session
+        .has_running_unified_exec_processes(&turn)
+        .await;
+    assert!(
+        has_running_during,
+        "should return true when a process started in this turn is still running"
+    );
+
+    // Exit the shell
+    write_stdin(&session, process_id, "exit\n", 2_500).await?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // After the process exits, should return false
+    let has_running_after = session
+        .has_running_unified_exec_processes(&turn)
+        .await;
+    assert!(
+        !has_running_after,
+        "should return false after the process exits"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn has_running_unified_exec_processes_ignores_completed_commands() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let (session, turn) = test_session_and_turn().await;
+
+    // Run a quick command that completes immediately
+    let result = exec_command(&session, &turn, "echo done", 2_500).await?;
+    
+    // Quick commands should not leave a process_id
+    assert!(
+        result.process_id.is_none(),
+        "completed command should not report a process_id"
+    );
+
+    // Should not detect any running processes
+    let has_running = session
+        .has_running_unified_exec_processes(&turn)
+        .await;
+    assert!(
+        !has_running,
+        "should return false for completed commands"
     );
 
     Ok(())

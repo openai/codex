@@ -148,7 +148,7 @@ impl UnifiedExecProcess {
         Arc::clone(&self.output_drained)
     }
 
-    pub(super) fn has_exited(&self) -> bool {
+    pub(crate) fn has_exited(&self) -> bool {
         self.process_handle.has_exited()
     }
 

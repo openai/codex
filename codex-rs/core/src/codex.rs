@@ -3892,6 +3892,19 @@ impl Session {
         }
     }
 
+    /// Check if there are running unified_exec processes that were started in the current turn.
+    /// This is used to prevent the turn from ending while background processes are still running.
+    pub async fn has_running_unified_exec_processes(&self, turn_context: &TurnContext) -> bool {
+        let store = self.services.unified_exec_manager.process_store.lock().await;
+        for entry in store.processes.values() {
+            // Check if a process was started during this turn (call_id starts with turn's sub_id)
+            if entry.call_id.starts_with(&turn_context.sub_id) && !entry.process.has_exited() {
+                return true;
+            }
+        }
+        false
+    }
+
     pub async fn list_resources(
         &self,
         server: &str,
@@ -7277,6 +7290,22 @@ async fn try_run_sampling_request(
                 should_emit_turn_diff = true;
 
                 needs_follow_up |= sess.has_pending_input().await;
+
+                // Check for running unified_exec processes started in this turn.
+                // If there are running processes, inject a warning and force follow-up
+                // to prevent the turn from ending while background processes are still running.
+                if !needs_follow_up && sess.has_running_unified_exec_processes(&turn_context).await
+                {
+                    sess.record_model_warning(
+                        "A background terminal started in this turn is still running. \
+                        If you intend to keep waiting for it, call write_stdin on the existing \
+                        process_id instead of ending the turn. If you are intentionally done \
+                        waiting, explicitly say that you are detaching from the background process.",
+                        &turn_context,
+                    )
+                    .await;
+                    needs_follow_up = true;
+                }
 
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
