@@ -75,6 +75,7 @@ use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_sdk::trace::SdkTracerProvider;
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -2125,6 +2126,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         config.codex_home.clone(),
         auth_manager.clone(),
         None,
+        HashMap::new(),
         CollaborationModesConfig::default(),
     ));
     let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
@@ -2215,6 +2217,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         config.codex_home.clone(),
         auth_manager.clone(),
         None,
+        HashMap::new(),
         CollaborationModesConfig::default(),
     ));
     let agent_control = AgentControl::default();
@@ -2892,6 +2895,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         config.codex_home.clone(),
         auth_manager.clone(),
         None,
+        HashMap::new(),
         CollaborationModesConfig::default(),
     ));
     let agent_control = AgentControl::default();

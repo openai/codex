@@ -104,4 +104,20 @@ developer message Codex inserts when realtime becomes active. It only affects
 the realtime start message in prompt history and does not change websocket
 backend prompt settings or the realtime end/inactive message.
 
+## Custom model aliases
+
+You can add aliases to the model picker via `custom_models` in `~/.codex/config.toml`.
+Each entry maps a user-facing alias to a provider-facing model slug and can override context settings:
+
+```toml
+[[custom_models]]
+name = "gpt-5.4 1m"
+model = "gpt-5.4"
+model_context_window = 1000000
+model_auto_compact_token_limit = 900000
+```
+
+When selected, Codex sends `model = "gpt-5.4"` to the backend while using your
+alias-specific context overrides for that session.
+
 Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).
