@@ -27,18 +27,41 @@ fn write_hooks_file(home: &Path, contents: &str) {
     fs::write(home.join("hooks.json"), contents).expect("write hooks.json");
 }
 
+fn write_json_hook_script(home: &Path, file_name: &str, stdout_json: &str) -> String {
+    let script_path = home.join(file_name);
+    let script = format!(
+        "#!/bin/sh\nprintf '%s' {}\n",
+        single_quote_for_shell(stdout_json)
+    );
+    fs::write(&script_path, script).expect("write hook script");
+    format!(
+        "sh {}",
+        single_quote_for_shell(&script_path.display().to_string())
+    )
+}
+
+fn single_quote_for_shell(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_prompt_submit_hook_injects_context_before_model_request() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let hook_context = "Follow the team checklist.";
-    let hook_command = serde_json::to_string(&format!(
-        "printf '%s' '{{\"hookSpecificOutput\":{{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"{hook_context}\"}}}}'"
-    ))
-    .expect("serialize hook command");
-    let hook_json = format!(
-        r#"{{
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |home| {
+            let hook_command = serde_json::to_string(&write_json_hook_script(
+                home,
+                "user-prompt-submit-hook.sh",
+                &format!(
+                    "{{\"hookSpecificOutput\":{{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"{hook_context}\"}}}}"
+                ),
+            ))
+            .expect("serialize hook command");
+            let hook_json = format!(
+                r#"{{
   "hooks": {{
     "UserPromptSubmit": [
       {{
@@ -53,9 +76,9 @@ async fn user_prompt_submit_hook_injects_context_before_model_request() -> Resul
     ]
   }}
 }}"#
-    );
-    let mut builder = test_codex()
-        .with_pre_build_hook(move |home| write_hooks_file(home, &hook_json))
+            );
+            write_hooks_file(home, &hook_json);
+        })
         .with_config(|config| {
             config
                 .features
@@ -145,16 +168,26 @@ async fn session_start_runs_before_user_prompt_submit_on_first_turn() -> Result<
     let server = start_mock_server().await;
     let session_context = "Warm the observatory.";
     let user_prompt_context = "Check the prompt parchment.";
-    let session_start_command = serde_json::to_string(&format!(
-        "printf '%s' '{{\"hookSpecificOutput\":{{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"{session_context}\"}}}}'"
-    ))
-    .expect("serialize session start hook command");
-    let user_prompt_submit_command = serde_json::to_string(&format!(
-        "printf '%s' '{{\"hookSpecificOutput\":{{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"{user_prompt_context}\"}}}}'"
-    ))
-    .expect("serialize user prompt submit hook command");
-    let hook_json = format!(
-        r#"{{
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |home| {
+            let session_start_command = serde_json::to_string(&write_json_hook_script(
+                home,
+                "session-start-hook.sh",
+                &format!(
+                    "{{\"hookSpecificOutput\":{{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"{session_context}\"}}}}"
+                ),
+            ))
+            .expect("serialize session start hook command");
+            let user_prompt_submit_command = serde_json::to_string(&write_json_hook_script(
+                home,
+                "user-prompt-submit-hook.sh",
+                &format!(
+                    "{{\"hookSpecificOutput\":{{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"{user_prompt_context}\"}}}}"
+                ),
+            ))
+            .expect("serialize user prompt submit hook command");
+            let hook_json = format!(
+                r#"{{
   "hooks": {{
     "SessionStart": [
       {{
@@ -181,9 +214,9 @@ async fn session_start_runs_before_user_prompt_submit_on_first_turn() -> Result<
     ]
   }}
 }}"#
-    );
-    let mut builder = test_codex()
-        .with_pre_build_hook(move |home| write_hooks_file(home, &hook_json))
+            );
+            write_hooks_file(home, &hook_json);
+        })
         .with_config(|config| {
             config
                 .features
