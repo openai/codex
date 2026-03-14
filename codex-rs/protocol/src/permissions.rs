@@ -1071,6 +1071,7 @@ fn resolve_gitdir_from_file(dot_git: &AbsolutePathBuf) -> Option<AbsolutePathBuf
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    #[cfg(unix)]
     use std::fs;
     use std::path::Path;
     use tempfile::TempDir;
