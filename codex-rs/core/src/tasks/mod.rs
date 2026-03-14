@@ -40,7 +40,6 @@ use codex_otel::metrics::names::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::metrics::names::TURN_TOOL_CALL_METRIC;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
@@ -239,7 +238,7 @@ impl Session {
             .cancel_git_enrichment_task();
 
         let mut active = self.active_turn.lock().await;
-        let mut pending_input = Vec::<ResponseInputItem>::new();
+        let mut pending_input = Vec::new();
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
         let mut turn_tool_calls = 0_u64;
@@ -247,7 +246,7 @@ impl Session {
             && at.remove_task(&turn_context.sub_id)
         {
             let mut ts = at.turn_state.lock().await;
-            pending_input = ts.take_pending_input();
+            pending_input = ts.take_pending_input_with_metadata();
             turn_tool_calls = ts.tool_calls;
             token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
             should_clear_active_turn = true;
@@ -257,11 +256,11 @@ impl Session {
         }
         drop(active);
         if !pending_input.is_empty() {
-            let pending_response_items = pending_input
+            for (pending_input, user_message_type) in pending_input
                 .into_iter()
-                .map(ResponseItem::from)
-                .collect::<Vec<_>>();
-            for response_item in pending_response_items {
+                .map(|item| (item.input, item.user_message_type))
+            {
+                let response_item = ResponseItem::from(pending_input);
                 if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
                     // Keep leftover user input on the same persistence + lifecycle path as the
                     // normal pre-sampling drain. This helper records the response item once, then
@@ -270,6 +269,7 @@ impl Session {
                         turn_context.as_ref(),
                         &user_message.content,
                         response_item,
+                        user_message_type,
                     )
                     .await;
                 } else {

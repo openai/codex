@@ -83,7 +83,12 @@ fn parse_agent_message(
         }
     }
     let id = id.cloned().unwrap_or_else(|| Uuid::new_v4().to_string());
-    AgentMessageItem { id, content, phase }
+    AgentMessageItem {
+        id,
+        content,
+        phase,
+        metadata: None,
+    }
 }
 
 pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
@@ -129,6 +134,7 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
                 id: id.clone(),
                 summary_text,
                 raw_content,
+                metadata: None,
             }))
         }
         ResponseItem::WebSearchCall { id, action, .. } => {
@@ -140,6 +146,7 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
                 id: id.clone().unwrap_or_default(),
                 query,
                 action,
+                metadata: None,
             }))
         }
         ResponseItem::ImageGenerationCall {
@@ -154,6 +161,7 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
                 revised_prompt: revised_prompt.clone(),
                 result: result.clone(),
                 saved_path: None,
+                metadata: None,
             },
         )),
         _ => None,

@@ -3835,6 +3835,91 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
     ));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_feature_enabled() {
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    Arc::get_mut(&mut sess)
+        .expect("session should be uniquely owned in this test")
+        .features
+        .enable(crate::features::Feature::UserMessageTypeMetadata)
+        .expect("feature flag should be enabled for this test");
+
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    while rx.try_recv().is_ok() {}
+
+    sess.inject_response_items(vec![ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "late queued pending input".to_string(),
+        }],
+        metadata: None,
+    }])
+    .await
+    .expect("inject pending input into active turn");
+
+    sess.on_task_finished(Arc::clone(&tc), None).await;
+
+    let first = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("expected raw response item event")
+        .expect("channel open");
+    assert!(matches!(
+        first.msg,
+        EventMsg::RawResponseItem(ref event)
+            if matches!(
+                &event.item,
+                ResponseItem::Message {
+                    metadata: Some(metadata),
+                    ..
+                } if metadata.user_message_type
+                    == Some(codex_protocol::items::UserMessageType::PromptQueued)
+            )
+    ));
+
+    let second = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("expected item started event")
+        .expect("channel open");
+    assert!(matches!(
+        second.msg,
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::UserMessage(UserMessageItem { content, .. }),
+            ..
+        }) if content == vec![UserInput::Text {
+            text: "late queued pending input".to_string(),
+            text_elements: Vec::new(),
+        }]
+    ));
+
+    let third = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("expected item completed event")
+        .expect("channel open");
+    assert!(matches!(
+        third.msg,
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::UserMessage(UserMessageItem { content, .. }),
+            ..
+        }) if content == vec![UserInput::Text {
+            text: "late queued pending input".to_string(),
+            text_elements: Vec::new(),
+        }]
+    ));
+}
+
 #[tokio::test]
 async fn steer_input_requires_active_turn() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
@@ -3916,6 +4001,14 @@ async fn steer_input_returns_active_turn_id() {
 
     assert_eq!(turn_id, tc.sub_id);
     assert!(sess.has_pending_input().await);
+    let pending_input = sess.get_pending_input_with_metadata().await;
+    assert_eq!(pending_input.len(), 1);
+    assert_eq!(
+        pending_input
+            .first()
+            .and_then(|(_, user_message_type)| user_message_type.as_ref()),
+        Some(&codex_protocol::items::UserMessageType::PromptSteering)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

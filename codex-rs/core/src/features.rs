@@ -174,6 +174,8 @@ pub enum Feature {
     ToolCallMcpElicitation,
     /// Enable personality selection in the TUI.
     Personality,
+    /// Emit user_message_type metadata on user message turn items and request items.
+    UserMessageTypeMetadata,
     /// Enable native artifact tools.
     Artifact,
     /// Enable Fast mode selection in the TUI and request layer.
@@ -810,6 +812,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "personality",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::UserMessageTypeMetadata,
+        key: "user_message_type_metadata",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Artifact,

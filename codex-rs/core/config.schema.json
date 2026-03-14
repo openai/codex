@@ -503,6 +503,9 @@
             "use_linux_sandbox_bwrap": {
               "type": "boolean"
             },
+            "user_message_type_metadata": {
+              "type": "boolean"
+            },
             "voice_transcription": {
               "type": "boolean"
             },
@@ -2053,6 +2056,9 @@
           "type": "boolean"
         },
         "use_linux_sandbox_bwrap": {
+          "type": "boolean"
+        },
+        "user_message_type_metadata": {
           "type": "boolean"
         },
         "voice_transcription": {

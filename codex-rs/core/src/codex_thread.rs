@@ -90,6 +90,20 @@ impl CodexThread {
         self.codex.steer_input(input, expected_turn_id).await
     }
 
+    /// Use sparingly: wrapper for integration tests and callers that only hold a
+    /// `CodexThread` handle.
+    ///
+    /// This preserves the same public escape hatch as `Codex` without exposing
+    /// `Session` internals directly.
+    /// Returns the input unchanged when there is no active turn.
+    #[doc(hidden)]
+    pub async fn inject_response_items(
+        &self,
+        input: Vec<ResponseInputItem>,
+    ) -> Result<(), Vec<ResponseInputItem>> {
+        self.codex.inject_response_items(input).await
+    }
+
     pub async fn set_app_server_client_name(
         &self,
         app_server_client_name: Option<String>,
