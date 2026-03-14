@@ -93,6 +93,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -1853,15 +1854,11 @@ impl App {
         server: Arc<ThreadManager>,
         init: crate::chatwidget::ChatWidgetInit,
     ) -> Result<(ChatWidget, ThreadId, SessionConfiguredEvent)> {
+        let params = Self::thread_start_params_from_config(&init.config, init.model.clone());
         let response: ThreadStartResponse = requester
             .request_typed_with_generated_id(|request_id| ClientRequest::ThreadStart {
                 request_id,
-                params: ThreadStartParams {
-                    model: init.model.clone(),
-                    cwd: Some(init.config.cwd.to_string_lossy().into_owned()),
-                    service_tier: Some(init.config.service_tier),
-                    ..ThreadStartParams::default()
-                },
+                params,
             })
             .await
             .wrap_err("thread/start failed")?;
@@ -1887,6 +1884,40 @@ impl App {
         );
 
         Ok((widget, thread_id, session_configured))
+    }
+
+    fn thread_start_params_from_config(
+        config: &Config,
+        model: Option<String>,
+    ) -> ThreadStartParams {
+        ThreadStartParams {
+            model: model.or_else(|| config.model.clone()),
+            model_provider: Some(config.model_provider_id.clone()),
+            service_tier: Some(config.service_tier),
+            cwd: Some(config.cwd.to_string_lossy().into_owned()),
+            approval_policy: Some(config.permissions.approval_policy.value().into()),
+            approvals_reviewer: Some(config.approvals_reviewer.into()),
+            sandbox: match config.permissions.sandbox_policy.get() {
+                SandboxPolicy::DangerFullAccess => {
+                    Some(codex_app_server_protocol::SandboxMode::DangerFullAccess)
+                }
+                SandboxPolicy::ReadOnly { .. } => {
+                    Some(codex_app_server_protocol::SandboxMode::ReadOnly)
+                }
+                SandboxPolicy::WorkspaceWrite { .. } => {
+                    Some(codex_app_server_protocol::SandboxMode::WorkspaceWrite)
+                }
+                SandboxPolicy::ExternalSandbox { .. } => None,
+            },
+            config: config.active_profile.as_ref().map(|profile| {
+                HashMap::from([("profile".to_string(), Value::String(profile.clone()))])
+            }),
+            base_instructions: config.base_instructions.clone(),
+            developer_instructions: config.developer_instructions.clone(),
+            personality: config.personality,
+            ephemeral: Some(config.ephemeral),
+            ..ThreadStartParams::default()
+        }
     }
 
     /// Map the app-server `ThreadStartResponse` into the internal
@@ -6940,12 +6971,7 @@ guardian_approval = true
             .requester()
             .request_typed_with_generated_id(|request_id| ClientRequest::ThreadStart {
                 request_id,
-                params: ThreadStartParams {
-                    model: app.config.model.clone(),
-                    cwd: Some(app.config.cwd.to_string_lossy().into_owned()),
-                    service_tier: Some(app.config.service_tier),
-                    ..ThreadStartParams::default()
-                },
+                params: App::thread_start_params_from_config(&app.config, app.config.model.clone()),
             })
             .await?;
 
@@ -6967,8 +6993,74 @@ guardian_approval = true
     }
 
     #[tokio::test]
-    async fn build_fresh_app_server_session_returns_bootstrapped_widget() -> Result<()> {
+    async fn thread_start_params_from_config_preserves_effective_session_config() -> Result<()> {
         let app = make_test_app().await;
+        let mut config = app.config.clone();
+        config.model = Some("config-model".to_string());
+        config.model_provider_id = "custom-provider".to_string();
+        config.service_tier = Some(codex_protocol::config_types::ServiceTier::Flex);
+        config
+            .permissions
+            .approval_policy
+            .set(AskForApproval::OnRequest)?;
+        config
+            .permissions
+            .sandbox_policy
+            .set(SandboxPolicy::new_workspace_write_policy())?;
+        config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+        config.active_profile = Some("guardian".to_string());
+        config.base_instructions = Some("base instructions".to_string());
+        config.developer_instructions = Some("developer instructions".to_string());
+        config.personality = Some(Personality::Friendly);
+        config.ephemeral = true;
+
+        let params =
+            App::thread_start_params_from_config(&config, Some("runtime-model".to_string()));
+
+        assert_eq!(
+            params,
+            ThreadStartParams {
+                model: Some("runtime-model".to_string()),
+                model_provider: Some("custom-provider".to_string()),
+                service_tier: Some(Some(codex_protocol::config_types::ServiceTier::Flex)),
+                cwd: Some(config.cwd.to_string_lossy().into_owned()),
+                approval_policy: Some(codex_app_server_protocol::AskForApproval::OnRequest),
+                approvals_reviewer: Some(
+                    codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent,
+                ),
+                sandbox: Some(codex_app_server_protocol::SandboxMode::WorkspaceWrite),
+                config: Some(HashMap::from([(
+                    "profile".to_string(),
+                    Value::String("guardian".to_string()),
+                )])),
+                service_name: None,
+                base_instructions: Some("base instructions".to_string()),
+                developer_instructions: Some("developer instructions".to_string()),
+                personality: Some(Personality::Friendly),
+                ephemeral: Some(true),
+                dynamic_tools: None,
+                mock_experimental_field: None,
+                experimental_raw_events: false,
+                persist_extended_history: false,
+            }
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn build_fresh_app_server_session_returns_bootstrapped_widget() -> Result<()> {
+        let mut app = make_test_app().await;
+        app.config
+            .permissions
+            .approval_policy
+            .set(AskForApproval::OnRequest)?;
+        app.config
+            .permissions
+            .sandbox_policy
+            .set(SandboxPolicy::new_workspace_write_policy())?;
+        app.config.approvals_reviewer = ApprovalsReviewer::GuardianSubagent;
+        app.config.service_tier = Some(codex_protocol::config_types::ServiceTier::Flex);
         let client = start_test_app_server_client(app.config.clone()).await;
         let server = client.thread_manager();
         let model = codex_core::test_support::get_model_offline(app.config.model.as_deref());
@@ -6998,6 +7090,22 @@ guardian_approval = true
         assert_eq!(chat.thread_id(), Some(thread_id));
         assert_eq!(chat.thread_name(), session_configured.thread_name.clone());
         assert_eq!(chat.rollout_path(), session_configured.rollout_path.clone());
+        assert_eq!(
+            session_configured.approval_policy,
+            AskForApproval::OnRequest
+        );
+        assert_eq!(
+            session_configured.approvals_reviewer,
+            ApprovalsReviewer::GuardianSubagent
+        );
+        assert_matches!(
+            session_configured.sandbox_policy,
+            SandboxPolicy::WorkspaceWrite { .. }
+        );
+        assert_eq!(
+            session_configured.service_tier,
+            Some(codex_protocol::config_types::ServiceTier::Flex)
+        );
 
         client.shutdown().await?;
         Ok(())
