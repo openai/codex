@@ -16,6 +16,7 @@ use chrono::Duration as ChronoDuration;
 use chrono::Utc;
 use codex_backend_client::Client as BackendClient;
 use codex_core::AuthManager;
+use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CodexAuth;
 use codex_core::auth::RefreshTokenError;
 use codex_core::config_loader::CloudRequirementsLoadError;
@@ -713,6 +714,20 @@ pub fn cloud_requirements_loader(
             )
         })?
     })
+}
+
+pub fn cloud_requirements_loader_for_storage(
+    codex_home: PathBuf,
+    enable_codex_api_key_env: bool,
+    credentials_store_mode: AuthCredentialsStoreMode,
+    chatgpt_base_url: String,
+) -> CloudRequirementsLoader {
+    let auth_manager = AuthManager::shared(
+        codex_home.clone(),
+        enable_codex_api_key_env,
+        credentials_store_mode,
+    );
+    cloud_requirements_loader(auth_manager, chatgpt_base_url, codex_home)
 }
 
 fn parse_cloud_requirements(

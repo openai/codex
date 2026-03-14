@@ -281,6 +281,11 @@ pub struct InProcessAppServerClient {
     thread_manager: Arc<ThreadManager>,
 }
 
+#[derive(Clone)]
+pub struct InProcessAppServerRequestHandle {
+    command_tx: mpsc::Sender<ClientCommand>,
+}
+
 impl InProcessAppServerClient {
     /// Starts the in-process runtime and facade worker task.
     ///
@@ -455,6 +460,12 @@ impl InProcessAppServerClient {
     /// Temporary bootstrap escape hatch for embedders migrating toward RPC-only usage.
     pub fn thread_manager(&self) -> Arc<ThreadManager> {
         self.thread_manager.clone()
+    }
+
+    pub fn request_handle(&self) -> InProcessAppServerRequestHandle {
+        InProcessAppServerRequestHandle {
+            command_tx: self.command_tx.clone(),
+        }
     }
 
     /// Sends a typed client request and returns raw JSON-RPC result.
@@ -638,6 +649,50 @@ impl InProcessAppServerClient {
             let _ = worker_handle.await;
         }
         Ok(())
+    }
+}
+
+impl InProcessAppServerRequestHandle {
+    pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.command_tx
+            .send(ClientCommand::Request {
+                request: Box::new(request),
+                response_tx,
+            })
+            .await
+            .map_err(|_| {
+                IoError::new(
+                    ErrorKind::BrokenPipe,
+                    "in-process app-server worker channel is closed",
+                )
+            })?;
+        response_rx.await.map_err(|_| {
+            IoError::new(
+                ErrorKind::BrokenPipe,
+                "in-process app-server request channel is closed",
+            )
+        })?
+    }
+
+    pub async fn request_typed<T>(&self, request: ClientRequest) -> Result<T, TypedRequestError>
+    where
+        T: DeserializeOwned,
+    {
+        let method = request_method_name(&request);
+        let response =
+            self.request(request)
+                .await
+                .map_err(|source| TypedRequestError::Transport {
+                    method: method.clone(),
+                    source,
+                })?;
+        let result = response.map_err(|source| TypedRequestError::Server {
+            method: method.clone(),
+            source,
+        })?;
+        serde_json::from_value(result)
+            .map_err(|source| TypedRequestError::Deserialize { method, source })
     }
 }
 

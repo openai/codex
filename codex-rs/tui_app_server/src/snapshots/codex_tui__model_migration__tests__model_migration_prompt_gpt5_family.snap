@@ -1,0 +1,13 @@
+---
+source: tui/src/model_migration.rs
+expression: terminal.backend()
+---
+
+> Codex just got an upgrade. Introducing gpt-5.1.
+
+  We recommend switching from gpt-5 to gpt-5.1.
+
+  Broad world knowledge with strong general reasoning. Learn more
+  about gpt-5.1 at https://www.codex.com/models/gpt-5.1
+
+  Press enter to continue
