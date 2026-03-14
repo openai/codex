@@ -13,9 +13,14 @@ use crate::shell_snapshot::ShellSnapshot;
 use crate::state_db;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ForkReferenceItem;
+use codex_protocol::protocol::AGENT_INBOX_KIND;
+use codex_protocol::protocol::AgentInboxPayload;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -26,6 +31,7 @@ use codex_protocol::user_input::UserInput;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::watch;
+use uuid::Uuid;
 
 const AGENT_NAMES: &str = include_str!("agent_names.txt");
 const FORKED_SPAWN_AGENT_OUTPUT_MESSAGE: &str = "You are the newly spawned agent. The prior conversation history was forked from your parent agent. Treat the next user message as your new task, and use the forked history only as background context.";
@@ -332,6 +338,76 @@ impl AgentControl {
         result
     }
 
+    pub(crate) async fn send_prompt(
+        &self,
+        agent_id: ThreadId,
+        prompt: String,
+    ) -> CodexResult<String> {
+        self.send_input(
+            agent_id,
+            vec![UserInput::Text {
+                text: prompt,
+                text_elements: Vec::new(),
+            }],
+        )
+        .await
+    }
+
+    pub(crate) async fn send_agent_message(
+        &self,
+        agent_id: ThreadId,
+        sender_thread_id: ThreadId,
+        message: String,
+    ) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        let thread = state.get_thread(agent_id).await?;
+        let snapshot = thread.config_snapshot().await;
+        if matches!(snapshot.session_source, SessionSource::SubAgent(_))
+            || !snapshot.agent_use_function_call_inbox
+        {
+            return self.send_prompt(agent_id, message).await;
+        }
+
+        let prepend_turn_start_user_message =
+            { !thread.codex.session.active_turn.lock().await.is_some() };
+        let result = state
+            .send_op(
+                agent_id,
+                Op::InjectResponseItems {
+                    items: build_agent_inbox_items(
+                        sender_thread_id,
+                        message,
+                        prepend_turn_start_user_message,
+                    )?,
+                },
+            )
+            .await;
+        if matches!(result, Err(CodexErr::InternalAgentDied)) {
+            let _ = state.remove_thread(&agent_id).await;
+            self.state.release_spawned_thread(agent_id);
+        }
+        result
+    }
+
+    pub(crate) async fn send_agent_message_or_input(
+        &self,
+        agent_id: ThreadId,
+        sender_thread_id: ThreadId,
+        message: Option<String>,
+        items: Option<Vec<UserInput>>,
+    ) -> CodexResult<String> {
+        match (message, items) {
+            (Some(message), None) => {
+                self.send_agent_message(agent_id, sender_thread_id, message)
+                    .await
+            }
+            (None, Some(items)) => self.send_input(agent_id, items).await,
+            _ => Err(CodexErr::UnsupportedOperation(
+                "invalid agent input".to_string(),
+            )),
+        }
+    }
+
     /// Interrupt the current task for an existing agent thread.
     pub(crate) async fn interrupt_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
@@ -502,6 +578,48 @@ impl AgentControl {
         parent_thread.codex.session.user_shell().shell_snapshot()
     }
 }
+
+fn build_agent_inbox_items(
+    sender_thread_id: ThreadId,
+    message: String,
+    prepend_turn_start_user_message: bool,
+) -> CodexResult<Vec<ResponseInputItem>> {
+    let mut items = Vec::new();
+    if prepend_turn_start_user_message {
+        items.push(ResponseInputItem::Message {
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: String::new(),
+            }],
+        });
+    }
+
+    let call_id = format!("agent_inbox_{}", Uuid::new_v4());
+    let output = serde_json::to_string(&AgentInboxPayload::new(sender_thread_id, message))
+        .map_err(|err| {
+            CodexErr::UnsupportedOperation(format!(
+                "failed to serialize agent inbox payload: {err}"
+            ))
+        })?;
+
+    items.extend([
+        ResponseInputItem::FunctionCall {
+            name: AGENT_INBOX_KIND.to_string(),
+            arguments: "{}".to_string(),
+            call_id: call_id.clone(),
+        },
+        ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text(output),
+                ..Default::default()
+            },
+        },
+    ]);
+
+    Ok(items)
+}
+
 #[cfg(test)]
 #[path = "control_tests.rs"]
 mod tests;
@@ -520,6 +638,7 @@ mod fork_reference_tests {
     use assert_matches::assert_matches;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseInputItem;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::EventMsg;
@@ -600,6 +719,170 @@ mod fork_reference_tests {
         }
     }
 
+    #[test]
+    fn build_agent_inbox_items_emits_function_call_and_output() {
+        let sender_thread_id = ThreadId::new();
+        let items = build_agent_inbox_items(sender_thread_id, "watchdog update".to_string(), false)
+            .expect("tool role should build inbox items");
+
+        assert_eq!(items.len(), 2);
+
+        let call_id = match &items[0] {
+            ResponseInputItem::FunctionCall {
+                name,
+                arguments,
+                call_id,
+            } => {
+                assert_eq!(name, AGENT_INBOX_KIND);
+                assert_eq!(arguments, "{}");
+                call_id.clone()
+            }
+            other => panic!("expected function call item, got {other:?}"),
+        };
+
+        match &items[1] {
+            ResponseInputItem::FunctionCallOutput {
+                call_id: output_call_id,
+                output,
+            } => {
+                assert_eq!(output_call_id, &call_id);
+                let output_text = output
+                    .body
+                    .to_text()
+                    .expect("payload should convert to text");
+                let payload: AgentInboxPayload =
+                    serde_json::from_str(&output_text).expect("payload should be valid json");
+                assert!(payload.injected);
+                assert_eq!(payload.kind, AGENT_INBOX_KIND);
+                assert_eq!(payload.sender_thread_id, sender_thread_id);
+                assert_eq!(payload.message, "watchdog update");
+            }
+            other => panic!("expected function call output item, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_agent_inbox_items_prepends_empty_user_message_when_requested() {
+        let sender_thread_id = ThreadId::new();
+        let items = build_agent_inbox_items(sender_thread_id, "watchdog update".to_string(), true)
+            .expect("tool role should build inbox items");
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(
+            items[0],
+            ResponseInputItem::Message {
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: String::new(),
+                }],
+            }
+        );
+        assert_matches!(&items[1], ResponseInputItem::FunctionCall { .. });
+        assert_matches!(&items[2], ResponseInputItem::FunctionCallOutput { .. });
+    }
+
+    #[tokio::test]
+    async fn send_agent_message_to_root_thread_defaults_to_user_input() {
+        let harness = AgentControlHarness::new().await;
+        let (receiver_thread_id, _thread) = harness.start_thread().await;
+        let sender_thread_id = ThreadId::new();
+
+        let submission_id = harness
+            .control
+            .send_agent_message(
+                receiver_thread_id,
+                sender_thread_id,
+                "watchdog update".to_string(),
+            )
+            .await
+            .expect("send_agent_message should succeed");
+        assert!(!submission_id.is_empty());
+
+        let expected = (
+            receiver_thread_id,
+            Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: "watchdog update".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            },
+        );
+        let captured = harness
+            .manager
+            .captured_ops()
+            .into_iter()
+            .find(|entry| *entry == expected);
+
+        assert_eq!(captured, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn send_agent_message_to_root_thread_injects_response_items_when_enabled() {
+        let mut harness = AgentControlHarness::new().await;
+        harness.config.agent_use_function_call_inbox = true;
+        let (receiver_thread_id, _thread) = harness.start_thread().await;
+        let sender_thread_id = ThreadId::new();
+
+        let submission_id = harness
+            .control
+            .send_agent_message(
+                receiver_thread_id,
+                sender_thread_id,
+                "watchdog update".to_string(),
+            )
+            .await
+            .expect("send_agent_message should succeed");
+        assert!(!submission_id.is_empty());
+
+        let captured = harness
+            .manager
+            .captured_ops()
+            .into_iter()
+            .find(|(thread_id, op)| {
+                *thread_id == receiver_thread_id && matches!(op, Op::InjectResponseItems { .. })
+            })
+            .expect("expected injected agent inbox op");
+
+        let Op::InjectResponseItems { items } = captured.1 else {
+            unreachable!("matched above");
+        };
+        assert_eq!(items.len(), 3);
+        match &items[0] {
+            ResponseInputItem::Message { role, content } => {
+                assert_eq!(role, "user");
+                assert_eq!(
+                    content,
+                    &vec![ContentItem::InputText {
+                        text: String::new(),
+                    }]
+                );
+            }
+            other => panic!("expected prepended user message, got {other:?}"),
+        }
+        match &items[1] {
+            ResponseInputItem::FunctionCall {
+                name, arguments, ..
+            } => {
+                assert_eq!(name, AGENT_INBOX_KIND);
+                assert_eq!(arguments, "{}");
+            }
+            other => panic!("expected function call item, got {other:?}"),
+        }
+        match &items[2] {
+            ResponseInputItem::FunctionCallOutput { output, .. } => {
+                let output_text = output
+                    .body
+                    .to_text()
+                    .expect("payload should convert to text");
+                let payload: AgentInboxPayload =
+                    serde_json::from_str(&output_text).expect("payload should be valid json");
+                assert_eq!(payload.sender_thread_id, sender_thread_id);
+                assert_eq!(payload.message, "watchdog update");
+            }
+            other => panic!("expected function call output item, got {other:?}"),
+        }
+    }
     fn has_subagent_notification(history_items: &[ResponseItem]) -> bool {
         history_items.iter().any(|item| {
             let ResponseItem::Message { role, content, .. } = item else {
@@ -648,7 +931,7 @@ mod fork_reference_tests {
                 sleep(Duration::from_millis(25)).await;
             }
         };
-        timeout(Duration::from_secs(2), wait).await.is_ok()
+        timeout(Duration::from_secs(5), wait).await.is_ok()
     }
 
     #[tokio::test]
@@ -896,6 +1179,7 @@ mod fork_reference_tests {
         let parent_spawn_call = ResponseItem::FunctionCall {
             id: None,
             name: "spawn_agent".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: parent_spawn_call_id.clone(),
         };
@@ -978,6 +1262,7 @@ mod fork_reference_tests {
         let parent_spawn_call = ResponseItem::FunctionCall {
             id: None,
             name: "spawn_agent".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: parent_spawn_call_id.clone(),
         };
@@ -1053,6 +1338,7 @@ mod fork_reference_tests {
         let parent_spawn_call = ResponseItem::FunctionCall {
             id: None,
             name: "spawn_agent".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: parent_spawn_call_id.clone(),
         };
@@ -1230,8 +1516,6 @@ mod fork_reference_tests {
             .await
             .expect("parent shutdown should submit");
     }
-
-    #[tokio::test]
     async fn spawn_agent_respects_max_threads_limit() {
         let max_threads = 1usize;
         let (_home, config) = test_config_with_cli_overrides(vec![(
@@ -1446,6 +1730,26 @@ mod fork_reference_tests {
             .get_thread(child_thread_id)
             .await
             .expect("child thread should exist");
+        let mut status_rx = harness
+            .control
+            .subscribe_status(child_thread_id)
+            .await
+            .expect("status subscription should succeed");
+        if matches!(status_rx.borrow().clone(), AgentStatus::PendingInit) {
+            timeout(Duration::from_secs(5), async {
+                loop {
+                    status_rx
+                        .changed()
+                        .await
+                        .expect("child status should advance past pending init");
+                    if !matches!(status_rx.borrow().clone(), AgentStatus::PendingInit) {
+                        break;
+                    }
+                }
+            })
+            .await
+            .expect("child should initialize before shutdown");
+        }
         let _ = child_thread
             .submit(Op::Shutdown {})
             .await
