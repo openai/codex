@@ -1,0 +1,249 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Slash Commands
+
+  Type / to open the command popup. For commands with both a picker and an arg form, bare /command
+  opens the picker and /command ... runs directly.
+  Args use shell-style quoting; quote values with spaces.
+
+  /help
+    show slash command help
+    Usage:
+        /help
+
+  /model
+    choose what model and reasoning effort to use
+    Usage:
+        /model
+        /model <model> [default|none|minimal|low|medium|high|xhigh] [plan-only|all-modes]
+
+  /fast
+    toggle Fast mode to enable fastest inference at 2X plan usage
+    Usage:
+        /fast
+        /fast <on|off|status>
+
+  /approvals
+    choose what Codex is allowed to do
+    Usage:
+        /approvals
+        /approvals <read-only|auto|full-access> [--smart-approvals] [--confirm-full-access]
+          [--remember-full-access] [--confirm-world-writable] [--remember-world-writable]
+          [--enable-windows-sandbox=elevated|legacy]
+
+  /permissions
+    choose what Codex is allowed to do
+    Usage:
+        /permissions
+        /permissions <read-only|auto|full-access> [--smart-approvals] [--confirm-full-access]
+          [--remember-full-access] [--confirm-world-writable] [--remember-world-writable]
+          [--enable-windows-sandbox=elevated|legacy]
+
+  /setup-default-sandbox
+    set up elevated agent sandbox
+    Usage:
+        /setup-default-sandbox
+
+  /sandbox-add-read-dir
+    let sandbox read a directory: /sandbox-add-read-dir <absolute_path>
+    Usage:
+        /sandbox-add-read-dir <absolute-directory-path>
+
+  /experimental
+    toggle experimental features
+    Usage:
+        /experimental
+        /experimental <feature-key>=on|off ...
+
+  /skills
+    use skills to improve how Codex performs specific tasks
+    Usage:
+        /skills
+        /skills <list|manage>
+
+  /review
+    review my current changes and find issues
+    Usage:
+        /review
+        /review uncommitted
+        /review branch <name>
+        /review commit <sha> [title]
+        /review <instructions>
+
+  /rename
+    rename the current thread
+    Usage:
+        /rename
+        /rename <title...>
+
+  /new
+    start a new chat during a conversation
+    Usage:
+        /new
+
+  /resume
+    resume a saved chat
+    Usage:
+        /resume
+        /resume <thread-id>
+        /resume <thread-id> --path <rollout-path>
+
+  /fork
+    fork the current chat
+    Usage:
+        /fork
+
+  /init
+    create an AGENTS.md file with instructions for Codex
+    Usage:
+        /init
+
+  /compact
+    summarize conversation to prevent hitting the context limit
+    Usage:
+        /compact
+
+  /plan
+    switch to Plan mode
+    Usage:
+        /plan
+        /plan <prompt...>
+
+  /collab
+    change collaboration mode (experimental)
+    Usage:
+        /collab
+        /collab <default|plan>
+
+  /agent
+    switch the active agent thread
+    Usage:
+        /agent
+        /agent <thread-id>
+
+  /diff
+    show git diff (including untracked files)
+    Usage:
+        /diff
+
+  /copy
+    copy the latest Codex output to your clipboard
+    Usage:
+        /copy
+
+  /mention
+    mention a file
+    Usage:
+        /mention
+
+  /status
+    show current session configuration and token usage
+    Usage:
+        /status
+
+  /debug-config
+    show config layers and requirement sources for debugging
+    Usage:
+        /debug-config
+
+  /statusline
+    configure which items appear in the status line
+    Usage:
+        /statusline
+        /statusline <item-id>...
+        /statusline none
+
+  /theme
+    choose a syntax highlighting theme
+    Usage:
+        /theme
+        /theme <theme-name>
+
+  /mcp
+    list configured MCP tools
+    Usage:
+        /mcp
+
+  /apps
+    manage apps
+    Usage:
+        /apps
+
+  /logout
+    log out of Codex
+    Usage:
+        /logout
+
+  /quit
+    exit Codex
+    Usage:
+        /quit
+
+  /exit
+    exit Codex
+    Usage:
+        /exit
+
+  /feedback
+    send logs to maintainers
+    Usage:
+        /feedback
+        /feedback <bug|bad-result|good-result|safety-check|other>
+
+  /rollout
+    print the rollout file path
+    Usage:
+        /rollout
+
+  /ps
+    list background terminals
+    Usage:
+        /ps
+
+  /clean
+    stop all background terminals
+    Usage:
+        /clean
+
+  /clear
+    clear the terminal and start a new chat
+    Usage:
+        /clear
+
+  /personality
+    choose a communication style for Codex
+    Usage:
+        /personality
+        /personality <none|friendly|pragmatic>
+
+  /realtime
+    toggle realtime voice mode (experimental)
+    Usage:
+        /realtime
+
+  /settings
+    configure realtime microphone/speaker
+    Usage:
+        /settings
+        /settings <microphone|speaker> [default|<device-name>]
+
+  /test-approval
+    test approval request
+    Usage:
+        /test-approval
+
+  /subagents
+    switch the active agent thread
+    Usage:
+        /subagents
+        /subagents <thread-id>
+
+  /debug-m-drop
+    DO NOT USE
+    Usage:
+        /debug-m-drop
+
+
+  ↑/↓ scroll  |  [ctrl + p / ctrl + n] page  |  / search  |  esc close                   1-238/245

@@ -29,7 +29,7 @@ pub(crate) enum CommandItem {
 
 pub(crate) struct CommandPopup {
     command_filter: String,
-    builtins: Vec<(&'static str, SlashCommand)>,
+    builtins: Vec<SlashCommand>,
     prompts: Vec<CustomPrompt>,
     state: ScrollState,
 }
@@ -62,13 +62,12 @@ impl From<CommandPopupFlags> for slash_commands::BuiltinCommandFlags {
 impl CommandPopup {
     pub(crate) fn new(mut prompts: Vec<CustomPrompt>, flags: CommandPopupFlags) -> Self {
         // Keep built-in availability in sync with the composer.
-        let builtins: Vec<(&'static str, SlashCommand)> =
-            slash_commands::builtins_for_input(flags.into())
-                .into_iter()
-                .filter(|(name, _)| !name.starts_with("debug"))
-                .collect();
+        let builtins: Vec<SlashCommand> = slash_commands::visible_builtins_for_input(flags.into())
+            .into_iter()
+            .filter(|cmd| !cmd.command().starts_with("debug"))
+            .collect();
         // Exclude prompts that collide with builtin command names and sort by name.
-        let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
+        let exclude = reserved_builtin_names(&builtins);
         prompts.retain(|p| !exclude.contains(&p.name));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
@@ -80,11 +79,7 @@ impl CommandPopup {
     }
 
     pub(crate) fn set_prompts(&mut self, mut prompts: Vec<CustomPrompt>) {
-        let exclude: HashSet<String> = self
-            .builtins
-            .iter()
-            .map(|(n, _)| (*n).to_string())
-            .collect();
+        let exclude = reserved_builtin_names(&self.builtins);
         prompts.retain(|p| !exclude.contains(&p.name));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
         self.prompts = prompts;
@@ -142,7 +137,7 @@ impl CommandPopup {
         let mut out: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
         if filter.is_empty() {
             // Built-ins first, in presentation order.
-            for (_, cmd) in self.builtins.iter() {
+            for cmd in self.builtins.iter() {
                 if ALIAS_COMMANDS.contains(cmd) {
                     continue;
                 }
@@ -183,7 +178,7 @@ impl CommandPopup {
                 }
             };
 
-        for (_, cmd) in self.builtins.iter() {
+        for cmd in self.builtins.iter() {
             push_match(CommandItem::Builtin(*cmd), cmd.command(), None, 0);
         }
         // Support both search styles:
@@ -270,6 +265,14 @@ impl CommandPopup {
     }
 }
 
+fn reserved_builtin_names(builtins: &[SlashCommand]) -> HashSet<String> {
+    builtins
+        .iter()
+        .flat_map(|cmd| std::iter::once(cmd.command()).chain(cmd.command_aliases().iter().copied()))
+        .map(str::to_string)
+        .collect()
+}
+
 impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let rows = self.rows_from_matches(self.filtered());
@@ -335,6 +338,20 @@ mod tests {
                 panic!("unexpected prompt ranked before '/model' for '/mo'")
             }
             None => panic!("expected at least one match for '/mo'"),
+        }
+    }
+
+    #[test]
+    fn help_is_first_suggestion_for_root_popup() {
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
+        popup.on_composer_text_change("/".to_string());
+        let matches = popup.filtered_items();
+        match matches.first() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "help"),
+            Some(CommandItem::UserPrompt(_)) => {
+                panic!("unexpected prompt ranked before '/help' for '/'")
+            }
+            None => panic!("expected at least one match for '/'"),
         }
     }
 
@@ -406,6 +423,31 @@ mod tests {
         assert!(
             !has_collision_prompt,
             "prompt with builtin name should be ignored"
+        );
+    }
+
+    #[test]
+    fn prompt_name_collision_with_builtin_alias_is_ignored() {
+        let popup = CommandPopup::new(
+            vec![CustomPrompt {
+                name: "multi-agents".to_string(),
+                path: "/tmp/multi-agents.md".to_string().into(),
+                content: "should be ignored".to_string(),
+                description: None,
+                argument_hint: None,
+            }],
+            CommandPopupFlags::default(),
+        );
+        let items = popup.filtered_items();
+        let has_collision_prompt = items.into_iter().any(|it| match it {
+            CommandItem::UserPrompt(i) => popup
+                .prompt(i)
+                .is_some_and(|prompt| prompt.name == "multi-agents"),
+            CommandItem::Builtin(_) => false,
+        });
+        assert!(
+            !has_collision_prompt,
+            "prompt with builtin alias should be ignored"
         );
     }
 
