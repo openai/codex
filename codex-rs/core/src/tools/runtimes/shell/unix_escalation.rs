@@ -226,20 +226,9 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
     _attempt: &SandboxAttempt<'_>,
     ctx: &ToolCtx,
     exec_request: ExecRequest,
+    shell_zsh_path: &std::path::Path,
+    main_execve_wrapper_exe: &std::path::Path,
 ) -> Result<Option<PreparedUnifiedExecZshFork>, ToolError> {
-    let Some(shell_zsh_path) = ctx.session.services.shell_zsh_path.as_ref() else {
-        tracing::warn!("ZshFork backend specified, but shell_zsh_path is not configured.");
-        return Ok(None);
-    };
-    if !ctx.session.features().enabled(Feature::ShellZshFork) {
-        tracing::warn!("ZshFork backend specified, but ShellZshFork feature is not enabled.");
-        return Ok(None);
-    }
-    if !matches!(ctx.session.user_shell().shell_type, ShellType::Zsh) {
-        tracing::warn!("ZshFork backend specified, but user shell is not Zsh.");
-        return Ok(None);
-    }
-
     let parsed = match extract_shell_script(&exec_request.command) {
         Ok(parsed) => parsed,
         Err(err) => {
@@ -282,16 +271,6 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         codex_linux_sandbox_exe: ctx.turn.codex_linux_sandbox_exe.clone(),
         use_legacy_landlock: ctx.turn.features.use_legacy_landlock(),
     };
-    let main_execve_wrapper_exe = ctx
-        .session
-        .services
-        .main_execve_wrapper_exe
-        .clone()
-        .ok_or_else(|| {
-            ToolError::Rejected(
-                "zsh fork feature enabled, but execve wrapper is not configured".to_string(),
-            )
-        })?;
     let escalation_policy = CoreShellActionProvider {
         policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
@@ -312,8 +291,8 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
     };
 
     let escalate_server = EscalateServer::new(
-        shell_zsh_path.clone(),
-        main_execve_wrapper_exe,
+        shell_zsh_path.to_path_buf(),
+        main_execve_wrapper_exe.to_path_buf(),
         escalation_policy,
     );
     let escalation_session = escalate_server

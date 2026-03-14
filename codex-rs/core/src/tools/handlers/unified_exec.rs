@@ -19,6 +19,7 @@ use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use crate::tools::spec::UnifiedExecShellMode;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecProcessManager;
@@ -107,6 +108,7 @@ impl ToolHandler for UnifiedExecHandler {
         let command = match get_command(
             &params,
             invocation.session.user_shell(),
+            &invocation.turn.tools_config.unified_exec_shell_mode,
             invocation.turn.tools_config.allow_login_shell,
         ) {
             Ok(command) => command,
@@ -154,6 +156,7 @@ impl ToolHandler for UnifiedExecHandler {
                 let command = get_command(
                     &args,
                     session.user_shell(),
+                    &turn.tools_config.unified_exec_shell_mode,
                     turn.tools_config.allow_login_shell,
                 )
                 .map_err(FunctionCallError::RespondToModel)?;
@@ -323,15 +326,9 @@ impl ToolHandler for UnifiedExecHandler {
 pub(crate) fn get_command(
     args: &ExecCommandArgs,
     session_shell: Arc<Shell>,
+    shell_mode: &UnifiedExecShellMode,
     allow_login_shell: bool,
 ) -> Result<Vec<String>, String> {
-    let model_shell = args.shell.as_ref().map(|shell_str| {
-        let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
-        shell.shell_snapshot = crate::shell::empty_shell_snapshot_receiver();
-        shell
-    });
-
-    let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
     let use_login_shell = match args.login {
         Some(true) if !allow_login_shell => {
             return Err(
@@ -342,7 +339,22 @@ pub(crate) fn get_command(
         None => allow_login_shell,
     };
 
-    Ok(shell.derive_exec_args(&args.cmd, use_login_shell))
+    match shell_mode {
+        UnifiedExecShellMode::Direct => {
+            let model_shell = args.shell.as_ref().map(|shell_str| {
+                let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
+                shell.shell_snapshot = crate::shell::empty_shell_snapshot_receiver();
+                shell
+            });
+            let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
+            Ok(shell.derive_exec_args(&args.cmd, use_login_shell))
+        }
+        UnifiedExecShellMode::ZshFork(zsh_fork_config) => Ok(vec![
+            zsh_fork_config.shell_zsh_path.to_string_lossy().to_string(),
+            if use_login_shell { "-lc" } else { "-c" }.to_string(),
+            args.cmd.clone(),
+        ]),
+    }
 }
 
 #[cfg(test)]

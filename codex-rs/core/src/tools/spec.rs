@@ -8,6 +8,8 @@ use crate::features::Features;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::original_image_detail::can_request_original_image_detail;
+use crate::shell::Shell;
+use crate::shell::ShellType;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::code_mode::WAIT_TOOL_NAME;
 use crate::tools::code_mode::is_code_mode_nested_tool;
@@ -46,12 +48,14 @@ use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 const TOOL_SEARCH_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
@@ -203,10 +207,46 @@ pub enum ShellCommandBackendConfig {
     ZshFork,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum UnifiedExecBackendConfig {
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum UnifiedExecShellMode {
     Direct,
-    ZshFork,
+    ZshFork(ZshForkConfig),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ZshForkConfig {
+    pub(crate) shell_zsh_path: AbsolutePathBuf,
+    pub(crate) main_execve_wrapper_exe: AbsolutePathBuf,
+}
+
+impl UnifiedExecShellMode {
+    pub fn for_session(
+        shell_command_backend: ShellCommandBackendConfig,
+        user_shell: &Shell,
+        shell_zsh_path: Option<&PathBuf>,
+        main_execve_wrapper_exe: Option<&PathBuf>,
+    ) -> Self {
+        if cfg!(unix)
+            && shell_command_backend == ShellCommandBackendConfig::ZshFork
+            && matches!(user_shell.shell_type, ShellType::Zsh)
+            && let (Some(shell_zsh_path), Some(main_execve_wrapper_exe)) =
+                (shell_zsh_path, main_execve_wrapper_exe)
+            && let (Ok(shell_zsh_path), Ok(main_execve_wrapper_exe)) = (
+                AbsolutePathBuf::try_from(shell_zsh_path.as_path())
+                    .inspect_err(|e| tracing::warn!("Failed to convert shell_zsh_path `{shell_zsh_path:?}`: {e:?}")),
+                AbsolutePathBuf::try_from(main_execve_wrapper_exe.as_path()).inspect_err(|e| {
+                    tracing::warn!("Failed to convert main_execve_wrapper_exe `{main_execve_wrapper_exe:?}`: {e:?}")
+                }),
+            )
+        {
+            Self::ZshFork(ZshForkConfig {
+                shell_zsh_path,
+                main_execve_wrapper_exe,
+            })
+        } else {
+            Self::Direct
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -214,7 +254,7 @@ pub(crate) struct ToolsConfig {
     pub available_models: Vec<ModelPreset>,
     pub shell_type: ConfigShellToolType,
     shell_command_backend: ShellCommandBackendConfig,
-    pub unified_exec_backend: UnifiedExecBackendConfig,
+    pub unified_exec_shell_mode: UnifiedExecShellMode,
     pub allow_login_shell: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
@@ -300,13 +340,6 @@ impl ToolsConfig {
             } else {
                 ShellCommandBackendConfig::Classic
             };
-        let unified_exec_backend =
-            if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
-                UnifiedExecBackendConfig::ZshFork
-            } else {
-                UnifiedExecBackendConfig::Direct
-            };
-
         let unified_exec_allowed = unified_exec_allowed_in_environment(
             cfg!(target_os = "windows"),
             sandbox_policy,
@@ -353,7 +386,7 @@ impl ToolsConfig {
             available_models: available_models_ref.to_vec(),
             shell_type,
             shell_command_backend,
-            unified_exec_backend,
+            unified_exec_shell_mode: UnifiedExecShellMode::Direct,
             allow_login_shell: true,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
@@ -387,6 +420,29 @@ impl ToolsConfig {
 
     pub fn with_allow_login_shell(mut self, allow_login_shell: bool) -> Self {
         self.allow_login_shell = allow_login_shell;
+        self
+    }
+
+    pub fn with_unified_exec_shell_mode(
+        mut self,
+        unified_exec_shell_mode: UnifiedExecShellMode,
+    ) -> Self {
+        self.unified_exec_shell_mode = unified_exec_shell_mode;
+        self
+    }
+
+    pub fn with_unified_exec_shell_mode_for_session(
+        mut self,
+        user_shell: &Shell,
+        shell_zsh_path: Option<&PathBuf>,
+        main_execve_wrapper_exe: Option<&PathBuf>,
+    ) -> Self {
+        self.unified_exec_shell_mode = UnifiedExecShellMode::for_session(
+            self.shell_command_backend,
+            user_shell,
+            shell_zsh_path,
+            main_execve_wrapper_exe,
+        );
         self
     }
 

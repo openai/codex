@@ -578,8 +578,10 @@ impl UnifiedExecProcessManager {
             Some(context.session.conversation_id),
         ));
         let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime =
-            UnifiedExecRuntime::new(self, context.turn.tools_config.unified_exec_backend);
+        let mut runtime = UnifiedExecRuntime::new(
+            self,
+            context.turn.tools_config.unified_exec_shell_mode.clone(),
+        );
         let exec_approval_requirement = context
             .session
             .services
