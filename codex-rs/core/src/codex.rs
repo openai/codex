@@ -16,7 +16,6 @@ use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
 use crate::analytics_client::InvocationType;
 use crate::analytics_client::build_track_events_context;
-use crate::apps::render_apps_section;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::compact::InitialContextInjection;
@@ -41,7 +40,6 @@ use crate::realtime_conversation::handle_close as handle_realtime_conversation_c
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::rollout::session_index;
-use crate::skills::render_skills_section;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -169,11 +167,13 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
-use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
 use crate::exec::StreamOutput;
+use crate::model_visible_context::DeveloperTextFragment;
+use crate::model_visible_context::ModelVisibleContextFragment;
+use crate::model_visible_context::TurnContextDiffParams;
 use codex_config::CONFIG_TOML_FILE;
 
 mod rollout_reconstruction;
@@ -204,7 +204,6 @@ use crate::feedback_tags;
 use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::git_info::get_git_repo_root;
-use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
 use crate::mcp::auth::compute_auth_statuses;
@@ -222,8 +221,7 @@ use crate::mentions::collect_tool_mentions_from_messages;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
 use crate::plugins::build_plugin_injections;
-use crate::plugins::render_plugins_section;
-use crate::project_doc::get_user_instructions;
+use crate::project_doc::build_project_doc_instructions_text;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
@@ -319,7 +317,6 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -470,7 +467,8 @@ impl Codex {
             config.startup_warnings.push(message);
         }
 
-        let user_instructions = get_user_instructions(&config).await;
+        let project_doc_instructions = build_project_doc_instructions_text(&config).await;
+        let user_instructions = config.user_instructions.clone();
 
         let exec_policy = if crate::guardian::is_guardian_subagent_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -554,6 +552,7 @@ impl Codex {
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier: config.service_tier,
             developer_instructions: config.developer_instructions.clone(),
+            project_doc_instructions,
             user_instructions,
             personality: config.personality,
             base_instructions,
@@ -789,6 +788,7 @@ pub(crate) struct TurnContext {
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
+    pub(crate) project_doc_instructions: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) collaboration_mode: CollaborationMode,
     pub(crate) personality: Option<Personality>,
@@ -893,6 +893,7 @@ impl TurnContext {
             app_server_client_name: self.app_server_client_name.clone(),
             developer_instructions: self.developer_instructions.clone(),
             compact_prompt: self.compact_prompt.clone(),
+            project_doc_instructions: self.project_doc_instructions.clone(),
             user_instructions: self.user_instructions.clone(),
             collaboration_mode,
             personality: self.personality,
@@ -946,6 +947,7 @@ impl TurnContext {
             realtime_active: Some(self.realtime_active),
             effort: self.reasoning_effort,
             summary: self.reasoning_summary,
+            project_doc_instructions: self.project_doc_instructions.clone(),
             user_instructions: self.user_instructions.clone(),
             developer_instructions: self.developer_instructions.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
@@ -989,7 +991,10 @@ pub(crate) struct SessionConfiguration {
     /// Developer instructions that supplement the base instructions.
     developer_instructions: Option<String>,
 
-    /// Model instructions that are appended to the base instructions.
+    /// Project-doc / AGENTS instructions for the session.
+    project_doc_instructions: Option<String>,
+
+    /// Custom user instructions configured for the session.
     user_instructions: Option<String>,
 
     /// Personality preference for the model.
@@ -1054,6 +1059,12 @@ impl SessionConfiguration {
             personality: self.personality,
             session_source: self.session_source.clone(),
         }
+    }
+
+    async fn project_doc_instructions_for_cwd(&self) -> Option<String> {
+        let mut config = (*self.original_config_do_not_use).clone();
+        config.cwd = self.cwd.clone();
+        build_project_doc_instructions_text(&config).await
     }
 
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
@@ -1335,6 +1346,7 @@ impl Session {
             app_server_client_name: session_configuration.app_server_client_name.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
+            project_doc_instructions: session_configuration.project_doc_instructions.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             personality: session_configuration.personality,
@@ -2219,30 +2231,51 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
-        let mut state = self.state.lock().await;
+        loop {
+            let (current, revision) = {
+                let state = self.state.lock().await;
+                (
+                    state.session_configuration.clone(),
+                    state.session_configuration_revision,
+                )
+            };
+            let previous_cwd = current.cwd.clone();
+            let mut updated = match current.apply(&updates) {
+                Ok(updated) => updated,
+                Err(err) => {
+                    warn!("rejected session settings update: {err}");
+                    return Err(err);
+                }
+            };
 
-        match state.session_configuration.apply(&updates) {
-            Ok(updated) => {
-                let previous_cwd = state.session_configuration.cwd.clone();
-                let next_cwd = updated.cwd.clone();
-                let codex_home = updated.codex_home.clone();
-                let session_source = updated.session_source.clone();
-                state.session_configuration = updated;
-                drop(state);
-
-                self.maybe_refresh_shell_snapshot_for_cwd(
-                    &previous_cwd,
-                    &next_cwd,
-                    &codex_home,
-                    &session_source,
-                );
-
-                Ok(())
+            if previous_cwd != updated.cwd {
+                updated.project_doc_instructions = updated.project_doc_instructions_for_cwd().await;
             }
-            Err(err) => {
-                warn!("rejected session settings update: {err}");
-                Err(err)
+
+            let next_cwd = updated.cwd.clone();
+            let codex_home = updated.codex_home.clone();
+            let session_source = updated.session_source.clone();
+            let committed = {
+                let mut state = self.state.lock().await;
+                if state.session_configuration_revision != revision {
+                    false
+                } else {
+                    state.replace_session_configuration(updated);
+                    true
+                }
+            };
+            if !committed {
+                continue;
             }
+
+            self.maybe_refresh_shell_snapshot_for_cwd(
+                &previous_cwd,
+                &next_cwd,
+                &codex_home,
+                &session_source,
+            );
+
+            return Ok(());
         }
     }
 
@@ -2251,32 +2284,18 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<Arc<TurnContext>> {
-        let (
-            session_configuration,
-            sandbox_policy_changed,
-            previous_cwd,
-            codex_home,
-            session_source,
-        ) = {
-            let mut state = self.state.lock().await;
-            match state.session_configuration.clone().apply(&updates) {
-                Ok(next) => {
-                    let previous_cwd = state.session_configuration.cwd.clone();
-                    let sandbox_policy_changed =
-                        state.session_configuration.sandbox_policy != next.sandbox_policy;
-                    let codex_home = next.codex_home.clone();
-                    let session_source = next.session_source.clone();
-                    state.session_configuration = next.clone();
-                    (
-                        next,
-                        sandbox_policy_changed,
-                        previous_cwd,
-                        codex_home,
-                        session_source,
-                    )
-                }
+        loop {
+            let (current, revision) = {
+                let state = self.state.lock().await;
+                (
+                    state.session_configuration.clone(),
+                    state.session_configuration_revision,
+                )
+            };
+            let previous_cwd = current.cwd.clone();
+            let mut next = match current.apply(&updates) {
+                Ok(next) => next,
                 Err(err) => {
-                    drop(state);
                     self.send_event_raw(Event {
                         id: sub_id.clone(),
                         msg: EventMsg::Error(ErrorEvent {
@@ -2287,24 +2306,42 @@ impl Session {
                     .await;
                     return Err(err);
                 }
+            };
+            let sandbox_policy_changed = current.sandbox_policy != next.sandbox_policy;
+            if previous_cwd != next.cwd {
+                next.project_doc_instructions = next.project_doc_instructions_for_cwd().await;
             }
-        };
+            let codex_home = next.codex_home.clone();
+            let session_source = next.session_source.clone();
+            let committed = {
+                let mut state = self.state.lock().await;
+                if state.session_configuration_revision != revision {
+                    false
+                } else {
+                    state.replace_session_configuration(next.clone());
+                    true
+                }
+            };
+            if !committed {
+                continue;
+            }
 
-        self.maybe_refresh_shell_snapshot_for_cwd(
-            &previous_cwd,
-            &session_configuration.cwd,
-            &codex_home,
-            &session_source,
-        );
+            self.maybe_refresh_shell_snapshot_for_cwd(
+                &previous_cwd,
+                &next.cwd,
+                &codex_home,
+                &session_source,
+            );
 
-        Ok(self
-            .new_turn_from_configuration(
-                sub_id,
-                session_configuration,
-                updates.final_output_json_schema,
-                sandbox_policy_changed,
-            )
-            .await)
+            return Ok(self
+                .new_turn_from_configuration(
+                    sub_id,
+                    next,
+                    updates.final_output_json_schema,
+                    sandbox_policy_changed,
+                )
+                .await);
+        }
     }
 
     async fn new_turn_from_configuration(
@@ -2550,13 +2587,22 @@ impl Session {
         };
         let shell = self.user_shell();
         let exec_policy = self.services.exec_policy.current();
-        crate::context_manager::updates::build_settings_update_items(
-            reference_context_item,
-            previous_turn_settings.as_ref(),
-            current_context,
+        let loaded_plugins = self
+            .services
+            .plugins_manager
+            .plugins_for_config(&current_context.config);
+        let diff_context = TurnContextDiffParams::new(
             shell.as_ref(),
+            previous_turn_settings.as_ref(),
             exec_policy.as_ref(),
             self.features.enabled(Feature::Personality),
+            None,
+            Some(loaded_plugins.capability_summaries()),
+        );
+        crate::context_manager::updates::build_settings_update_items(
+            reference_context_item,
+            current_context,
+            &diff_context,
         )
     }
 
@@ -2701,24 +2747,8 @@ impl Session {
             return;
         };
         let text = format!("Approved command prefix saved:\n{prefixes}");
-        let message: ResponseItem = DeveloperInstructions::new(text.clone()).into();
-
-        if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
-            self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
-                .await;
-            return;
-        }
-
-        if self
-            .inject_response_items(vec![ResponseInputItem::Message {
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText { text }],
-            }])
-            .await
-            .is_err()
-        {
-            warn!("no active turn found to record execpolicy amendment message for {sub_id}");
-        }
+        self.record_or_inject_developer_text_for_sub_id(sub_id, text)
+            .await;
     }
 
     pub(crate) async fn persist_network_policy_amendment(
@@ -2798,23 +2828,26 @@ impl Session {
             "{action} network rule saved in execpolicy ({list_name}): {}",
             amendment.host
         );
-        let message: ResponseItem = DeveloperInstructions::new(text.clone()).into();
+        self.record_or_inject_developer_text_for_sub_id(sub_id, text)
+            .await;
+    }
 
+    async fn record_or_inject_developer_text_for_sub_id(&self, sub_id: &str, text: String) {
         if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
+            let message = DeveloperTextFragment::new(text.clone()).into_message();
             self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
                 .await;
             return;
         }
 
         if self
-            .inject_response_items(vec![ResponseInputItem::Message {
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText { text }],
-            }])
+            .inject_response_items(vec![
+                DeveloperTextFragment::new(text).into_response_input_item(),
+            ])
             .await
             .is_err()
         {
-            warn!("no active turn found to record network policy amendment message for {sub_id}");
+            warn!("no active turn found to record amendment message for {sub_id}");
         }
     }
 
@@ -3397,165 +3430,119 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Vec<ResponseItem> {
-        let mut developer_sections = Vec::<String>::with_capacity(8);
-        let mut contextual_user_sections = Vec::<String>::with_capacity(2);
-        let shell = self.user_shell();
-        let (
-            reference_context_item,
-            previous_turn_settings,
-            collaboration_mode,
-            base_instructions,
-            session_source,
-        ) = {
+        let mut developer_envelope =
+            crate::context_manager::updates::DeveloperEnvelopeBuilder::default();
+        let mut contextual_user_envelope =
+            crate::context_manager::updates::ContextualUserEnvelopeBuilder::default();
+        let (previous_turn_settings, base_instructions, session_source) = {
             let state = self.state.lock().await;
             (
-                state.reference_context_item(),
                 state.previous_turn_settings(),
-                state.session_configuration.collaboration_mode.clone(),
                 state.session_configuration.base_instructions.clone(),
                 state.session_configuration.session_source.clone(),
             )
         };
-        if let Some(model_switch_message) =
-            crate::context_manager::updates::build_model_instructions_update_item(
-                previous_turn_settings.as_ref(),
-                turn_context,
-            )
-        {
-            developer_sections.push(model_switch_message.into_text());
-        }
-        developer_sections.push(
-            DeveloperInstructions::from_policy(
-                turn_context.sandbox_policy.get(),
-                turn_context.approval_policy.value(),
-                self.services.exec_policy.current().as_ref(),
-                &turn_context.cwd,
-                turn_context
-                    .features
-                    .enabled(Feature::ExecPermissionApprovals),
-                turn_context
-                    .features
-                    .enabled(Feature::RequestPermissionsTool),
-            )
-            .into_text(),
-        );
         let separate_guardian_developer_message =
             crate::guardian::is_guardian_subagent_source(&session_source);
-        // Keep the guardian policy prompt out of the aggregated developer bundle so it
-        // stays isolated as its own top-level developer message for guardian subagents.
-        if !separate_guardian_developer_message
-            && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
-        {
-            developer_sections.push(developer_instructions.to_string());
-        }
-        // Add developer instructions for memories.
-        if turn_context.features.enabled(Feature::MemoryTool)
-            && turn_context.config.memories.use_memories
-            && let Some(memory_prompt) =
-                build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
-        {
-            developer_sections.push(memory_prompt);
-        }
-        // Add developer instructions from collaboration_mode if they exist and are non-empty
-        if let Some(collab_instructions) =
-            DeveloperInstructions::from_collaboration_mode(&collaboration_mode)
-        {
-            developer_sections.push(collab_instructions.into_text());
-        }
-        if let Some(realtime_update) = crate::context_manager::updates::build_initial_realtime_item(
-            reference_context_item.as_ref(),
-            previous_turn_settings.as_ref(),
-            turn_context,
-        ) {
-            developer_sections.push(realtime_update.into_text());
-        }
-        if self.features.enabled(Feature::Personality)
-            && let Some(personality) = turn_context.personality
-        {
-            let model_info = turn_context.model_info.clone();
-            let has_baked_personality = model_info.supports_personality()
-                && base_instructions == model_info.get_model_instructions(Some(personality));
-            if !has_baked_personality
-                && let Some(personality_message) =
-                    crate::context_manager::updates::personality_message_for(
-                        &model_info,
-                        personality,
-                    )
-            {
-                developer_sections.push(
-                    DeveloperInstructions::personality_spec_message(personality_message)
-                        .into_text(),
-                );
-            }
-        }
-        if turn_context.apps_enabled() {
-            developer_sections.push(render_apps_section());
-        }
-        let implicit_skills = turn_context
-            .turn_skills
-            .outcome
-            .allowed_skills_for_implicit_invocation();
-        if let Some(skills_section) = render_skills_section(&implicit_skills) {
-            developer_sections.push(skills_section);
-        }
+        let shell = self.user_shell();
+        let exec_policy = self.services.exec_policy.current();
         let loaded_plugins = self
             .services
             .plugins_manager
             .plugins_for_config(&turn_context.config);
-        if let Some(plugin_section) = render_plugins_section(loaded_plugins.capability_summaries())
-        {
-            developer_sections.push(plugin_section);
-        }
-        if turn_context.features.enabled(Feature::CodexGitCommit)
-            && let Some(commit_message_instruction) = commit_message_trailer_instruction(
-                turn_context.config.commit_attribution.as_deref(),
-            )
-        {
-            developer_sections.push(commit_message_instruction);
-        }
-        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            contextual_user_sections.push(
-                UserInstructions {
-                    text: user_instructions.to_string(),
-                    directory: turn_context.cwd.to_string_lossy().into_owned(),
+        let diff_context = TurnContextDiffParams::new(
+            shell.as_ref(),
+            previous_turn_settings.as_ref(),
+            exec_policy.as_ref(),
+            self.features.enabled(Feature::Personality),
+            Some(base_instructions.as_str()),
+            Some(loaded_plugins.capability_summaries()),
+        );
+        let guardian_only_developer_instructions = separate_guardian_developer_message
+            .then_some(turn_context.developer_instructions.as_deref())
+            .flatten();
+        for fragment in crate::model_visible_fragments::build_turn_state_fragments(
+            None,
+            turn_context,
+            &diff_context,
+        ) {
+            match fragment {
+                crate::model_visible_fragments::BuiltTurnStateFragment::Developer(fragment) => {
+                    if guardian_only_developer_instructions == Some(fragment.render_text().as_str())
+                    {
+                        continue;
+                    }
+                    developer_envelope.push(fragment);
                 }
-                .serialize_to_text(),
-            );
+                crate::model_visible_fragments::BuiltTurnStateFragment::ContextualUser(
+                    fragment,
+                ) => {
+                    contextual_user_envelope.push_fragment(fragment);
+                }
+            }
+        }
+        let memory_prompt = if turn_context.features.enabled(Feature::MemoryTool)
+            && turn_context.config.memories.use_memories
+        {
+            build_memory_tool_developer_instructions(&turn_context.config.codex_home).await
+        } else {
+            None
+        };
+        for fragment in [
+            memory_prompt.map(DeveloperTextFragment::new),
+            turn_context
+                .features
+                .enabled(Feature::CodexGitCommit)
+                .then(|| {
+                    commit_message_trailer_instruction(
+                        turn_context.config.commit_attribution.as_deref(),
+                    )
+                })
+                .flatten()
+                .map(DeveloperTextFragment::new),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            developer_envelope.push(fragment);
         }
         let subagents = self
             .services
             .agent_control
             .format_environment_context_subagents(self.conversation_id)
             .await;
-        contextual_user_sections.push(
-            EnvironmentContext::from_turn_context(turn_context, shell.as_ref())
-                .with_subagents(subagents)
-                .serialize_to_xml(),
-        );
-
-        let mut items = Vec::with_capacity(3);
-        if let Some(developer_message) =
-            crate::context_manager::updates::build_developer_update_item(developer_sections)
+        if let Some(subagent_roster) =
+            crate::model_visible_fragments::SubagentRosterContext::new(subagents)
         {
+            developer_envelope.push(subagent_roster);
+        }
+        let mut items = Vec::with_capacity(3);
+        if let Some(developer_message) = developer_envelope.build() {
             items.push(developer_message);
         }
-        if let Some(contextual_user_message) =
-            crate::context_manager::updates::build_contextual_user_message(contextual_user_sections)
-        {
-            items.push(contextual_user_message);
+        if let Some(model_visible_context) = contextual_user_envelope.build() {
+            items.push(model_visible_context);
         }
         // Emit the guardian policy prompt as a separate developer item so the guardian
         // subagent sees a distinct, easy-to-audit instruction block.
         if separate_guardian_developer_message
             && let Some(developer_instructions) = turn_context.developer_instructions.as_deref()
-            && let Some(guardian_developer_message) =
-                crate::context_manager::updates::build_developer_update_item(vec![
-                    developer_instructions.to_string(),
-                ])
         {
-            items.push(guardian_developer_message);
+            items.push(DeveloperTextFragment::new(developer_instructions).into_message());
         }
         items
+    }
+
+    /// Build full initial context with no diff baseline.
+    ///
+    /// This is used by compaction replacement-history rebuilds, where we must
+    /// reinsert canonical current context regardless of what persisted
+    /// `reference_context_item` says.
+    pub(crate) async fn build_initial_context_without_reference_context_item(
+        &self,
+        turn_context: &TurnContext,
+    ) -> Vec<ResponseItem> {
+        self.build_initial_context(turn_context).await
     }
 
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
@@ -5337,6 +5324,7 @@ async fn spawn_review_thread(
         app_server_client_name: parent_turn_context.app_server_client_name.clone(),
         developer_instructions: None,
         user_instructions: None,
+        project_doc_instructions: parent_turn_context.project_doc_instructions.clone(),
         compact_prompt: parent_turn_context.compact_prompt.clone(),
         collaboration_mode: parent_turn_context.collaboration_mode.clone(),
         personality: parent_turn_context.personality,
@@ -5705,8 +5693,8 @@ pub(crate) async fn run_turn(
                 break;
             }
             if let Some(additional_context) = session_start_outcome.additional_context {
-                let developer_message: ResponseItem =
-                    DeveloperInstructions::new(additional_context).into();
+                let developer_message =
+                    DeveloperTextFragment::new(additional_context).into_message();
                 sess.record_conversation_items(
                     &turn_context,
                     std::slice::from_ref(&developer_message),
@@ -5849,8 +5837,8 @@ pub(crate) async fn run_turn(
                     if stop_outcome.should_block {
                         if let Some(continuation_prompt) = stop_outcome.continuation_prompt.clone()
                         {
-                            let developer_message: ResponseItem =
-                                DeveloperInstructions::new(continuation_prompt).into();
+                            let developer_message =
+                                DeveloperTextFragment::new(continuation_prompt).into_message();
                             sess.record_conversation_items(
                                 &turn_context,
                                 std::slice::from_ref(&developer_message),

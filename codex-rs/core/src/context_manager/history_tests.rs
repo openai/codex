@@ -70,6 +70,18 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
     }
 }
 
+fn developer_input_text_msg(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
 fn custom_tool_call_output(call_id: &str, output: &str) -> ResponseItem {
     ResponseItem::CustomToolCallOutput {
         call_id: call_id.to_string(),
@@ -705,7 +717,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
         ),
         user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
-        user_input_text_msg(
+        developer_input_text_msg(
             "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
         ),
         user_input_text_msg("turn 1 user"),
@@ -727,7 +739,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
         ),
         user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
-        user_input_text_msg(
+        developer_input_text_msg(
             "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
         ),
         user_input_text_msg("turn 1 user"),
@@ -748,7 +760,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
         ),
         user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
-        user_input_text_msg(
+        developer_input_text_msg(
             "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
         ),
     ];
@@ -762,7 +774,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
         ),
         user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
-        user_input_text_msg(
+        developer_input_text_msg(
             "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
         ),
         user_input_text_msg("turn 1 user"),
@@ -782,7 +794,7 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
             "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
         ),
         user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
-        user_input_text_msg(
+        developer_input_text_msg(
             "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>",
         ),
         user_input_text_msg("turn 1 user"),

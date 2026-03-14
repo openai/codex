@@ -2468,6 +2468,8 @@ pub struct TurnContextItem {
     pub effort: Option<ReasoningEffortConfig>,
     pub summary: ReasoningSummaryConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_doc_instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub user_instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub developer_instructions: Option<String>,
@@ -4262,6 +4264,7 @@ mod tests {
             realtime_active: None,
             effort: None,
             summary: ReasoningSummaryConfig::Auto,
+            project_doc_instructions: None,
             user_instructions: None,
             developer_instructions: None,
             final_output_json_schema: None,

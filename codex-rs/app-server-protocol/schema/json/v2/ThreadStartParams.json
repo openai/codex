@@ -142,6 +142,7 @@
       ]
     },
     "developerInstructions": {
+      "description": "Custom developer override for this thread session. Takes precedence over `~/.codex/config.toml` `developer_instructions`.",
       "type": [
         "string",
         "null"

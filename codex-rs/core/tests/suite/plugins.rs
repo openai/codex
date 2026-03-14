@@ -225,6 +225,7 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
     let request = resp_mock.single_request();
     let developer_messages = request.message_input_texts("developer");
     let developer_text = developer_messages.join("\n\n");
+    let user_texts = request.message_input_texts("user");
     let apps_pos = developer_text
         .find("## Apps")
         .expect("expected apps section in developer message");
@@ -253,6 +254,25 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
     assert!(
         developer_text.contains("sample:sample-search: inspect sample data"),
         "expected namespaced plugin skill summary in developer message: {developer_messages:?}"
+    );
+    assert!(
+        developer_text.contains("<apps_instructions>"),
+        "expected apps instructions wrapper in developer message: {developer_messages:?}"
+    );
+    assert!(
+        developer_text.contains("<skills_instructions>"),
+        "expected skills instructions wrapper in developer message: {developer_messages:?}"
+    );
+    assert!(
+        developer_text.contains("<plugins_instructions>"),
+        "expected plugins instructions wrapper in developer message: {developer_messages:?}"
+    );
+    assert!(
+        user_texts
+            .iter()
+            .all(|text| !text.starts_with("<skills_instructions>")
+                && !text.starts_with("<plugins_instructions>")),
+        "expected general capability instructions to stay out of user messages: {user_texts:?}"
     );
 
     Ok(())

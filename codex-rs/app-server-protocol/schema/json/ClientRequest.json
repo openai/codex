@@ -2547,6 +2547,7 @@
           ]
         },
         "developerInstructions": {
+          "description": "Custom developer override for this thread session. Takes precedence over `~/.codex/config.toml` `developer_instructions`.",
           "type": [
             "string",
             "null"
@@ -2795,7 +2796,7 @@
       "type": "object"
     },
     "ThreadResumeParams": {
-      "description": "There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.\n\nThe precedence is: history > path > thread_id. If using history or path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
+      "description": "There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.\n\nThe precedence is: history > path > thread_id. If using history or path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.\n\nWhen resuming a thread that is already loaded/running, override fields are ignored and reported as mismatch warnings rather than being reapplied mid-session.",
       "properties": {
         "approvalPolicy": {
           "anyOf": [
@@ -2838,6 +2839,7 @@
           ]
         },
         "developerInstructions": {
+          "description": "Custom developer override for this thread session. Takes precedence over `~/.codex/config.toml` `developer_instructions`.",
           "type": [
             "string",
             "null"
@@ -3000,6 +3002,7 @@
           ]
         },
         "developerInstructions": {
+          "description": "Custom developer override for this thread session. Takes precedence over `~/.codex/config.toml` `developer_instructions`.",
           "type": [
             "string",
             "null"

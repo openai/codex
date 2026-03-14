@@ -10,6 +10,8 @@ use crate::config_loader::Sourced;
 use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
+use crate::model_visible_context::DeveloperTextFragment;
+use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
@@ -63,9 +65,9 @@ use codex_network_proxy::NetworkProxyConfig;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::developer_personality_spec_text;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::RealtimeAudioFrame;
@@ -157,6 +159,15 @@ fn developer_input_texts(items: &[ResponseItem]) -> Vec<&str> {
             _ => None,
         })
         .collect()
+}
+
+fn default_image_save_developer_message_text() -> String {
+    let image_output_dir = crate::stream_events_utils::default_image_generation_output_dir();
+    format!(
+        "Generated images are saved to {} as {} by default.",
+        image_output_dir.display(),
+        image_output_dir.join("<image_id>.png").display(),
+    )
 }
 
 fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
@@ -1018,6 +1029,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         realtime_active: Some(turn_context.realtime_active),
         effort: turn_context.reasoning_effort,
         summary: turn_context.reasoning_summary,
+        project_doc_instructions: None,
         user_instructions: None,
         developer_instructions: None,
         final_output_json_schema: None,
@@ -1536,6 +1548,7 @@ async fn set_rate_limits_retains_previous_credits() {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
+        project_doc_instructions: None,
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
         personality: config.personality,
@@ -1633,6 +1646,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
+        project_doc_instructions: None,
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
         personality: config.personality,
@@ -1988,6 +2002,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
+        project_doc_instructions: None,
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
         personality: config.personality,
@@ -2142,6 +2157,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
+        project_doc_instructions: None,
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
         personality: config.personality,
@@ -2236,6 +2252,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
+        project_doc_instructions: None,
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
         personality: config.personality,
@@ -2911,6 +2928,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
+        project_doc_instructions: None,
         user_instructions: config.user_instructions.clone(),
         service_tier: None,
         personality: config.personality,
@@ -3337,7 +3355,7 @@ async fn build_settings_update_items_uses_previous_turn_settings_for_realtime_en
 }
 
 #[tokio::test]
-async fn build_initial_context_uses_previous_realtime_state() {
+async fn build_settings_update_items_omits_duplicate_realtime_start_when_baseline_exists() {
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.realtime_active = true;
 
@@ -3355,13 +3373,91 @@ async fn build_initial_context_uses_previous_realtime_state() {
         let mut state = session.state.lock().await;
         state.set_reference_context_item(Some(previous_context_item));
     }
-    let resumed_context = session.build_initial_context(&turn_context).await;
+    let resumed_context = session
+        .build_settings_update_items(
+            session.reference_context_item().await.as_ref(),
+            &turn_context,
+        )
+        .await;
     let resumed_developer_texts = developer_input_texts(&resumed_context);
     assert!(
         !resumed_developer_texts
             .iter()
             .any(|text| text.contains("<realtime_conversation>")),
         "did not expect a duplicate realtime update, got {resumed_developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_settings_update_items_emits_collaboration_mode_when_legacy_baseline_lacks_mode() {
+    let (session, previous_context) = make_session_and_context().await;
+    let mut current_context = previous_context
+        .with_model(
+            previous_context.model_info.slug.clone(),
+            &session.services.models_manager,
+        )
+        .await;
+    current_context
+        .collaboration_mode
+        .settings
+        .developer_instructions = Some("legacy baseline collaboration instructions".to_string());
+
+    let mut previous_context_item = previous_context.to_turn_context_item();
+    previous_context_item.collaboration_mode = None;
+
+    let update_items = session
+        .build_settings_update_items(Some(&previous_context_item), &current_context)
+        .await;
+
+    let developer_texts = developer_input_texts(&update_items);
+    assert!(
+        developer_texts.iter().any(|text| {
+            text.contains("<collaboration_mode>")
+                && text.contains("legacy baseline collaboration instructions")
+        }),
+        "expected collaboration mode update from legacy baseline without persisted mode, got {developer_texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn build_settings_update_items_emits_agents_reset_when_project_doc_disappears() {
+    let (session, mut previous_context) = make_session_and_context().await;
+    previous_context.project_doc_instructions = Some("old agents body".to_string());
+    let mut current_context = previous_context
+        .with_model(
+            previous_context.model_info.slug.clone(),
+            &session.services.models_manager,
+        )
+        .await;
+    current_context.cwd = PathBuf::from("/tmp/without-agents");
+    current_context.project_doc_instructions = None;
+
+    let update_items = session
+        .build_settings_update_items(
+            Some(&previous_context.to_turn_context_item()),
+            &current_context,
+        )
+        .await;
+
+    let agents_reset = update_items
+        .iter()
+        .find_map(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                content.iter().find_map(|entry| match entry {
+                    ContentItem::InputText { text } => text
+                        .starts_with("# AGENTS.md instructions for ")
+                        .then_some(text.as_str()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
+        .expect("expected AGENTS reset item");
+    assert!(
+        agents_reset.starts_with(
+            "# AGENTS.md instructions for /tmp/without-agents\n\n<INSTRUCTIONS>\n\n</INSTRUCTIONS>"
+        ),
+        "expected AGENTS reset fragment, got {agents_reset:?}"
     );
 }
 
@@ -3406,12 +3502,13 @@ async fn build_initial_context_omits_default_image_save_location_without_image_h
 }
 
 #[tokio::test]
-async fn handle_output_item_done_records_image_save_history_message() {
+async fn handle_output_item_done_records_image_save_message_after_successful_save() {
     let (session, turn_context) = make_session_and_context().await;
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_records_message";
-    let expected_saved_path = std::env::temp_dir().join(format!("{call_id}.png"));
+    let expected_saved_path = crate::stream_events_utils::default_image_generation_output_dir()
+        .join(format!("{call_id}.png"));
     let _ = std::fs::remove_file(&expected_saved_path);
     let item = ResponseItem::ImageGenerationCall {
         id: call_id.to_string(),
@@ -3431,13 +3528,9 @@ async fn handle_output_item_done_records_image_save_history_message() {
         .expect("image generation item should succeed");
 
     let history = session.clone_history().await;
-    let save_message: ResponseItem = DeveloperInstructions::new(format!(
-        "Generated images are saved to {} as {} by default.",
-        std::env::temp_dir().display(),
-        std::env::temp_dir().join("<image_id>.png").display(),
-    ))
-    .into();
-    assert_eq!(history.raw_items(), &[save_message, item]);
+    let expected_message: ResponseItem =
+        DeveloperTextFragment::new(default_image_save_developer_message_text()).into_message();
+    assert_eq!(history.raw_items(), &[expected_message, item]);
     assert_eq!(
         std::fs::read(&expected_saved_path).expect("saved file"),
         b"foo"
@@ -3451,7 +3544,8 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_no_message";
-    let expected_saved_path = std::env::temp_dir().join(format!("{call_id}.png"));
+    let expected_saved_path = crate::stream_events_utils::default_image_generation_output_dir()
+        .join(format!("{call_id}.png"));
     let _ = std::fs::remove_file(&expected_saved_path);
     let item = ResponseItem::ImageGenerationCall {
         id: call_id.to_string(),
@@ -4148,7 +4242,7 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
                 let ContentItem::InputText { text } = content_item else {
                     return false;
                 };
-                text.contains(crate::contextual_user_message::TURN_ABORTED_OPEN_TAG)
+                text.contains(crate::model_visible_context::TURN_ABORTED_OPEN_TAG)
             })
         }),
         "expected a model-visible turn aborted marker in history after interrupt"
@@ -4243,7 +4337,8 @@ async fn sample_rollout(
             .as_ref()
             .and_then(|m| m.get_personality_message(Some(p)).filter(|s| !s.is_empty()))
     {
-        let msg = DeveloperInstructions::personality_spec_message(personality_message).into();
+        let msg = DeveloperTextFragment::new(developer_personality_spec_text(personality_message))
+            .into_message();
         let insert_at = initial_context
             .iter()
             .position(|m| matches!(m, ResponseItem::Message { role, .. } if role == "developer"))

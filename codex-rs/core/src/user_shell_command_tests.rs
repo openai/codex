@@ -7,10 +7,11 @@ use pretty_assertions::assert_eq;
 #[test]
 fn detects_user_shell_command_text_variants() {
     assert!(
-        USER_SHELL_COMMAND_FRAGMENT
-            .matches_text("<user_shell_command>\necho hi\n</user_shell_command>")
+        <UserShellCommandFragment as crate::model_visible_context::ModelVisibleContextFragment>::matches_contextual_user_text("<user_shell_command>\necho hi\n</user_shell_command>")
     );
-    assert!(!USER_SHELL_COMMAND_FRAGMENT.matches_text("echo hi"));
+    assert!(
+        !<UserShellCommandFragment as crate::model_visible_context::ModelVisibleContextFragment>::matches_contextual_user_text("echo hi")
+    );
 }
 
 #[tokio::test]
