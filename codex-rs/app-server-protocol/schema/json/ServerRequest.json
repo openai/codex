@@ -1449,7 +1449,7 @@
           "type": "string"
         },
         "permissions": {
-          "$ref": "#/definitions/AdditionalPermissionProfile"
+          "$ref": "#/definitions/RequestPermissionProfile"
         },
         "reason": {
           "type": [
@@ -1482,6 +1482,32 @@
           "type": "integer"
         }
       ]
+    },
+    "RequestPermissionProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "fileSystem": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalFileSystemPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalNetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "ThreadId": {
       "type": "string"

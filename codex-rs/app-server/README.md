@@ -940,7 +940,7 @@ Order of messages:
 
 ### Permission requests
 
-The built-in `request_permissions` tool sends an `item/permissions/requestApproval` JSON-RPC request to the client with the requested permission profile. Today that commonly means additional filesystem access, but the payload is intentionally general so future requests can include non-filesystem permissions too. This request is part of the v2 protocol surface.
+The built-in `request_permissions` tool sends an `item/permissions/requestApproval` JSON-RPC request to the client with the requested permission profile. This v2 payload mirrors the standalone tool's narrower permission shape, so it can request network access and additional filesystem access but does not include the broader `macos` branch used by command-execution `additionalPermissions`.
 
 ```json
 {
