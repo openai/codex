@@ -36,6 +36,7 @@ use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::MessagePhase;
+use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
@@ -244,6 +245,9 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
     },
+
+    /// Inject non-user response items into an existing turn, or start a turn if needed.
+    InjectResponseItems { items: Vec<ResponseInputItem> },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
     /// for a turn of a [`crate::codex_thread::CodexThread`].
@@ -531,6 +535,7 @@ impl Op {
             Self::UserInputAnswer { .. } => "user_input_answer",
             Self::RequestPermissionsResponse { .. } => "request_permissions_response",
             Self::DynamicToolResponse { .. } => "dynamic_tool_response",
+            Self::InjectResponseItems { .. } => "inject_response_items",
             Self::AddToHistory { .. } => "add_to_history",
             Self::GetHistoryEntryRequest { .. } => "get_history_entry_request",
             Self::ListMcpTools => "list_mcp_tools",

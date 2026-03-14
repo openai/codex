@@ -55,6 +55,7 @@ use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::MessagePhase;
@@ -1644,6 +1645,34 @@ async fn thread_snapshot_replay_preserves_agent_message_during_review_mode() {
     let inserted = drain_insert_history(&mut rx);
     assert_eq!(inserted.len(), 1);
     assert!(lines_to_single_string(&inserted[0]).contains("Review progress update"));
+}
+
+#[tokio::test]
+async fn raw_agent_inbox_response_item_renders_info_cell() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+    let sender_thread_id = ThreadId::new();
+    let payload = AgentInboxPayload::new(sender_thread_id, "watchdog update".to_string());
+
+    chat.handle_codex_event(Event {
+        id: "agent-inbox".into(),
+        msg: EventMsg::RawResponseItem(RawResponseItemEvent {
+            item: ResponseItem::FunctionCallOutput {
+                call_id: "agent-call".to_string(),
+                output: FunctionCallOutputPayload {
+                    body: FunctionCallOutputBody::Text(
+                        serde_json::to_string(&payload).expect("payload json"),
+                    ),
+                    ..Default::default()
+                },
+            },
+        }),
+    });
+
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    let rendered = lines_to_single_string(&inserted[0]);
+    assert!(rendered.contains("Agent message: watchdog update"));
+    assert!(rendered.contains(&sender_thread_id.to_string()));
 }
 
 /// Exiting review restores the pre-review context window indicator.
