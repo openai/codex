@@ -37,10 +37,19 @@ pub(crate) async fn maybe_prepare_unified_exec(
     req: &UnifiedExecRequest,
     attempt: &SandboxAttempt<'_>,
     ctx: &ToolCtx,
+    shell_command: &[String],
     exec_request: ExecRequest,
     zsh_fork_config: &ZshForkConfig,
 ) -> Result<Option<PreparedUnifiedExecSpawn>, ToolError> {
-    imp::maybe_prepare_unified_exec(req, attempt, ctx, exec_request, zsh_fork_config).await
+    imp::maybe_prepare_unified_exec(
+        req,
+        attempt,
+        ctx,
+        shell_command,
+        exec_request,
+        zsh_fork_config,
+    )
+    .await
 }
 
 #[cfg(unix)]
@@ -53,21 +62,29 @@ mod imp {
 
     #[derive(Debug)]
     struct ZshForkSpawnLifecycle {
-        escalation_session: EscalationSession,
+        escalation_session: Option<EscalationSession>,
     }
 
     impl SpawnLifecycle for ZshForkSpawnLifecycle {
         fn inherited_fds(&self) -> Vec<i32> {
             self.escalation_session
-                .env()
-                .get(ESCALATE_SOCKET_ENV_VAR)
+                .as_ref()
+                .and_then(|escalation_session| {
+                    escalation_session.env().get(ESCALATE_SOCKET_ENV_VAR)
+                })
                 .and_then(|fd| fd.parse().ok())
                 .into_iter()
                 .collect()
         }
 
         fn after_spawn(&mut self) {
-            self.escalation_session.close_client_socket();
+            if let Some(escalation_session) = self.escalation_session.as_ref() {
+                escalation_session.close_client_socket();
+            }
+        }
+
+        fn after_exit(&mut self) {
+            self.escalation_session = None;
         }
     }
 
@@ -84,6 +101,7 @@ mod imp {
         req: &UnifiedExecRequest,
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
+        shell_command: &[String],
         exec_request: ExecRequest,
         zsh_fork_config: &ZshForkConfig,
     ) -> Result<Option<PreparedUnifiedExecSpawn>, ToolError> {
@@ -91,6 +109,7 @@ mod imp {
             req,
             attempt,
             ctx,
+            shell_command,
             exec_request,
             zsh_fork_config.shell_zsh_path.as_path(),
             zsh_fork_config.main_execve_wrapper_exe.as_path(),
@@ -103,7 +122,7 @@ mod imp {
         Ok(Some(PreparedUnifiedExecSpawn {
             exec_request: prepared.exec_request,
             spawn_lifecycle: Box::new(ZshForkSpawnLifecycle {
-                escalation_session: prepared.escalation_session,
+                escalation_session: Some(prepared.escalation_session),
             }),
         }))
     }
@@ -127,10 +146,18 @@ mod imp {
         req: &UnifiedExecRequest,
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
+        shell_command: &[String],
         exec_request: ExecRequest,
         zsh_fork_config: &ZshForkConfig,
     ) -> Result<Option<PreparedUnifiedExecSpawn>, ToolError> {
-        let _ = (req, attempt, ctx, exec_request, zsh_fork_config);
+        let _ = (
+            req,
+            attempt,
+            ctx,
+            shell_command,
+            exec_request,
+            zsh_fork_config,
+        );
         Ok(None)
     }
 }

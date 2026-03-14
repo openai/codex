@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
+#[cfg(unix)]
+use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -31,7 +33,15 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
+#[cfg(unix)]
+use core_test_support::zsh_fork::build_unified_exec_zsh_fork_test;
+#[cfg(unix)]
+use core_test_support::zsh_fork::find_host_zsh_path;
+#[cfg(unix)]
+use core_test_support::zsh_fork::zsh_fork_runtime;
 use pretty_assertions::assert_eq;
+#[cfg(unix)]
+use regex_lite::Regex;
 use serde_json::Value;
 use serde_json::json;
 use tokio::time::Duration;
@@ -135,6 +145,172 @@ fn collect_tool_outputs(bodies: &[Value]) -> Result<HashMap<String, ParsedUnifie
         }
     }
     Ok(outputs)
+}
+
+#[cfg(unix)]
+fn process_text_binary_path(pid: &str) -> Result<PathBuf> {
+    let output = std::process::Command::new("lsof")
+        .args(["-Fn", "-a", "-p", pid, "-d", "txt"])
+        .output()
+        .with_context(|| format!("failed to inspect process {pid} executable mapping with lsof"))?;
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "lsof failed for pid {pid} with status {:?}",
+            output.status.code()
+        ));
+    }
+
+    let stdout = String::from_utf8(output.stdout).context("lsof output was not UTF-8")?;
+    let path = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix('n'))
+        .ok_or_else(|| anyhow::anyhow!("lsof did not report a text binary path for pid {pid}"))?;
+    Ok(PathBuf::from(path))
+}
+
+#[cfg(unix)]
+#[allow(clippy::expect_used)]
+async fn run_unified_exec_zsh_fork_nested_zsh_rewrite_test(
+    enable_shell_snapshot: bool,
+) -> Result<()> {
+    let test_name = if enable_shell_snapshot {
+        "unified exec zsh-fork nested zsh rewrite test with shell snapshot"
+    } else {
+        "unified exec zsh-fork nested zsh rewrite test"
+    };
+    let Some(runtime) = zsh_fork_runtime(test_name)? else {
+        return Ok(());
+    };
+    let configured_zsh_path =
+        fs::canonicalize(runtime.zsh_path()).unwrap_or_else(|_| runtime.zsh_path().to_path_buf());
+    let host_zsh = match find_host_zsh_path() {
+        Some(path) => path,
+        None => {
+            eprintln!("host zsh not found, skipping nested zsh rewrite test.");
+            return Ok(());
+        }
+    };
+
+    let server = start_mock_server().await;
+    let test = if enable_shell_snapshot {
+        let mut builder = test_codex().with_config({
+            let runtime = runtime.clone();
+            move |config| {
+                runtime.apply_to_config(
+                    config,
+                    AskForApproval::Never,
+                    SandboxPolicy::new_workspace_write_policy(),
+                );
+                config.use_experimental_unified_exec_tool = true;
+                config
+                    .features
+                    .enable(Feature::UnifiedExec)
+                    .expect("test config should allow feature update");
+                config
+                    .features
+                    .enable(Feature::ShellSnapshot)
+                    .expect("test config should allow feature update");
+            }
+        });
+        builder.build(&server).await?
+    } else {
+        build_unified_exec_zsh_fork_test(
+            &server,
+            runtime,
+            AskForApproval::Never,
+            SandboxPolicy::new_workspace_write_policy(),
+            |_| {},
+        )
+        .await?
+    };
+
+    let start_call_id = if enable_shell_snapshot {
+        "uexec-zsh-fork-nested-start-snapshot"
+    } else {
+        "uexec-zsh-fork-nested-start"
+    };
+    let nested_command = format!(
+        "exec {} -lc 'echo CODEX_NESTED_ZSH_PID=$$; sleep 3; :'",
+        host_zsh.display(),
+    );
+    let start_args = serde_json::json!({
+        "cmd": nested_command,
+        "yield_time_ms": 500,
+        "tty": true,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-nested-1"),
+            ev_function_call(
+                start_call_id,
+                "exec_command",
+                &serde_json::to_string(&start_args)?,
+            ),
+            ev_completed("resp-nested-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-nested-1", "done"),
+            ev_completed("resp-nested-2"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "test nested zsh rewrite behavior".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+    let outputs = collect_tool_outputs(&bodies)?;
+
+    let start_output = outputs
+        .get(start_call_id)
+        .expect("missing start output for nested zsh exec_command");
+    let normalized = start_output.output.replace("\r\n", "\n");
+    let nested_zsh_pid = Regex::new(r"CODEX_NESTED_ZSH_PID=(\d+)")
+        .expect("valid nested zsh pid regex")
+        .captures(&normalized)
+        .and_then(|captures| captures.get(1))
+        .map(|value| value.as_str().to_string())
+        .with_context(|| format!("missing nested zsh pid marker in output {normalized:?}"))?;
+    assert!(
+        process_is_alive(&nested_zsh_pid)?,
+        "nested zsh process should be running before release, got output {normalized:?}"
+    );
+
+    let nested_text_binary = process_text_binary_path(&nested_zsh_pid)?;
+    let nested_text_binary = fs::canonicalize(&nested_text_binary).unwrap_or(nested_text_binary);
+    assert_eq!(
+        nested_text_binary, configured_zsh_path,
+        "nested zsh exec should be rewritten to configured zsh-fork binary, got {:?}",
+        nested_text_binary,
+    );
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1305,7 +1481,6 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
         .into_iter()
         .map(|request| request.body_json())
         .collect::<Vec<_>>();
-
     let outputs = collect_tool_outputs(&bodies)?;
     let metadata = outputs
         .get(call_id)
@@ -1427,7 +1602,6 @@ async fn unified_exec_defaults_to_pipe() -> Result<()> {
         .into_iter()
         .map(|request| request.body_json())
         .collect::<Vec<_>>();
-
     let outputs = collect_tool_outputs(&bodies)?;
     let output = outputs
         .get(call_id)
@@ -1521,7 +1695,6 @@ async fn unified_exec_can_enable_tty() -> Result<()> {
         .into_iter()
         .map(|request| request.body_json())
         .collect::<Vec<_>>();
-
     let outputs = collect_tool_outputs(&bodies)?;
     let output = outputs
         .get(call_id)
@@ -1606,7 +1779,6 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
         .into_iter()
         .map(|request| request.body_json())
         .collect::<Vec<_>>();
-
     let outputs = collect_tool_outputs(&bodies)?;
     let output = outputs
         .get(call_id)
@@ -1803,6 +1975,252 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
+async fn unified_exec_zsh_fork_keeps_python_repl_attached_to_zsh_session() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("unified exec zsh-fork tty session test")? else {
+        return Ok(());
+    };
+    let configured_zsh_path =
+        fs::canonicalize(runtime.zsh_path()).unwrap_or_else(|_| runtime.zsh_path().to_path_buf());
+
+    let python = match which("python3") {
+        Ok(path) => path,
+        Err(_) => {
+            eprintln!("python3 not found in PATH, skipping zsh-fork python repl test.");
+            return Ok(());
+        }
+    };
+
+    let server = start_mock_server().await;
+    let test = build_unified_exec_zsh_fork_test(
+        &server,
+        runtime,
+        AskForApproval::Never,
+        SandboxPolicy::new_workspace_write_policy(),
+        |_| {},
+    )
+    .await?;
+
+    let start_call_id = "uexec-zsh-fork-python-start";
+    let send_call_id = "uexec-zsh-fork-python-pid";
+    let exit_call_id = "uexec-zsh-fork-python-exit";
+
+    let start_command = format!("{}; :", python.display());
+    let start_args = serde_json::json!({
+        "cmd": start_command,
+        "yield_time_ms": 500,
+        "tty": true,
+    });
+    let send_args = serde_json::json!({
+        "chars": "import os; print('CODEX_PY_PID=' + str(os.getpid()))\r\n",
+        "session_id": 1000,
+        "yield_time_ms": 500,
+    });
+    let exit_args = serde_json::json!({
+        "chars": "import sys; sys.exit(0)\r\n",
+        "session_id": 1000,
+        "yield_time_ms": 500,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                start_call_id,
+                "exec_command",
+                &serde_json::to_string(&start_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_function_call(
+                send_call_id,
+                "write_stdin",
+                &serde_json::to_string(&send_args)?,
+            ),
+            ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "python is running"),
+            ev_completed("resp-3"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-4"),
+            ev_function_call(
+                exit_call_id,
+                "write_stdin",
+                &serde_json::to_string(&exit_args)?,
+            ),
+            ev_completed("resp-4"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-2", "all done"),
+            ev_completed("resp-5"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "test unified exec zsh-fork tty behavior".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert!(!requests.is_empty(), "expected at least one POST request");
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+    let outputs = collect_tool_outputs(&bodies)?;
+
+    let start_output = outputs
+        .get(start_call_id)
+        .expect("missing start output for exec_command");
+    let process_id = start_output
+        .process_id
+        .clone()
+        .expect("expected process id from exec_command");
+    assert!(
+        start_output.exit_code.is_none(),
+        "initial exec_command should leave the PTY session running"
+    );
+
+    let send_output = outputs
+        .get(send_call_id)
+        .expect("missing write_stdin output");
+    let normalized = send_output.output.replace("\r\n", "\n");
+    let python_pid = Regex::new(r"CODEX_PY_PID=(\d+)")
+        .expect("valid python pid marker regex")
+        .captures(&normalized)
+        .and_then(|captures| captures.get(1))
+        .map(|value| value.as_str().to_string())
+        .with_context(|| format!("missing python pid in output {normalized:?}"))?;
+    assert!(
+        process_is_alive(&python_pid)?,
+        "python process should still be alive after printing its pid, got output {normalized:?}"
+    );
+    assert_eq!(send_output.process_id.as_deref(), Some(process_id.as_str()));
+    assert!(
+        send_output.exit_code.is_none(),
+        "write_stdin should not report an exit code while the process is still running"
+    );
+
+    let zsh_pid = std::process::Command::new("ps")
+        .args(["-o", "ppid=", "-p", &python_pid])
+        .output()
+        .context("failed to look up python parent pid")?;
+    let zsh_pid = String::from_utf8(zsh_pid.stdout)
+        .context("python parent pid output is not UTF-8")?
+        .trim()
+        .to_string();
+    assert!(
+        !zsh_pid.is_empty(),
+        "expected python parent pid to identify the zsh session"
+    );
+    assert!(
+        process_is_alive(&zsh_pid)?,
+        "expected zsh parent process {zsh_pid} to still be alive"
+    );
+
+    let zsh_command = std::process::Command::new("ps")
+        .args(["-o", "command=", "-p", &zsh_pid])
+        .output()
+        .context("failed to look up zsh parent command")?;
+    let zsh_command =
+        String::from_utf8(zsh_command.stdout).context("zsh parent command output is not UTF-8")?;
+    assert!(
+        zsh_command.contains("zsh"),
+        "expected python parent command to be zsh, got {zsh_command:?}"
+    );
+    let zsh_text_binary = process_text_binary_path(&zsh_pid)?;
+    let zsh_text_binary = fs::canonicalize(&zsh_text_binary).unwrap_or(zsh_text_binary);
+    assert_eq!(
+        zsh_text_binary, configured_zsh_path,
+        "python parent shell should run with configured zsh-fork binary, got {:?} ({zsh_command:?})",
+        zsh_text_binary,
+    );
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "shut down the python repl".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert!(!requests.is_empty(), "expected at least one POST request");
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+    let outputs = collect_tool_outputs(&bodies)?;
+    let exit_output = outputs
+        .get(exit_call_id)
+        .expect("missing exit output after requesting python shutdown");
+    assert!(
+        exit_output.exit_code.is_none() || exit_output.exit_code == Some(0),
+        "exit request should either leave cleanup to the background watcher or report success directly, got {exit_output:?}"
+    );
+    wait_for_process_exit(&python_pid).await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
+async fn unified_exec_zsh_fork_rewrites_nested_zsh_exec_to_configured_binary() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    run_unified_exec_zsh_fork_nested_zsh_rewrite_test(false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
+async fn unified_exec_zsh_fork_with_shell_snapshot_rewrites_nested_zsh_exec() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    run_unified_exec_zsh_fork_nested_zsh_rewrite_test(true).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

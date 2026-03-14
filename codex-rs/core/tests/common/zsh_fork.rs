@@ -18,7 +18,11 @@ pub struct ZshForkRuntime {
 }
 
 impl ZshForkRuntime {
-    fn apply_to_config(
+    pub fn zsh_path(&self) -> &Path {
+        &self.zsh_path
+    }
+
+    pub fn apply_to_config(
         &self,
         config: &mut Config,
         approval_policy: AskForApproval,
@@ -73,6 +77,44 @@ pub fn zsh_fork_runtime(test_name: &str) -> Result<Option<ZshForkRuntime>> {
     }))
 }
 
+pub fn find_host_zsh_path() -> Option<PathBuf> {
+    let approved_host_zsh_paths = std::fs::read_to_string("/etc/shells")
+        .ok()
+        .map(|contents| {
+            contents
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(PathBuf::from)
+                .filter(|path| path.file_name() == Some(std::ffi::OsStr::new("zsh")))
+                .filter(|path| is_executable_file(path))
+                .map(canonicalize_best_effort)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if let Some(path_env) = std::env::var_os("PATH")
+        && let Some(host_zsh_path) = std::env::split_paths(&path_env).find_map(|dir| {
+            let candidate = dir.join("zsh");
+            if !is_executable_file(&candidate) {
+                return None;
+            }
+            let candidate = canonicalize_best_effort(candidate);
+            approved_host_zsh_paths
+                .contains(&candidate)
+                .then_some(candidate)
+        })
+    {
+        return Some(host_zsh_path);
+    }
+    ["/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find_map(|dir| {
+            let candidate = dir.join("zsh");
+            is_executable_file(&candidate).then(|| canonicalize_best_effort(candidate))
+        })
+}
+
 pub async fn build_zsh_fork_test<F>(
     server: &wiremock::MockServer,
     runtime: ZshForkRuntime,
@@ -87,6 +129,29 @@ where
         .with_pre_build_hook(pre_build_hook)
         .with_config(move |config| {
             runtime.apply_to_config(config, approval_policy, sandbox_policy);
+        });
+    builder.build(server).await
+}
+
+pub async fn build_unified_exec_zsh_fork_test<F>(
+    server: &wiremock::MockServer,
+    runtime: ZshForkRuntime,
+    approval_policy: AskForApproval,
+    sandbox_policy: SandboxPolicy,
+    pre_build_hook: F,
+) -> Result<TestCodex>
+where
+    F: FnOnce(&Path) + Send + 'static,
+{
+    let mut builder = test_codex()
+        .with_pre_build_hook(pre_build_hook)
+        .with_config(move |config| {
+            runtime.apply_to_config(config, approval_policy, sandbox_policy);
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
         });
     builder.build(server).await
 }
@@ -121,4 +186,24 @@ fn supports_exec_wrapper_intercept(zsh_path: &Path) -> bool {
         Ok(status) => !status.success(),
         Err(_) => false,
     }
+}
+
+fn canonicalize_best_effort(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or(path)
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| {
+        metadata.is_file() && {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                metadata.permissions().mode() & 0o111 != 0
+            }
+            #[cfg(not(unix))]
+            {
+                true
+            }
+        }
+    })
 }

@@ -35,6 +35,7 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
+use core_test_support::zsh_fork::build_unified_exec_zsh_fork_test;
 use core_test_support::zsh_fork::build_zsh_fork_test;
 use core_test_support::zsh_fork::restrictive_workspace_write_policy;
 use core_test_support::zsh_fork::zsh_fork_runtime;
@@ -1980,6 +1981,158 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
         fs::read_to_string(&allow_prefix_path)?,
         "",
         "unexpected file contents after second run"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
+async fn unified_exec_zsh_fork_execpolicy_amendment_skips_later_subcommands() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("unified exec zsh-fork execpolicy amendment test")? else {
+        return Ok(());
+    };
+
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let server = start_mock_server().await;
+    let test = build_unified_exec_zsh_fork_test(
+        &server,
+        runtime,
+        approval_policy,
+        sandbox_policy.clone(),
+        |_| {},
+    )
+    .await?;
+    let allow_prefix_path = test.cwd.path().join("allow-prefix-zsh-fork.txt");
+    let _ = fs::remove_file(&allow_prefix_path);
+
+    let call_id = "allow-prefix-zsh-fork";
+    let command = "touch allow-prefix-zsh-fork.txt && touch allow-prefix-zsh-fork.txt";
+    let event = exec_command_event(
+        call_id,
+        command,
+        Some(1_000),
+        SandboxPermissions::UseDefault,
+        None,
+    )?;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-zsh-fork-allow-prefix-1"),
+            event,
+            ev_completed("resp-zsh-fork-allow-prefix-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-zsh-fork-allow-prefix-1", "done"),
+            ev_completed("resp-zsh-fork-allow-prefix-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "allow-prefix-zsh-fork",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+
+    let expected_execpolicy_amendment = ExecPolicyAmendment::new(vec![
+        "touch".to_string(),
+        "allow-prefix-zsh-fork.txt".to_string(),
+    ]);
+    let mut saw_parent_approval = false;
+    let mut saw_subcommand_approval = false;
+    loop {
+        let event = wait_for_event(&test.codex, |event| {
+            matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+            )
+        })
+        .await;
+
+        match event {
+            EventMsg::TurnComplete(_) => break,
+            EventMsg::ExecApprovalRequest(approval) => {
+                let command_parts = approval.command.clone();
+                let last_arg = command_parts.last().map(String::as_str).unwrap_or_default();
+                if last_arg == command {
+                    assert!(
+                        !saw_parent_approval,
+                        "unexpected duplicate parent approval: {command_parts:?}"
+                    );
+                    saw_parent_approval = true;
+                    test.codex
+                        .submit(Op::ExecApproval {
+                            id: approval.effective_approval_id(),
+                            turn_id: None,
+                            decision: ReviewDecision::Approved,
+                        })
+                        .await?;
+                    continue;
+                }
+
+                let is_touch_subcommand = command_parts
+                    .iter()
+                    .any(|part| part == "allow-prefix-zsh-fork.txt")
+                    && command_parts
+                        .first()
+                        .is_some_and(|part| part.ends_with("/touch") || part == "touch");
+                if is_touch_subcommand {
+                    assert!(
+                        !saw_subcommand_approval,
+                        "execpolicy amendment should suppress later matching subcommand approvals: {command_parts:?}"
+                    );
+                    saw_subcommand_approval = true;
+                    assert_eq!(
+                        approval.proposed_execpolicy_amendment,
+                        Some(expected_execpolicy_amendment.clone())
+                    );
+                    test.codex
+                        .submit(Op::ExecApproval {
+                            id: approval.effective_approval_id(),
+                            turn_id: None,
+                            decision: ReviewDecision::ApprovedExecpolicyAmendment {
+                                proposed_execpolicy_amendment: expected_execpolicy_amendment
+                                    .clone(),
+                            },
+                        })
+                        .await?;
+                    continue;
+                }
+
+                test.codex
+                    .submit(Op::ExecApproval {
+                        id: approval.effective_approval_id(),
+                        turn_id: None,
+                        decision: ReviewDecision::Approved,
+                    })
+                    .await?;
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    assert!(saw_parent_approval, "expected parent unified-exec approval");
+    assert!(
+        saw_subcommand_approval,
+        "expected at least one intercepted touch approval"
+    );
+
+    let result = parse_result(&results.single_request().function_call_output(call_id));
+    assert_eq!(result.exit_code.unwrap_or(0), 0);
+    assert!(
+        allow_prefix_path.exists(),
+        "expected touch command to complete after approving the first intercepted subcommand; output: {}",
+        result.stdout
     );
 
     Ok(())

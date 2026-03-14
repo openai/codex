@@ -450,7 +450,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     // Build expected from the same helpers used by the builder.
     let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
     for spec in [
-        create_exec_command_tool(true, false),
+        create_exec_command_tool(true, false, &UnifiedExecShellMode::Direct),
         create_write_stdin_tool(),
         PLAN_TOOL.clone(),
         create_request_user_input_tool(CollaborationModesConfig::default()),
@@ -1418,7 +1418,7 @@ fn test_build_specs_default_shell_present() {
 }
 
 #[test]
-fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
+fn shell_zsh_fork_uses_unified_exec_when_enabled() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
     let mut features = Features::with_defaults();
@@ -1441,7 +1441,7 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
         shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     };
 
-    assert_eq!(tools_config.shell_type, ConfigShellToolType::ShellCommand);
+    assert_eq!(tools_config.shell_type, ConfigShellToolType::UnifiedExec);
     assert_eq!(
         tools_config.shell_command_backend,
         ShellCommandBackendConfig::ZshFork
@@ -1450,22 +1450,21 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
         tools_config.unified_exec_shell_mode,
         UnifiedExecShellMode::Direct
     );
+    let tools_config = tools_config.with_unified_exec_shell_mode_for_session(
+        &user_shell,
+        Some(&PathBuf::from(if cfg!(windows) {
+            r"C:\opt\codex\zsh"
+        } else {
+            "/opt/codex/zsh"
+        })),
+        Some(&PathBuf::from(if cfg!(windows) {
+            r"C:\opt\codex\codex-execve-wrapper"
+        } else {
+            "/opt/codex/codex-execve-wrapper"
+        })),
+    );
     assert_eq!(
-        tools_config
-            .with_unified_exec_shell_mode_for_session(
-                &user_shell,
-                Some(&PathBuf::from(if cfg!(windows) {
-                    r"C:\opt\codex\zsh"
-                } else {
-                    "/opt/codex/zsh"
-                })),
-                Some(&PathBuf::from(if cfg!(windows) {
-                    r"C:\opt\codex\codex-execve-wrapper"
-                } else {
-                    "/opt/codex/codex-execve-wrapper"
-                })),
-            )
-            .unified_exec_shell_mode,
+        tools_config.unified_exec_shell_mode,
         if cfg!(unix) {
             UnifiedExecShellMode::ZshFork(ZshForkConfig {
                 shell_zsh_path: AbsolutePathBuf::from_absolute_path("/opt/codex/zsh").unwrap(),
@@ -1477,6 +1476,23 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
         } else {
             UnifiedExecShellMode::Direct
         }
+    );
+
+    let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), None, &[]).build();
+    let exec_spec = find_tool(&tools, "exec_command");
+    let ToolSpec::Function(exec_tool) = &exec_spec.spec else {
+        panic!("exec_command should be a function tool spec");
+    };
+    let JsonSchema::Object { properties, .. } = &exec_tool.parameters else {
+        panic!("exec_command parameters should be an object schema");
+    };
+    assert_eq!(
+        properties.contains_key("shell"),
+        !matches!(
+            tools_config.unified_exec_shell_mode,
+            UnifiedExecShellMode::ZshFork(_)
+        ),
+        "exec_command should omit `shell` only when zsh-fork forces the configured shell",
     );
 }
 
