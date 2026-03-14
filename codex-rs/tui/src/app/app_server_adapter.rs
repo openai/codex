@@ -73,7 +73,7 @@ impl App {
     ///
     /// Legacy notifications embed the thread id as a `"conversationId"` string
     /// field alongside the serialized `Event` body. Returns `None` if the
-    /// notification is missing the field, contains an unparseable thread id,
+    /// notification is missing the field, contains an unparsable thread id,
     /// or fails to deserialize into an `Event`.
     fn legacy_notification_to_thread_event(
         notification: codex_app_server_protocol::JSONRPCNotification,
