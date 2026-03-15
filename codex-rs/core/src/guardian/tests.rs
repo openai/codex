@@ -676,6 +676,10 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                         ("Follow-up Guardian Review Request", &requests[1]),
                     ],
                     &ContextSnapshotOptions::default().strip_capability_instructions(),
+                )
+                .replace(
+                    "01:message/user[2]:\n    [01] <AGENTS_MD>\n    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>",
+                    "01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>",
                 ),
                 first_body["prompt_cache_key"] == second_body["prompt_cache_key"],
                 second_body.to_string().contains(first_rationale),
