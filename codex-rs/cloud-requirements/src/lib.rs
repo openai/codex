@@ -400,7 +400,7 @@ impl CloudRequirementsService {
                             "Cloud requirements request was unauthorized; attempting auth recovery"
                         );
                         match auth_recovery.next().await {
-                            Ok(()) => {
+                            Ok(_) => {
                                 let Some(refreshed_auth) = self.auth_manager.auth().await else {
                                     tracing::error!(
                                         "Auth recovery succeeded but no auth is available for cloud requirements"

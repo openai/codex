@@ -700,6 +700,7 @@ impl RmcpClient {
         &self,
         name: String,
         arguments: Option<serde_json::Value>,
+        meta: Option<serde_json::Value>,
         timeout: Option<Duration>,
     ) -> Result<CallToolResult> {
         self.refresh_oauth_if_needed().await;
@@ -712,8 +713,17 @@ impl RmcpClient {
             }
             None => None,
         };
+        let meta = match meta {
+            Some(Value::Object(map)) => Some(rmcp::model::Meta(map)),
+            Some(other) => {
+                return Err(anyhow!(
+                    "MCP tool request _meta must be a JSON object, got {other}"
+                ));
+            }
+            None => None,
+        };
         let rmcp_params = CallToolRequestParams {
-            meta: None,
+            meta,
             name: name.into(),
             arguments,
             task: None,
