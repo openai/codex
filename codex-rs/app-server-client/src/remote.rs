@@ -170,12 +170,14 @@ impl RemoteAppServerClient {
                         match command {
                             RemoteClientCommand::Request { request, response_tx } => {
                                 let request_id = request_id_from_client_request(&request);
-                                if let Some(previous) = pending_requests.insert(request_id.clone(), response_tx) {
-                                    let _ = previous.send(Err(IoError::new(
+                                if pending_requests.contains_key(&request_id) {
+                                    let _ = response_tx.send(Err(IoError::new(
                                         ErrorKind::InvalidInput,
                                         format!("duplicate remote app-server request id `{request_id}`"),
                                     )));
+                                    continue;
                                 }
+                                pending_requests.insert(request_id.clone(), response_tx);
                                 if let Err(err) = write_jsonrpc_message(
                                     &mut stream,
                                     JSONRPCMessage::Request(jsonrpc_request_from_client_request(*request)),

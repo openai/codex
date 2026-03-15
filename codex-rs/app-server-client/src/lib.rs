@@ -1134,6 +1134,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_duplicate_request_id_keeps_original_waiter() {
+        let (first_request_seen_tx, first_request_seen_rx) = tokio::sync::oneshot::channel();
+        let websocket_url = start_test_remote_server(|mut websocket| async move {
+            expect_remote_initialize(&mut websocket).await;
+            let JSONRPCMessage::Request(request) = read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected account/read request");
+            };
+            assert_eq!(request.method, "account/read");
+            first_request_seen_tx
+                .send(request.id.clone())
+                .expect("request id should send");
+            assert!(
+                timeout(
+                    Duration::from_millis(100),
+                    read_websocket_message(&mut websocket)
+                )
+                .await
+                .is_err(),
+                "duplicate request should not be forwarded to the server"
+            );
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(GetAccountResponse {
+                        account: None,
+                        requires_openai_auth: false,
+                    })
+                    .expect("response should serialize"),
+                }),
+            )
+            .await;
+            let _ = websocket.next().await;
+        })
+        .await;
+        let client = RemoteAppServerClient::connect(test_remote_connect_args(websocket_url))
+            .await
+            .expect("remote client should connect");
+        let first_request_handle = client.request_handle();
+        let second_request_handle = first_request_handle.clone();
+
+        let first_request = tokio::spawn(async move {
+            first_request_handle
+                .request_typed::<GetAccountResponse>(ClientRequest::GetAccount {
+                    request_id: RequestId::Integer(1),
+                    params: codex_app_server_protocol::GetAccountParams {
+                        refresh_token: false,
+                    },
+                })
+                .await
+        });
+
+        let first_request_id = first_request_seen_rx
+            .await
+            .expect("server should observe the first request");
+        assert_eq!(first_request_id, RequestId::Integer(1));
+
+        let second_err = second_request_handle
+            .request_typed::<GetAccountResponse>(ClientRequest::GetAccount {
+                request_id: RequestId::Integer(1),
+                params: codex_app_server_protocol::GetAccountParams {
+                    refresh_token: false,
+                },
+            })
+            .await
+            .expect_err("duplicate request id should be rejected");
+        assert_eq!(
+            second_err.to_string(),
+            "account/read transport error: duplicate remote app-server request id `1`"
+        );
+
+        let first_response = first_request
+            .await
+            .expect("first request task should join")
+            .expect("first request should succeed");
+        assert_eq!(
+            first_response,
+            GetAccountResponse {
+                account: None,
+                requires_openai_auth: false,
+            }
+        );
+
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
     async fn remote_notifications_arrive_over_websocket() {
         let websocket_url = start_test_remote_server(|mut websocket| async move {
             expect_remote_initialize(&mut websocket).await;
