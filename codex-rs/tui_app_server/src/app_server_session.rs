@@ -109,9 +109,18 @@ pub(crate) struct AppServerSession {
 }
 
 #[derive(Clone, Copy)]
-enum ThreadCwdMode {
-    UseConfigCwd,
-    OmitCwd,
+enum ThreadParamsMode {
+    Embedded,
+    Remote,
+}
+
+impl ThreadParamsMode {
+    fn model_provider_from_config(self, config: &Config) -> Option<String> {
+        match self {
+            Self::Embedded => Some(config.model_provider_id.clone()),
+            Self::Remote => None,
+        }
+    }
 }
 
 pub(crate) struct AppServerStartedThread {
@@ -254,7 +263,7 @@ impl AppServerSession {
             .client
             .request_typed(ClientRequest::ThreadStart {
                 request_id,
-                params: thread_start_params_from_config(config, self.thread_cwd_mode()),
+                params: thread_start_params_from_config(config, self.thread_params_mode()),
             })
             .await
             .wrap_err("thread/start failed during TUI bootstrap")?;
@@ -272,7 +281,11 @@ impl AppServerSession {
             .client
             .request_typed(ClientRequest::ThreadResume {
                 request_id,
-                params: thread_resume_params_from_config(config, thread_id, self.thread_cwd_mode()),
+                params: thread_resume_params_from_config(
+                    config,
+                    thread_id,
+                    self.thread_params_mode(),
+                ),
             })
             .await
             .wrap_err("thread/resume failed during TUI bootstrap")?;
@@ -290,17 +303,21 @@ impl AppServerSession {
             .client
             .request_typed(ClientRequest::ThreadFork {
                 request_id,
-                params: thread_fork_params_from_config(config, thread_id, self.thread_cwd_mode()),
+                params: thread_fork_params_from_config(
+                    config,
+                    thread_id,
+                    self.thread_params_mode(),
+                ),
             })
             .await
             .wrap_err("thread/fork failed during TUI bootstrap")?;
         started_thread_from_fork_response(&response, show_raw_agent_reasoning)
     }
 
-    fn thread_cwd_mode(&self) -> ThreadCwdMode {
+    fn thread_params_mode(&self) -> ThreadParamsMode {
         match &self.client {
-            AppServerClient::InProcess(_) => ThreadCwdMode::UseConfigCwd,
-            AppServerClient::Remote(_) => ThreadCwdMode::OmitCwd,
+            AppServerClient::InProcess(_) => ThreadParamsMode::Embedded,
+            AppServerClient::Remote(_) => ThreadParamsMode::Remote,
         }
     }
 
@@ -756,12 +773,12 @@ fn sandbox_mode_from_policy(
 
 fn thread_start_params_from_config(
     config: &Config,
-    thread_cwd_mode: ThreadCwdMode,
+    thread_params_mode: ThreadParamsMode,
 ) -> ThreadStartParams {
     ThreadStartParams {
         model: config.model.clone(),
-        model_provider: Some(config.model_provider_id.clone()),
-        cwd: thread_cwd_from_config(config, thread_cwd_mode),
+        model_provider: thread_params_mode.model_provider_from_config(config),
+        cwd: thread_cwd_from_config(config, thread_params_mode),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
@@ -775,13 +792,13 @@ fn thread_start_params_from_config(
 fn thread_resume_params_from_config(
     config: Config,
     thread_id: ThreadId,
-    thread_cwd_mode: ThreadCwdMode,
+    thread_params_mode: ThreadParamsMode,
 ) -> ThreadResumeParams {
     ThreadResumeParams {
         thread_id: thread_id.to_string(),
         model: config.model.clone(),
-        model_provider: Some(config.model_provider_id.clone()),
-        cwd: thread_cwd_from_config(&config, thread_cwd_mode),
+        model_provider: thread_params_mode.model_provider_from_config(&config),
+        cwd: thread_cwd_from_config(&config, thread_params_mode),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
@@ -794,13 +811,13 @@ fn thread_resume_params_from_config(
 fn thread_fork_params_from_config(
     config: Config,
     thread_id: ThreadId,
-    thread_cwd_mode: ThreadCwdMode,
+    thread_params_mode: ThreadParamsMode,
 ) -> ThreadForkParams {
     ThreadForkParams {
         thread_id: thread_id.to_string(),
         model: config.model.clone(),
-        model_provider: Some(config.model_provider_id.clone()),
-        cwd: thread_cwd_from_config(&config, thread_cwd_mode),
+        model_provider: thread_params_mode.model_provider_from_config(&config),
+        cwd: thread_cwd_from_config(&config, thread_params_mode),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
@@ -811,10 +828,10 @@ fn thread_fork_params_from_config(
     }
 }
 
-fn thread_cwd_from_config(config: &Config, thread_cwd_mode: ThreadCwdMode) -> Option<String> {
-    match thread_cwd_mode {
-        ThreadCwdMode::UseConfigCwd => Some(config.cwd.to_string_lossy().to_string()),
-        ThreadCwdMode::OmitCwd => None,
+fn thread_cwd_from_config(config: &Config, thread_params_mode: ThreadParamsMode) -> Option<String> {
+    match thread_params_mode {
+        ThreadParamsMode::Embedded => Some(config.cwd.to_string_lossy().to_string()),
+        ThreadParamsMode::Remote => None,
     }
 }
 
@@ -1161,25 +1178,32 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let config = build_config(&temp_dir).await;
 
-        let params = thread_start_params_from_config(&config, ThreadCwdMode::UseConfigCwd);
+        let params = thread_start_params_from_config(&config, ThreadParamsMode::Embedded);
 
         assert_eq!(params.cwd, Some(config.cwd.to_string_lossy().to_string()));
+        assert_eq!(
+            params.model_provider,
+            Some(config.model_provider_id)
+        );
     }
 
     #[tokio::test]
-    async fn thread_lifecycle_params_omit_cwd_for_remote_sessions() {
+    async fn thread_lifecycle_params_omit_local_overrides_for_remote_sessions() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let config = build_config(&temp_dir).await;
         let thread_id = ThreadId::new();
 
-        let start = thread_start_params_from_config(&config, ThreadCwdMode::OmitCwd);
+        let start = thread_start_params_from_config(&config, ThreadParamsMode::Remote);
         let resume =
-            thread_resume_params_from_config(config.clone(), thread_id, ThreadCwdMode::OmitCwd);
-        let fork = thread_fork_params_from_config(config, thread_id, ThreadCwdMode::OmitCwd);
+            thread_resume_params_from_config(config.clone(), thread_id, ThreadParamsMode::Remote);
+        let fork = thread_fork_params_from_config(config, thread_id, ThreadParamsMode::Remote);
 
         assert_eq!(start.cwd, None);
         assert_eq!(resume.cwd, None);
         assert_eq!(fork.cwd, None);
+        assert_eq!(start.model_provider, None);
+        assert_eq!(resume.model_provider, None);
+        assert_eq!(fork.model_provider, None);
     }
 
     #[test]
