@@ -47,6 +47,7 @@ async fn guardian_test_session_and_turn(
     let (mut session, mut turn) = crate::codex::make_session_and_context().await;
     let mut config = (*turn.config).clone();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    config.user_instructions = None;
     let config = Arc::new(config);
     let models_manager = Arc::new(test_support::models_manager_with_provider(
         config.codex_home.clone(),
@@ -56,6 +57,7 @@ async fn guardian_test_session_and_turn(
     session.services.models_manager = models_manager;
     turn.config = Arc::clone(&config);
     turn.provider = config.model_provider.clone();
+    turn.user_instructions = None;
 
     (Arc::new(session), Arc::new(turn))
 }
@@ -568,13 +570,9 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                 ev_response_created("resp-guardian-1"),
                 ev_assistant_message(
                     "msg-guardian-1",
-                    &serde_json::json!({
-                        "risk_level": "low",
-                        "risk_score": 5,
-                        "rationale": first_rationale,
-                        "evidence": [],
-                    })
-                    .to_string(),
+                    &format!(
+                        "{{\"risk_level\":\"low\",\"risk_score\":5,\"rationale\":\"{first_rationale}\",\"evidence\":[]}}"
+                    ),
                 ),
                 ev_completed("resp-guardian-1"),
             ]),
@@ -582,13 +580,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                 ev_response_created("resp-guardian-2"),
                 ev_assistant_message(
                     "msg-guardian-2",
-                    &serde_json::json!({
-                        "risk_level": "low",
-                        "risk_score": 7,
-                        "rationale": "second guardian rationale",
-                        "evidence": [],
-                    })
-                    .to_string(),
+                    "{\"risk_level\":\"low\",\"risk_score\":7,\"rationale\":\"second guardian rationale\",\"evidence\":[]}",
                 ),
                 ev_completed("resp-guardian-2"),
             ]),
