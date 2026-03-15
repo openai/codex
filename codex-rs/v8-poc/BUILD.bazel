@@ -1,0 +1,49 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load(
+    "@v8_poc_crates//:defs.bzl",
+    "aliases",
+    "all_crate_deps",
+)
+
+package(default_visibility = ["//visibility:public"])
+
+PACKAGE_NAME = "codex-rs/v8-poc/Cargo.toml"
+
+GNU_CONSTRAINTS = [
+    "@platforms//os:linux",
+    "@platforms//cpu:x86_64",
+    "@llvm//constraints/libc:gnu.2.28",
+]
+
+rust_library(
+    name = "v8-poc",
+    aliases = aliases(package_name = PACKAGE_NAME),
+    crate_name = "codex_v8_poc",
+    deps = all_crate_deps(
+        normal = True,
+        package_name = PACKAGE_NAME,
+    ),
+    edition = "2024",
+    srcs = ["src/lib.rs"],
+)
+
+rust_test(
+    name = "v8-poc-test",
+    aliases = aliases(package_name = PACKAGE_NAME),
+    crate = ":v8-poc",
+    deps = all_crate_deps(
+        normal = True,
+        normal_dev = True,
+        package_name = PACKAGE_NAME,
+    ),
+    target_compatible_with = GNU_CONSTRAINTS,
+)
+
+rust_binary(
+    name = "smoke_test",
+    crate_name = "codex_v8_poc_smoke_test",
+    crate_root = "src/smoke_test.rs",
+    deps = [":v8-poc"],
+    edition = "2024",
+    srcs = ["src/smoke_test.rs"],
+)

@@ -1,0 +1,178 @@
+name: rusty-v8-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional Git tag to publish the built artifacts to
+        required: false
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}::${{ github.event.inputs.release_tag || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-xlarge
+            platform: macos_arm64
+            target: aarch64-apple-darwin
+          - runner: macos-15-large
+            platform: macos_amd64
+            target: x86_64-apple-darwin
+          - runner: ubuntu-24.04
+            platform: linux_amd64_musl
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04
+            platform: linux_amd64
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            platform: linux_arm64_musl
+            target: aarch64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            platform: linux_arm64
+            target: aarch64-unknown-linux-gnu
+          # 2026-03-16: Disable windows since its disabled for all bazel builds
+          #- runner: windows-x64
+          #  platform: windows_amd64
+          #  target: x86_64-pc-windows-msvc
+          #  runs_on:
+          #    group: codex-runners
+          #    labels: codex-windows-x64
+          #- runner: windows-arm64
+          #  platform: windows_arm64
+          #  target: aarch64-pc-windows-msvc
+          #  runs_on:
+          #    group: codex-runners
+          #    labels: codex-windows-arm64
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Bazel
+        uses: bazelbuild/setup-bazelisk@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Provide python3 shim (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $shim_dir = Join-Path $env:RUNNER_TEMP "python3-shim"
+          New-Item -ItemType Directory -Force -Path $shim_dir | Out-Null
+          '@python %*' | Out-File -FilePath (Join-Path $shim_dir 'python3.cmd') -Encoding ascii
+          $shim_dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Configure Bazel startup args (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "BAZEL_STARTUP_ARGS=--output_user_root=C:\" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Configure Bazel repository caches (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $cache_root = Join-Path $env:RUNNER_TEMP "bazel-cache-${{ matrix.target }}"
+          $repo_contents_cache = Join-Path $cache_root "repo-contents"
+          $repository_cache = Join-Path $cache_root "repo"
+          New-Item -ItemType Directory -Force -Path $repo_contents_cache, $repository_cache | Out-Null
+          "BAZEL_REPO_CONTENTS_CACHE=$($repo_contents_cache -replace '\\', '/')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "BAZEL_REPOSITORY_CACHE=$($repository_cache -replace '\\', '/')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build Bazel V8 release pair
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+          PLATFORM: ${{ matrix.platform }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target_suffix="${TARGET//-/_}"
+          pair_target="//third_party/v8:rusty_v8_release_pair_${target_suffix}"
+          bazel_cmd=(bazel)
+          if [[ -n "${BAZEL_STARTUP_ARGS:-}" ]]; then
+            bazel_cmd+=("${BAZEL_STARTUP_ARGS}")
+          fi
+
+          bazel_args=(
+            build
+            "--platforms=@llvm//platforms:${PLATFORM}"
+            "${pair_target}"
+            --build_metadata=REPO_URL=https://github.com/${GITHUB_REPOSITORY}.git
+            --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
+            --build_metadata=ROLE=CI
+            --build_metadata=VISIBILITY=PUBLIC
+          )
+          if [[ -n "${BAZEL_REPO_CONTENTS_CACHE:-}" ]]; then
+            bazel_args+=("--repo_contents_cache=${BAZEL_REPO_CONTENTS_CACHE}")
+          fi
+          if [[ -n "${BAZEL_REPOSITORY_CACHE:-}" ]]; then
+            bazel_args+=("--repository_cache=${BAZEL_REPOSITORY_CACHE}")
+          fi
+
+          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+            "${bazel_cmd[@]}" \
+              --noexperimental_remote_repo_contents_cache \
+              --bazelrc=.github/workflows/ci.bazelrc \
+              "${bazel_args[@]}" \
+              "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+          else
+            "${bazel_cmd[@]}" \
+              --noexperimental_remote_repo_contents_cache \
+              "${bazel_args[@]}" \
+              --remote_cache= \
+              --remote_executor=
+          fi
+
+      - name: Stage release pair
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 .github/scripts/rusty_v8_bazel.py stage-release-pair \
+            --platform "${PLATFORM}" \
+            --target "${TARGET}" \
+            --output-dir "dist/${TARGET}"
+
+      - name: Upload release pair
+        uses: actions/upload-artifact@v7
+        with:
+          name: rusty-v8-${{ matrix.target }}
+          path: dist/${{ matrix.target }}/*
+
+  publish-release:
+    if: ${{ github.event.inputs.release_tag != '' }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag }}
+          name: ${{ github.event.inputs.release_tag }}
+          files: dist/**

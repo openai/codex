@@ -1,0 +1,279 @@
+load("@rules_cc//cc:cc_static_library.bzl", "cc_static_library")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+V8_COPTS = select({
+    "@v8//bazel/config:is_windows": ["/std:c++20"],
+    "@v8//bazel/config:is_gcc": ["-std=gnu++2a"],
+    "//conditions:default": ["-std=c++20"],
+})
+
+V8_STATIC_LIBRARY_FEATURES = [
+    "-symbol_check",
+    "-validate-static-library",
+]
+
+genrule(
+    name = "binding_cc",
+    srcs = ["@v8_crate_146_4_0//:binding_cc"],
+    outs = ["binding.cc"],
+    cmd = """
+      sed \
+        -e '/#include "v8\\/src\\/flags\\/flags.h"/d' \
+        -e 's|"v8/src/libplatform/default-platform.h"|"src/libplatform/default-platform.h"|' \
+        -e 's|  namespace i = v8::internal;|  (void)usage;|' \
+        -e '/using HelpOptions = i::FlagList::HelpOptions;/d' \
+        -e '/HelpOptions help_options = HelpOptions(HelpOptions::kExit, usage);/d' \
+        -e 's|  i::FlagList::SetFlagsFromCommandLine(argc, argv, true, help_options);|  v8::V8::SetFlagsFromCommandLine(argc, argv, true);|' \
+        $(location @v8_crate_146_4_0//:binding_cc) > "$@"
+    """,
+)
+
+genrule(
+    name = "support_h",
+    srcs = ["@v8_crate_146_4_0//:support_h"],
+    outs = ["support.h"],
+    cmd = "cp $(location @v8_crate_146_4_0//:support_h) $@",
+)
+
+cc_library(
+    name = "v8_146_4_0_binding",
+    srcs = [":binding_cc"],
+    hdrs = [":support_h"],
+    copts = V8_COPTS,
+    deps = [
+        "@v8//:core_lib_icu",
+        "@v8//:rusty_v8_internal_headers",
+    ],
+)
+
+cc_static_library(
+    name = "v8_146_4_0_x86_64_apple_darwin",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
+    name = "v8_146_4_0_aarch64_apple_darwin",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
+    name = "v8_146_4_0_aarch64_unknown_linux_gnu",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
+    name = "v8_146_4_0_x86_64_unknown_linux_gnu",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
+    name = "v8_146_4_0_aarch64_unknown_linux_musl_base",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+genrule(
+    name = "v8_146_4_0_aarch64_unknown_linux_musl",
+    srcs = [
+        ":v8_146_4_0_aarch64_unknown_linux_musl_base",
+        "@llvm//runtimes/compiler-rt:clang_rt.builtins.static",
+    ],
+    tools = [
+        "@llvm//tools:llvm-ar",
+        "@llvm//tools:llvm-ranlib",
+    ],
+    outs = ["libv8_146_4_0_aarch64_unknown_linux_musl.a"],
+    cmd = """
+      cat > "$(@D)/merge.mri" <<'EOF'
+create $@
+addlib $(location :v8_146_4_0_aarch64_unknown_linux_musl_base)
+addlib $(location @llvm//runtimes/compiler-rt:clang_rt.builtins.static)
+save
+end
+EOF
+      $(location @llvm//tools:llvm-ar) -M < "$(@D)/merge.mri"
+      $(location @llvm//tools:llvm-ranlib) "$@"
+    """,
+)
+
+cc_static_library(
+    name = "v8_146_4_0_x86_64_unknown_linux_musl",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
+    name = "v8_146_4_0_aarch64_pc_windows_msvc",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
+    name = "v8_146_4_0_x86_64_pc_windows_msvc",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+alias(
+    name = "v8_146_4_0_aarch64_pc_windows_gnullvm",
+    actual = ":v8_146_4_0_aarch64_pc_windows_msvc",
+)
+
+alias(
+    name = "v8_146_4_0_x86_64_pc_windows_gnullvm",
+    actual = ":v8_146_4_0_x86_64_pc_windows_msvc",
+)
+
+filegroup(
+    name = "src_binding_release_x86_64_apple_darwin",
+    srcs = ["@v8_crate_146_4_0//:src_binding_release_x86_64_apple_darwin"],
+)
+
+filegroup(
+    name = "src_binding_release_aarch64_apple_darwin",
+    srcs = ["@v8_crate_146_4_0//:src_binding_release_aarch64_apple_darwin"],
+)
+
+filegroup(
+    name = "src_binding_release_aarch64_unknown_linux_gnu",
+    srcs = ["@v8_crate_146_4_0//:src_binding_release_aarch64_unknown_linux_gnu"],
+)
+
+filegroup(
+    name = "src_binding_release_x86_64_unknown_linux_gnu",
+    srcs = ["@v8_crate_146_4_0//:src_binding_release_x86_64_unknown_linux_gnu"],
+)
+
+filegroup(
+    name = "src_binding_release_aarch64_unknown_linux_musl",
+    srcs = ["@v8_crate_146_4_0//:src_binding_release_aarch64_unknown_linux_gnu"],
+)
+
+filegroup(
+    name = "src_binding_release_x86_64_unknown_linux_musl",
+    srcs = ["@v8_crate_146_4_0//:src_binding_release_x86_64_unknown_linux_gnu"],
+)
+
+filegroup(
+    name = "src_binding_release_x86_64_pc_windows_msvc",
+    srcs = ["@v8_crate_146_4_0//:src_binding_release_x86_64_pc_windows_msvc"],
+)
+
+filegroup(
+    name = "src_binding_release_aarch64_pc_windows_msvc",
+    srcs = ["@v8_crate_146_4_0//:src_binding_release_aarch64_pc_windows_msvc"],
+)
+
+alias(
+    name = "src_binding_release_x86_64_pc_windows_gnullvm",
+    actual = ":src_binding_release_x86_64_pc_windows_msvc",
+)
+
+alias(
+    name = "src_binding_release_aarch64_pc_windows_gnullvm",
+    actual = ":src_binding_release_aarch64_pc_windows_msvc",
+)
+
+filegroup(
+    name = "rusty_v8_release_pair_x86_64_apple_darwin",
+    srcs = [
+        ":v8_146_4_0_x86_64_apple_darwin",
+        ":src_binding_release_x86_64_apple_darwin",
+    ],
+)
+
+filegroup(
+    name = "rusty_v8_release_pair_aarch64_apple_darwin",
+    srcs = [
+        ":v8_146_4_0_aarch64_apple_darwin",
+        ":src_binding_release_aarch64_apple_darwin",
+    ],
+)
+
+filegroup(
+    name = "rusty_v8_release_pair_x86_64_unknown_linux_gnu",
+    srcs = [
+        ":v8_146_4_0_x86_64_unknown_linux_gnu",
+        ":src_binding_release_x86_64_unknown_linux_gnu",
+    ],
+)
+
+filegroup(
+    name = "rusty_v8_release_pair_aarch64_unknown_linux_gnu",
+    srcs = [
+        ":v8_146_4_0_aarch64_unknown_linux_gnu",
+        ":src_binding_release_aarch64_unknown_linux_gnu",
+    ],
+)
+
+filegroup(
+    name = "rusty_v8_release_pair_x86_64_unknown_linux_musl",
+    srcs = [
+        ":v8_146_4_0_x86_64_unknown_linux_musl",
+        ":src_binding_release_x86_64_unknown_linux_musl",
+    ],
+)
+
+filegroup(
+    name = "rusty_v8_release_pair_aarch64_unknown_linux_musl",
+    srcs = [
+        ":v8_146_4_0_aarch64_unknown_linux_musl",
+        ":src_binding_release_aarch64_unknown_linux_musl",
+    ],
+)
+
+filegroup(
+    name = "rusty_v8_release_pair_x86_64_pc_windows_msvc",
+    srcs = [
+        ":v8_146_4_0_x86_64_pc_windows_msvc",
+        ":src_binding_release_x86_64_pc_windows_msvc",
+    ],
+)
+
+filegroup(
+    name = "rusty_v8_release_pair_aarch64_pc_windows_msvc",
+    srcs = [
+        ":v8_146_4_0_aarch64_pc_windows_msvc",
+        ":src_binding_release_aarch64_pc_windows_msvc",
+    ],
+)
+
+alias(
+    name = "rusty_v8_archive_for_target",
+    actual = select({
+        "@rules_rs//rs/experimental/platforms/config:aarch64-apple-darwin": ":v8_146_4_0_aarch64_apple_darwin",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-gnullvm": ":v8_146_4_0_aarch64_pc_windows_gnullvm",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-msvc": ":v8_146_4_0_aarch64_pc_windows_msvc",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-gnu": ":v8_146_4_0_aarch64_unknown_linux_gnu",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-musl": ":v8_146_4_0_aarch64_unknown_linux_musl",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-apple-darwin": ":v8_146_4_0_x86_64_apple_darwin",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-gnullvm": ":v8_146_4_0_x86_64_pc_windows_gnullvm",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-msvc": ":v8_146_4_0_x86_64_pc_windows_msvc",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-gnu": ":v8_146_4_0_x86_64_unknown_linux_gnu",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-musl": ":v8_146_4_0_x86_64_unknown_linux_musl",
+        "//conditions:default": ":v8_146_4_0_x86_64_unknown_linux_gnu",
+    }),
+)
+
+alias(
+    name = "rusty_v8_binding_for_target",
+    actual = select({
+        "@rules_rs//rs/experimental/platforms/config:aarch64-apple-darwin": ":src_binding_release_aarch64_apple_darwin",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-gnullvm": ":src_binding_release_aarch64_pc_windows_gnullvm",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-msvc": ":src_binding_release_aarch64_pc_windows_msvc",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-gnu": ":src_binding_release_aarch64_unknown_linux_gnu",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-musl": ":src_binding_release_aarch64_unknown_linux_musl",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-apple-darwin": ":src_binding_release_x86_64_apple_darwin",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-gnullvm": ":src_binding_release_x86_64_pc_windows_gnullvm",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-msvc": ":src_binding_release_x86_64_pc_windows_msvc",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-gnu": ":src_binding_release_x86_64_unknown_linux_gnu",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-musl": ":src_binding_release_x86_64_unknown_linux_musl",
+        "//conditions:default": ":src_binding_release_x86_64_unknown_linux_gnu",
+    }),
+)

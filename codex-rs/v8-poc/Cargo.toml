@@ -1,0 +1,18 @@
+[package]
+name = "codex-v8-poc"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+resolver = "2"
+
+[lib]
+doctest = false
+name = "codex_v8_poc"
+path = "src/lib.rs"
+
+[dependencies]
+# Keep this in sync with the v8 crate pinned in MODULE.bazel.
+v8 = "=146.4.0"

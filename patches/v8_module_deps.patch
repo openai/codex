@@ -1,0 +1,244 @@
+# What: replace upstream V8 module dependency bootstrapping with repository
+# declarations and dependency setup that match this Bazel workspace.
+# Scope: upstream MODULE.bazel only; affects external repo resolution and Bazel
+# module wiring, not V8 source files.
+
+diff --git a/orig/v8-14.6.202.11/MODULE.bazel b/mod/v8-14.6.202.11/MODULE.bazel
+index 7d7ba53..66e1df5 100644
+--- a/orig/v8-14.6.202.11/MODULE.bazel
++++ b/mod/v8-14.6.202.11/MODULE.bazel
+@@ -8,185 +8,66 @@ bazel_dep(name = "rules_cc", version = "0.2.0")
+ bazel_dep(name = "rules_python", version = "1.0.0")
+ bazel_dep(name = "platforms", version = "1.0.0")
+ bazel_dep(name = "abseil-cpp", version = "20250814.0")
+-bazel_dep(name = "highway", version = "1.2.0")
++bazel_dep(name = "rules_license", version = "0.0.4")
+ 
+-pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
+-pip.parse(
+-    hub_name = "v8_python_deps",
+-    python_version = "3.11",
+-    requirements_lock = "//:bazel/requirements.txt",
+-    extra_pip_args = [
+-        "--require-hashes",
+-        "--index-url=https://pypi.org/simple",
+-    ],
+-)
+-use_repo(pip, "v8_python_deps")
+-
+-# Define the local LLVM toolchain repository
+-llvm_toolchain_repository = use_repo_rule("//bazel/toolchain:llvm_repository.bzl", "llvm_toolchain_repository")
+-
+-llvm_toolchain_repository(
+-    name = "llvm_toolchain",
+-    path = "third_party/llvm-build/Release+Asserts",
+-    config_file_content = """
+-load("@bazel_tools//tools/cpp:cc_toolchain_config_lib.bzl", "feature", "flag_group", "flag_set", "tool_path")
++git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
++http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+ 
+-def _impl(ctx):
+-    tool_paths = [
+-        tool_path(name = "gcc", path = "bin/clang"),
+-        tool_path(name = "ld", path = "bin/lld"),
+-        tool_path(name = "ar", path = "bin/llvm-ar"),
+-        tool_path(name = "cpp", path = "bin/clang++"),
+-        tool_path(name = "gcov", path = "/bin/false"),
+-        tool_path(name = "nm", path = "bin/llvm-nm"),
+-        tool_path(name = "objdump", path = "bin/llvm-objdump"),
+-        tool_path(name = "strip", path = "bin/llvm-strip"),
+-    ]
+-
+-    features = [
+-        feature(
+-            name = "default_compile_flags",
+-            enabled = True,
+-            flag_sets = [
+-                flag_set(
+-                    actions = [
+-                        "c-compile",
+-                        "c++-compile",
+-                        "c++-header-parsing",
+-                        "c++-module-compile",
+-                        "c++-module-codegen",
+-                        "linkstamp-compile",
+-                        "assemble",
+-                        "preprocess-assemble",
+-                    ],
+-                    flag_groups = [
+-                        flag_group(
+-                            flags = [
+-                                "--sysroot={WORKSPACE_ROOT}/build/linux/debian_bullseye_amd64-sysroot",
+-                                "-nostdinc++",
+-                                "-isystem",
+-                                "{WORKSPACE_ROOT}/buildtools/third_party/libc++",
+-                                "-isystem",
+-                                "{WORKSPACE_ROOT}/third_party/libc++/src/include",
+-                                "-isystem",
+-                                "{WORKSPACE_ROOT}/third_party/libc++abi/src/include",
+-                                "-isystem",
+-                                "{WORKSPACE_ROOT}/third_party/libc++/src/src",
+-                                "-isystem",
+-                                "{WORKSPACE_ROOT}/third_party/llvm-libc/src",
+-                                "-D_LIBCPP_HARDENING_MODE_DEFAULT=_LIBCPP_HARDENING_MODE_NONE",
+-                                "-DLIBC_NAMESPACE=__llvm_libc_cr",
+-                            ],
+-                        ),
+-                    ],
+-                ),
+-            ],
+-        ),
+-        feature(
+-            name = "default_linker_flags",
+-            enabled = True,
+-            flag_sets = [
+-                flag_set(
+-                    actions = [
+-                        "c++-link-executable",
+-                        "c++-link-dynamic-library",
+-                        "c++-link-nodeps-dynamic-library",
+-                    ],
+-                    flag_groups = [
+-                        flag_group(
+-                            flags = [
+-                                "--sysroot={WORKSPACE_ROOT}/build/linux/debian_bullseye_amd64-sysroot",
+-                                "-fuse-ld=lld",
+-                                "-lm",
+-                                "-lpthread",
+-                            ],
+-                        ),
+-                    ],
+-                ),
+-            ],
+-        ),
+-    ]
+-
+-    return cc_common.create_cc_toolchain_config_info(
+-        ctx = ctx,
+-        features = features,
+-        cxx_builtin_include_directories = [
+-            "{WORKSPACE_ROOT}/buildtools/third_party/libc++",
+-            "{WORKSPACE_ROOT}/third_party/libc++/src/include",
+-            "{WORKSPACE_ROOT}/third_party/libc++abi/src/include",
+-            "{WORKSPACE_ROOT}/third_party/libc++/src/src",
+-            "{WORKSPACE_ROOT}/third_party/llvm-libc/src",
+-            "{WORKSPACE_ROOT}/third_party/llvm-build/Release+Asserts/lib/clang/22/include",
+-            "{WORKSPACE_ROOT}/third_party/llvm-build/Release+Asserts/lib/clang/23/include",
+-            "{WORKSPACE_ROOT}/build/linux/debian_bullseye_amd64-sysroot/usr/include",
+-            "{WORKSPACE_ROOT}/build/linux/debian_bullseye_amd64-sysroot/usr/local/include",
+-        ],
+-        toolchain_identifier = "local_clang",
+-        host_system_name = "local",
+-        target_system_name = "local",
+-        target_cpu = "k8",
+-        target_libc = "unknown",
+-        compiler = "clang",
+-        abi_version = "unknown",
+-        abi_libc_version = "unknown",
+-        tool_paths = tool_paths,
+-    )
+-
+-cc_toolchain_config = rule(
+-    implementation = _impl,
+-    attrs = {},
+-    provides = [CcToolchainConfigInfo],
++http_archive(
++    name = "highway",
++    patch_cmds = ['python3 - <<\'PY\'\nfrom pathlib import Path\n\nbuild = Path("BUILD")\ntext = build.read_text()\ntext = text.replace(\n    \'load("@rules_cc//cc:defs.bzl", "cc_test")\',\n    \'load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")\',\n)\nbuild.write_text(text)\nPY'],
++    sha256 = "7e0be78b8318e8bdbf6fa545d2ecb4c90f947df03f7aadc42c1967f019e63343",
++    strip_prefix = "highway-1.2.0",
++    urls = ["https://github.com/google/highway/archive/refs/tags/1.2.0.tar.gz"],
+ )
+-""",
+-    build_file_content = """
+-load(":cc_toolchain_config.bzl", "cc_toolchain_config")
+ 
+-package(default_visibility = ["//visibility:public"])
++git_repository(
++    name = "icu",
++    build_file = "@v8//:bazel/BUILD.icu",
++    commit = "a86a32e67b8d1384b33f8fa48c83a6079b86f8cd",
++    patch_cmds = ["find source -name BUILD.bazel | xargs rm"],
++    patch_cmds_win = ["Get-ChildItem -Path source -File -Include BUILD.bazel -Recurse | Remove-Item"],
++    remote = "https://chromium.googlesource.com/chromium/deps/icu.git",
++)
+ 
+-filegroup(
+-    name = "all_files",
+-    srcs = glob(["**/*"]),
++http_archive(
++    name = "fast_float",
++    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "fast_float",\n    hdrs = glob(["include/fast_float/*.h"]),\n    includes = ["include"],\n    visibility = ["//visibility:public"],\n)\n',
++    sha256 = "e14a33089712b681d74d94e2a11362643bd7d769ae8f7e7caefe955f57f7eacd",
++    strip_prefix = "fast_float-8.0.2",
++    urls = ["https://github.com/fastfloat/fast_float/archive/refs/tags/v8.0.2.tar.gz"],
+ )
+ 
+-filegroup(name = "empty")
++git_repository(
++    name = "simdutf",
++    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "simdutf",\n    srcs = ["simdutf.cpp"],\n    hdrs = ["simdutf.h"],\n    copts = ["-std=c++20"],\n    includes = ["."],\n    visibility = ["//visibility:public"],\n)\n',
++    commit = "93b35aec29256f705c97f675fe4623578bd7a395",
++    remote = "https://chromium.googlesource.com/chromium/src/third_party/simdutf",
++)
+ 
+-cc_toolchain_config(name = "k8_toolchain_config")
++git_repository(
++    name = "dragonbox",
++    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "dragonbox",\n    hdrs = ["include/dragonbox/dragonbox.h"],\n    includes = ["include"],\n    visibility = ["//visibility:public"],\n)\n',
++    commit = "beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44",
++    remote = "https://chromium.googlesource.com/external/github.com/jk-jeon/dragonbox.git",
++)
+ 
+-cc_toolchain(
+-    name = "k8_toolchain",
+-    all_files = ":all_files",
+-    ar_files = ":all_files",
+-    compiler_files = ":all_files",
+-    dwp_files = ":empty",
+-    linker_files = ":all_files",
+-    objcopy_files = ":all_files",
+-    strip_files = ":all_files",
+-    supports_param_files = 0,
+-    toolchain_config = ":k8_toolchain_config",
+-    toolchain_identifier = "local_clang",
++git_repository(
++    name = "fp16",
++    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "fp16",\n    hdrs = glob(["include/**/*.h"]),\n    includes = ["include"],\n    visibility = ["//visibility:public"],\n)\n',
++    commit = "3d2de1816307bac63c16a297e8c4dc501b4076df",
++    remote = "https://chromium.googlesource.com/external/github.com/Maratyszcza/FP16.git",
+ )
+ 
+-toolchain(
+-    name = "cc_toolchain_k8",
+-    exec_compatible_with = [
+-        "@platforms//cpu:x86_64",
+-        "@platforms//os:linux",
+-    ],
+-    target_compatible_with = [
+-        "@platforms//cpu:x86_64",
+-        "@platforms//os:linux",
++pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
++pip.parse(
++    hub_name = "v8_python_deps",
++    python_version = "3.11",
++    requirements_lock = "//:bazel/requirements.txt",
++    extra_pip_args = [
++        "--require-hashes",
++        "--index-url=https://pypi.org/simple",
+     ],
+-    toolchain = ":k8_toolchain",
+-    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+-)
+-""",
+ )
++use_repo(pip, "v8_python_deps")
+ 
+-register_toolchains("@llvm_toolchain//:cc_toolchain_k8")
+-
+-# Define local repository for libc++ from third_party sources
+-libcxx_repository = use_repo_rule("//bazel/toolchain:libcxx_repository.bzl", "libcxx_repository")
+-
+-libcxx_repository(
+-    name = "libcxx",
+-)

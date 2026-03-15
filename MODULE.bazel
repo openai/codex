@@ -1,5 +1,7 @@
 module(name = "codex")
 
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "llvm", version = "0.6.7")
 
@@ -63,12 +65,47 @@ crate.from_cargo(
     use_experimental_platforms = True,
 )
 
+crate.from_cargo(
+    name = "v8_poc_crates",
+    cargo_lock = "//codex-rs/v8-poc:Cargo.lock",
+    cargo_toml = "//codex-rs/v8-poc:Cargo.toml",
+    platform_triples = [
+        "aarch64-apple-darwin",
+        "aarch64-pc-windows-gnullvm",
+        "aarch64-pc-windows-msvc",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-linux-musl",
+        "x86_64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+        "x86_64-apple-darwin",
+        "x86_64-pc-windows-gnullvm",
+        "x86_64-pc-windows-msvc",
+    ],
+    use_experimental_platforms = True,
+)
+
 bazel_dep(name = "zstd", version = "1.5.7")
 
 crate.annotation(
     crate = "zstd-sys",
     gen_build_script = "off",
     deps = ["@zstd"],
+)
+crate.annotation(
+    build_script_data = [
+        "@@//third_party/v8:rusty_v8_archive_for_target",
+        "@@//third_party/v8:rusty_v8_binding_for_target",
+    ],
+    build_script_env = {
+        "RUSTY_V8_ARCHIVE": "$(execpath @@//third_party/v8:rusty_v8_archive_for_target)",
+        "RUSTY_V8_SRC_BINDING_PATH": "$(execpath @@//third_party/v8:rusty_v8_binding_for_target)",
+    },
+    crate = "v8",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:v8_custom_archive_out_dir.patch",
+    ],
+    repositories = ["v8_poc_crates"],
 )
 crate.annotation(
     build_script_env = {
@@ -174,7 +211,30 @@ crate.annotation(
 
 inject_repo(crate, "alsa_lib")
 
-use_repo(crate, "crates")
+bazel_dep(name = "v8", version = "14.6.202.11")
+archive_override(
+    module_name = "v8",
+    integrity = "sha256-Ju45oFJMyCWyT/r+d+MDsCbCeoDBisGaj4+KZYIIYSU=",
+    patch_strip = 3,
+    patches = [
+        "//patches:v8_module_deps.patch",
+        "//patches:v8_bazel_rules.patch",
+        "//patches:v8_source_portability.patch",
+    ],
+    strip_prefix = "v8-14.6.202.11",
+    urls = ["https://github.com/v8/v8/archive/refs/tags/14.6.202.11.tar.gz"],
+)
+
+http_archive(
+    name = "v8_crate_146_4_0",
+    build_file = "//third_party/v8:v8_crate.BUILD.bazel",
+    sha256 = "d97bcac5cdc5a195a4813f1855a6bc658f240452aac36caa12fd6c6f16026ab1",
+    strip_prefix = "v8-146.4.0",
+    type = "tar.gz",
+    urls = ["https://static.crates.io/crates/v8/v8-146.4.0.crate"],
+)
+
+use_repo(crate, "crates", "v8_poc_crates")
 
 bazel_dep(name = "libcap", version = "2.27.bcr.1")
 
