@@ -556,7 +556,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_reuses_prompt_cache_key_without_retaining_prior_reviews() -> anyhow::Result<()> {
+async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -612,6 +612,14 @@ async fn guardian_reuses_prompt_cache_key_without_retaining_prior_reviews() -> a
         },
     )
     .await;
+    let first_outcome = run_guardian_subagent(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        first_prompt,
+        guardian_output_schema(),
+        None,
+    )
+    .await;
     let second_prompt = build_guardian_prompt_items(
         session.as_ref(),
         Some("Second retry reason".to_string()),
@@ -627,15 +635,6 @@ async fn guardian_reuses_prompt_cache_key_without_retaining_prior_reviews() -> a
             additional_permissions: None,
             justification: Some("Need to push the second docs fix.".to_string()),
         },
-    )
-    .await;
-
-    let first_outcome = run_guardian_subagent(
-        Arc::clone(&session),
-        Arc::clone(&turn),
-        first_prompt,
-        guardian_output_schema(),
-        None,
     )
     .await;
     let second_outcome = run_guardian_subagent(
@@ -666,8 +665,8 @@ async fn guardian_reuses_prompt_cache_key_without_retaining_prior_reviews() -> a
         second_body["prompt_cache_key"]
     );
     assert!(
-        !second_body.to_string().contains(first_rationale),
-        "guardian session should be reset between reviews"
+        second_body.to_string().contains(first_rationale),
+        "guardian session should append earlier reviews into the follow-up request"
     );
 
     let mut settings = Settings::clone_current();

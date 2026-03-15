@@ -142,17 +142,6 @@ impl GuardianReviewSessionManager {
             deadline,
             params.external_cancel.as_ref(),
             Box::pin(async {
-                review_session
-                    .codex
-                    .session
-                    .replace_history(Vec::new(), None)
-                    .await;
-                review_session
-                    .codex
-                    .session
-                    .set_previous_turn_settings(None)
-                    .await;
-
                 params
                     .parent_session
                     .services
