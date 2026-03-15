@@ -123,7 +123,10 @@ struct McpToolCallApprovalAction<'a> {
 }
 
 fn serialize_guardian_action(value: impl Serialize) -> Value {
-    serde_json::to_value(value).expect("guardian approval action should serialize")
+    match serde_json::to_value(value) {
+        Ok(value) => value,
+        Err(error) => panic!("guardian approval action should serialize: {error}"),
+    }
 }
 
 fn truncate_guardian_action_value(value: Value) -> Value {
