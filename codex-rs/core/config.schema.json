@@ -491,6 +491,9 @@
             "tool_suggest": {
               "type": "boolean"
             },
+            "tui_app_server": {
+              "type": "boolean"
+            },
             "undo": {
               "type": "boolean"
             },
@@ -2041,6 +2044,9 @@
           "type": "boolean"
         },
         "tool_suggest": {
+          "type": "boolean"
+        },
+        "tui_app_server": {
           "type": "boolean"
         },
         "undo": {

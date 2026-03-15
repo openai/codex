@@ -1223,6 +1223,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_unknown_server_request_is_rejected() {
+        let websocket_url = start_test_remote_server(|mut websocket| async move {
+            expect_remote_initialize(&mut websocket).await;
+            let request_id = RequestId::String("srv-unknown".to_string());
+            write_websocket_message(
+                &mut websocket,
+                JSONRPCMessage::Request(JSONRPCRequest {
+                    id: request_id.clone(),
+                    method: "thread/unknown".to_string(),
+                    params: None,
+                    trace: None,
+                }),
+            )
+            .await;
+
+            let JSONRPCMessage::Error(response) = read_websocket_message(&mut websocket).await
+            else {
+                panic!("expected JSON-RPC error response");
+            };
+            assert_eq!(response.id, request_id);
+            assert_eq!(response.error.code, -32601);
+            assert_eq!(
+                response.error.message,
+                "unsupported remote app-server request `thread/unknown`"
+            );
+        })
+        .await;
+        let client = RemoteAppServerClient::connect(test_remote_connect_args(websocket_url))
+            .await
+            .expect("remote client should connect");
+
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
     async fn remote_disconnect_surfaces_as_event() {
         let websocket_url = start_test_remote_server(|mut websocket| async move {
             expect_remote_initialize(&mut websocket).await;
