@@ -560,7 +560,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let first_rationale = "first guardian rationale should not appear in later prompts";
+    let first_rationale = "first guardian rationale from the prior review";
     let request_log = mount_sse_sequence(
         &server,
         vec![
@@ -732,6 +732,22 @@ fn guardian_subagent_config_preserves_parent_network_proxy() {
     assert_eq!(
         guardian_config.permissions.sandbox_policy,
         Constrained::allow_only(SandboxPolicy::new_read_only_policy())
+    );
+}
+
+#[test]
+fn guardian_subagent_config_overrides_parent_developer_instructions() {
+    let mut parent_config = test_config();
+    parent_config.developer_instructions =
+        Some("parent or managed config should not replace guardian policy".to_string());
+
+    let guardian_config =
+        build_guardian_subagent_config(&parent_config, None, "active-model", None)
+            .expect("guardian config");
+
+    assert_eq!(
+        guardian_config.developer_instructions,
+        Some(guardian_policy_prompt())
     );
 }
 

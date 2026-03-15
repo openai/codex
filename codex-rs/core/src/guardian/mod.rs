@@ -76,6 +76,8 @@ use prompt::collect_guardian_transcript_entries;
 #[cfg(test)]
 use prompt::guardian_output_schema;
 #[cfg(test)]
+pub(crate) use prompt::guardian_policy_prompt;
+#[cfg(test)]
 use prompt::guardian_truncate_text;
 #[cfg(test)]
 use prompt::parse_guardian_assessment;

@@ -76,6 +76,56 @@ pub(crate) struct GuardianMcpAnnotations {
     pub(crate) read_only_hint: Option<bool>,
 }
 
+#[derive(Serialize)]
+struct CommandApprovalAction<'a> {
+    tool: &'a str,
+    command: &'a [String],
+    cwd: &'a PathBuf,
+    sandbox_permissions: &'a crate::sandboxing::SandboxPermissions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    additional_permissions: Option<&'a PermissionProfile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    justification: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tty: Option<bool>,
+}
+
+#[cfg(unix)]
+#[derive(Serialize)]
+struct ExecveApprovalAction<'a> {
+    tool: &'a str,
+    program: &'a str,
+    argv: &'a [String],
+    cwd: &'a PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    additional_permissions: Option<&'a PermissionProfile>,
+}
+
+#[derive(Serialize)]
+struct McpToolCallApprovalAction<'a> {
+    tool: &'static str,
+    server: &'a str,
+    tool_name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    arguments: Option<&'a Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connector_id: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connector_name: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connector_description: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_title: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_description: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    annotations: Option<&'a GuardianMcpAnnotations>,
+}
+
+fn serialize_guardian_action(value: impl Serialize) -> Value {
+    serde_json::to_value(value).expect("guardian approval action should serialize")
+}
+
 fn truncate_guardian_action_value(value: Value) -> Value {
     match value {
         Value::String(text) => Value::String(guardian_truncate_text(
@@ -111,25 +161,15 @@ pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest
             sandbox_permissions,
             additional_permissions,
             justification,
-        } => {
-            let mut action = serde_json::json!({
-                "tool": "shell",
-                "command": command,
-                "cwd": cwd,
-                "sandbox_permissions": sandbox_permissions,
-                "additional_permissions": additional_permissions,
-                "justification": justification,
-            });
-            if let Some(action) = action.as_object_mut() {
-                if additional_permissions.is_none() {
-                    action.remove("additional_permissions");
-                }
-                if justification.is_none() {
-                    action.remove("justification");
-                }
-            }
-            action
-        }
+        } => serialize_guardian_action(CommandApprovalAction {
+            tool: "shell",
+            command,
+            cwd,
+            sandbox_permissions,
+            additional_permissions: additional_permissions.as_ref(),
+            justification: justification.as_ref(),
+            tty: None,
+        }),
         GuardianApprovalRequest::ExecCommand {
             id: _,
             command,
@@ -138,26 +178,15 @@ pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest
             additional_permissions,
             justification,
             tty,
-        } => {
-            let mut action = serde_json::json!({
-                "tool": "exec_command",
-                "command": command,
-                "cwd": cwd,
-                "sandbox_permissions": sandbox_permissions,
-                "additional_permissions": additional_permissions,
-                "justification": justification,
-                "tty": tty,
-            });
-            if let Some(action) = action.as_object_mut() {
-                if additional_permissions.is_none() {
-                    action.remove("additional_permissions");
-                }
-                if justification.is_none() {
-                    action.remove("justification");
-                }
-            }
-            action
-        }
+        } => serialize_guardian_action(CommandApprovalAction {
+            tool: "exec_command",
+            command,
+            cwd,
+            sandbox_permissions,
+            additional_permissions: additional_permissions.as_ref(),
+            justification: justification.as_ref(),
+            tty: Some(*tty),
+        }),
         #[cfg(unix)]
         GuardianApprovalRequest::Execve {
             id: _,
@@ -166,21 +195,13 @@ pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest
             argv,
             cwd,
             additional_permissions,
-        } => {
-            let mut action = serde_json::json!({
-                "tool": tool_name,
-                "program": program,
-                "argv": argv,
-                "cwd": cwd,
-                "additional_permissions": additional_permissions,
-            });
-            if let Some(action) = action.as_object_mut()
-                && additional_permissions.is_none()
-            {
-                action.remove("additional_permissions");
-            }
-            action
-        }
+        } => serialize_guardian_action(ExecveApprovalAction {
+            tool: tool_name,
+            program,
+            argv,
+            cwd,
+            additional_permissions: additional_permissions.as_ref(),
+        }),
         GuardianApprovalRequest::ApplyPatch {
             id: _,
             cwd,
@@ -219,36 +240,18 @@ pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest
             tool_title,
             tool_description,
             annotations,
-        } => {
-            let mut action = serde_json::json!({
-                "tool": "mcp_tool_call",
-                "server": server,
-                "tool_name": tool_name,
-                "arguments": arguments,
-                "connector_id": connector_id,
-                "connector_name": connector_name,
-                "connector_description": connector_description,
-                "tool_title": tool_title,
-                "tool_description": tool_description,
-                "annotations": annotations,
-            });
-            if let Some(action) = action.as_object_mut() {
-                for (key, remove) in [
-                    ("arguments", arguments.is_none()),
-                    ("connector_id", connector_id.is_none()),
-                    ("connector_name", connector_name.is_none()),
-                    ("connector_description", connector_description.is_none()),
-                    ("tool_title", tool_title.is_none()),
-                    ("tool_description", tool_description.is_none()),
-                    ("annotations", annotations.is_none()),
-                ] {
-                    if remove {
-                        action.remove(key);
-                    }
-                }
-            }
-            action
-        }
+        } => serialize_guardian_action(McpToolCallApprovalAction {
+            tool: "mcp_tool_call",
+            server,
+            tool_name,
+            arguments: arguments.as_ref(),
+            connector_id: connector_id.as_ref(),
+            connector_name: connector_name.as_ref(),
+            connector_description: connector_description.as_ref(),
+            tool_title: tool_title.as_ref(),
+            tool_description: tool_description.as_ref(),
+            annotations: annotations.as_ref(),
+        }),
     }
 }
 

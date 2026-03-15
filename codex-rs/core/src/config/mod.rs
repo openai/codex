@@ -664,6 +664,46 @@ impl ConfigBuilder {
     }
 }
 
+fn config_scope_segments(scope: &[String], key: &str) -> Vec<String> {
+    let mut segments = scope.to_vec();
+    segments.push(key.to_string());
+    segments
+}
+
+fn feature_scope_segments(scope: &[String], feature_key: &str) -> Vec<String> {
+    let mut segments = scope.to_vec();
+    segments.push("features".to_string());
+    segments.push(feature_key.to_string());
+    segments
+}
+
+fn push_smart_approvals_alias_migration_edits(
+    edits: &mut Vec<ConfigEdit>,
+    scope: &[String],
+    features: &FeaturesToml,
+    approvals_reviewer_missing: bool,
+) {
+    let Some(enabled) = features.entries.get("smart_approvals").copied() else {
+        return;
+    };
+
+    if !features.entries.contains_key("guardian_approval") {
+        edits.push(ConfigEdit::SetPath {
+            segments: feature_scope_segments(scope, "guardian_approval"),
+            value: value(enabled),
+        });
+    }
+    if enabled && approvals_reviewer_missing {
+        edits.push(ConfigEdit::SetPath {
+            segments: config_scope_segments(scope, "approvals_reviewer"),
+            value: value(ApprovalsReviewer::GuardianSubagent.to_string()),
+        });
+    }
+    edits.push(ConfigEdit::ClearPath {
+        segments: feature_scope_segments(scope, "smart_approvals"),
+    });
+}
+
 /// Rewrites the legacy `smart_approvals` feature flag to
 /// `guardian_approval` in `config.toml` before normal config loading.
 ///
@@ -688,59 +728,25 @@ async fn maybe_migrate_smart_approvals_alias(codex_home: &Path) -> std::io::Resu
 
     let mut edits = Vec::new();
 
-    if let Some(features) = config_toml.features.as_ref()
-        && let Some(enabled) = features.entries.get("smart_approvals").copied()
-    {
-        if !features.entries.contains_key("guardian_approval") {
-            edits.push(ConfigEdit::SetPath {
-                segments: vec!["features".to_string(), "guardian_approval".to_string()],
-                value: value(enabled),
-            });
-        }
-        if enabled && config_toml.approvals_reviewer.is_none() {
-            edits.push(ConfigEdit::SetPath {
-                segments: vec!["approvals_reviewer".to_string()],
-                value: value(ApprovalsReviewer::GuardianSubagent.to_string()),
-            });
-        }
-        edits.push(ConfigEdit::ClearPath {
-            segments: vec!["features".to_string(), "smart_approvals".to_string()],
-        });
+    let root_scope = Vec::new();
+    if let Some(features) = config_toml.features.as_ref() {
+        push_smart_approvals_alias_migration_edits(
+            &mut edits,
+            &root_scope,
+            features,
+            config_toml.approvals_reviewer.is_none(),
+        );
     }
 
     for (profile_name, profile) in &config_toml.profiles {
-        if let Some(features) = profile.features.as_ref()
-            && let Some(enabled) = features.entries.get("smart_approvals").copied()
-        {
-            if !features.entries.contains_key("guardian_approval") {
-                edits.push(ConfigEdit::SetPath {
-                    segments: vec![
-                        "profiles".to_string(),
-                        profile_name.clone(),
-                        "features".to_string(),
-                        "guardian_approval".to_string(),
-                    ],
-                    value: value(enabled),
-                });
-            }
-            if enabled && profile.approvals_reviewer.is_none() {
-                edits.push(ConfigEdit::SetPath {
-                    segments: vec![
-                        "profiles".to_string(),
-                        profile_name.clone(),
-                        "approvals_reviewer".to_string(),
-                    ],
-                    value: value(ApprovalsReviewer::GuardianSubagent.to_string()),
-                });
-            }
-            edits.push(ConfigEdit::ClearPath {
-                segments: vec![
-                    "profiles".to_string(),
-                    profile_name.clone(),
-                    "features".to_string(),
-                    "smart_approvals".to_string(),
-                ],
-            });
+        if let Some(features) = profile.features.as_ref() {
+            let scope = vec!["profiles".to_string(), profile_name.clone()];
+            push_smart_approvals_alias_migration_edits(
+                &mut edits,
+                &scope,
+                features,
+                profile.approvals_reviewer.is_none(),
+            );
         }
     }
 

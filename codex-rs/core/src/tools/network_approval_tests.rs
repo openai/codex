@@ -67,7 +67,7 @@ async fn session_approved_hosts_preserve_protocol_and_port_scope() {
     }
 
     let seeded = NetworkApprovalService::default();
-    source.copy_session_approved_hosts_to(&seeded).await;
+    source.sync_session_approved_hosts_to(&seeded).await;
 
     let mut copied = seeded
         .session_approved_hosts
@@ -101,7 +101,7 @@ async fn session_approved_hosts_preserve_protocol_and_port_scope() {
 }
 
 #[tokio::test]
-async fn copy_session_approved_hosts_to_replaces_existing_target_hosts() {
+async fn sync_session_approved_hosts_to_replaces_existing_target_hosts() {
     let source = NetworkApprovalService::default();
     {
         let mut approved_hosts = source.session_approved_hosts.lock().await;
@@ -122,7 +122,7 @@ async fn copy_session_approved_hosts_to_replaces_existing_target_hosts() {
         });
     }
 
-    source.copy_session_approved_hosts_to(&target).await;
+    source.sync_session_approved_hosts_to(&target).await;
 
     let copied = target
         .session_approved_hosts
