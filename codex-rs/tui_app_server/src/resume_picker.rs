@@ -240,6 +240,9 @@ async fn run_session_picker_with_loader(
     };
     let codex_home = config.codex_home.as_path();
     let filter_cwd = if show_all || is_remote {
+        // Remote sessions live in the server's filesystem namespace, so the client
+        // process cwd is not a meaningful default filter. A real remote cwd filter
+        // would need an explicit server-side target cwd instead of current_dir().
         None
     } else {
         std::env::current_dir().ok()
