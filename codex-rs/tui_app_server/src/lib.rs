@@ -268,19 +268,33 @@ pub(crate) enum AppServerTarget {
     Remote(String),
 }
 
-fn remote_addr_has_explicit_port(addr: &str) -> bool {
-    let Some((_, authority)) = addr.split_once("://") else {
+fn remote_addr_has_explicit_port(addr: &str, parsed: &Url) -> bool {
+    let Some(host) = parsed.host_str() else {
         return false;
     };
-    let authority = authority.strip_suffix('/').unwrap_or(authority);
-    if authority.starts_with('[') {
-        return authority
-            .rsplit_once("]:")
-            .is_some_and(|(_, port)| !port.is_empty());
+    if parsed.port().is_some() {
+        return true;
     }
-    authority
-        .rsplit_once(':')
-        .is_some_and(|(host, port)| !host.is_empty() && !port.is_empty())
+
+    let Some((_, rest)) = addr.split_once("://") else {
+        return false;
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    let host_and_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host_and_port)| host_and_port);
+    let explicit_default_port = match parsed.scheme() {
+        "ws" => 80,
+        "wss" => 443,
+        _ => return false,
+    };
+    let expected_host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    host_and_port == format!("{expected_host}:{explicit_default_port}")
 }
 
 pub fn normalize_remote_addr(addr: &str) -> color_eyre::Result<String> {
@@ -294,7 +308,7 @@ pub fn normalize_remote_addr(addr: &str) -> color_eyre::Result<String> {
     };
     if matches!(parsed.scheme(), "ws" | "wss")
         && parsed.host_str().is_some()
-        && remote_addr_has_explicit_port(addr)
+        && remote_addr_has_explicit_port(addr, &parsed)
         && parsed.path() == "/"
         && parsed.query().is_none()
         && parsed.fragment().is_none()
@@ -1566,7 +1580,11 @@ mod tests {
 
     #[test]
     fn normalize_remote_addr_rejects_websocket_url_without_explicit_port() {
-        for addr in ["ws://127.0.0.1", "wss://example.com"] {
+        for addr in [
+            "ws://127.0.0.1",
+            "wss://example.com",
+            "ws://user:pass@127.0.0.1",
+        ] {
             let err = normalize_remote_addr(addr)
                 .expect_err("websocket URLs without an explicit port should be rejected");
             assert!(
