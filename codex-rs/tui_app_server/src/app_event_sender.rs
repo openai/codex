@@ -63,6 +63,10 @@ impl AppEventSender {
         ));
     }
 
+    #[cfg_attr(
+        any(target_os = "linux", not(feature = "voice-input")),
+        allow(dead_code)
+    )]
     pub(crate) fn realtime_conversation_audio(&self, params: ConversationAudioParams) {
         self.send(AppEvent::CodexOp(
             AppCommand::realtime_conversation_audio(params).into_core(),

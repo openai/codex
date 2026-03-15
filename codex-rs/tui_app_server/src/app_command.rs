@@ -120,6 +120,10 @@ impl AppCommand {
         Self(Op::RealtimeConversationStart(params))
     }
 
+    #[cfg_attr(
+        any(target_os = "linux", not(feature = "voice-input")),
+        allow(dead_code)
+    )]
     pub(crate) fn realtime_conversation_audio(params: ConversationAudioParams) -> Self {
         Self(Op::RealtimeConversationAudio(params))
     }
