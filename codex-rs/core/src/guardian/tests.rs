@@ -670,6 +670,28 @@ async fn guardian_reuses_prompt_cache_key_without_retaining_prior_reviews() -> a
         "guardian session should be reset between reviews"
     );
 
+    let mut settings = Settings::clone_current();
+    settings.set_snapshot_path("snapshots");
+    settings.set_prepend_module_to_snapshot(false);
+    settings.bind(|| {
+        assert_snapshot!(
+            "codex_core__guardian__tests__guardian_followup_review_request_layout",
+            format!(
+                "{}\n\nshared_prompt_cache_key: {}\nfollowup_contains_first_rationale: {}",
+                context_snapshot::format_labeled_requests_snapshot(
+                    "Guardian follow-up review request layout",
+                    &[
+                        ("Initial Guardian Review Request", &requests[0]),
+                        ("Follow-up Guardian Review Request", &requests[1]),
+                    ],
+                    &ContextSnapshotOptions::default().strip_capability_instructions(),
+                ),
+                first_body["prompt_cache_key"] == second_body["prompt_cache_key"],
+                second_body.to_string().contains(first_rationale),
+            )
+        );
+    });
+
     Ok(())
 }
 #[test]
