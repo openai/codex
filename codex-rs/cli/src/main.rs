@@ -507,7 +507,7 @@ struct FeatureToggles {
 struct InteractiveRemoteOptions {
     /// Connect the app-server-backed TUI to a remote app server websocket endpoint.
     ///
-    /// Accepted form: `ws://host:port`.
+    /// Accepted forms: `ws://host:port` or `wss://host:port`.
     #[arg(long = "remote", value_name = "ADDR")]
     remote: Option<String>,
 }

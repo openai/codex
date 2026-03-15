@@ -272,12 +272,14 @@ pub fn normalize_remote_addr(addr: &str) -> color_eyre::Result<String> {
     let parsed = match Url::parse(addr) {
         Ok(parsed) => parsed,
         Err(_) => {
-            color_eyre::eyre::bail!("invalid remote address `{addr}`; expected `ws://host:port`");
+            color_eyre::eyre::bail!(
+                "invalid remote address `{addr}`; expected `ws://host:port` or `wss://host:port`"
+            );
         }
     };
-    if parsed.scheme() == "ws"
+    if matches!(parsed.scheme(), "ws" | "wss")
         && parsed.host_str().is_some()
-        && parsed.port().is_some()
+        && parsed.port_or_known_default().is_some()
         && parsed.path() == "/"
         && parsed.query().is_none()
         && parsed.fragment().is_none()
@@ -285,7 +287,9 @@ pub fn normalize_remote_addr(addr: &str) -> color_eyre::Result<String> {
         return Ok(parsed.to_string());
     }
 
-    color_eyre::eyre::bail!("invalid remote address `{addr}`; expected `ws://host:port`");
+    color_eyre::eyre::bail!(
+        "invalid remote address `{addr}`; expected `ws://host:port` or `wss://host:port`"
+    );
 }
 
 async fn connect_remote_app_server(websocket_url: String) -> color_eyre::Result<AppServerClient> {
@@ -703,10 +707,12 @@ pub async fn run_main(
         }
     }
 
-    #[allow(clippy::print_stderr)]
-    if let Err(err) = enforce_login_restrictions(&config) {
-        eprintln!("{err}");
-        std::process::exit(1);
+    if matches!(app_server_target, AppServerTarget::Embedded) {
+        #[allow(clippy::print_stderr)]
+        if let Err(err) = enforce_login_restrictions(&config) {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
     }
 
     let log_dir = codex_core::config::log_dir(&config)?;
@@ -1536,17 +1542,31 @@ mod tests {
     }
 
     #[test]
+    fn normalize_remote_addr_accepts_secure_websocket_url() {
+        assert_eq!(
+            normalize_remote_addr("wss://example.com:443").expect("wss URL should normalize"),
+            "wss://example.com/"
+        );
+    }
+
+    #[test]
     fn normalize_remote_addr_rejects_invalid_input() {
         let err = normalize_remote_addr("https://127.0.0.1:4500")
             .expect_err("https URLs should be rejected");
-        assert!(err.to_string().contains("expected `ws://host:port`"));
+        assert!(
+            err.to_string()
+                .contains("expected `ws://host:port` or `wss://host:port`")
+        );
     }
 
     #[test]
     fn normalize_remote_addr_rejects_host_port_shortcut() {
         let err =
             normalize_remote_addr("127.0.0.1:4500").expect_err("host:port should be rejected");
-        assert!(err.to_string().contains("expected `ws://host:port`"));
+        assert!(
+            err.to_string()
+                .contains("expected `ws://host:port` or `wss://host:port`")
+        );
     }
 
     #[tokio::test]
