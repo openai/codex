@@ -10,6 +10,7 @@ session logic.
 */
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::io::Error as IoError;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
@@ -111,6 +112,7 @@ enum RemoteClientCommand {
 pub struct RemoteAppServerClient {
     command_tx: mpsc::Sender<RemoteClientCommand>,
     event_rx: mpsc::Receiver<AppServerEvent>,
+    pending_events: VecDeque<AppServerEvent>,
     worker_handle: tokio::task::JoinHandle<()>,
 }
 
@@ -144,7 +146,7 @@ impl RemoteAppServerClient {
                 ))
             })?;
         let mut stream = stream;
-        initialize_remote_connection(
+        let pending_events = initialize_remote_connection(
             &mut stream,
             &websocket_url,
             args.initialize_params(),
@@ -268,10 +270,7 @@ impl RemoteAppServerClient {
                                         }
                                     }
                                     Ok(JSONRPCMessage::Notification(notification)) => {
-                                        let event = match ServerNotification::try_from(notification.clone()) {
-                                            Ok(notification) => AppServerEvent::ServerNotification(notification),
-                                            Err(_) => AppServerEvent::LegacyNotification(notification),
-                                        };
+                                        let event = app_server_event_from_notification(notification);
                                         if let Err(err) = deliver_event(
                                             &event_tx,
                                             &mut skipped_events,
@@ -420,6 +419,7 @@ impl RemoteAppServerClient {
         Ok(Self {
             command_tx,
             event_rx,
+            pending_events: pending_events.into(),
             worker_handle,
         })
     }
@@ -549,6 +549,9 @@ impl RemoteAppServerClient {
     }
 
     pub async fn next_event(&mut self) -> Option<AppServerEvent> {
+        if let Some(event) = self.pending_events.pop_front() {
+            return Some(event);
+        }
         self.event_rx.recv().await
     }
 
@@ -556,6 +559,7 @@ impl RemoteAppServerClient {
         let Self {
             command_tx,
             event_rx,
+            pending_events: _pending_events,
             worker_handle,
         } = self;
         let mut worker_handle = worker_handle;
@@ -632,8 +636,9 @@ async fn initialize_remote_connection(
     websocket_url: &str,
     params: InitializeParams,
     initialize_timeout: Duration,
-) -> IoResult<()> {
+) -> IoResult<Vec<AppServerEvent>> {
     let initialize_request_id = RequestId::String("initialize".to_string());
+    let mut pending_events = Vec::new();
     write_jsonrpc_message(
         stream,
         JSONRPCMessage::Request(jsonrpc_request_from_client_request(
@@ -665,7 +670,37 @@ async fn initialize_remote_connection(
                                 error.error.message
                             )));
                         }
-                        _ => {}
+                        JSONRPCMessage::Notification(notification) => {
+                            pending_events.push(app_server_event_from_notification(notification));
+                        }
+                        JSONRPCMessage::Request(request) => {
+                            let request_id = request.id.clone();
+                            let method = request.method.clone();
+                            match ServerRequest::try_from(request) {
+                                Ok(request) => {
+                                    pending_events.push(AppServerEvent::ServerRequest(request));
+                                }
+                                Err(err) => {
+                                    warn!(%err, method, "rejecting unknown remote app-server request during initialize");
+                                    write_jsonrpc_message(
+                                        stream,
+                                        JSONRPCMessage::Error(JSONRPCError {
+                                            error: JSONRPCErrorError {
+                                                code: -32601,
+                                                message: format!(
+                                                    "unsupported remote app-server request `{method}`"
+                                                ),
+                                                data: None,
+                                            },
+                                            id: request_id,
+                                        }),
+                                        websocket_url,
+                                    )
+                                    .await?;
+                                }
+                            }
+                        }
+                        JSONRPCMessage::Response(_) | JSONRPCMessage::Error(_) => {}
                     }
                 }
                 Some(Ok(Message::Binary(_)))
@@ -714,7 +749,16 @@ async fn initialize_remote_connection(
         )),
         websocket_url,
     )
-    .await
+    .await?;
+
+    Ok(pending_events)
+}
+
+fn app_server_event_from_notification(notification: JSONRPCNotification) -> AppServerEvent {
+    match ServerNotification::try_from(notification.clone()) {
+        Ok(notification) => AppServerEvent::ServerNotification(notification),
+        Err(_) => AppServerEvent::LegacyNotification(notification),
+    }
 }
 
 async fn deliver_event(
