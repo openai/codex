@@ -1181,10 +1181,7 @@ mod tests {
         let params = thread_start_params_from_config(&config, ThreadParamsMode::Embedded);
 
         assert_eq!(params.cwd, Some(config.cwd.to_string_lossy().to_string()));
-        assert_eq!(
-            params.model_provider,
-            Some(config.model_provider_id)
-        );
+        assert_eq!(params.model_provider, Some(config.model_provider_id));
     }
 
     #[tokio::test]
