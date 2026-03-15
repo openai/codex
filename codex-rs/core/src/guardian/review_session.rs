@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -43,7 +42,6 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) parent_session: Arc<Session>,
     pub(crate) parent_turn: Arc<TurnContext>,
     pub(crate) spawn_config: Config,
-    pub(crate) live_network_config: Option<NetworkProxyConfig>,
     pub(crate) prompt_items: Vec<UserInput>,
     pub(crate) schema: Value,
     pub(crate) model: String,
@@ -61,7 +59,7 @@ pub(crate) struct GuardianReviewSessionManager {
 struct GuardianReviewSession {
     codex: Codex,
     cancel_token: CancellationToken,
-    live_network_config: Option<NetworkProxyConfig>,
+    spawn_config: Config,
 }
 
 impl GuardianReviewSession {
@@ -102,7 +100,10 @@ impl GuardianReviewSessionManager {
         };
 
         if state.as_ref().is_some_and(|review_session| {
-            review_session.live_network_config != params.live_network_config
+            guardian_review_session_config_changed(
+                &review_session.spawn_config,
+                &params.spawn_config,
+            )
         }) && let Some(review_session) = state.take()
         {
             review_session.shutdown_in_background();
@@ -207,10 +208,11 @@ impl GuardianReviewSessionManager {
 
     #[cfg(test)]
     pub(crate) async fn cache_for_test(&self, codex: Codex) {
+        let spawn_config = (*codex.session.get_config().await).clone();
         *self.state.lock().await = Some(GuardianReviewSession {
+            spawn_config,
             codex,
             cancel_token: CancellationToken::new(),
-            live_network_config: None,
         });
     }
 }
@@ -234,8 +236,15 @@ async fn spawn_guardian_review_session(
     Ok(GuardianReviewSession {
         codex,
         cancel_token,
-        live_network_config: params.live_network_config.clone(),
+        spawn_config: params.spawn_config.clone(),
     })
+}
+
+fn guardian_review_session_config_changed(
+    cached_spawn_config: &Config,
+    next_spawn_config: &Config,
+) -> bool {
+    cached_spawn_config != next_spawn_config
 }
 
 async fn wait_for_guardian_review(
@@ -392,6 +401,34 @@ async fn interrupt_and_drain_turn(codex: &Codex) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guardian_review_session_config_change_invalidates_cached_session() {
+        let parent_config = crate::config::test_config();
+        let cached_spawn_config =
+            build_guardian_review_session_config(&parent_config, None, "active-model", None)
+                .expect("cached guardian config");
+
+        let mut changed_parent_config = parent_config;
+        changed_parent_config.model_provider.base_url =
+            Some("https://guardian.example.invalid/v1".to_string());
+        let next_spawn_config = build_guardian_review_session_config(
+            &changed_parent_config,
+            None,
+            "active-model",
+            None,
+        )
+        .expect("next guardian config");
+
+        assert!(guardian_review_session_config_changed(
+            &cached_spawn_config,
+            &next_spawn_config
+        ));
+        assert!(!guardian_review_session_config_changed(
+            &cached_spawn_config,
+            &cached_spawn_config
+        ));
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn run_before_review_deadline_times_out_before_future_completes() {
