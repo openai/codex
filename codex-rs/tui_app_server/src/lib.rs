@@ -526,21 +526,41 @@ async fn lookup_latest_session_target_with_app_server(
     cwd_filter: Option<&Path>,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     let response = app_server
-        .thread_list(ThreadListParams {
-            cursor: None,
-            limit: Some(1),
-            sort_key: Some(AppServerThreadSortKey::UpdatedAt),
-            model_providers: Some(vec![config.model_provider_id.clone()]),
-            source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
-            archived: Some(false),
-            cwd: cwd_filter.map(|cwd| cwd.to_string_lossy().to_string()),
-            search_term: None,
-        })
+        .thread_list(latest_session_lookup_params(
+            app_server.is_remote(),
+            config,
+            cwd_filter,
+        ))
         .await?;
     Ok(response
         .data
         .into_iter()
         .find_map(session_target_from_app_server_thread))
+}
+
+fn latest_session_lookup_params(
+    is_remote: bool,
+    config: &Config,
+    cwd_filter: Option<&Path>,
+) -> ThreadListParams {
+    ThreadListParams {
+        cursor: None,
+        limit: Some(1),
+        sort_key: Some(AppServerThreadSortKey::UpdatedAt),
+        model_providers: if is_remote {
+            None
+        } else {
+            Some(vec![config.model_provider_id.clone()])
+        },
+        source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
+        archived: Some(false),
+        cwd: if is_remote {
+            None
+        } else {
+            cwd_filter.map(|cwd| cwd.to_string_lossy().to_string())
+        },
+        search_term: None,
+    }
 }
 
 pub async fn run_main(
@@ -1612,6 +1632,34 @@ mod tests {
             err.to_string()
                 .contains("expected `ws://host:port` or `wss://host:port`")
         );
+    }
+
+    #[tokio::test]
+    async fn latest_session_lookup_params_keep_local_filters_for_embedded_sessions()
+    -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let cwd = temp_dir.path().join("project");
+
+        let params = latest_session_lookup_params(false, &config, Some(cwd.as_path()));
+
+        assert_eq!(params.model_providers, Some(vec![config.model_provider_id]));
+        assert_eq!(params.cwd, Some(cwd.to_string_lossy().to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn latest_session_lookup_params_omit_local_filters_for_remote_sessions()
+    -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let cwd = temp_dir.path().join("project");
+
+        let params = latest_session_lookup_params(true, &config, Some(cwd.as_path()));
+
+        assert_eq!(params.model_providers, None);
+        assert_eq!(params.cwd, None);
+        Ok(())
     }
 
     #[tokio::test]
