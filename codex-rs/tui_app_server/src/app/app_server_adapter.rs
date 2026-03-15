@@ -19,7 +19,10 @@ use crate::app_server_session::status_account_display_from_auth_mode;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnStatus;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::AgentMessageContent;
@@ -48,6 +51,8 @@ use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use serde_json::Value;
@@ -194,6 +199,22 @@ impl App {
             .await
             .map_err(|err| format!("failed to reject app-server request: {err}"))
     }
+}
+
+pub(super) fn thread_snapshot_events(thread: &Thread) -> Vec<Event> {
+    let Ok(thread_id) = ThreadId::from_string(&thread.id) else {
+        tracing::warn!(
+            thread_id = %thread.id,
+            "ignoring app-server thread snapshot with invalid thread id"
+        );
+        return Vec::new();
+    };
+
+    thread
+        .turns
+        .iter()
+        .flat_map(|turn| turn_snapshot_events(thread_id, turn))
+        .collect()
 }
 
 fn legacy_thread_event(params: Option<Value>) -> Option<(ThreadId, Event)> {
@@ -418,6 +439,70 @@ fn token_usage_from_app_server(
     }
 }
 
+fn turn_snapshot_events(thread_id: ThreadId, turn: &Turn) -> Vec<Event> {
+    let mut events = vec![Event {
+        id: String::new(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: turn.id.clone(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::default(),
+        }),
+    }];
+
+    events.extend(turn.items.iter().filter_map(|item| {
+        let item = thread_item_to_core(item.clone())?;
+        Some(Event {
+            id: String::new(),
+            msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id,
+                turn_id: turn.id.clone(),
+                item,
+            }),
+        })
+    }));
+
+    match turn.status {
+        TurnStatus::Completed => events.push(Event {
+            id: String::new(),
+            msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: turn.id.clone(),
+                last_agent_message: None,
+            }),
+        }),
+        TurnStatus::Interrupted => events.push(Event {
+            id: String::new(),
+            msg: EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: Some(turn.id.clone()),
+                reason: TurnAbortReason::Interrupted,
+            }),
+        }),
+        TurnStatus::Failed => {
+            if let Some(error) = &turn.error {
+                events.push(Event {
+                    id: String::new(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: error.message.clone(),
+                        codex_error_info: error
+                            .codex_error_info
+                            .clone()
+                            .and_then(app_server_codex_error_info_to_core),
+                    }),
+                });
+            }
+            events.push(Event {
+                id: String::new(),
+                msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: turn.id.clone(),
+                    last_agent_message: None,
+                }),
+            });
+        }
+        TurnStatus::InProgress => {}
+    }
+
+    events
+}
+
 fn thread_item_to_core(item: ThreadItem) -> Option<TurnItem> {
     match item {
         ThreadItem::UserMessage { id, content } => Some(TurnItem::UserMessage(UserMessageItem {
@@ -504,11 +589,14 @@ fn app_server_codex_error_info_to_core(
 #[cfg(test)]
 mod tests {
     use super::server_notification_thread_events;
+    use super::thread_snapshot_events;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
     use codex_app_server_protocol::ItemCompletedNotification;
     use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
     use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::Thread;
     use codex_app_server_protocol::ThreadItem;
+    use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
     use codex_app_server_protocol::TurnStatus;
@@ -518,7 +606,11 @@ mod tests {
     use codex_protocol::items::TurnItem;
     use codex_protocol::models::MessagePhase;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::protocol::TurnAbortedEvent;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
 
     #[test]
     fn bridges_completed_agent_messages_from_server_notifications() {
@@ -641,5 +733,66 @@ mod tests {
             panic!("expected bridged reasoning delta");
         };
         assert_eq!(delta.delta, "Thinking");
+    }
+
+    #[test]
+    fn bridges_thread_snapshot_turns_for_resume_restore() {
+        let thread_id = ThreadId::new();
+        let events = thread_snapshot_events(&Thread {
+            id: thread_id.to_string(),
+            preview: "hello".to_string(),
+            ephemeral: false,
+            model_provider: "openai".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            status: ThreadStatus::Idle,
+            path: None,
+            cwd: PathBuf::from("/tmp/project"),
+            cli_version: "test".to_string(),
+            source: SessionSource::Cli.into(),
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: Some("restore".to_string()),
+            turns: vec![
+                Turn {
+                    id: "turn-complete".to_string(),
+                    items: vec![
+                        ThreadItem::UserMessage {
+                            id: "user-1".to_string(),
+                            content: vec![codex_app_server_protocol::UserInput::Text {
+                                text: "hello".to_string(),
+                                text_elements: Vec::new(),
+                            }],
+                        },
+                        ThreadItem::AgentMessage {
+                            id: "assistant-1".to_string(),
+                            text: "hi".to_string(),
+                            phase: Some(MessagePhase::FinalAnswer),
+                        },
+                    ],
+                    status: TurnStatus::Completed,
+                    error: None,
+                },
+                Turn {
+                    id: "turn-interrupted".to_string(),
+                    items: Vec::new(),
+                    status: TurnStatus::Interrupted,
+                    error: None,
+                },
+            ],
+        });
+
+        assert_eq!(events.len(), 6);
+        assert!(matches!(events[0].msg, EventMsg::TurnStarted(_)));
+        assert!(matches!(events[1].msg, EventMsg::ItemCompleted(_)));
+        assert!(matches!(events[2].msg, EventMsg::ItemCompleted(_)));
+        assert!(matches!(events[3].msg, EventMsg::TurnComplete(_)));
+        assert!(matches!(events[4].msg, EventMsg::TurnStarted(_)));
+        let EventMsg::TurnAborted(TurnAbortedEvent { turn_id, reason }) = &events[5].msg else {
+            panic!("expected interrupted turn replay");
+        };
+        assert_eq!(turn_id.as_deref(), Some("turn-interrupted"));
+        assert_eq!(*reason, TurnAbortReason::Interrupted);
     }
 }

@@ -124,6 +124,7 @@ impl ThreadParamsMode {
 }
 
 pub(crate) struct AppServerStartedThread {
+    pub(crate) thread: Thread,
     pub(crate) session_configured: SessionConfiguredEvent,
 }
 
@@ -840,7 +841,10 @@ fn started_thread_from_start_response(
 ) -> Result<AppServerStartedThread> {
     let session_configured = session_configured_from_thread_start_response(response)
         .map_err(color_eyre::eyre::Report::msg)?;
-    Ok(AppServerStartedThread { session_configured })
+    Ok(AppServerStartedThread {
+        thread: response.thread.clone(),
+        session_configured,
+    })
 }
 
 fn started_thread_from_resume_response(
@@ -850,6 +854,7 @@ fn started_thread_from_resume_response(
     let session_configured = session_configured_from_thread_resume_response(response)
         .map_err(color_eyre::eyre::Report::msg)?;
     Ok(AppServerStartedThread {
+        thread: response.thread.clone(),
         session_configured: SessionConfiguredEvent {
             initial_messages: thread_initial_messages(
                 &session_configured.session_id,
@@ -868,6 +873,7 @@ fn started_thread_from_fork_response(
     let session_configured = session_configured_from_thread_fork_response(response)
         .map_err(color_eyre::eyre::Report::msg)?;
     Ok(AppServerStartedThread {
+        thread: response.thread.clone(),
         session_configured: SessionConfiguredEvent {
             initial_messages: thread_initial_messages(
                 &session_configured.session_id,
