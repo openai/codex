@@ -104,8 +104,14 @@ struct PageLoadRequest {
     cursor: Option<PageCursor>,
     request_token: usize,
     search_token: Option<usize>,
-    default_provider: String,
+    provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
+}
+
+#[derive(Clone)]
+enum ProviderFilter {
+    Any,
+    MatchDefault(String),
 }
 
 type PageLoader = Arc<dyn Fn(PageLoadRequest) + Send + Sync>;
@@ -164,11 +170,13 @@ pub async fn run_resume_picker_with_app_server(
     app_server: AppServerSession,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
+    let is_remote = app_server.is_remote();
     run_session_picker_with_loader(
         tui,
         config,
         show_all,
         SessionPickerAction::Resume,
+        is_remote,
         spawn_app_server_page_loader(app_server, bg_tx),
         bg_rx,
     )
@@ -182,11 +190,13 @@ pub async fn run_fork_picker_with_app_server(
     app_server: AppServerSession,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
+    let is_remote = app_server.is_remote();
     run_session_picker_with_loader(
         tui,
         config,
         show_all,
         SessionPickerAction::Fork,
+        is_remote,
         spawn_app_server_page_loader(app_server, bg_tx),
         bg_rx,
     )
@@ -206,6 +216,7 @@ async fn run_session_picker(
         config,
         show_all,
         action,
+        /*is_remote*/ false,
         spawn_rollout_page_loader(config, bg_tx),
         bg_rx,
     )
@@ -217,13 +228,18 @@ async fn run_session_picker_with_loader(
     config: &Config,
     show_all: bool,
     action: SessionPickerAction,
+    is_remote: bool,
     page_loader: PageLoader,
     bg_rx: mpsc::UnboundedReceiver<BackgroundEvent>,
 ) -> Result<SessionSelection> {
     let alt = AltScreenGuard::enter(tui);
-    let default_provider = config.model_provider_id.to_string();
+    let provider_filter = if is_remote {
+        ProviderFilter::Any
+    } else {
+        ProviderFilter::MatchDefault(config.model_provider_id.to_string())
+    };
     let codex_home = config.codex_home.as_path();
-    let filter_cwd = if show_all {
+    let filter_cwd = if show_all || is_remote {
         None
     } else {
         std::env::current_dir().ok()
@@ -233,7 +249,7 @@ async fn run_session_picker_with_loader(
         codex_home.to_path_buf(),
         alt.tui.frame_requester(),
         page_loader,
-        default_provider.clone(),
+        provider_filter,
         show_all,
         filter_cwd,
         action,
@@ -289,7 +305,10 @@ fn spawn_rollout_page_loader(
         let tx = loader_tx.clone();
         let config = config.clone();
         tokio::spawn(async move {
-            let provider_filter = vec![request.default_provider.clone()];
+            let default_provider = match request.provider_filter {
+                ProviderFilter::Any => None,
+                ProviderFilter::MatchDefault(default_provider) => Some(default_provider),
+            };
             let cursor = match request.cursor.as_ref() {
                 Some(PageCursor::Rollout(cursor)) => Some(cursor),
                 Some(PageCursor::AppServer(_)) => None,
@@ -301,8 +320,8 @@ fn spawn_rollout_page_loader(
                 cursor,
                 request.sort_key,
                 INTERACTIVE_SESSION_SOURCES,
-                Some(provider_filter.as_slice()),
-                request.default_provider.as_str(),
+                default_provider.as_ref().map(std::slice::from_ref),
+                default_provider.as_deref().unwrap_or_default(),
                 None,
             )
             .await
@@ -333,7 +352,7 @@ fn spawn_app_server_page_loader(
             let page = load_app_server_page(
                 &mut app_server,
                 cursor,
-                request.default_provider,
+                request.provider_filter,
                 request.sort_key,
             )
             .await;
@@ -394,7 +413,7 @@ struct PickerState {
     next_search_token: usize,
     page_loader: PageLoader,
     view_rows: Option<usize>,
-    default_provider: String,
+    provider_filter: ProviderFilter,
     show_all: bool,
     filter_cwd: Option<PathBuf>,
     action: SessionPickerAction,
@@ -442,23 +461,11 @@ impl LoadingState {
 async fn load_app_server_page(
     app_server: &mut AppServerSession,
     cursor: Option<String>,
-    default_provider: String,
+    provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
 ) -> std::io::Result<PickerPage> {
     let response = app_server
-        .thread_list(ThreadListParams {
-            cursor,
-            limit: Some(PAGE_SIZE as u32),
-            sort_key: Some(match sort_key {
-                ThreadSortKey::CreatedAt => AppServerThreadSortKey::CreatedAt,
-                ThreadSortKey::UpdatedAt => AppServerThreadSortKey::UpdatedAt,
-            }),
-            model_providers: Some(vec![default_provider]),
-            source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
-            archived: Some(false),
-            cwd: None,
-            search_term: None,
-        })
+        .thread_list(thread_list_params(cursor, provider_filter, sort_key))
         .await
         .map_err(std::io::Error::other)?;
     let num_scanned_files = response.data.len();
@@ -536,7 +543,7 @@ impl PickerState {
         codex_home: PathBuf,
         requester: FrameRequester,
         page_loader: PageLoader,
-        default_provider: String,
+        provider_filter: ProviderFilter,
         show_all: bool,
         filter_cwd: Option<PathBuf>,
         action: SessionPickerAction,
@@ -561,7 +568,7 @@ impl PickerState {
             next_search_token: 0,
             page_loader,
             view_rows: None,
-            default_provider,
+            provider_filter,
             show_all,
             filter_cwd,
             action,
@@ -698,7 +705,7 @@ impl PickerState {
             cursor: None,
             request_token,
             search_token,
-            default_provider: self.default_provider.clone(),
+            provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
         });
     }
@@ -974,7 +981,7 @@ impl PickerState {
             cursor: Some(cursor),
             request_token,
             search_token,
-            default_provider: self.default_provider.clone(),
+            provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
         });
     }
@@ -1074,6 +1081,29 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
         cwd: Some(thread.cwd),
         git_branch: thread.git_info.and_then(|git_info| git_info.branch),
     })
+}
+
+fn thread_list_params(
+    cursor: Option<String>,
+    provider_filter: ProviderFilter,
+    sort_key: ThreadSortKey,
+) -> ThreadListParams {
+    ThreadListParams {
+        cursor,
+        limit: Some(PAGE_SIZE as u32),
+        sort_key: Some(match sort_key {
+            ThreadSortKey::CreatedAt => AppServerThreadSortKey::CreatedAt,
+            ThreadSortKey::UpdatedAt => AppServerThreadSortKey::UpdatedAt,
+        }),
+        model_providers: match provider_filter {
+            ProviderFilter::Any => None,
+            ProviderFilter::MatchDefault(default_provider) => Some(vec![default_provider]),
+        },
+        source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
+        archived: Some(false),
+        cwd: None,
+        search_term: None,
+    }
 }
 
 fn paths_match(a: &Path, b: &Path) -> bool {
@@ -1786,6 +1816,48 @@ mod tests {
     }
 
     #[test]
+    fn remote_thread_list_params_omit_provider_filter() {
+        let params = thread_list_params(
+            Some(String::from("cursor-1")),
+            ProviderFilter::Any,
+            ThreadSortKey::UpdatedAt,
+        );
+
+        assert_eq!(params.cursor, Some(String::from("cursor-1")));
+        assert_eq!(params.model_providers, None);
+        assert_eq!(
+            params.source_kinds,
+            Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode])
+        );
+    }
+
+    #[test]
+    fn remote_picker_does_not_filter_rows_by_local_cwd() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::Any,
+            false,
+            None,
+            SessionPickerAction::Resume,
+        );
+        let row = Row {
+            path: None,
+            preview: String::from("remote session"),
+            thread_id: Some(ThreadId::new()),
+            thread_name: None,
+            created_at: None,
+            updated_at: None,
+            cwd: Some(PathBuf::from("/srv/remote-project")),
+            git_branch: None,
+        };
+
+        assert!(state.row_matches_filter(&row));
+    }
+
+    #[test]
     fn resume_table_snapshot() {
         use crate::custom_terminal::Terminal;
         use crate::test_backend::VT100Backend;
@@ -1797,7 +1869,7 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            String::from("openai"),
+            ProviderFilter::MatchDefault(String::from("openai")),
             true,
             None,
             SessionPickerAction::Resume,
@@ -1875,7 +1947,7 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            String::from("openai"),
+            ProviderFilter::MatchDefault(String::from("openai")),
             true,
             None,
             SessionPickerAction::Resume,
@@ -2111,7 +2183,7 @@ mod tests {
             tempdir.path().to_path_buf(),
             FrameRequester::test_dummy(),
             loader,
-            String::from("openai"),
+            ProviderFilter::MatchDefault(String::from("openai")),
             true,
             None,
             SessionPickerAction::Resume,
@@ -2178,7 +2250,7 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            String::from("openai"),
+            ProviderFilter::MatchDefault(String::from("openai")),
             true,
             None,
             SessionPickerAction::Resume,
@@ -2247,7 +2319,7 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            String::from("openai"),
+            ProviderFilter::MatchDefault(String::from("openai")),
             true,
             None,
             SessionPickerAction::Resume,
@@ -2328,7 +2400,7 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            String::from("openai"),
+            ProviderFilter::MatchDefault(String::from("openai")),
             true,
             None,
             SessionPickerAction::Resume,
@@ -2358,7 +2430,7 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            String::from("openai"),
+            ProviderFilter::MatchDefault(String::from("openai")),
             true,
             None,
             SessionPickerAction::Resume,
@@ -2403,7 +2475,7 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            String::from("openai"),
+            ProviderFilter::MatchDefault(String::from("openai")),
             true,
             None,
             SessionPickerAction::Resume,
@@ -2443,7 +2515,7 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            String::from("openai"),
+            ProviderFilter::MatchDefault(String::from("openai")),
             true,
             None,
             SessionPickerAction::Resume,
@@ -2512,7 +2584,7 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            String::from("openai"),
+            ProviderFilter::MatchDefault(String::from("openai")),
             true,
             None,
             SessionPickerAction::Resume,
@@ -2557,7 +2629,7 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            String::from("openai"),
+            ProviderFilter::MatchDefault(String::from("openai")),
             true,
             None,
             SessionPickerAction::Resume,

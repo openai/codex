@@ -126,6 +126,10 @@ impl AppServerSession {
         }
     }
 
+    pub(crate) fn is_remote(&self) -> bool {
+        matches!(self.client, AppServerClient::Remote(_))
+    }
+
     pub(crate) async fn bootstrap(&mut self, config: &Config) -> Result<AppServerBootstrap> {
         let account_request_id = self.next_request_id();
         let account: GetAccountResponse = self
