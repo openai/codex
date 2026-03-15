@@ -1,4 +1,7 @@
 use super::*;
+use crate::codex::Session;
+use crate::codex::TurnContext;
+use crate::config::Constrained;
 use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::test_config;
@@ -6,13 +9,19 @@ use crate::config_loader::FeatureRequirementsToml;
 use crate::config_loader::NetworkConstraints;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
+use crate::protocol::SandboxPolicy;
 use crate::test_support;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::ReviewDecision;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses::ev_assistant_message;
@@ -764,7 +773,7 @@ fn guardian_subagent_config_rejects_pinned_collab_feature() {
 
     assert!(
         err.to_string()
-            .contains("guardian subagent requires `features.multi_agent` to be disabled")
+            .contains("guardian review session requires `features.multi_agent` to be disabled")
     );
 }
 

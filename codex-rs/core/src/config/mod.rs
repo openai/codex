@@ -667,11 +667,12 @@ impl ConfigBuilder {
 /// Rewrites the legacy `smart_approvals` feature flag to
 /// `guardian_approval` in `config.toml` before normal config loading.
 ///
-/// If the old key is present and enabled, this preserves the enabled state by
-/// setting `guardian_approval = true` when the new key is not already present.
+/// If the old key is present, this preserves its value by setting
+/// `guardian_approval = <alias value>` when the new key is not already present.
 /// Because the deprecated flag historically meant "turn guardian review on",
 /// this migration also backfills `approvals_reviewer = "guardian_subagent"`
-/// in the same scope when that reviewer is not already configured there.
+/// in the same scope when that reviewer is not already configured there and the
+/// migrated feature value is `true`.
 /// In all cases it removes the deprecated `smart_approvals` entry so future
 /// loads only see the canonical feature flag name.
 async fn maybe_migrate_smart_approvals_alias(codex_home: &Path) -> std::io::Result<bool> {
@@ -690,10 +691,10 @@ async fn maybe_migrate_smart_approvals_alias(codex_home: &Path) -> std::io::Resu
     if let Some(features) = config_toml.features.as_ref()
         && let Some(enabled) = features.entries.get("smart_approvals").copied()
     {
-        if enabled && !features.entries.contains_key("guardian_approval") {
+        if !features.entries.contains_key("guardian_approval") {
             edits.push(ConfigEdit::SetPath {
                 segments: vec!["features".to_string(), "guardian_approval".to_string()],
-                value: value(true),
+                value: value(enabled),
             });
         }
         if enabled && config_toml.approvals_reviewer.is_none() {
@@ -711,7 +712,7 @@ async fn maybe_migrate_smart_approvals_alias(codex_home: &Path) -> std::io::Resu
         if let Some(features) = profile.features.as_ref()
             && let Some(enabled) = features.entries.get("smart_approvals").copied()
         {
-            if enabled && !features.entries.contains_key("guardian_approval") {
+            if !features.entries.contains_key("guardian_approval") {
                 edits.push(ConfigEdit::SetPath {
                     segments: vec![
                         "profiles".to_string(),
@@ -719,7 +720,7 @@ async fn maybe_migrate_smart_approvals_alias(codex_home: &Path) -> std::io::Resu
                         "features".to_string(),
                         "guardian_approval".to_string(),
                     ],
-                    value: value(true),
+                    value: value(enabled),
                 });
             }
             if enabled && profile.approvals_reviewer.is_none() {

@@ -2370,7 +2370,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
-        guardian_subagent: crate::guardian_subagent::GuardianSubagentManager::default(),
+        guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
@@ -2917,7 +2917,7 @@ async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
     parent_session
-        .guardian_subagent
+        .guardian_review_session
         .cache_for_test(child_codex)
         .await;
 
@@ -3103,7 +3103,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
-        guardian_subagent: crate::guardian_subagent::GuardianSubagentManager::default(),
+        guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),

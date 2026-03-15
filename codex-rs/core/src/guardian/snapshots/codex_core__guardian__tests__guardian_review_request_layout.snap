@@ -1,5 +1,6 @@
 ---
-source: core/src/guardian_tests.rs
+source: core/src/guardian/tests.rs
+assertion_line: 545
 expression: "context_snapshot::format_labeled_requests_snapshot(\"Guardian review request layout\",\n&[(\"Guardian Review Request\", &request)],\n&ContextSnapshotOptions::default().strip_capability_instructions(),)"
 ---
 Scenario: Guardian review request layout

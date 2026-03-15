@@ -5,7 +5,7 @@ use crate::config_loader::ConfigRequirementsToml;
 use crate::exec::ExecParams;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
-use crate::guardian::GUARDIAN_SUBAGENT_NAME;
+use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::protocol::AskForApproval;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::FunctionToolOutput;
@@ -382,7 +382,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         file_watcher,
         conversation_history: InitialHistory::New,
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
-            GUARDIAN_SUBAGENT_NAME.to_string(),
+            GUARDIAN_REVIEWER_NAME.to_string(),
         )),
         agent_control: AgentControl::default(),
         dynamic_tools: Vec::new(),
