@@ -1185,6 +1185,9 @@ impl ChatWidget {
         if let Some(mut controller) = self.stream_controller.take()
             && let Some(cell) = controller.finalize()
         {
+            // Match newline-committed streaming behavior: once assistant output is committed into
+            // history, hide the inline status row so the new transcript content takes its place.
+            self.bottom_pane.hide_status_indicator();
             self.add_boxed_history(cell);
         }
         self.adaptive_chunking.reset();
