@@ -70,16 +70,6 @@ impl App {
                     self.pending_app_server_requests
                         .resolve_notification(&notification.request_id);
                 }
-                ServerNotification::CommandExecOutputDelta(notification) => {
-                    if let Some((thread_id, event)) =
-                        self.note_command_exec_output_delta(&notification)
-                        && let Err(err) = self.enqueue_thread_event(thread_id, event).await
-                    {
-                        tracing::warn!(
-                            "failed to enqueue app-server command exec output for {thread_id}: {err}"
-                        );
-                    }
-                }
                 ServerNotification::AccountRateLimitsUpdated(notification) => {
                     self.chat_widget.on_rate_limit_snapshot(Some(
                         app_server_rate_limit_snapshot_to_core(notification.rate_limits),

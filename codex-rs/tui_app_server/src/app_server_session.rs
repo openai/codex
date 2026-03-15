@@ -4,8 +4,6 @@ use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
-use codex_app_server_protocol::CommandExecTerminateParams;
-use codex_app_server_protocol::CommandExecTerminateResponse;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
@@ -399,19 +397,6 @@ impl AppServerSession {
             })
             .await
             .wrap_err("turn/steer failed in app-server TUI")
-    }
-
-    pub(crate) async fn command_exec_terminate(&mut self, process_id: String) -> Result<()> {
-        let request_id = self.next_request_id();
-        let _: CommandExecTerminateResponse = self
-            .client
-            .request_typed(ClientRequest::CommandExecTerminate {
-                request_id,
-                params: CommandExecTerminateParams { process_id },
-            })
-            .await
-            .wrap_err("command/exec/terminate failed in app-server TUI")?;
-        Ok(())
     }
 
     pub(crate) async fn thread_set_name(

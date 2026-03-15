@@ -10,7 +10,6 @@
 
 use std::path::PathBuf;
 
-use codex_app_server_protocol::CommandExecResponse;
 use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
@@ -144,12 +143,6 @@ pub(crate) enum AppEvent {
 
     /// Result of computing a `/diff` command.
     DiffResult(String),
-
-    /// Result of a background `command/exec` request started by the app-server TUI.
-    CommandExecFinished {
-        process_id: String,
-        result: Result<CommandExecResponse, String>,
-    },
 
     /// Open the app link view in the bottom pane.
     OpenAppLink {

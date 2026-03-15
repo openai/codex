@@ -43,15 +43,8 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
-use base64::Engine;
-use base64::prelude::BASE64_STANDARD;
 use codex_ansi_escape::ansi_escape_line;
-use codex_app_server_protocol::CommandExecOutputDeltaNotification;
-use codex_app_server_protocol::CommandExecOutputStream;
-use codex_app_server_protocol::CommandExecParams;
-use codex_app_server_protocol::CommandExecResponse;
 use codex_app_server_protocol::ConfigLayerSource;
-use codex_app_server_protocol::RequestId;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -64,7 +57,6 @@ use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
-use codex_core::shell::default_user_shell;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::SessionTelemetry;
@@ -77,16 +69,9 @@ use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ExecCommandBeginEvent;
-use codex_protocol::protocol::ExecCommandEndEvent;
-use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
-use codex_protocol::protocol::ExecCommandSource;
-use codex_protocol::protocol::ExecCommandStatus;
-use codex_protocol::protocol::ExecOutputStream;
 use codex_protocol::protocol::FinalOutput;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 #[cfg(test)]
@@ -96,9 +81,6 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
-use codex_protocol::protocol::TurnCompleteEvent;
-use codex_protocol::protocol::TurnStartedEvent;
-use codex_shell_command::parse_command::parse_command;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -129,8 +111,6 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
-use uuid::Uuid;
-
 mod agent_navigation;
 mod app_server_adapter;
 mod app_server_requests;
@@ -478,155 +458,6 @@ impl ThreadEventChannel {
     }
 }
 
-#[derive(Debug)]
-struct PendingCommandExec {
-    thread_id: ThreadId,
-    turn_id: String,
-    process_id: String,
-    command: Vec<String>,
-    cwd: PathBuf,
-    parsed_cmd: Vec<ParsedCommand>,
-    collaboration_mode_kind: codex_protocol::config_types::ModeKind,
-    model_context_window: Option<i64>,
-    started_at: Instant,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-}
-
-impl PendingCommandExec {
-    fn new_user_shell(
-        thread_id: ThreadId,
-        cwd: PathBuf,
-        raw_command: &str,
-        collaboration_mode_kind: codex_protocol::config_types::ModeKind,
-        model_context_window: Option<i64>,
-    ) -> Self {
-        let command = default_user_shell().derive_exec_args(raw_command, true);
-        let process_id = Uuid::new_v4().to_string();
-        Self {
-            thread_id,
-            turn_id: Uuid::new_v4().to_string(),
-            process_id,
-            command: command.clone(),
-            cwd,
-            parsed_cmd: parse_command(&command),
-            collaboration_mode_kind,
-            model_context_window,
-            started_at: Instant::now(),
-            stdout: Vec::new(),
-            stderr: Vec::new(),
-        }
-    }
-
-    fn turn_started_event(&self) -> Event {
-        Event {
-            id: String::new(),
-            msg: EventMsg::TurnStarted(TurnStartedEvent {
-                turn_id: self.turn_id.clone(),
-                model_context_window: self.model_context_window,
-                collaboration_mode_kind: self.collaboration_mode_kind,
-            }),
-        }
-    }
-
-    fn exec_begin_event(&self) -> Event {
-        Event {
-            id: String::new(),
-            msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-                call_id: self.process_id.clone(),
-                process_id: Some(self.process_id.clone()),
-                turn_id: self.turn_id.clone(),
-                command: self.command.clone(),
-                cwd: self.cwd.clone(),
-                parsed_cmd: self.parsed_cmd.clone(),
-                source: ExecCommandSource::UserShell,
-                interaction_input: None,
-            }),
-        }
-    }
-
-    fn push_output_delta(
-        &mut self,
-        notification: &CommandExecOutputDeltaNotification,
-    ) -> Option<Event> {
-        let chunk = BASE64_STANDARD.decode(&notification.delta_base64).ok()?;
-        let stream = match notification.stream {
-            CommandExecOutputStream::Stdout => {
-                self.stdout.extend_from_slice(&chunk);
-                ExecOutputStream::Stdout
-            }
-            CommandExecOutputStream::Stderr => {
-                self.stderr.extend_from_slice(&chunk);
-                ExecOutputStream::Stderr
-            }
-        };
-        Some(Event {
-            id: String::new(),
-            msg: EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
-                call_id: self.process_id.clone(),
-                stream,
-                chunk,
-            }),
-        })
-    }
-
-    fn finish_events(self, result: Result<CommandExecResponse, String>) -> Vec<Event> {
-        let duration = self.started_at.elapsed();
-        let (stdout, stderr, exit_code, status) = match result {
-            Ok(response) => {
-                let stdout = if response.stdout.is_empty() {
-                    String::from_utf8_lossy(&self.stdout).into_owned()
-                } else {
-                    response.stdout
-                };
-                let stderr = if response.stderr.is_empty() {
-                    String::from_utf8_lossy(&self.stderr).into_owned()
-                } else {
-                    response.stderr
-                };
-                let status = if response.exit_code == 0 {
-                    ExecCommandStatus::Completed
-                } else {
-                    ExecCommandStatus::Failed
-                };
-                (stdout, stderr, response.exit_code, status)
-            }
-            Err(error) => (String::new(), error, -1, ExecCommandStatus::Failed),
-        };
-        let aggregated_output = format!("{stdout}{stderr}");
-
-        vec![
-            Event {
-                id: String::new(),
-                msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-                    call_id: self.process_id.clone(),
-                    process_id: Some(self.process_id.clone()),
-                    turn_id: self.turn_id.clone(),
-                    command: self.command,
-                    cwd: self.cwd,
-                    parsed_cmd: self.parsed_cmd,
-                    source: ExecCommandSource::UserShell,
-                    interaction_input: None,
-                    stdout,
-                    stderr,
-                    aggregated_output: aggregated_output.clone(),
-                    exit_code,
-                    duration,
-                    formatted_output: aggregated_output,
-                    status,
-                }),
-            },
-            Event {
-                id: String::new(),
-                msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                    turn_id: self.turn_id,
-                    last_agent_message: None,
-                }),
-            },
-        ]
-    }
-}
-
 fn should_show_model_migration_prompt(
     current_model: &str,
     target_model: &str,
@@ -928,7 +759,6 @@ pub(crate) struct App {
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
     pending_app_server_requests: PendingAppServerRequests,
-    pending_command_execs: HashMap<String, PendingCommandExec>,
 }
 
 #[derive(Default)]
@@ -1529,13 +1359,6 @@ impl App {
         store.active_turn_id().map(ToOwned::to_owned)
     }
 
-    fn active_command_exec_process_id_for_thread(&self, thread_id: ThreadId) -> Option<String> {
-        self.pending_command_execs
-            .values()
-            .find(|exec| exec.thread_id == thread_id)
-            .map(|exec| exec.process_id.clone())
-    }
-
     fn thread_label(&self, thread_id: ThreadId) -> String {
         let is_primary = self.primary_thread_id == Some(thread_id);
         let fallback_label = if is_primary {
@@ -1714,11 +1537,6 @@ impl App {
     ) -> Result<bool> {
         match op.view() {
             AppCommandView::Interrupt => {
-                if let Some(process_id) = self.active_command_exec_process_id_for_thread(thread_id)
-                {
-                    app_server.command_exec_terminate(process_id).await?;
-                    return Ok(true);
-                }
                 let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await else {
                     return Ok(false);
                 };
@@ -1894,99 +1712,9 @@ impl App {
                 app_server.thread_realtime_stop(thread_id).await?;
                 Ok(true)
             }
-            AppCommandView::RunUserShellCommand { command } => {
-                self.start_app_server_user_shell_command(app_server, thread_id, command)
-                    .await?;
-                Ok(true)
-            }
             AppCommandView::OverrideTurnContext { .. } => Ok(true),
             _ => Ok(false),
         }
-    }
-
-    async fn start_app_server_user_shell_command(
-        &mut self,
-        app_server: &AppServerSession,
-        thread_id: ThreadId,
-        raw_command: &str,
-    ) -> Result<()> {
-        let cwd = self
-            .thread_cwd(thread_id)
-            .await
-            .unwrap_or_else(|| self.config.cwd.clone());
-        let exec = PendingCommandExec::new_user_shell(
-            thread_id,
-            cwd.clone(),
-            raw_command,
-            self.chat_widget.current_collaboration_mode().mode,
-            self.chat_widget.config_ref().model_context_window,
-        );
-        let process_id = exec.process_id.clone();
-        let command = exec.command.clone();
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-
-        self.enqueue_thread_event(thread_id, exec.turn_started_event())
-            .await?;
-        self.enqueue_thread_event(thread_id, exec.exec_begin_event())
-            .await?;
-        self.pending_command_execs.insert(process_id.clone(), exec);
-
-        tokio::spawn(async move {
-            let result = request_handle
-                .request_typed::<CommandExecResponse>(
-                    codex_app_server_protocol::ClientRequest::OneOffCommandExec {
-                        request_id: RequestId::String(format!("command-exec-{process_id}")),
-                        params: CommandExecParams {
-                            command,
-                            process_id: Some(process_id.clone()),
-                            tty: false,
-                            stream_stdin: false,
-                            stream_stdout_stderr: true,
-                            output_bytes_cap: None,
-                            disable_output_cap: false,
-                            disable_timeout: false,
-                            timeout_ms: None,
-                            cwd: Some(cwd),
-                            env: None,
-                            size: None,
-                            sandbox_policy: Some(SandboxPolicy::DangerFullAccess.into()),
-                        },
-                    },
-                )
-                .await
-                .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::CommandExecFinished { process_id, result });
-        });
-
-        Ok(())
-    }
-
-    fn note_command_exec_output_delta(
-        &mut self,
-        notification: &CommandExecOutputDeltaNotification,
-    ) -> Option<(ThreadId, Event)> {
-        let exec = self
-            .pending_command_execs
-            .get_mut(&notification.process_id)?;
-        let event = exec.push_output_delta(notification)?;
-        Some((exec.thread_id, event))
-    }
-
-    async fn handle_command_exec_finished(
-        &mut self,
-        process_id: String,
-        result: Result<CommandExecResponse, String>,
-    ) -> Result<()> {
-        let Some(exec) = self.pending_command_execs.remove(&process_id) else {
-            return Ok(());
-        };
-        let thread_id = exec.thread_id;
-
-        for event in exec.finish_events(result) {
-            self.enqueue_thread_event(thread_id, event).await?;
-        }
-        Ok(())
     }
 
     async fn try_resolve_app_server_request(
@@ -2727,7 +2455,6 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
-            pending_command_execs: HashMap::new(),
         };
         if let Some(session_configured) = initial_session_configured {
             app.enqueue_primary_event(Event {
@@ -3224,10 +2951,6 @@ impl App {
                     "D I F F".to_string(),
                 ));
                 tui.frame_requester().schedule_frame();
-            }
-            AppEvent::CommandExecFinished { process_id, result } => {
-                self.handle_command_exec_finished(process_id, result)
-                    .await?;
             }
             AppEvent::OpenAppLink {
                 app_id,
@@ -6881,7 +6604,6 @@ smart_approvals = true
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
-            pending_command_execs: HashMap::new(),
         }
     }
 
@@ -6934,7 +6656,6 @@ smart_approvals = true
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
-                pending_command_execs: HashMap::new(),
             },
             rx,
             op_rx,
@@ -6973,73 +6694,6 @@ smart_approvals = true
             }),
         });
         assert_eq!(store.active_turn_id(), None);
-    }
-
-    #[test]
-    fn pending_command_exec_reuses_streamed_output_in_finish_event() {
-        let thread_id = ThreadId::new();
-        let mut exec = PendingCommandExec::new_user_shell(
-            thread_id,
-            PathBuf::from("/tmp"),
-            "printf test",
-            ModeKind::Default,
-            Some(128_000),
-        );
-
-        let stdout_delta = codex_app_server_protocol::CommandExecOutputDeltaNotification {
-            process_id: exec.process_id.clone(),
-            stream: codex_app_server_protocol::CommandExecOutputStream::Stdout,
-            delta_base64: BASE64_STANDARD.encode("hello "),
-            cap_reached: false,
-        };
-        let stderr_delta = codex_app_server_protocol::CommandExecOutputDeltaNotification {
-            process_id: exec.process_id.clone(),
-            stream: codex_app_server_protocol::CommandExecOutputStream::Stderr,
-            delta_base64: BASE64_STANDARD.encode("world"),
-            cap_reached: false,
-        };
-
-        let stdout_event = exec
-            .push_output_delta(&stdout_delta)
-            .expect("stdout delta should convert");
-        let stderr_event = exec
-            .push_output_delta(&stderr_delta)
-            .expect("stderr delta should convert");
-
-        assert!(matches!(
-            stdout_event.msg,
-            EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
-                stream: ExecOutputStream::Stdout,
-                ..
-            })
-        ));
-        assert!(matches!(
-            stderr_event.msg,
-            EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
-                stream: ExecOutputStream::Stderr,
-                ..
-            })
-        ));
-
-        let events = exec.finish_events(Ok(CommandExecResponse {
-            exit_code: 0,
-            stdout: String::new(),
-            stderr: String::new(),
-        }));
-
-        assert_eq!(events.len(), 2);
-        match &events[0].msg {
-            EventMsg::ExecCommandEnd(end) => {
-                assert_eq!(end.stdout, "hello ");
-                assert_eq!(end.stderr, "world");
-                assert_eq!(end.status, ExecCommandStatus::Completed);
-            }
-            other => panic!("expected ExecCommandEnd event, got {other:?}"),
-        }
-        match &events[1].msg {
-            EventMsg::TurnComplete(turn) => assert_eq!(turn.turn_id.is_empty(), false),
-            other => panic!("expected TurnComplete event, got {other:?}"),
-        }
     }
 
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {

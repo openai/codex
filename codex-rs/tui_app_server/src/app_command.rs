@@ -101,9 +101,6 @@ pub(crate) enum AppCommandView<'a> {
     Review {
         review_request: &'a ReviewRequest,
     },
-    RunUserShellCommand {
-        command: &'a str,
-    },
     Other(&'a Op),
 }
 
@@ -262,10 +259,6 @@ impl AppCommand {
         Self(Op::Review { review_request })
     }
 
-    pub(crate) fn run_user_shell_command(command: String) -> Self {
-        Self(Op::RunUserShellCommand { command })
-    }
-
     #[allow(dead_code)]
     pub(crate) fn kind(&self) -> &'static str {
         self.0.kind()
@@ -389,7 +382,6 @@ impl AppCommand {
                 num_turns: *num_turns,
             },
             Op::Review { review_request } => AppCommandView::Review { review_request },
-            Op::RunUserShellCommand { command } => AppCommandView::RunUserShellCommand { command },
             op => AppCommandView::Other(op),
         }
     }

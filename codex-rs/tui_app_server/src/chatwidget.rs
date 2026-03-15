@@ -4707,7 +4707,10 @@ impl ChatWidget {
                 )));
                 return;
             }
-            self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()));
+            self.add_to_history(history_cell::new_error_event(
+                "`!` shell commands are unavailable in app-server TUI because command output is not yet persisted in thread history.".to_string(),
+            ));
+            self.request_redraw();
             return;
         }
 

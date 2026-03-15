@@ -8082,6 +8082,58 @@ async fn user_shell_command_renders_output_not_exploring() {
 }
 
 #[tokio::test]
+async fn bang_shell_command_is_disabled_in_app_server_tui() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let conversation_id = ThreadId::new();
+    let rollout_file = NamedTempFile::new().unwrap();
+    let configured = codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: conversation_id,
+        forked_from_id: None,
+        thread_name: None,
+        model: "test-model".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        cwd: PathBuf::from("/home/user/project"),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path: Some(rollout_file.path().to_path_buf()),
+    };
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+    drain_insert_history(&mut rx);
+    while op_rx.try_recv().is_ok() {}
+
+    chat.bottom_pane
+        .set_composer_text("!echo hi".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    let mut rendered = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            rendered = Some(lines_to_single_string(&cell.display_lines(80)));
+            break;
+        }
+    }
+    let rendered = rendered.expect("expected disabled bang-shell error");
+    assert!(
+        rendered.contains(
+            "`!` shell commands are unavailable in app-server TUI because command output is not yet persisted in thread history."
+        ),
+        "expected bang-shell disabled message, got: {rendered}"
+    );
+}
+
+#[tokio::test]
 async fn disabled_slash_command_while_task_running_snapshot() {
     // Build a chat widget and simulate an active task
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
