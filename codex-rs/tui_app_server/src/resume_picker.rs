@@ -90,11 +90,8 @@ impl SessionPickerAction {
         }
     }
 
-    fn selection(self, path: PathBuf, thread_id: ThreadId) -> SessionSelection {
-        let target_session = SessionTarget {
-            path: Some(path),
-            thread_id,
-        };
+    fn selection(self, path: Option<PathBuf>, thread_id: ThreadId) -> SessionSelection {
+        let target_session = SessionTarget { path, thread_id };
         match self {
             SessionPickerAction::Resume => SessionSelection::Resume(target_session),
             SessionPickerAction::Fork => SessionSelection::Fork(target_session),
@@ -388,7 +385,7 @@ struct PickerState {
     pagination: PaginationState,
     all_rows: Vec<Row>,
     filtered_rows: Vec<Row>,
-    seen_paths: HashSet<PathBuf>,
+    seen_rows: HashSet<SeenRowKey>,
     selected: usize,
     scroll_top: usize,
     query: String,
@@ -493,7 +490,7 @@ impl SearchState {
 
 #[derive(Clone)]
 struct Row {
-    path: PathBuf,
+    path: Option<PathBuf>,
     preview: String,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
@@ -503,7 +500,20 @@ struct Row {
     git_branch: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum SeenRowKey {
+    Path(PathBuf),
+    Thread(ThreadId),
+}
+
 impl Row {
+    fn seen_key(&self) -> Option<SeenRowKey> {
+        if let Some(path) = self.path.clone() {
+            return Some(SeenRowKey::Path(path));
+        }
+        self.thread_id.map(SeenRowKey::Thread)
+    }
+
     fn display_preview(&self) -> &str {
         self.thread_name.as_deref().unwrap_or(&self.preview)
     }
@@ -542,7 +552,7 @@ impl PickerState {
             },
             all_rows: Vec::new(),
             filtered_rows: Vec::new(),
-            seen_paths: HashSet::new(),
+            seen_rows: HashSet::new(),
             selected: 0,
             scroll_top: 0,
             query: String::new(),
@@ -581,15 +591,24 @@ impl PickerState {
                     let path = row.path.clone();
                     let thread_id = match row.thread_id {
                         Some(thread_id) => Some(thread_id),
-                        None => crate::resolve_session_thread_id(path.as_path(), None).await,
+                        None => match path.as_ref() {
+                            Some(path) => {
+                                crate::resolve_session_thread_id(path.as_path(), None).await
+                            }
+                            None => None,
+                        },
                     };
                     if let Some(thread_id) = thread_id {
                         return Ok(Some(self.action.selection(path, thread_id)));
                     }
-                    self.inline_error = Some(format!(
-                        "Failed to read session metadata from {}",
-                        path.display()
-                    ));
+                    self.inline_error = Some(match path {
+                        Some(path) => {
+                            format!("Failed to read session metadata from {}", path.display())
+                        }
+                        None => {
+                            String::from("Failed to read session metadata from selected session")
+                        }
+                    });
                     self.request_frame();
                 }
             }
@@ -656,7 +675,7 @@ impl PickerState {
         self.reset_pagination();
         self.all_rows.clear();
         self.filtered_rows.clear();
-        self.seen_paths.clear();
+        self.seen_rows.clear();
         self.selected = 0;
 
         let search_token = if self.query.is_empty() {
@@ -731,7 +750,11 @@ impl PickerState {
         }
 
         for row in page.rows {
-            if self.seen_paths.insert(row.path.clone()) {
+            if let Some(seen_key) = row.seen_key() {
+                if self.seen_rows.insert(seen_key) {
+                    self.all_rows.push(row);
+                }
+            } else {
                 self.all_rows.push(row);
             }
         }
@@ -1015,7 +1038,7 @@ fn head_to_row(item: &ThreadItem) -> Row {
         .unwrap_or_else(|| String::from("(no message yet)"));
 
     Row {
-        path: item.path.clone(),
+        path: Some(item.path.clone()),
         preview,
         thread_id: item.thread_id,
         thread_name: None,
@@ -1034,11 +1057,9 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
             return None;
         }
     };
-    let path = thread.path?;
-
     let preview = thread.preview.trim();
     Some(Row {
-        path,
+        path: thread.path,
         preview: if preview.is_empty() {
             String::from("(no message yet)")
         } else {
@@ -1751,7 +1772,7 @@ mod tests {
     #[test]
     fn row_display_preview_prefers_thread_name() {
         let row = Row {
-            path: PathBuf::from("/tmp/a.jsonl"),
+            path: Some(PathBuf::from("/tmp/a.jsonl")),
             preview: String::from("first message"),
             thread_id: None,
             thread_name: Some(String::from("My session")),
@@ -1785,7 +1806,7 @@ mod tests {
         let now = Utc::now();
         let rows = vec![
             Row {
-                path: PathBuf::from("/tmp/a.jsonl"),
+                path: Some(PathBuf::from("/tmp/a.jsonl")),
                 preview: String::from("Fix resume picker timestamps"),
                 thread_id: None,
                 thread_name: None,
@@ -1795,7 +1816,7 @@ mod tests {
                 git_branch: None,
             },
             Row {
-                path: PathBuf::from("/tmp/b.jsonl"),
+                path: Some(PathBuf::from("/tmp/b.jsonl")),
                 preview: String::from("Investigate lazy pagination cap"),
                 thread_id: None,
                 thread_name: None,
@@ -1805,7 +1826,7 @@ mod tests {
                 git_branch: None,
             },
             Row {
-                path: PathBuf::from("/tmp/c.jsonl"),
+                path: Some(PathBuf::from("/tmp/c.jsonl")),
                 preview: String::from("Explain the codebase"),
                 thread_id: None,
                 thread_name: None,
@@ -2099,7 +2120,7 @@ mod tests {
         let now = Utc::now();
         let rows = vec![
             Row {
-                path: PathBuf::from("/tmp/a.jsonl"),
+                path: Some(PathBuf::from("/tmp/a.jsonl")),
                 preview: String::from("First message preview"),
                 thread_id: Some(id1),
                 thread_name: None,
@@ -2109,7 +2130,7 @@ mod tests {
                 git_branch: None,
             },
             Row {
-                path: PathBuf::from("/tmp/b.jsonl"),
+                path: Some(PathBuf::from("/tmp/b.jsonl")),
                 preview: String::from("Second message preview"),
                 thread_id: Some(id2),
                 thread_name: None,
@@ -2389,7 +2410,7 @@ mod tests {
         );
 
         let row = Row {
-            path: PathBuf::from("/tmp/missing.jsonl"),
+            path: Some(PathBuf::from("/tmp/missing.jsonl")),
             preview: String::from("missing metadata"),
             thread_id: None,
             thread_name: None,
@@ -2413,6 +2434,75 @@ mod tests {
                 "Failed to read session metadata from /tmp/missing.jsonl"
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn enter_on_pathless_thread_uses_thread_id() {
+        let loader: PageLoader = Arc::new(|_| {});
+        let mut state = PickerState::new(
+            PathBuf::from("/tmp"),
+            FrameRequester::test_dummy(),
+            loader,
+            String::from("openai"),
+            true,
+            None,
+            SessionPickerAction::Resume,
+        );
+        let thread_id = ThreadId::new();
+        let row = Row {
+            path: None,
+            preview: String::from("pathless thread"),
+            thread_id: Some(thread_id),
+            thread_name: None,
+            created_at: None,
+            updated_at: None,
+            cwd: None,
+            git_branch: None,
+        };
+        state.all_rows = vec![row.clone()];
+        state.filtered_rows = vec![row];
+
+        let selection = state
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("enter should not abort the picker");
+
+        match selection {
+            Some(SessionSelection::Resume(SessionTarget {
+                path: None,
+                thread_id: selected_thread_id,
+            })) => assert_eq!(selected_thread_id, thread_id),
+            other => panic!("unexpected selection: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn app_server_row_keeps_pathless_threads() {
+        let thread_id = ThreadId::new();
+        let thread = Thread {
+            id: thread_id.to_string(),
+            preview: String::from("remote thread"),
+            ephemeral: false,
+            model_provider: String::from("openai"),
+            created_at: 1,
+            updated_at: 2,
+            status: codex_app_server_protocol::ThreadStatus::Idle,
+            path: None,
+            cwd: PathBuf::from("/tmp"),
+            cli_version: String::from("0.0.0"),
+            source: codex_app_server_protocol::SessionSource::Cli,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: Some(String::from("Named thread")),
+            turns: Vec::new(),
+        };
+
+        let row = row_from_app_server_thread(thread).expect("row should be preserved");
+
+        assert_eq!(row.path, None);
+        assert_eq!(row.thread_id, Some(thread_id));
+        assert_eq!(row.thread_name, Some(String::from("Named thread")));
     }
 
     #[tokio::test]
