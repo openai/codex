@@ -377,6 +377,7 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
+const DIRECT_APP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -6462,8 +6463,6 @@ pub(crate) async fn built_tools(
         None
     };
 
-    // Keep the connector-grouped app view around for the router even though
-    // app tools only become prompt-visible after explicit selection/discovery.
     let app_tools = connectors.as_ref().map(|connectors| {
         filter_codex_apps_mcp_tools(&mcp_tools, connectors, &turn_context.config)
     });
@@ -6489,6 +6488,21 @@ pub(crate) async fn built_tools(
 
         mcp_tools = selected_mcp_tools;
     }
+
+    // Expose app tools directly when tool_search is disabled, or when tool_search
+    // is enabled but the accessible app tool set stays below the direct-exposure threshold.
+    let expose_app_tools_directly = !turn_context.tools_config.search_tool
+        || app_tools
+            .as_ref()
+            .is_some_and(|tools| tools.len() < DIRECT_APP_TOOL_EXPOSURE_THRESHOLD);
+    if expose_app_tools_directly && let Some(app_tools) = app_tools.as_ref() {
+        mcp_tools.extend(app_tools.clone());
+    }
+    let app_tools = if expose_app_tools_directly {
+        None
+    } else {
+        app_tools
+    };
 
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,

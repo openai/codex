@@ -18,6 +18,7 @@ const CONNECTOR_DESCRIPTION: &str = "Plan events and manage your calendar.";
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const SERVER_NAME: &str = "codex-apps-test";
 const SERVER_VERSION: &str = "1.0.0";
+const SEARCHABLE_TOOL_COUNT: usize = 100;
 
 #[derive(Clone)]
 pub struct AppsTestServer {
@@ -27,6 +28,21 @@ pub struct AppsTestServer {
 impl AppsTestServer {
     pub async fn mount(server: &MockServer) -> Result<Self> {
         Self::mount_with_connector_name(server, CONNECTOR_NAME).await
+    }
+
+    pub async fn mount_searchable(server: &MockServer) -> Result<Self> {
+        mount_oauth_metadata(server).await;
+        mount_connectors_directory(server).await;
+        mount_streamable_http_json_rpc(
+            server,
+            CONNECTOR_NAME.to_string(),
+            CONNECTOR_DESCRIPTION.to_string(),
+            /*searchable*/ true,
+        )
+        .await;
+        Ok(Self {
+            chatgpt_base_url: server.uri(),
+        })
     }
 
     pub async fn mount_with_connector_name(
@@ -39,6 +55,7 @@ impl AppsTestServer {
             server,
             connector_name.to_string(),
             CONNECTOR_DESCRIPTION.to_string(),
+            /*searchable*/ false,
         )
         .await;
         Ok(Self {
@@ -94,12 +111,14 @@ async fn mount_streamable_http_json_rpc(
     server: &MockServer,
     connector_name: String,
     connector_description: String,
+    searchable: bool,
 ) {
     Mock::given(method("POST"))
         .and(path_regex("^/api/codex/apps/?$"))
         .respond_with(CodexAppsJsonRpcResponder {
             connector_name,
             connector_description,
+            searchable,
         })
         .mount(server)
         .await;
@@ -108,6 +127,7 @@ async fn mount_streamable_http_json_rpc(
 struct CodexAppsJsonRpcResponder {
     connector_name: String,
     connector_description: String,
+    searchable: bool,
 }
 
 impl Respond for CodexAppsJsonRpcResponder {
@@ -154,7 +174,7 @@ impl Respond for CodexAppsJsonRpcResponder {
             "notifications/initialized" => ResponseTemplate::new(202),
             "tools/list" => {
                 let id = body.get("id").cloned().unwrap_or(Value::Null);
-                ResponseTemplate::new(200).set_body_json(json!({
+                let mut response = json!({
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": {
@@ -198,7 +218,32 @@ impl Respond for CodexAppsJsonRpcResponder {
                         ],
                         "nextCursor": null
                     }
-                }))
+                });
+                if self.searchable
+                    && let Some(tools) = response
+                        .pointer_mut("/result/tools")
+                        .and_then(Value::as_array_mut)
+                {
+                    for index in 2..SEARCHABLE_TOOL_COUNT {
+                        tools.push(json!({
+                            "name": format!("calendar_timezone_option_{index}"),
+                            "description": format!("Read timezone option {index}."),
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "timezone": { "type": "string" }
+                                },
+                                "additionalProperties": false
+                            },
+                            "_meta": {
+                                "connector_id": CONNECTOR_ID,
+                                "connector_name": self.connector_name.clone(),
+                                "connector_description": self.connector_description.clone()
+                            }
+                        }));
+                    }
+                }
+                ResponseTemplate::new(200).set_body_json(response)
             }
             "tools/call" => {
                 let id = body.get("id").cloned().unwrap_or(Value::Null);
