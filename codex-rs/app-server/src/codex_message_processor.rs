@@ -1921,6 +1921,10 @@ impl CodexMessageProcessor {
         }
     }
 
+    pub(crate) async fn clear_all_thread_listeners(&self) {
+        self.thread_state_manager.clear_all_listeners().await;
+    }
+
     pub(crate) async fn shutdown_threads(&self) {
         let report = self
             .thread_manager
