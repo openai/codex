@@ -210,7 +210,7 @@ mod windows_impl {
         cwd: &Path,
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
-        _use_private_desktop: bool,
+        use_private_desktop: bool,
     ) -> Result<CaptureResult> {
         let policy = parse_policy(policy_json_or_preset)?;
         normalize_null_device_env(&mut env_map);
@@ -364,6 +364,7 @@ mod windows_impl {
                     timeout_ms,
                     tty: false,
                     stdin_open: false,
+                    use_private_desktop,
                 }),
             },
         };

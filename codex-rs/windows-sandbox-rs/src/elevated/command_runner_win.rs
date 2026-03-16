@@ -262,6 +262,8 @@ fn spawn_ipc_process(
             &req.command,
             &effective_cwd,
             &req.env,
+            req.use_private_desktop,
+            Some(log_dir.as_path()),
         )?;
         let (hpc, input_write, output_read) = conpty.into_raw();
         hpc_handle = Some(hpc);
@@ -292,6 +294,7 @@ fn spawn_ipc_process(
             &req.env,
             stdin_mode,
             StderrMode::Separate,
+            req.use_private_desktop,
         )?;
         (
             pipe_handles.process,
