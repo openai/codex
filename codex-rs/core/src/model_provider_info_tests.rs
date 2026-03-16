@@ -20,6 +20,7 @@ base_url = "http://localhost:11434/v1"
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
     };
@@ -51,6 +52,7 @@ query_params = { api-version = "2025-04-01-preview" }
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
     };
@@ -85,6 +87,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
     };
@@ -104,4 +107,17 @@ wire_api = "chat"
 
     let err = toml::from_str::<ModelProviderInfo>(provider_toml).unwrap_err();
     assert!(err.to_string().contains(CHAT_WIRE_API_REMOVED_ERROR));
+}
+
+#[test]
+fn test_deserialize_websocket_connect_timeout() {
+    let provider_toml = r#"
+name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+websocket_connect_timeout_ms = 15000
+supports_websockets = true
+        "#;
+
+    let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
+    assert_eq!(provider.websocket_connect_timeout_ms, Some(15_000));
 }
