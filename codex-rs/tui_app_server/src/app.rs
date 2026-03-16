@@ -2122,6 +2122,20 @@ impl App {
         self.restore_started_app_server_thread(started).await
     }
 
+    /// Hydrate thread state from an `AppServerStartedThread` returned by the
+    /// app-server start/resume/fork handshake.
+    ///
+    /// This is the single path that every session-start variant funnels
+    /// through. It performs four things in order:
+    ///
+    /// 1. Converts the `Thread` snapshot into protocol-level `Event`s.
+    /// 2. Builds a **lossless** replay snapshot from a temporary store so that
+    ///    the initial render sees all history even when the thread has more
+    ///    turns than the bounded channel capacity.
+    /// 3. Pushes the same events into the real channel store for backtrack and
+    ///    navigation.
+    /// 4. Activates the thread channel and replays the snapshot into the chat
+    ///    widget.
     async fn restore_started_app_server_thread(
         &mut self,
         started: AppServerStartedThread,

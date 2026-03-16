@@ -201,6 +201,12 @@ impl App {
     }
 }
 
+/// Convert a `Thread` snapshot into a flat sequence of protocol `Event`s
+/// suitable for replaying into the TUI event store.
+///
+/// Each turn is expanded into `TurnStarted`, zero or more `ItemCompleted`,
+/// and a terminal event that matches the turn's `TurnStatus`. Returns an
+/// empty vec (with a warning log) if the thread ID is not a valid UUID.
 pub(super) fn thread_snapshot_events(thread: &Thread) -> Vec<Event> {
     let Ok(thread_id) = ThreadId::from_string(&thread.id) else {
         tracing::warn!(
@@ -435,6 +441,12 @@ fn token_usage_from_app_server(
     }
 }
 
+/// Expand a single `Turn` into the event sequence the TUI would have
+/// observed if it had been connected for the turn's entire lifetime:
+/// `TurnStarted` → `ItemCompleted`* → terminal event.
+///
+/// Items that cannot be mapped to a core `TurnItem` (e.g. unknown
+/// variants) are silently skipped via `filter_map`.
 fn turn_snapshot_events(thread_id: ThreadId, turn: &Turn) -> Vec<Event> {
     let mut events = vec![Event {
         id: String::new(),
@@ -462,6 +474,16 @@ fn turn_snapshot_events(thread_id: ThreadId, turn: &Turn) -> Vec<Event> {
     events
 }
 
+/// Append the terminal event(s) for a turn based on its `TurnStatus`.
+///
+/// This function is shared between the live notification bridge
+/// (`TurnCompleted` handling) and the snapshot replay path so that both
+/// produce identical `EventMsg` sequences for the same turn status.
+///
+/// - `Completed` → `TurnComplete`
+/// - `Interrupted` → `TurnAborted { reason: Interrupted }`
+/// - `Failed` → `Error` (if present) then `TurnComplete`
+/// - `InProgress` → no events (the turn is still running)
 fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn) {
     match turn.status {
         TurnStatus::Completed => events.push(Event {

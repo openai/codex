@@ -123,6 +123,14 @@ impl ThreadParamsMode {
     }
 }
 
+/// Result of starting, resuming, or forking an app-server thread.
+///
+/// Carries the full `Thread` snapshot returned by the server alongside the
+/// derived `SessionConfiguredEvent`. The snapshot's `turns` are used by
+/// `App::restore_started_app_server_thread` to seed the event store and
+/// replay transcript history — this is the only source of prior-turn data
+/// for remote sessions, where historical websocket notifications are not
+/// re-sent after the handshake.
 pub(crate) struct AppServerStartedThread {
     pub(crate) thread: Thread,
     pub(crate) session_configured: SessionConfiguredEvent,
