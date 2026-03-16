@@ -835,12 +835,23 @@ fn load_plugins_rejects_invalid_plugin_keys() {
 }
 
 #[tokio::test]
-async fn install_plugin_updates_config_with_relative_path_and_plugin_key() {
+async fn install_plugin_updates_config_with_relative_path_and_enables_installed_apps() {
     let tmp = tempfile::tempdir().unwrap();
     let repo_root = tmp.path().join("repo");
     fs::create_dir_all(repo_root.join(".git")).unwrap();
     fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
     write_plugin(&repo_root, "sample-plugin", "sample-plugin");
+    fs::write(
+        repo_root.join("sample-plugin/.app.json"),
+        r#"{
+  "apps": {
+    "connector_example": {
+      "id": "connector_example"
+    }
+  }
+}"#,
+    )
+    .unwrap();
     fs::write(
         repo_root.join(".agents/plugins/marketplace.json"),
         r#"{
@@ -884,6 +895,96 @@ async fn install_plugin_updates_config_with_relative_path_and_plugin_key() {
     let config = fs::read_to_string(tmp.path().join("config.toml")).unwrap();
     assert!(config.contains(r#"[plugins."sample-plugin@debug"]"#));
     assert!(config.contains("enabled = true"));
+    let config_toml: Value = toml::from_str(&config).unwrap();
+    assert_eq!(
+        config_toml
+            .get("apps")
+            .and_then(Value::as_table)
+            .and_then(|apps| apps.get("connector_example"))
+            .and_then(Value::as_table)
+            .and_then(|app| app.get("enabled"))
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+}
+
+#[tokio::test]
+async fn install_plugin_enables_existing_disabled_app_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    write_plugin(&repo_root, "sample-plugin", "sample-plugin");
+    fs::write(
+        repo_root.join("sample-plugin/.app.json"),
+        r#"{
+  "apps": {
+    "connector_example": {
+      "id": "connector_example"
+    }
+  }
+}"#,
+    )
+    .unwrap();
+    fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        r#"[apps.connector_example]
+enabled = false
+display_name = "Example Connector"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample-plugin",
+      "source": {
+        "source": "local",
+        "path": "./sample-plugin"
+      },
+      "authPolicy": "ON_USE"
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    PluginsManager::new(tmp.path().to_path_buf())
+        .install_plugin(PluginInstallRequest {
+            plugin_name: "sample-plugin".to_string(),
+            marketplace_path: AbsolutePathBuf::try_from(
+                repo_root.join(".agents/plugins/marketplace.json"),
+            )
+            .unwrap(),
+        })
+        .await
+        .unwrap();
+
+    let config = fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).unwrap();
+    let config_toml: Value = toml::from_str(&config).unwrap();
+    assert_eq!(
+        config_toml
+            .get("apps")
+            .and_then(Value::as_table)
+            .and_then(|apps| apps.get("connector_example"))
+            .and_then(Value::as_table)
+            .and_then(|app| app.get("enabled"))
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        config_toml
+            .get("apps")
+            .and_then(Value::as_table)
+            .and_then(|apps| apps.get("connector_example"))
+            .and_then(Value::as_table)
+            .and_then(|app| app.get("display_name"))
+            .and_then(Value::as_str),
+        Some("Example Connector")
+    );
 }
 
 #[tokio::test]
