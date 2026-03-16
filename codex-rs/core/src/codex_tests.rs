@@ -15,6 +15,7 @@ use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -157,6 +158,75 @@ fn developer_input_texts(items: &[ResponseItem]) -> Vec<&str> {
             _ => None,
         })
         .collect()
+}
+
+fn write_project_hooks(dot_codex: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dot_codex)?;
+    std::fs::write(
+        dot_codex.join("hooks.json"),
+        r#"{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo hello from hook"
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+    )
+}
+
+async fn write_project_trust_config(
+    codex_home: &Path,
+    trusted_projects: &[(&Path, TrustLevel)],
+) -> std::io::Result<()> {
+    tokio::fs::write(
+        codex_home.join(codex_config::CONFIG_TOML_FILE),
+        toml::to_string(&crate::config::ConfigToml {
+            projects: Some(
+                trusted_projects
+                    .iter()
+                    .map(|(project, trust_level)| {
+                        (
+                            project.to_string_lossy().to_string(),
+                            crate::config::ProjectConfig {
+                                trust_level: Some(*trust_level),
+                            },
+                        )
+                    })
+                    .collect::<std::collections::HashMap<_, _>>(),
+            ),
+            ..Default::default()
+        })
+        .expect("serialize config"),
+    )
+    .await
+}
+
+async fn preview_session_start_hooks(
+    config: &crate::config::Config,
+) -> std::io::Result<Vec<codex_protocol::protocol::HookRunSummary>> {
+    let hooks = Hooks::new(HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(config.config_layer_stack.clone()),
+        ..HooksConfig::default()
+    });
+
+    Ok(
+        hooks.preview_session_start(&codex_hooks::SessionStartRequest {
+            session_id: ThreadId::new(),
+            cwd: config.cwd.clone(),
+            transcript_path: None,
+            model: "gpt-5".to_string(),
+            permission_mode: "default".to_string(),
+            source: codex_hooks::SessionStartSource::Startup,
+        }),
+    )
 }
 
 fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> ToolCallRuntime {
@@ -4578,4 +4648,83 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
     );
 
     pretty_assertions::assert_eq!(output, expected);
+}
+
+#[tokio::test]
+async fn session_start_hooks_only_load_from_trusted_project_layers() -> std::io::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let codex_home = temp.path().join("home");
+    let project_root = temp.path().join("project");
+    let nested = project_root.join("nested");
+    let root_dot_codex = project_root.join(".codex");
+    let nested_dot_codex = nested.join(".codex");
+
+    std::fs::create_dir_all(&codex_home)?;
+    std::fs::create_dir_all(&nested_dot_codex)?;
+    std::fs::write(project_root.join(".git"), "gitdir: here")?;
+    write_project_hooks(&root_dot_codex)?;
+    write_project_hooks(&nested_dot_codex)?;
+    write_project_trust_config(&codex_home, &[(&nested, TrustLevel::Trusted)]).await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(nested))
+        .build()
+        .await?;
+
+    let preview = preview_session_start_hooks(&config).await?;
+    assert_eq!(
+        preview
+            .iter()
+            .map(|run| &run.source_path)
+            .collect::<Vec<_>>(),
+        vec![&nested_dot_codex.join("hooks.json")],
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_start_hooks_require_project_trust_without_config_toml() -> std::io::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let project_root = temp.path().join("project");
+    let nested = project_root.join("nested");
+    let dot_codex = project_root.join(".codex");
+    std::fs::create_dir_all(&nested)?;
+    std::fs::write(project_root.join(".git"), "gitdir: here")?;
+    write_project_hooks(&dot_codex)?;
+
+    let cases = [
+        ("unknown", Vec::<(&Path, TrustLevel)>::new(), 0_usize),
+        (
+            "untrusted",
+            vec![(&project_root as &Path, TrustLevel::Untrusted)],
+            0_usize,
+        ),
+        (
+            "trusted",
+            vec![(&project_root as &Path, TrustLevel::Trusted)],
+            1_usize,
+        ),
+    ];
+
+    for (name, trust_entries, expected_hooks) in cases {
+        let codex_home = temp.path().join(format!("home_{name}"));
+        std::fs::create_dir_all(&codex_home)?;
+        write_project_trust_config(&codex_home, &trust_entries).await?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home)
+            .fallback_cwd(Some(nested.clone()))
+            .build()
+            .await?;
+
+        assert_eq!(
+            preview_session_start_hooks(&config).await?.len(),
+            expected_hooks,
+            "unexpected hook count for {name}",
+        );
+    }
+
+    Ok(())
 }
