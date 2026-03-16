@@ -1033,6 +1033,7 @@ fn build_mcp_tool_approval_display_params(
             |(name, value)| crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam {
                 name: name.clone(),
                 value: value.clone(),
+                display_name: name.clone(),
             },
         )
         .collect::<Vec<_>>();

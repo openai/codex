@@ -26,6 +26,7 @@ pub(crate) struct RenderedMcpToolApprovalTemplate {
 pub(crate) struct RenderedMcpToolApprovalParam {
     pub(crate) name: String,
     pub(crate) value: Value,
+    pub(crate) display_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -158,8 +159,9 @@ fn render_tool_params(
             return None;
         }
         display_params.push(RenderedMcpToolApprovalParam {
-            name: label.to_string(),
+            name: template_param.name.clone(),
             value: value.clone(),
+            display_name: label.to_string(),
         });
         handled_names.insert(template_param.name.as_str());
     }
@@ -180,6 +182,7 @@ fn render_tool_params(
         display_params.push(RenderedMcpToolApprovalParam {
             name: name.clone(),
             value: value.clone(),
+            display_name: name.clone(),
         });
     }
 
@@ -237,16 +240,19 @@ mod tests {
                 })),
                 tool_params_display: vec![
                     RenderedMcpToolApprovalParam {
-                        name: "Calendar".to_string(),
+                        name: "calendar_id".to_string(),
                         value: json!("primary"),
+                        display_name: "Calendar".to_string(),
                     },
                     RenderedMcpToolApprovalParam {
-                        name: "Title".to_string(),
+                        name: "title".to_string(),
                         value: json!("Roadmap review"),
+                        display_name: "Title".to_string(),
                     },
                     RenderedMcpToolApprovalParam {
                         name: "timezone".to_string(),
                         value: json!("UTC"),
+                        display_name: "timezone".to_string(),
                     },
                 ],
             })

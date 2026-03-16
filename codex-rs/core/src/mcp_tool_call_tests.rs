@@ -138,12 +138,14 @@ async fn approval_elicitation_request_uses_message_override_and_preserves_tool_p
             })),
             tool_params_display: Some(&[
                 RenderedMcpToolApprovalParam {
-                    name: "Calendar".to_string(),
+                    name: "calendar_id".to_string(),
                     value: serde_json::json!("primary"),
+                    display_name: "Calendar".to_string(),
                 },
                 RenderedMcpToolApprovalParam {
-                    name: "Title".to_string(),
+                    name: "title".to_string(),
                     value: serde_json::json!("Roadmap review"),
+                    display_name: "Title".to_string(),
                 },
             ]),
             question,
@@ -177,12 +179,14 @@ async fn approval_elicitation_request_uses_message_override_and_preserves_tool_p
                     },
                     MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY: [
                         {
-                            "name": "Calendar",
+                            "name": "calendar_id",
                             "value": "primary",
+                            "display_name": "Calendar",
                         },
                         {
-                            "name": "Title",
+                            "name": "title",
                             "value": "Roadmap review",
+                            "display_name": "Title",
                         },
                     ],
                 })),
