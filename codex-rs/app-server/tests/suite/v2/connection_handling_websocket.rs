@@ -40,6 +40,7 @@ use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
+use tokio_tungstenite::tungstenite::http::header::ORIGIN;
 
 pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -110,6 +111,35 @@ async fn websocket_transport_serves_health_endpoints_on_same_listener() -> Resul
     send_initialize_request(&mut ws, 1, "ws_health_client").await?;
     let init = read_response_for_id(&mut ws, 1).await?;
     assert_eq!(init.id, RequestId::Integer(1));
+
+    process
+        .kill()
+        .await
+        .context("failed to stop websocket app-server process")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_transport_rejects_browser_origin_without_auth() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
+
+    let mut ws = connect_websocket(bind_addr).await?;
+    send_initialize_request(&mut ws, 1, "ws_loopback_client").await?;
+    let init = read_response_for_id(&mut ws, 1).await?;
+    assert_eq!(init.id, RequestId::Integer(1));
+    drop(ws);
+
+    assert_websocket_connect_rejected_with_headers(
+        bind_addr,
+        None,
+        Some("https://evil.example"),
+        StatusCode::FORBIDDEN,
+    )
+    .await?;
 
     process
         .kill()
@@ -408,7 +438,7 @@ pub(super) async fn connect_websocket_with_bearer(
     bearer_token: Option<&str>,
 ) -> Result<WsClient> {
     let url = format!("ws://{}", connectable_bind_addr(bind_addr));
-    let request = websocket_request(url.as_str(), bearer_token)?;
+    let request = websocket_request(url.as_str(), bearer_token, None)?;
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         match connect_async(request.clone()).await {
@@ -427,8 +457,23 @@ async fn assert_websocket_connect_rejected(
     bind_addr: SocketAddr,
     bearer_token: Option<&str>,
 ) -> Result<()> {
+    assert_websocket_connect_rejected_with_headers(
+        bind_addr,
+        bearer_token,
+        None,
+        StatusCode::UNAUTHORIZED,
+    )
+    .await
+}
+
+async fn assert_websocket_connect_rejected_with_headers(
+    bind_addr: SocketAddr,
+    bearer_token: Option<&str>,
+    origin: Option<&str>,
+    expected_status: StatusCode,
+) -> Result<()> {
     let url = format!("ws://{}", connectable_bind_addr(bind_addr));
-    let request = websocket_request(url.as_str(), bearer_token)?;
+    let request = websocket_request(url.as_str(), bearer_token, origin)?;
 
     match connect_async(request).await {
         Ok((_stream, response)) => {
@@ -438,7 +483,7 @@ async fn assert_websocket_connect_rejected(
             )
         }
         Err(WsError::Http(response)) => {
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(response.status(), expected_status);
             Ok(())
         }
         Err(err) => bail!("expected http rejection during websocket handshake: {err}"),
@@ -502,6 +547,7 @@ async fn http_get(
 fn websocket_request(
     url: &str,
     bearer_token: Option<&str>,
+    origin: Option<&str>,
 ) -> Result<tokio_tungstenite::tungstenite::http::Request<()>> {
     let mut request = url
         .into_client_request()
@@ -511,6 +557,12 @@ fn websocket_request(
             AUTHORIZATION,
             HeaderValue::from_str(&format!("Bearer {bearer_token}"))
                 .context("invalid bearer token header")?,
+        );
+    }
+    if let Some(origin) = origin {
+        request.headers_mut().insert(
+            ORIGIN,
+            HeaderValue::from_str(origin).context("invalid origin header")?,
         );
     }
     Ok(request)
