@@ -2470,6 +2470,8 @@ mod tests {
                 sender_thread_id: sender.to_string(),
                 receiver_thread_ids: vec![receiver.to_string()],
                 prompt: Some("new task".into()),
+                model: None,
+                reasoning_effort: None,
                 agents_states: [(
                     receiver.to_string(),
                     CollabAgentState {
