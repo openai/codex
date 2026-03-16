@@ -63,12 +63,13 @@ pub(crate) struct GuardianReviewSessionParams {
 
 #[derive(Default)]
 pub(crate) struct GuardianReviewSessionManager {
-    state: Mutex<GuardianReviewSessionState>,
+    state: Arc<Mutex<GuardianReviewSessionState>>,
 }
 
 #[derive(Default)]
 struct GuardianReviewSessionState {
     trunk: Option<Arc<GuardianReviewSession>>,
+    ephemeral_reviews: Vec<Arc<GuardianReviewSession>>,
 }
 
 struct GuardianReviewSession {
@@ -77,6 +78,11 @@ struct GuardianReviewSession {
     reuse_key: GuardianReviewSessionReuseKey,
     review_lock: Mutex<()>,
     last_committed_rollout_items: Mutex<Option<Vec<RolloutItem>>>,
+}
+
+struct EphemeralReviewCleanup {
+    state: Arc<Mutex<GuardianReviewSessionState>>,
+    review_session: Option<Arc<GuardianReviewSession>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -172,10 +178,57 @@ impl GuardianReviewSession {
     }
 }
 
+impl EphemeralReviewCleanup {
+    fn new(
+        state: Arc<Mutex<GuardianReviewSessionState>>,
+        review_session: Arc<GuardianReviewSession>,
+    ) -> Self {
+        Self {
+            state,
+            review_session: Some(review_session),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.review_session = None;
+    }
+}
+
+impl Drop for EphemeralReviewCleanup {
+    fn drop(&mut self) {
+        let Some(review_session) = self.review_session.take() else {
+            return;
+        };
+        let state = Arc::clone(&self.state);
+        drop(tokio::spawn(async move {
+            let review_session = {
+                let mut state = state.lock().await;
+                state
+                    .ephemeral_reviews
+                    .iter()
+                    .position(|active_review| Arc::ptr_eq(active_review, &review_session))
+                    .map(|index| state.ephemeral_reviews.swap_remove(index))
+            };
+            if let Some(review_session) = review_session {
+                review_session.shutdown().await;
+            }
+        }));
+    }
+}
+
 impl GuardianReviewSessionManager {
     pub(crate) async fn shutdown(&self) {
-        let review_session = self.state.lock().await.trunk.take();
+        let (review_session, ephemeral_reviews) = {
+            let mut state = self.state.lock().await;
+            (
+                state.trunk.take(),
+                std::mem::take(&mut state.ephemeral_reviews),
+            )
+        };
         if let Some(review_session) = review_session {
+            review_session.shutdown().await;
+        }
+        for review_session in ephemeral_reviews {
             review_session.shutdown().await;
         }
     }
@@ -260,12 +313,12 @@ impl GuardianReviewSessionManager {
 
         let (outcome, keep_review_session) =
             run_review_on_session(trunk.as_ref(), &params, deadline).await;
+        if keep_review_session && matches!(outcome, GuardianReviewSessionOutcome::Completed(_)) {
+            trunk.refresh_last_committed_rollout_items().await;
+        }
         drop(trunk_guard);
 
         if keep_review_session {
-            if matches!(outcome, GuardianReviewSessionOutcome::Completed(_)) {
-                trunk.refresh_last_committed_rollout_items().await;
-            }
             outcome
         } else {
             if let Some(review_session) = self.remove_trunk_if_current(&trunk).await {
@@ -289,6 +342,24 @@ impl GuardianReviewSessionManager {
         }));
     }
 
+    #[cfg(test)]
+    pub(crate) async fn register_ephemeral_for_test(&self, codex: Codex) {
+        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            codex.session.get_config().await.as_ref(),
+        );
+        self.state
+            .lock()
+            .await
+            .ephemeral_reviews
+            .push(Arc::new(GuardianReviewSession {
+                reuse_key,
+                codex,
+                cancel_token: CancellationToken::new(),
+                review_lock: Mutex::new(()),
+                last_committed_rollout_items: Mutex::new(None),
+            }));
+    }
+
     async fn remove_trunk_if_current(
         &self,
         trunk: &Arc<GuardianReviewSession>,
@@ -303,6 +374,26 @@ impl GuardianReviewSessionManager {
         } else {
             None
         }
+    }
+
+    async fn register_active_ephemeral(&self, review_session: Arc<GuardianReviewSession>) {
+        self.state
+            .lock()
+            .await
+            .ephemeral_reviews
+            .push(review_session);
+    }
+
+    async fn take_active_ephemeral(
+        &self,
+        review_session: &Arc<GuardianReviewSession>,
+    ) -> Option<Arc<GuardianReviewSession>> {
+        let mut state = self.state.lock().await;
+        let ephemeral_review_index = state
+            .ephemeral_reviews
+            .iter()
+            .position(|active_review| Arc::ptr_eq(active_review, review_session))?;
+        Some(state.ephemeral_reviews.swap_remove(ephemeral_review_index))
     }
 
     async fn run_ephemeral_review(
@@ -333,9 +424,16 @@ impl GuardianReviewSessionManager {
             Ok(Err(err)) => return GuardianReviewSessionOutcome::Completed(Err(err)),
             Err(outcome) => return outcome,
         };
+        self.register_active_ephemeral(Arc::clone(&review_session))
+            .await;
+        let mut cleanup =
+            EphemeralReviewCleanup::new(Arc::clone(&self.state), Arc::clone(&review_session));
 
         let (outcome, _) = run_review_on_session(review_session.as_ref(), &params, deadline).await;
-        review_session.shutdown_in_background();
+        if let Some(review_session) = self.take_active_ephemeral(&review_session).await {
+            cleanup.disarm();
+            review_session.shutdown_in_background();
+        }
         outcome
     }
 }

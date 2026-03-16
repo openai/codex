@@ -114,6 +114,12 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
         .await;
 }
 
+fn guardian_snapshot_options() -> ContextSnapshotOptions {
+    ContextSnapshotOptions::default()
+        .strip_capability_instructions()
+        .strip_agents_md_user_context()
+}
+
 #[test]
 fn build_guardian_transcript_keeps_original_numbering() {
     let entries = [
@@ -537,7 +543,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     )
     .await?;
 
-    let outcome = run_guardian_subagent(
+    let outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
         prompt,
@@ -560,7 +566,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
             context_snapshot::format_labeled_requests_snapshot(
                 "Guardian review request layout",
                 &[("Guardian Review Request", &request)],
-                &ContextSnapshotOptions::default().strip_capability_instructions(),
+                &guardian_snapshot_options(),
             )
         );
     });
@@ -615,7 +621,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         },
     )
     .await?;
-    let first_outcome = run_guardian_subagent(
+    let first_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
         first_prompt,
@@ -640,7 +646,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         },
     )
     .await?;
-    let second_outcome = run_guardian_subagent(
+    let second_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
         second_prompt,
@@ -686,11 +692,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                         ("Initial Guardian Review Request", &requests[0]),
                         ("Follow-up Guardian Review Request", &requests[1]),
                     ],
-                    &ContextSnapshotOptions::default().strip_capability_instructions(),
-                )
-                .replace(
-                    "01:message/user[2]:\n    [01] <AGENTS_MD>\n    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>",
-                    "01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>",
+                    &guardian_snapshot_options(),
                 ),
                 first_body["prompt_cache_key"] == second_body["prompt_cache_key"],
                 second_body.to_string().contains(first_rationale),
@@ -702,7 +704,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn guardian_parallel_reviews_use_ephemeral_fork_when_trunk_is_busy() -> anyhow::Result<()> {
+async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> anyhow::Result<()> {
     let first_assessment = serde_json::json!({
         "risk_level": "low",
         "risk_score": 4,
@@ -717,27 +719,42 @@ async fn guardian_parallel_reviews_use_ephemeral_fork_when_trunk_is_busy() -> an
         "evidence": [],
     })
     .to_string();
+    let third_assessment = serde_json::json!({
+        "risk_level": "low",
+        "risk_score": 9,
+        "rationale": "third guardian rationale",
+        "evidence": [],
+    })
+    .to_string();
     let (gate_tx, gate_rx) = tokio::sync::oneshot::channel();
     let (server, _) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_response_created("resp-guardian-1"),
+                ev_assistant_message("msg-guardian-1", &first_assessment),
+                ev_completed("resp-guardian-1"),
+            ]),
+        }],
         vec![
             StreamingSseChunk {
                 gate: None,
-                body: sse(vec![ev_response_created("resp-guardian-1")]),
+                body: sse(vec![ev_response_created("resp-guardian-2")]),
             },
             StreamingSseChunk {
                 gate: Some(gate_rx),
                 body: sse(vec![
-                    ev_assistant_message("msg-guardian-1", &first_assessment),
-                    ev_completed("resp-guardian-1"),
+                    ev_assistant_message("msg-guardian-2", &second_assessment),
+                    ev_completed("resp-guardian-2"),
                 ]),
             },
         ],
         vec![StreamingSseChunk {
             gate: None,
             body: sse(vec![
-                ev_response_created("resp-guardian-2"),
-                ev_assistant_message("msg-guardian-2", &second_assessment),
-                ev_completed("resp-guardian-2"),
+                ev_response_created("resp-guardian-3"),
+                ev_assistant_message("msg-guardian-3", &third_assessment),
+                ev_completed("resp-guardian-3"),
             ]),
         }],
     ])
@@ -746,7 +763,7 @@ async fn guardian_parallel_reviews_use_ephemeral_fork_when_trunk_is_busy() -> an
     let (session, turn) = guardian_test_session_and_turn_with_base_url(server.uri()).await;
     seed_guardian_parent_history(&session, &turn).await;
 
-    let first_request = GuardianApprovalRequest::Shell {
+    let initial_request = GuardianApprovalRequest::Shell {
         id: "shell-guardian-1".to_string(),
         command: vec!["git".to_string(), "status".to_string()],
         cwd: PathBuf::from("/repo/codex-rs/core"),
@@ -754,6 +771,11 @@ async fn guardian_parallel_reviews_use_ephemeral_fork_when_trunk_is_busy() -> an
         additional_permissions: None,
         justification: Some("Inspect repo state before proceeding.".to_string()),
     };
+    assert_eq!(
+        review_approval_request(&session, &turn, initial_request, None).await,
+        ReviewDecision::Approved
+    );
+
     let second_request = GuardianApprovalRequest::Shell {
         id: "shell-guardian-2".to_string(),
         command: vec!["git".to_string(), "diff".to_string()],
@@ -762,16 +784,30 @@ async fn guardian_parallel_reviews_use_ephemeral_fork_when_trunk_is_busy() -> an
         additional_permissions: None,
         justification: Some("Inspect pending changes before proceeding.".to_string()),
     };
+    let third_request = GuardianApprovalRequest::Shell {
+        id: "shell-guardian-3".to_string(),
+        command: vec!["git".to_string(), "push".to_string()],
+        cwd: PathBuf::from("/repo/codex-rs/core"),
+        sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+        additional_permissions: None,
+        justification: Some("Inspect whether pushing is safe before proceeding.".to_string()),
+    };
 
-    let session_for_first = Arc::clone(&session);
-    let turn_for_first = Arc::clone(&turn);
-    let mut first_review = tokio::spawn(async move {
-        review_approval_request(&session_for_first, &turn_for_first, first_request, None).await
+    let session_for_second = Arc::clone(&session);
+    let turn_for_second = Arc::clone(&turn);
+    let mut second_review = tokio::spawn(async move {
+        review_approval_request(
+            &session_for_second,
+            &turn_for_second,
+            second_request,
+            Some("trunk follow-up".to_string()),
+        )
+        .await
     });
 
-    let first_request_observed = tokio::time::timeout(Duration::from_secs(5), async {
+    let second_request_observed = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if !server.requests().await.is_empty() {
+            if server.requests().await.len() >= 2 {
                 break;
             }
             tokio::task::yield_now().await;
@@ -779,36 +815,47 @@ async fn guardian_parallel_reviews_use_ephemeral_fork_when_trunk_is_busy() -> an
     })
     .await;
     assert!(
-        first_request_observed.is_ok(),
-        "first guardian request was not observed"
+        second_request_observed.is_ok(),
+        "second guardian request was not observed"
     );
 
-    let second_decision = review_approval_request(
+    let third_decision = review_approval_request(
         &session,
         &turn,
-        second_request,
+        third_request,
         Some("parallel follow-up".to_string()),
     )
     .await;
-    assert_eq!(second_decision, ReviewDecision::Approved);
-    assert_eq!(server.requests().await.len(), 2);
+    assert_eq!(third_decision, ReviewDecision::Approved);
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 3);
+    let third_request_body = serde_json::from_slice::<serde_json::Value>(&requests[2])?;
+    let third_request_body_text = third_request_body.to_string();
     assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut first_review)
+        third_request_body_text.contains("first guardian rationale"),
+        "forked guardian review should include the last committed trunk assessment"
+    );
+    assert!(
+        !third_request_body_text.contains("second guardian rationale"),
+        "forked guardian review should not include the still in-flight trunk assessment"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut second_review)
             .await
             .is_err(),
-        "the first guardian review should still be blocked on its gated response"
+        "the trunk guardian review should still be blocked on its gated response"
     );
 
     gate_tx
         .send(())
-        .expect("first guardian review gate should still be open");
-    assert_eq!(first_review.await?, ReviewDecision::Approved);
+        .expect("second guardian review gate should still be open");
+    assert_eq!(second_review.await?, ReviewDecision::Approved);
     server.shutdown().await;
 
     Ok(())
 }
 #[test]
-fn guardian_subagent_config_preserves_parent_network_proxy() {
+fn guardian_review_session_config_preserves_parent_network_proxy() {
     let mut parent_config = test_config();
     let network = NetworkProxySpec::from_config_and_constraints(
         NetworkProxyConfig::default(),
@@ -822,7 +869,7 @@ fn guardian_subagent_config_preserves_parent_network_proxy() {
     .expect("network proxy spec");
     parent_config.permissions.network = Some(network.clone());
 
-    let guardian_config = build_guardian_subagent_config(
+    let guardian_config = build_guardian_review_session_config_for_test(
         &parent_config,
         None,
         "parent-active-model",
@@ -850,13 +897,13 @@ fn guardian_subagent_config_preserves_parent_network_proxy() {
 }
 
 #[test]
-fn guardian_subagent_config_overrides_parent_developer_instructions() {
+fn guardian_review_session_config_overrides_parent_developer_instructions() {
     let mut parent_config = test_config();
     parent_config.developer_instructions =
         Some("parent or managed config should not replace guardian policy".to_string());
 
     let guardian_config =
-        build_guardian_subagent_config(&parent_config, None, "active-model", None)
+        build_guardian_review_session_config_for_test(&parent_config, None, "active-model", None)
             .expect("guardian config");
 
     assert_eq!(
@@ -866,7 +913,7 @@ fn guardian_subagent_config_overrides_parent_developer_instructions() {
 }
 
 #[test]
-fn guardian_subagent_config_uses_live_network_proxy_state() {
+fn guardian_review_session_config_uses_live_network_proxy_state() {
     let mut parent_config = test_config();
     let mut parent_network = NetworkProxyConfig::default();
     parent_network.network.enabled = true;
@@ -884,7 +931,7 @@ fn guardian_subagent_config_uses_live_network_proxy_state() {
     live_network.network.enabled = true;
     live_network.network.allowed_domains = vec!["github.com".to_string()];
 
-    let guardian_config = build_guardian_subagent_config(
+    let guardian_config = build_guardian_review_session_config_for_test(
         &parent_config,
         Some(live_network.clone()),
         "active-model",
@@ -906,7 +953,7 @@ fn guardian_subagent_config_uses_live_network_proxy_state() {
 }
 
 #[test]
-fn guardian_subagent_config_rejects_pinned_collab_feature() {
+fn guardian_review_session_config_rejects_pinned_collab_feature() {
     let mut parent_config = test_config();
     parent_config.features = ManagedFeatures::from_configured(
         parent_config.features.get().clone(),
@@ -919,8 +966,9 @@ fn guardian_subagent_config_rejects_pinned_collab_feature() {
     )
     .expect("managed features");
 
-    let err = build_guardian_subagent_config(&parent_config, None, "active-model", None)
-        .expect_err("guardian config should fail when collab is pinned on");
+    let err =
+        build_guardian_review_session_config_for_test(&parent_config, None, "active-model", None)
+            .expect_err("guardian config should fail when collab is pinned on");
 
     assert!(
         err.to_string()
@@ -929,12 +977,12 @@ fn guardian_subagent_config_rejects_pinned_collab_feature() {
 }
 
 #[test]
-fn guardian_subagent_config_uses_parent_active_model_instead_of_hardcoded_slug() {
+fn guardian_review_session_config_uses_parent_active_model_instead_of_hardcoded_slug() {
     let mut parent_config = test_config();
     parent_config.model = Some("configured-model".to_string());
 
     let guardian_config =
-        build_guardian_subagent_config(&parent_config, None, "active-model", None)
+        build_guardian_review_session_config_for_test(&parent_config, None, "active-model", None)
             .expect("guardian config");
 
     assert_eq!(guardian_config.model, Some("active-model".to_string()));

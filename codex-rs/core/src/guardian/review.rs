@@ -247,11 +247,13 @@ pub(crate) async fn review_approval_request_with_cancel(
 ///
 /// The guardian itself should not mutate state or trigger further approvals, so
 /// it is pinned to a read-only sandbox with `approval_policy = never` and
-/// nonessential agent features disabled. The child session is reused across
-/// approvals to preserve a stable prompt-cache key and append later approval
-/// requests onto the same guardian conversation. It is recreated when the
-/// effective review-session config changes, and any future compaction must
-/// continue to preserve the guardian policy as exact top-level developer
+/// nonessential agent features disabled. When the cached trunk session is idle,
+/// later approvals append onto that same guardian conversation to preserve a
+/// stable prompt-cache key. If the trunk is already busy, the review runs in an
+/// ephemeral fork from the last committed trunk rollout so parallel approvals
+/// do not block each other or mutate the cached thread. The trunk is recreated
+/// when the effective review-session config changes, and any future compaction
+/// must continue to preserve the guardian policy as exact top-level developer
 /// context. It may still reuse the parent's managed-network allowlist for
 /// read-only checks, but it intentionally runs without inherited exec-policy
 /// rules.

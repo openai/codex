@@ -81,7 +81,7 @@ struct CommandApprovalAction<'a> {
     tool: &'a str,
     command: &'a [String],
     cwd: &'a PathBuf,
-    sandbox_permissions: &'a crate::sandboxing::SandboxPermissions,
+    sandbox_permissions: crate::sandboxing::SandboxPermissions,
     #[serde(skip_serializing_if = "Option::is_none")]
     additional_permissions: Option<&'a PermissionProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -126,6 +126,34 @@ fn serialize_guardian_action(value: impl Serialize) -> serde_json::Result<Value>
     serde_json::to_value(value)
 }
 
+fn serialize_command_guardian_action(
+    tool: &'static str,
+    command: &[String],
+    cwd: &PathBuf,
+    sandbox_permissions: crate::sandboxing::SandboxPermissions,
+    additional_permissions: Option<&PermissionProfile>,
+    justification: Option<&String>,
+    tty: Option<bool>,
+) -> serde_json::Result<Value> {
+    serialize_guardian_action(CommandApprovalAction {
+        tool,
+        command,
+        cwd,
+        sandbox_permissions,
+        additional_permissions,
+        justification,
+        tty,
+    })
+}
+
+fn command_assessment_action_value(tool: &'static str, command: &[String], cwd: &PathBuf) -> Value {
+    serde_json::json!({
+        "tool": tool,
+        "command": codex_shell_command::parse_command::shlex_join(command),
+        "cwd": cwd,
+    })
+}
+
 fn truncate_guardian_action_value(value: Value) -> Value {
     match value {
         Value::String(text) => Value::String(guardian_truncate_text(
@@ -163,15 +191,15 @@ pub(crate) fn guardian_approval_request_to_json(
             sandbox_permissions,
             additional_permissions,
             justification,
-        } => serialize_guardian_action(CommandApprovalAction {
-            tool: "shell",
+        } => serialize_command_guardian_action(
+            "shell",
             command,
             cwd,
-            sandbox_permissions,
-            additional_permissions: additional_permissions.as_ref(),
-            justification: justification.as_ref(),
-            tty: None,
-        }),
+            *sandbox_permissions,
+            additional_permissions.as_ref(),
+            justification.as_ref(),
+            None,
+        ),
         GuardianApprovalRequest::ExecCommand {
             id: _,
             command,
@@ -180,15 +208,15 @@ pub(crate) fn guardian_approval_request_to_json(
             additional_permissions,
             justification,
             tty,
-        } => serialize_guardian_action(CommandApprovalAction {
-            tool: "exec_command",
+        } => serialize_command_guardian_action(
+            "exec_command",
             command,
             cwd,
-            sandbox_permissions,
-            additional_permissions: additional_permissions.as_ref(),
-            justification: justification.as_ref(),
-            tty: Some(*tty),
-        }),
+            *sandbox_permissions,
+            additional_permissions.as_ref(),
+            justification.as_ref(),
+            Some(*tty),
+        ),
         #[cfg(unix)]
         GuardianApprovalRequest::Execve {
             id: _,
@@ -259,16 +287,12 @@ pub(crate) fn guardian_approval_request_to_json(
 
 pub(crate) fn guardian_assessment_action_value(action: &GuardianApprovalRequest) -> Value {
     match action {
-        GuardianApprovalRequest::Shell { command, cwd, .. } => serde_json::json!({
-            "tool": "shell",
-            "command": codex_shell_command::parse_command::shlex_join(command),
-            "cwd": cwd,
-        }),
-        GuardianApprovalRequest::ExecCommand { command, cwd, .. } => serde_json::json!({
-            "tool": "exec_command",
-            "command": codex_shell_command::parse_command::shlex_join(command),
-            "cwd": cwd,
-        }),
+        GuardianApprovalRequest::Shell { command, cwd, .. } => {
+            command_assessment_action_value("shell", command, cwd)
+        }
+        GuardianApprovalRequest::ExecCommand { command, cwd, .. } => {
+            command_assessment_action_value("exec_command", command, cwd)
+        }
         #[cfg(unix)]
         GuardianApprovalRequest::Execve {
             tool_name,
