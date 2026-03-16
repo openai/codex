@@ -74,7 +74,7 @@ fn guardian_approval_is_experimental_and_user_toggleable() {
     let stage = spec.stage;
 
     assert!(matches!(stage, Stage::Experimental { .. }));
-    assert_eq!(stage.experimental_menu_name(), Some("Smart Approvals"));
+    assert_eq!(stage.experimental_menu_name(), Some("Guardian Approvals"));
     assert_eq!(
         stage.experimental_menu_description().map(str::to_owned),
         Some(
