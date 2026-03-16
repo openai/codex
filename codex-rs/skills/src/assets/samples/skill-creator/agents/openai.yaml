@@ -1,0 +1,5 @@
+interface:
+  display_name: "Skill Creator"
+  short_description: "Create or update a skill"
+  icon_small: "./assets/skill-creator-small.svg"
+  icon_large: "./assets/skill-creator.png"

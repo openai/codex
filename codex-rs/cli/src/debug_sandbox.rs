@@ -5,15 +5,16 @@ mod seatbelt;
 
 use std::path::PathBuf;
 
-use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::NetworkProxyAuditMetadata;
 use codex_core::exec_env::create_env;
 use codex_core::landlock::spawn_command_under_linux_sandbox;
 #[cfg(target_os = "macos")]
 use codex_core::seatbelt::spawn_command_under_seatbelt;
 use codex_core::spawn::StdioPolicy;
 use codex_protocol::config_types::SandboxMode;
+use codex_utils_cli::CliConfigOverrides;
 
 use crate::LandlockCommand;
 use crate::SeatbeltCommand;
@@ -130,25 +131,28 @@ async fn run_command_under_sandbox(
     let sandbox_policy_cwd = cwd.clone();
 
     let stdio_policy = StdioPolicy::Inherit;
-    let env = create_env(&config.shell_environment_policy);
+    let env = create_env(&config.permissions.shell_environment_policy, None);
 
     // Special-case Windows sandbox: execute and exit the process to emulate inherited stdio.
     if let SandboxType::Windows = sandbox_type {
         #[cfg(target_os = "windows")]
         {
-            use codex_core::features::Feature;
+            use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+            use codex_protocol::config_types::WindowsSandboxLevel;
             use codex_windows_sandbox::run_windows_sandbox_capture;
             use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
 
-            let policy_str = serde_json::to_string(config.sandbox_policy.get())?;
+            let policy_str = serde_json::to_string(config.permissions.sandbox_policy.get())?;
 
             let sandbox_cwd = sandbox_policy_cwd.clone();
             let cwd_clone = cwd.clone();
             let env_map = env.clone();
             let command_vec = command.clone();
             let base_dir = config.codex_home.clone();
-            let use_elevated = config.features.enabled(Feature::WindowsSandbox)
-                && config.features.enabled(Feature::WindowsSandboxElevated);
+            let use_elevated = matches!(
+                WindowsSandboxLevel::from_config(&config),
+                WindowsSandboxLevel::Elevated
+            );
 
             // Preflight audit is invoked elsewhere at the appropriate times.
             let res = tokio::task::spawn_blocking(move || {
@@ -161,6 +165,7 @@ async fn run_command_under_sandbox(
                         &cwd_clone,
                         env_map,
                         None,
+                        config.permissions.windows_sandbox_private_desktop,
                     )
                 } else {
                     run_windows_sandbox_capture(
@@ -171,6 +176,7 @@ async fn run_command_under_sandbox(
                         &cwd_clone,
                         env_map,
                         None,
+                        config.permissions.windows_sandbox_private_desktop,
                     )
                 }
             })
@@ -210,15 +216,37 @@ async fn run_command_under_sandbox(
     #[cfg(not(target_os = "macos"))]
     let _ = log_denials;
 
+    let managed_network_requirements_enabled = config.managed_network_requirements_enabled();
+
+    // This proxy should only live for the lifetime of the child process.
+    let network_proxy = match config.permissions.network.as_ref() {
+        Some(spec) => Some(
+            spec.start_proxy(
+                config.permissions.sandbox_policy.get(),
+                None,
+                None,
+                managed_network_requirements_enabled,
+                NetworkProxyAuditMetadata::default(),
+            )
+            .await
+            .map_err(|err| anyhow::anyhow!("failed to start managed network proxy: {err}"))?,
+        ),
+        None => None,
+    };
+    let network = network_proxy
+        .as_ref()
+        .map(codex_core::config::StartedNetworkProxy::proxy);
+
     let mut child = match sandbox_type {
         #[cfg(target_os = "macos")]
         SandboxType::Seatbelt => {
             spawn_command_under_seatbelt(
                 command,
                 cwd,
-                config.sandbox_policy.get(),
+                config.permissions.sandbox_policy.get(),
                 sandbox_policy_cwd.as_path(),
                 stdio_policy,
+                network.as_ref(),
                 env,
             )
             .await?
@@ -228,13 +256,16 @@ async fn run_command_under_sandbox(
             let codex_linux_sandbox_exe = config
                 .codex_linux_sandbox_exe
                 .expect("codex-linux-sandbox executable not found");
+            let use_legacy_landlock = config.features.use_legacy_landlock();
             spawn_command_under_linux_sandbox(
                 codex_linux_sandbox_exe,
                 command,
                 cwd,
-                config.sandbox_policy.get(),
+                config.permissions.sandbox_policy.get(),
                 sandbox_policy_cwd.as_path(),
+                use_legacy_landlock,
                 stdio_policy,
+                network.as_ref(),
                 env,
             )
             .await?

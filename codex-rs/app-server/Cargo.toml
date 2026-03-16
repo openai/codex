@@ -8,6 +8,10 @@ license.workspace = true
 name = "codex-app-server"
 path = "src/main.rs"
 
+[[bin]]
+name = "codex-app-server-test-notify-capture"
+path = "src/bin/notify_capture.rs"
+
 [lib]
 name = "codex_app_server"
 path = "src/lib.rs"
@@ -17,9 +21,21 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+axum = { workspace = true, default-features = false, features = [
+    "http1",
+    "json",
+    "tokio",
+    "ws",
+] }
 codex-arg0 = { workspace = true }
-codex-common = { workspace = true, features = ["cli"] }
+codex-cloud-requirements = { workspace = true }
 codex-core = { workspace = true }
+codex-otel = { workspace = true }
+codex-shell-command = { workspace = true }
+codex-utils-cli = { workspace = true }
+codex-utils-pty = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
@@ -28,12 +44,15 @@ codex-protocol = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-feedback = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-state = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+futures = { workspace = true }
+owo-colors = { workspace = true, features = ["supports-colors"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-mcp-types = { workspace = true }
 tempfile = { workspace = true }
 time = { workspace = true }
 toml = { workspace = true }
@@ -44,26 +63,34 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "signal",
 ] }
+tokio-util = { workspace = true }
+tokio-tungstenite = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
-tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
 uuid = { workspace = true, features = ["serde", "v7"] }
+walkdir = { workspace = true }
 
 [dev-dependencies]
 app_test_support = { workspace = true }
+base64 = { workspace = true }
 axum = { workspace = true, default-features = false, features = [
     "http1",
     "json",
     "tokio",
 ] }
-base64 = { workspace = true }
 core_test_support = { workspace = true }
-mcp-types = { workspace = true }
-os_info = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
+reqwest = { workspace = true, features = ["rustls-tls"] }
 rmcp = { workspace = true, default-features = false, features = [
+    "elicitation",
     "server",
     "transport-streamable-http-server",
 ] }
 serial_test = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 wiremock = { workspace = true }
 shlex = { workspace = true }

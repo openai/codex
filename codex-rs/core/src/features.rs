@@ -5,14 +5,22 @@
 //! booleans through multiple types, call sites consult a single `Features`
 //! container attached to `Config`.
 
+use crate::auth::AuthManager;
+use crate::auth::CodexAuth;
+use crate::config::Config;
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
-use codex_otel::OtelManager;
+use crate::protocol::Event;
+use crate::protocol::EventMsg;
+use crate::protocol::WarningEvent;
+use codex_config::CONFIG_TOML_FILE;
+use codex_otel::SessionTelemetry;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use toml::Value as TomlValue;
 
 mod legacy;
 pub(crate) use legacy::LegacyFeatureToggles;
@@ -21,8 +29,8 @@ pub(crate) use legacy::legacy_feature_keys;
 /// High-level lifecycle stage for a feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
-    /// Closed beta features to be used while developing or within the company.
-    Beta,
+    /// Features that are still under development, not ready for external use
+    UnderDevelopment,
     /// Experimental features made available to users through the `/experimental` menu
     Experimental {
         name: &'static str,
@@ -38,14 +46,14 @@ pub enum Stage {
 }
 
 impl Stage {
-    pub fn beta_menu_name(self) -> Option<&'static str> {
+    pub fn experimental_menu_name(self) -> Option<&'static str> {
         match self {
             Stage::Experimental { name, .. } => Some(name),
             _ => None,
         }
     }
 
-    pub fn beta_menu_description(self) -> Option<&'static str> {
+    pub fn experimental_menu_description(self) -> Option<&'static str> {
         match self {
             Stage::Experimental {
                 menu_description, ..
@@ -54,8 +62,11 @@ impl Stage {
         }
     }
 
-    pub fn beta_announcement(self) -> Option<&'static str> {
+    pub fn experimental_announcement(self) -> Option<&'static str> {
         match self {
+            Stage::Experimental {
+                announcement: "", ..
+            } => None,
             Stage::Experimental { announcement, .. } => Some(announcement),
             _ => None,
         }
@@ -72,43 +83,111 @@ pub enum Feature {
     ShellTool,
 
     // Experimental
+    /// Enable JavaScript REPL tools backed by a persistent Node kernel.
+    JsRepl,
+    /// Enable a minimal JavaScript mode backed by Node's built-in vm runtime.
+    CodeMode,
+    /// Restrict model-visible tools to code mode entrypoints (`exec`, `exec_wait`).
+    CodeModeOnly,
+    /// Only expose js_repl tools directly to the model.
+    JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
+    /// Route shell tool execution through the zsh exec bridge.
+    ShellZshFork,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
+    /// Allow exec tools to request additional permissions while staying sandboxed.
+    ExecPermissionApprovals,
+    /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
+    CodexHooks,
+    /// Expose the built-in request_permissions tool.
+    RequestPermissionsTool,
     /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
     /// Allow the model to request web searches that fetch cached content.
     /// Takes precedence over `WebSearchRequest`.
     WebSearchCached,
-    /// Gate the execpolicy enforcement for shell/unified exec.
-    ExecPolicy,
+    /// Legacy search-tool feature flag kept for backward compatibility.
+    SearchTool,
+    /// Removed legacy Linux bubblewrap opt-in flag retained as a no-op so old
+    /// wrappers and config can still parse it.
+    UseLinuxSandboxBwrap,
+    /// Use the legacy Landlock Linux sandbox fallback instead of the default
+    /// bubblewrap pipeline.
+    UseLegacyLandlock,
+    /// Allow the model to request approval and propose exec rules.
+    RequestRule,
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
     /// Use the elevated Windows sandbox pipeline (setup + runner).
     WindowsSandboxElevated,
-    /// Remote compaction enabled (only for ChatGPT auth)
-    RemoteCompaction,
-    /// Refresh remote models and emit AppReady once the list is available.
+    /// Legacy remote models flag kept for backward compatibility.
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Enable git commit attribution guidance via model instructions.
+    CodexGitCommit,
+    /// Enable runtime metrics snapshots via a manual reader.
+    RuntimeMetrics,
+    /// Persist rollout metadata to a local SQLite database.
+    Sqlite,
+    /// Enable startup memory extraction and file-backed memory consolidation.
+    MemoryTool,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
+    /// Allow the model to request `detail: "original"` image outputs on supported models.
+    ImageDetailOriginal,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
     EnableRequestCompression,
     /// Enable collab tools.
     Collab,
-    /// Enable connectors (apps).
-    Connectors,
+    /// Enable CSV-backed agent job tools.
+    SpawnCsv,
+    /// Enable apps.
+    Apps,
+    /// Enable discoverable tool suggestions for apps.
+    ToolSuggest,
+    /// Enable plugins.
+    Plugins,
+    /// Allow the model to invoke the built-in image generation tool.
+    ImageGeneration,
+    /// Allow prompting and installing missing MCP dependencies.
+    SkillMcpDependencyInstall,
+    /// Prompt for missing skill env var dependencies.
+    SkillEnvVarDependencyPrompt,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
+    /// Kept for config backward compatibility; behavior is always steer-enabled.
     Steer,
-    /// Enable collaboration modes (Plan, Code, Pair Programming, Execute).
+    /// Allow request_user_input in Default collaboration mode.
+    DefaultModeRequestUserInput,
+    /// Enable automatic review for approval prompts.
+    GuardianApproval,
+    /// Enable collaboration modes (Plan, Default).
+    /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
     CollaborationModes,
+    /// Route MCP tool approval prompts through the MCP elicitation request path.
+    ToolCallMcpElicitation,
+    /// Enable personality selection in the TUI.
+    Personality,
+    /// Enable native artifact tools.
+    Artifact,
+    /// Enable Fast mode selection in the TUI and request layer.
+    FastMode,
+    /// Enable voice transcription in the TUI composer.
+    VoiceTranscription,
+    /// Enable experimental realtime voice conversation mode in the TUI.
+    RealtimeConversation,
+    /// Route interactive startup to the app-server-backed TUI implementation.
+    TuiAppServer,
+    /// Prevent idle system sleep while a turn is actively running.
+    PreventIdleSleep,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
+    /// Enable Responses API websocket v2 mode.
+    ResponsesWebsocketsV2,
 }
 
 impl Feature {
@@ -136,6 +215,8 @@ impl Feature {
 pub struct LegacyFeatureUsage {
     pub alias: String,
     pub feature: Feature,
+    pub summary: String,
+    pub details: Option<String>,
 }
 
 /// Holds the effective set of enabled features.
@@ -155,10 +236,17 @@ impl FeatureOverrides {
     fn apply(self, features: &mut Features) {
         LegacyFeatureToggles {
             include_apply_patch_tool: self.include_apply_patch_tool,
-            tools_web_search: self.web_search_request,
             ..Default::default()
         }
         .apply(features);
+        if let Some(enabled) = self.web_search_request {
+            if enabled {
+                features.enable(Feature::WebSearchRequest);
+            } else {
+                features.disable(Feature::WebSearchRequest);
+            }
+            features.record_legacy_usage("web_search_request", Feature::WebSearchRequest);
+        }
     }
 }
 
@@ -181,6 +269,31 @@ impl Features {
         self.enabled.contains(&f)
     }
 
+    pub async fn apps_enabled(&self, auth_manager: Option<&AuthManager>) -> bool {
+        if !self.enabled(Feature::Apps) {
+            return false;
+        }
+
+        let auth = match auth_manager {
+            Some(auth_manager) => auth_manager.auth().await,
+            None => None,
+        };
+        self.apps_enabled_for_auth(auth.as_ref())
+    }
+
+    pub fn apps_enabled_cached(&self, auth_manager: Option<&AuthManager>) -> bool {
+        let auth = auth_manager.and_then(AuthManager::auth_cached);
+        self.apps_enabled_for_auth(auth.as_ref())
+    }
+
+    pub(crate) fn apps_enabled_for_auth(&self, auth: Option<&CodexAuth>) -> bool {
+        self.enabled(Feature::Apps) && auth.is_some_and(CodexAuth::is_chatgpt_auth)
+    }
+
+    pub fn use_legacy_landlock(&self) -> bool {
+        self.enabled(Feature::UseLegacyLandlock)
+    }
+
     pub fn enable(&mut self, f: Feature) -> &mut Self {
         self.enabled.insert(f);
         self
@@ -191,10 +304,21 @@ impl Features {
         self
     }
 
+    pub fn set_enabled(&mut self, f: Feature, enabled: bool) -> &mut Self {
+        if enabled {
+            self.enable(f)
+        } else {
+            self.disable(f)
+        }
+    }
+
     pub fn record_legacy_usage_force(&mut self, alias: &str, feature: Feature) {
+        let (summary, details) = legacy_usage_notice(alias, feature);
         self.legacy_usages.insert(LegacyFeatureUsage {
             alias: alias.to_string(),
             feature,
+            summary,
+            details,
         });
     }
 
@@ -205,14 +329,15 @@ impl Features {
         self.record_legacy_usage_force(alias, feature);
     }
 
-    pub fn legacy_feature_usages(&self) -> impl Iterator<Item = (&str, Feature)> + '_ {
-        self.legacy_usages
-            .iter()
-            .map(|usage| (usage.alias.as_str(), usage.feature))
+    pub fn legacy_feature_usages(&self) -> impl Iterator<Item = &LegacyFeatureUsage> + '_ {
+        self.legacy_usages.iter()
     }
 
-    pub fn emit_metrics(&self, otel: &OtelManager) {
+    pub fn emit_metrics(&self, otel: &SessionTelemetry) {
         for feature in FEATURES {
+            if matches!(feature.stage, Stage::Removed) {
+                continue;
+            }
             if self.enabled(feature.id) != feature.default_enabled {
                 otel.counter(
                     "codex.feature.state",
@@ -229,6 +354,21 @@ impl Features {
     /// Apply a table of key -> bool toggles (e.g. from TOML).
     pub fn apply_map(&mut self, m: &BTreeMap<String, bool>) {
         for (k, v) in m {
+            match k.as_str() {
+                "web_search_request" => {
+                    self.record_legacy_usage_force(
+                        "features.web_search_request",
+                        Feature::WebSearchRequest,
+                    );
+                }
+                "web_search_cached" => {
+                    self.record_legacy_usage_force(
+                        "features.web_search_cached",
+                        Feature::WebSearchCached,
+                    );
+                }
+                _ => {}
+            }
             match feature_for_key(k) {
                 Some(feat) => {
                     if k != feat.key() {
@@ -257,7 +397,6 @@ impl Features {
         let base_legacy = LegacyFeatureToggles {
             experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
             experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
-            tools_web_search: cfg.tools.as_ref().and_then(|t| t.web_search),
             ..Default::default()
         };
         base_legacy.apply(&mut features);
@@ -272,7 +411,6 @@ impl Features {
                 .experimental_use_freeform_apply_patch,
 
             experimental_use_unified_exec_tool: config_profile.experimental_use_unified_exec_tool,
-            tools_web_search: config_profile.tools_web_search,
         };
         profile_legacy.apply(&mut features);
         if let Some(profile_features) = config_profile.features.as_ref() {
@@ -280,6 +418,7 @@ impl Features {
         }
 
         overrides.apply(&mut features);
+        features.normalize_dependencies();
 
         features
     }
@@ -287,16 +426,77 @@ impl Features {
     pub fn enabled_features(&self) -> Vec<Feature> {
         self.enabled.iter().copied().collect()
     }
+
+    pub(crate) fn normalize_dependencies(&mut self) {
+        if self.enabled(Feature::SpawnCsv) && !self.enabled(Feature::Collab) {
+            self.enable(Feature::Collab);
+        }
+        if self.enabled(Feature::CodeModeOnly) && !self.enabled(Feature::CodeMode) {
+            self.enable(Feature::CodeMode);
+        }
+        if self.enabled(Feature::JsReplToolsOnly) && !self.enabled(Feature::JsRepl) {
+            tracing::warn!("js_repl_tools_only requires js_repl; disabling js_repl_tools_only");
+            self.disable(Feature::JsReplToolsOnly);
+        }
+    }
+}
+
+fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>) {
+    let canonical = feature.key();
+    match feature {
+        Feature::WebSearchRequest | Feature::WebSearchCached => {
+            let label = match alias {
+                "web_search" => "[features].web_search",
+                "features.web_search_request" | "web_search_request" => {
+                    "[features].web_search_request"
+                }
+                "features.web_search_cached" | "web_search_cached" => {
+                    "[features].web_search_cached"
+                }
+                _ => alias,
+            };
+            let summary =
+                format!("`{label}` is deprecated because web search is enabled by default.");
+            (summary, Some(web_search_details().to_string()))
+        }
+        _ => {
+            let label = if alias.contains('.') || alias.starts_with('[') {
+                alias.to_string()
+            } else {
+                format!("[features].{alias}")
+            };
+            let summary = format!("`{label}` is deprecated. Use `[features].{canonical}` instead.");
+            let details = if alias == canonical {
+                None
+            } else {
+                Some(format!(
+                    "Enable it with `--enable {canonical}` or `[features].{canonical}` in config.toml. See https://developers.openai.com/codex/config-basic#feature-flags for details."
+                ))
+            };
+            (summary, details)
+        }
+    }
+}
+
+fn web_search_details() -> &'static str {
+    "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it."
 }
 
 /// Keys accepted in `[features]` tables.
-fn feature_for_key(key: &str) -> Option<Feature> {
+pub(crate) fn feature_for_key(key: &str) -> Option<Feature> {
     for spec in FEATURES {
         if spec.key == key {
             return Some(spec.id);
         }
     }
     legacy::feature_for_key(key)
+}
+
+pub(crate) fn canonical_feature_for_key(key: &str) -> Option<Feature> {
+    FEATURES
+        .iter()
+        .find(|spec| spec.key == key)
+        .map(|spec| spec.id)
 }
 
 /// Returns `true` if the provided string matches a known feature toggle key.
@@ -335,134 +535,393 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
-        id: Feature::WebSearchRequest,
-        key: "web_search_request",
-        stage: Stage::Stable,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::WebSearchCached,
-        key: "web_search_cached",
-        stage: Stage::Beta,
-        default_enabled: false,
-    },
-    // Beta program. Rendered in the `/experimental` menu for users.
-    FeatureSpec {
         id: Feature::UnifiedExec,
         key: "unified_exec",
-        stage: Stage::Experimental {
-            name: "Background terminal",
-            menu_description: "Run long-running terminal commands in the background.",
-            announcement: "NEW! Try Background terminals for long-running commands. Enable in /experimental!",
-        },
+        stage: Stage::Stable,
+        default_enabled: !cfg!(windows),
+    },
+    FeatureSpec {
+        id: Feature::ShellZshFork,
+        key: "shell_zsh_fork",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ShellSnapshot,
         key: "shell_snapshot",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::JsRepl,
+        key: "js_repl",
         stage: Stage::Experimental {
-            name: "Shell snapshot",
-            menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
-            announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
+            name: "JavaScript REPL",
+            menu_description: "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities. Requires Node >= v22.22.0 installed.",
+            announcement: "NEW: JavaScript REPL is now available in /experimental. Enable it, then start a new chat or restart Codex to use it.",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CodeMode,
+        key: "code_mode",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CodeModeOnly,
+        key: "code_mode_only",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::JsReplToolsOnly,
+        key: "js_repl_tools_only",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WebSearchRequest,
+        key: "web_search_request",
+        stage: Stage::Deprecated,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::WebSearchCached,
+        key: "web_search_cached",
+        stage: Stage::Deprecated,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SearchTool,
+        key: "search_tool",
+        stage: Stage::Removed,
+        default_enabled: false,
+    },
+    // Experimental program. Rendered in the `/experimental` menu for users.
+    FeatureSpec {
+        id: Feature::CodexGitCommit,
+        key: "codex_git_commit",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RuntimeMetrics,
+        key: "runtime_metrics",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Sqlite,
+        key: "sqlite",
+        stage: Stage::Removed,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::MemoryTool,
+        key: "memories",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ChildAgentsMd,
         key: "child_agents_md",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ImageDetailOriginal,
+        key: "image_detail_original",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ExecPolicy,
-        key: "exec_policy",
-        stage: Stage::Beta,
-        default_enabled: true,
+        id: Feature::ExecPermissionApprovals,
+        key: "exec_permission_approvals",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CodexHooks,
+        key: "codex_hooks",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RequestPermissionsTool,
+        key: "request_permissions_tool",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::UseLinuxSandboxBwrap,
+        key: "use_linux_sandbox_bwrap",
+        stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::UseLegacyLandlock,
+        key: "use_legacy_landlock",
+        stage: Stage::Stable,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RequestRule,
+        key: "request_rule",
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,
         key: "experimental_windows_sandbox",
-        stage: Stage::Beta,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandboxElevated,
         key: "elevated_windows_sandbox",
-        stage: Stage::Beta,
+        stage: Stage::Removed,
         default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::RemoteCompaction,
-        key: "remote_compaction",
-        stage: Stage::Beta,
-        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::RemoteModels,
         key: "remote_models",
-        stage: Stage::Beta,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::PowershellUtf8,
         key: "powershell_utf8",
         #[cfg(windows)]
-        stage: Stage::Experimental {
-            name: "Powershell UTF-8 support",
-            menu_description: "Enable UTF-8 output in Powershell.",
-            announcement: "Codex now supports UTF-8 output in Powershell. If you are seeing problems, disable in /experimental.",
-        },
+        stage: Stage::Stable,
         #[cfg(windows)]
         default_enabled: true,
         #[cfg(not(windows))]
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         #[cfg(not(windows))]
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::EnableRequestCompression,
         key: "enable_request_compression",
-        stage: Stage::Beta,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Collab,
-        key: "collab",
-        stage: Stage::Beta,
+        key: "multi_agent",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::SpawnCsv,
+        key: "enable_fanout",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::Connectors,
-        key: "connectors",
-        stage: Stage::Beta,
+        id: Feature::Apps,
+        key: "apps",
+        stage: Stage::Experimental {
+            name: "Apps",
+            menu_description: "Use a connected ChatGPT App using \"$\". Install Apps via /apps command. Restart Codex after enabling.",
+            announcement: "NEW: Use ChatGPT Apps (Connectors) in Codex via $ mentions. Enable in /experimental and restart Codex!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ToolSuggest,
+        key: "tool_suggest",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Plugins,
+        key: "plugins",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ImageGeneration,
+        key: "image_generation",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SkillMcpDependencyInstall,
+        key: "skill_mcp_dependency_install",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::SkillEnvVarDependencyPrompt,
+        key: "skill_env_var_dependency_prompt",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Steer,
         key: "steer",
+        stage: Stage::Removed,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::DefaultModeRequestUserInput,
+        key: "default_mode_request_user_input",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::GuardianApproval,
+        key: "guardian_approval",
         stage: Stage::Experimental {
-            name: "Steer conversation",
-            menu_description: "Enter submits immediately; Tab queues messages when a task is running.",
-            announcement: "NEW! Try Steer mode: Enter submits immediately, Tab queues. Enable in /experimental!",
+            name: "Guardian Approvals",
+            menu_description: "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to a carefully-prompted security reviewer subagent rather than blocking the agent on your input. This can consume significantly more tokens because it runs a subagent on every approval request.",
+            announcement: "",
         },
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::CollaborationModes,
         key: "collaboration_modes",
-        stage: Stage::Beta,
+        stage: Stage::Removed,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ToolCallMcpElicitation,
+        key: "tool_call_mcp_elicitation",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Personality,
+        key: "personality",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Artifact,
+        key: "artifact",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::FastMode,
+        key: "fast_mode",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::VoiceTranscription,
+        key: "voice_transcription",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RealtimeConversation,
+        key: "realtime_conversation",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::TuiAppServer,
+        key: "tui_app_server",
+        stage: Stage::Experimental {
+            name: "App-server TUI",
+            menu_description: "Use the app-server-backed TUI implementation.",
+            announcement: "",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::PreventIdleSleep,
+        key: "prevent_idle_sleep",
+        stage: if cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        )) {
+            Stage::Experimental {
+                name: "Prevent sleep while running",
+                menu_description: "Keep your computer awake while Codex is running a thread.",
+                announcement: "NEW: Prevent sleep while running is now available in /experimental.",
+            }
+        } else {
+            Stage::UnderDevelopment
+        },
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ResponsesWebsockets,
         key: "responses_websockets",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResponsesWebsocketsV2,
+        key: "responses_websockets_v2",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
 ];
+
+/// Push a warning event if any under-development features are enabled.
+pub fn maybe_push_unstable_features_warning(
+    config: &Config,
+    post_session_configured_events: &mut Vec<Event>,
+) {
+    if config.suppress_unstable_features_warning {
+        return;
+    }
+
+    let mut under_development_feature_keys = Vec::new();
+    if let Some(table) = config
+        .config_layer_stack
+        .effective_config()
+        .get("features")
+        .and_then(TomlValue::as_table)
+    {
+        for (key, value) in table {
+            if value.as_bool() != Some(true) {
+                continue;
+            }
+            let Some(spec) = FEATURES.iter().find(|spec| spec.key == key.as_str()) else {
+                continue;
+            };
+            if !config.features.enabled(spec.id) {
+                continue;
+            }
+            if matches!(spec.stage, Stage::UnderDevelopment) {
+                under_development_feature_keys.push(spec.key.to_string());
+            }
+        }
+    }
+
+    if under_development_feature_keys.is_empty() {
+        return;
+    }
+
+    let under_development_feature_keys = under_development_feature_keys.join(", ");
+    let config_path = config
+        .codex_home
+        .join(CONFIG_TOML_FILE)
+        .display()
+        .to_string();
+    let message = format!(
+        "Under-development features enabled: {under_development_feature_keys}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {config_path}."
+    );
+    post_session_configured_events.push(Event {
+        id: "".to_owned(),
+        msg: EventMsg::Warning(WarningEvent { message }),
+    });
+}
+
+#[cfg(test)]
+#[path = "features_tests.rs"]
+mod tests;

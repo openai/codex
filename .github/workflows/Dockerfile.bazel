@@ -8,8 +8,24 @@ FROM ubuntu:24.04
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    curl git python3 ca-certificates && \
+    curl git python3 ca-certificates xz-utils && \
     rm -rf /var/lib/apt/lists/*
+
+COPY codex-rs/node-version.txt /tmp/node-version.txt
+
+RUN set -eux; \
+    node_arch="$(dpkg --print-architecture)"; \
+    case "${node_arch}" in \
+      amd64) node_dist_arch="x64" ;; \
+      arm64) node_dist_arch="arm64" ;; \
+      *) echo "unsupported architecture: ${node_arch}"; exit 1 ;; \
+    esac; \
+    node_version="$(tr -d '[:space:]' </tmp/node-version.txt)"; \
+    curl -fsSLO "https://nodejs.org/dist/v${node_version}/node-v${node_version}-linux-${node_dist_arch}.tar.xz"; \
+    tar -xJf "node-v${node_version}-linux-${node_dist_arch}.tar.xz" -C /usr/local --strip-components=1; \
+    rm "node-v${node_version}-linux-${node_dist_arch}.tar.xz" /tmp/node-version.txt; \
+    node --version; \
+    npm --version
 
 # Install dotslash.
 RUN curl -LSfs "https://github.com/facebook/dotslash/releases/download/v0.5.8/dotslash-ubuntu-22.04.$(uname -m).tar.gz" | tar fxz - -C /usr/local/bin

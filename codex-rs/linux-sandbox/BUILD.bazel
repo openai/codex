@@ -1,6 +1,36 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
 load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
     name = "linux-sandbox",
     crate_name = "codex_linux_sandbox",
+    # Bazel wires vendored bubblewrap + libcap via :vendored-bwrap-ffi below
+    # and sets vendored_bwrap_available explicitly, so we skip Cargo's
+    # build.rs in Bazel builds.
+    build_script_enabled = False,
+    deps_extra = select({
+        "@platforms//os:linux": [":vendored-bwrap-ffi"],
+        "//conditions:default": [],
+    }),
+    rustc_flags_extra = select({
+        "@platforms//os:linux": ["--cfg=vendored_bwrap_available"],
+        "//conditions:default": [],
+    }),
+)
+
+cc_library(
+    name = "vendored-bwrap-ffi",
+    srcs = ["//codex-rs/vendor:bubblewrap_c_sources"],
+    hdrs = [
+        "config.h",
+        "//codex-rs/vendor:bubblewrap_headers",
+    ],
+    copts = [
+        "-D_GNU_SOURCE",
+        "-Dmain=bwrap_main",
+    ],
+    includes = ["."],
+    deps = ["@libcap//:libcap"],
+    target_compatible_with = ["@platforms//os:linux"],
+    visibility = ["//visibility:private"],
 )

@@ -2,7 +2,7 @@
 #![allow(clippy::expect_used)]
 
 use anyhow::Result;
-use codex_core::protocol::SandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -349,7 +349,7 @@ async fn shell_output_for_freeform_tool_records_duration(
     let test = builder.build(&server).await?;
 
     let call_id = "shell-structured";
-    let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "sleep 1"], output_type)?;
+    let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "sleep 0.2"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -381,7 +381,7 @@ $"#;
         .and_then(|value| value.as_str().parse::<f32>().ok())
         .expect("expected structured shell output to contain wall time seconds");
     assert!(
-        wall_time_seconds > 0.5,
+        wall_time_seconds > 0.1,
         "expected wall time to be greater than zero seconds, got {wall_time_seconds}"
     );
 
@@ -740,6 +740,7 @@ async fn shell_command_output_is_freeform() -> Result<()> {
     let call_id = "shell-command";
     let args = json!({
         "command": "echo shell command",
+        "login": false,
         "timeout_ms": 1_000,
     });
     let responses = vec![
@@ -791,6 +792,7 @@ async fn shell_command_output_is_not_truncated_under_10k_bytes() -> Result<()> {
     let call_id = "shell-command";
     let args = json!({
         "command": "perl -e 'print \"1\" x 10000'",
+        "login": false,
         "timeout_ms": 1000,
     });
     let responses = vec![
@@ -841,6 +843,7 @@ async fn shell_command_output_is_not_truncated_over_10k_bytes() -> Result<()> {
     let call_id = "shell-command";
     let args = json!({
         "command": "perl -e 'print \"1\" x 10001'",
+        "login": false,
         "timeout_ms": 1000,
     });
     let responses = vec![

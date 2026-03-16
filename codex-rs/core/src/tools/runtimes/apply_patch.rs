@@ -4,8 +4,10 @@
 //! decision to avoid re-prompting, builds the self-invocation command for
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
-use crate::CODEX_APPLY_PATCH_ARG1;
 use crate::exec::ExecToolCallOutput;
+use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::review_approval_request;
+use crate::guardian::routes_approval_to_guardian;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
@@ -20,6 +22,8 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
+use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
@@ -34,6 +38,9 @@ pub struct ApplyPatchRequest {
     pub file_paths: Vec<AbsolutePathBuf>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
     pub exec_approval_requirement: ExecApprovalRequirement,
+    pub sandbox_permissions: SandboxPermissions,
+    pub additional_permissions: Option<PermissionProfile>,
+    pub permissions_preapproved: bool,
     pub timeout_ms: Option<u64>,
     pub codex_exe: Option<PathBuf>,
 }
@@ -46,28 +53,55 @@ impl ApplyPatchRuntime {
         Self
     }
 
-    fn build_command_spec(req: &ApplyPatchRequest) -> Result<CommandSpec, ToolError> {
-        use std::env;
+    fn build_guardian_review_request(
+        req: &ApplyPatchRequest,
+        call_id: &str,
+    ) -> GuardianApprovalRequest {
+        GuardianApprovalRequest::ApplyPatch {
+            id: call_id.to_string(),
+            cwd: req.action.cwd.clone(),
+            files: req.file_paths.clone(),
+            change_count: req.changes.len(),
+            patch: req.action.patch.clone(),
+        }
+    }
+
+    fn build_command_spec(
+        req: &ApplyPatchRequest,
+        _codex_home: &std::path::Path,
+    ) -> Result<CommandSpec, ToolError> {
         let exe = if let Some(path) = &req.codex_exe {
             path.clone()
         } else {
-            env::current_exe()
-                .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))?
+            #[cfg(target_os = "windows")]
+            {
+                codex_windows_sandbox::resolve_current_exe_for_launch(_codex_home, "codex.exe")
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                std::env::current_exe().map_err(|e| {
+                    ToolError::Rejected(format!("failed to determine codex exe: {e}"))
+                })?
+            }
         };
         let program = exe.to_string_lossy().to_string();
         Ok(CommandSpec {
             program,
-            args: vec![CODEX_APPLY_PATCH_ARG1.to_string(), req.action.patch.clone()],
+            args: vec![
+                CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
+                req.action.patch.clone(),
+            ],
             cwd: req.action.cwd.clone(),
             expiration: req.timeout_ms.into(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
-            sandbox_permissions: SandboxPermissions::UseDefault,
+            sandbox_permissions: req.sandbox_permissions,
+            additional_permissions: req.additional_permissions.clone(),
             justification: None,
         })
     }
 
-    fn stdout_stream(ctx: &ToolCtx<'_>) -> Option<crate::exec::StdoutStream> {
+    fn stdout_stream(ctx: &ToolCtx) -> Option<crate::exec::StdoutStream> {
         Some(crate::exec::StdoutStream {
             sub_id: ctx.turn.sub_id.clone(),
             call_id: ctx.call_id.clone(),
@@ -104,6 +138,13 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let approval_keys = self.approval_keys(req);
         let changes = req.changes.clone();
         Box::pin(async move {
+            if routes_approval_to_guardian(turn) {
+                let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
+                return review_approval_request(session, turn, action, retry_reason).await;
+            }
+            if req.permissions_preapproved && retry_reason.is_none() {
+                return ReviewDecision::Approved;
+            }
             if let Some(reason) = retry_reason {
                 let rx_approve = session
                     .request_patch_approval(turn, call_id, changes.clone(), Some(reason), None)
@@ -127,7 +168,13 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
     }
 
     fn wants_no_sandbox_approval(&self, policy: AskForApproval) -> bool {
-        !matches!(policy, AskForApproval::Never)
+        match policy {
+            AskForApproval::Never => false,
+            AskForApproval::Granular(granular_config) => granular_config.allows_sandbox_approval(),
+            AskForApproval::OnFailure => true,
+            AskForApproval::OnRequest => true,
+            AskForApproval::UnlessTrusted => true,
+        }
     }
 
     // apply_patch approvals are decided upstream by assess_patch_safety.
@@ -147,15 +194,19 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         &mut self,
         req: &ApplyPatchRequest,
         attempt: &SandboxAttempt<'_>,
-        ctx: &ToolCtx<'_>,
+        ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let spec = Self::build_command_spec(req)?;
+        let spec = Self::build_command_spec(req, &ctx.turn.config.codex_home)?;
         let env = attempt
-            .env_for(spec)
+            .env_for(spec, None)
             .map_err(|err| ToolError::Codex(err.into()))?;
-        let out = execute_env(env, attempt.policy, Self::stdout_stream(ctx))
+        let out = execute_env(env, Self::stdout_stream(ctx))
             .await
             .map_err(ToolError::Codex)?;
         Ok(out)
     }
 }
+
+#[cfg(test)]
+#[path = "apply_patch_tests.rs"]
+mod tests;

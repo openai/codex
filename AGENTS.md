@@ -11,22 +11,50 @@ In the codex-rs folder where the rust code lives:
 - Always collapse if statements per https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
 - Always inline format! args when possible per https://rust-lang.github.io/rust-clippy/master/index.html#uninlined_format_args
 - Use method references over closures when possible per https://rust-lang.github.io/rust-clippy/master/index.html#redundant_closure_for_method_calls
+- Avoid bool or ambiguous `Option` parameters that force callers to write hard-to-read code such as `foo(false)` or `bar(None)`. Prefer enums, named methods, newtypes, or other idiomatic Rust API shapes when they keep the callsite self-documenting.
+- When you cannot make that API change and still need a small positional-literal callsite in Rust, follow the `argument_comment_lint` convention:
+  - Use an exact `/*param_name*/` comment before opaque literal arguments such as `None`, booleans, and numeric literals when passing them by position.
+  - Do not add these comments for string or char literals unless the comment adds real clarity; those literals are intentionally exempt from the lint.
+  - If you add one of these comments, the parameter name must exactly match the callee signature.
+- When possible, make `match` statements exhaustive and avoid wildcard arms.
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
 - When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
 - If you change `ConfigToml` or nested config types, run `just write-config-schema` to update `codex-rs/core/config.schema.json`.
+- If you change Rust dependencies (`Cargo.toml` or `Cargo.lock`), run `just bazel-lock-update` from the
+  repo root to refresh `MODULE.bazel.lock`, and include that lockfile update in the same change.
+- After dependency changes, run `just bazel-lock-check` from the repo root so lockfile drift is caught
+  locally before CI.
+- Bazel does not automatically make source-tree files available to compile-time Rust file access. If
+  you add `include_str!`, `include_bytes!`, `sqlx::migrate!`, or similar build-time file or
+  directory reads, update the crate's `BUILD.bazel` (`compile_data`, `build_script_data`, or test
+  data) or Bazel may fail even when Cargo passes.
+- Do not create small helper methods that are referenced only once.
+- Avoid large modules:
+  - Prefer adding new modules instead of growing existing ones.
+  - Target Rust modules under 500 LoC, excluding tests.
+  - If a file exceeds roughly 800 LoC, add new functionality in a new module instead of extending
+    the existing file unless there is a strong documented reason not to.
+  - This rule applies especially to high-touch files that already attract unrelated changes, such
+    as `codex-rs/tui/src/app.rs`, `codex-rs/tui/src/bottom_pane/chat_composer.rs`,
+    `codex-rs/tui/src/bottom_pane/footer.rs`, `codex-rs/tui/src/chatwidget.rs`,
+    `codex-rs/tui/src/bottom_pane/mod.rs`, and similarly central orchestration modules.
+  - When extracting code from a large module, move the related tests and module/type docs toward
+    the new implementation so the invariants stay close to the code that owns them.
 
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 
 1. Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `cargo test -p codex-tui`.
-2. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `cargo test --all-features`. project-specific or individual tests can be run without asking the user, but do ask the user before running the complete test suite.
+2. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `cargo test` (or `just test` if `cargo-nextest` is installed). Avoid `--all-features` for routine local runs because it expands the build matrix and can significantly increase `target/` disk usage; use it only when you specifically need full feature coverage. project-specific or individual tests can be run without asking the user, but do ask the user before running the complete test suite.
 
-Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates.
+Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Do not re-run tests after running `fix` or `fmt`.
 
 ## TUI style conventions
 
 See `codex-rs/tui/styles.md`.
 
 ## TUI code conventions
+
+- When a change lands in `codex-rs/tui` and `codex-rs/tui_app_server` has a parallel implementation of the same behavior, reflect the change in `codex-rs/tui_app_server` too unless there is a documented reason not to.
 
 - Use concise styling helpers from ratatui’s Stylize trait.
   - Basic spans: use "text".into()
@@ -58,7 +86,14 @@ See `codex-rs/tui/styles.md`.
 
 ### Snapshot tests
 
-This repo uses snapshot tests (via `insta`), especially in `codex-rs/tui`, to validate rendered output. When UI or text output changes intentionally, update the snapshots as follows:
+This repo uses snapshot tests (via `insta`), especially in `codex-rs/tui`, to validate rendered output.
+
+**Requirement:** any change that affects user-visible UI (including adding new UI) must include
+corresponding `insta` snapshot coverage (add a new snapshot test if one doesn't exist yet, or
+update the existing snapshot). Review and accept snapshot updates as part of the PR so UI impact
+is easy to review and future diffs stay visual.
+
+When UI or text output changes intentionally, update the snapshots as follows:
 
 - Run tests to generate any updated snapshots:
   - `cargo test -p codex-tui`
@@ -111,3 +146,50 @@ If you don’t have the tool:
   let request = mock.single_request();
   // assert using request.function_call_output(call_id) or request.json_body() or other helpers.
   ```
+
+## App-server API Development Best Practices
+
+These guidelines apply to app-server protocol work in `codex-rs`, especially:
+
+- `app-server-protocol/src/protocol/common.rs`
+- `app-server-protocol/src/protocol/v2.rs`
+- `app-server/README.md`
+
+### Core Rules
+
+- All active API development should happen in app-server v2. Do not add new API surface area to v1.
+- Follow payload naming consistently:
+  `*Params` for request payloads, `*Response` for responses, and `*Notification` for notifications.
+- Expose RPC methods as `<resource>/<method>` and keep `<resource>` singular (for example, `thread/read`, `app/list`).
+- Always expose fields as camelCase on the wire with `#[serde(rename_all = "camelCase")]` unless a tagged union or explicit compatibility requirement needs a targeted rename.
+- Exception: config RPC payloads are expected to use snake_case to mirror config.toml keys (see the config read/write/list APIs in `app-server-protocol/src/protocol/v2.rs`).
+- Always set `#[ts(export_to = "v2/")]` on v2 request/response/notification types so generated TypeScript lands in the correct namespace.
+- Never use `#[serde(skip_serializing_if = "Option::is_none")]` for v2 API payload fields.
+  Exception: client->server requests that intentionally have no params may use:
+  `params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>`.
+- Keep Rust and TS wire renames aligned. If a field or variant uses `#[serde(rename = "...")]`, add matching `#[ts(rename = "...")]`.
+- For discriminated unions, use explicit tagging in both serializers:
+  `#[serde(tag = "type", ...)]` and `#[ts(tag = "type", ...)]`.
+- Prefer plain `String` IDs at the API boundary (do UUID parsing/conversion internally if needed).
+- Timestamps should be integer Unix seconds (`i64`) and named `*_at` (for example, `created_at`, `updated_at`, `resets_at`).
+- For experimental API surface area:
+  use `#[experimental("method/or/field")]`, derive `ExperimentalApi` when field-level gating is needed, and use `inspect_params: true` in `common.rs` when only some fields of a method are experimental.
+
+### Client->server request payloads (`*Params`)
+
+- Every optional field must be annotated with `#[ts(optional = nullable)]`. Do not use `#[ts(optional = nullable)]` outside client->server request payloads (`*Params`).
+- Optional collection fields (for example `Vec`, `HashMap`) must use `Option<...>` + `#[ts(optional = nullable)]`. Do not use `#[serde(default)]` to model optional collections, and do not use `skip_serializing_if` on v2 payload fields.
+- When you want omission to mean `false` for boolean fields, use `#[serde(default, skip_serializing_if = "std::ops::Not::not")] pub field: bool` over `Option<bool>`.
+- For new list methods, implement cursor pagination by default:
+  request fields `pub cursor: Option<String>` and `pub limit: Option<u32>`,
+  response fields `pub data: Vec<...>` and `pub next_cursor: Option<String>`.
+
+### Development Workflow
+
+- Update docs/examples when API behavior changes (at minimum `app-server/README.md`).
+- Regenerate schema fixtures when API shapes change:
+  `just write-app-server-schema`
+  (and `just write-app-server-schema --experimental` when experimental API fixtures are affected).
+- Validate with `cargo test -p codex-app-server-protocol`.
+- Avoid boilerplate tests that only assert experimental field markers for individual
+  request fields in `common.rs`; rely on schema generation/tests and behavioral coverage instead.

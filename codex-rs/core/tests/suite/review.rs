@@ -1,31 +1,28 @@
-use codex_core::CodexAuth;
 use codex_core::CodexThread;
-use codex_core::ContentItem;
-use codex_core::ModelProviderInfo;
 use codex_core::REVIEW_PROMPT;
-use codex_core::ResponseItem;
-use codex_core::ThreadManager;
-use codex_core::built_in_model_providers;
 use codex_core::config::Config;
-use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExitedReviewModeEvent;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewCodeLocation;
-use codex_core::protocol::ReviewFinding;
-use codex_core::protocol::ReviewLineRange;
-use codex_core::protocol::ReviewOutputEvent;
-use codex_core::protocol::ReviewRequest;
-use codex_core::protocol::ReviewTarget;
-use codex_core::protocol::RolloutItem;
-use codex_core::protocol::RolloutLine;
 use codex_core::review_format::render_review_output_text;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewCodeLocation;
+use codex_protocol::protocol::ReviewFinding;
+use codex_protocol::protocol::ReviewLineRange;
+use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::ReviewRequest;
+use codex_protocol::protocol::ReviewTarget;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
-use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -73,8 +70,8 @@ async fn review_op_emits_lifecycle_and_review_output() {
     let review_json_escaped = serde_json::to_string(&review_json).unwrap();
     let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
     let (server, _request_log) = start_responses_server_with_sse(&sse_raw, 1).await;
-    let codex_home = TempDir::new().unwrap();
-    let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
 
     // Submit review request.
     codex
@@ -174,6 +171,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
         "assistant review output contains user_action markup"
     );
 
+    let _codex_home_guard = codex_home;
     server.verify().await;
 }
 
@@ -194,8 +192,8 @@ async fn review_op_with_plain_text_emits_review_fallback() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let (server, _request_log) = start_responses_server_with_sse(sse_raw, 1).await;
-    let codex_home = TempDir::new().unwrap();
-    let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
 
     codex
         .submit(Op::Review {
@@ -226,6 +224,7 @@ async fn review_op_with_plain_text_emits_review_fallback() {
     assert_eq!(expected, review);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
+    let _codex_home_guard = codex_home;
     server.verify().await;
 }
 
@@ -254,8 +253,8 @@ async fn review_filters_agent_message_related_events() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let (server, _request_log) = start_responses_server_with_sse(sse_raw, 1).await;
-    let codex_home = TempDir::new().unwrap();
-    let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
 
     codex
         .submit(Op::Review {
@@ -295,6 +294,7 @@ async fn review_filters_agent_message_related_events() {
     .await;
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
 
+    let _codex_home_guard = codex_home;
     server.verify().await;
 }
 
@@ -335,8 +335,8 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
     let review_json_escaped = serde_json::to_string(&review_json).unwrap();
     let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
     let (server, _request_log) = start_responses_server_with_sse(&sse_raw, 1).await;
-    let codex_home = TempDir::new().unwrap();
-    let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
 
     codex
         .submit(Op::Review {
@@ -375,6 +375,7 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
     assert_eq!(1, agent_messages, "expected exactly one AgentMessage event");
     assert!(saw_entered && saw_exited, "missing review lifecycle events");
 
+    let _codex_home_guard = codex_home;
     server.verify().await;
 }
 
@@ -389,9 +390,9 @@ async fn review_uses_custom_review_model_from_config() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
-    let codex_home = TempDir::new().unwrap();
+    let codex_home = Arc::new(TempDir::new().unwrap());
     // Choose a review model different from the main model; ensure it is used.
-    let codex = new_conversation_for_server(&server, &codex_home, |cfg| {
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |cfg| {
         cfg.model = Some("gpt-4.1".to_string());
         cfg.review_model = Some("gpt-5.1".to_string());
     })
@@ -428,6 +429,7 @@ async fn review_uses_custom_review_model_from_config() {
     let body = request.body_json();
     assert_eq!(body["model"].as_str().unwrap(), "gpt-5.1");
 
+    let _codex_home_guard = codex_home;
     server.verify().await;
 }
 
@@ -442,8 +444,8 @@ async fn review_uses_session_model_when_review_model_unset() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
-    let codex_home = TempDir::new().unwrap();
-    let codex = new_conversation_for_server(&server, &codex_home, |cfg| {
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |cfg| {
         cfg.model = Some("gpt-4.1".to_string());
         cfg.review_model = None;
     })
@@ -478,6 +480,7 @@ async fn review_uses_session_model_when_review_model_unset() {
     let body = request.body_json();
     assert_eq!(body["model"].as_str().unwrap(), "gpt-4.1");
 
+    let _codex_home_guard = codex_home;
     server.verify().await;
 }
 
@@ -497,12 +500,7 @@ async fn review_input_isolated_from_parent_history() {
     let (server, request_log) = start_responses_server_with_sse(sse_raw, 1).await;
 
     // Seed a parent session history via resume file with both user + assistant items.
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
+    let codex_home = Arc::new(TempDir::new().unwrap());
 
     let session_file = codex_home.path().join("resume.jsonl");
     {
@@ -533,6 +531,7 @@ async fn review_input_isolated_from_parent_history() {
                 text: "parent: earlier user message".to_string(),
             }],
             end_turn: None,
+            phase: None,
         };
         let user_json = serde_json::to_value(&user).unwrap();
         let user_line = serde_json::json!({
@@ -552,6 +551,7 @@ async fn review_input_isolated_from_parent_history() {
                 text: "parent: assistant reply".to_string(),
             }],
             end_turn: None,
+            phase: None,
         };
         let assistant_json = serde_json::to_value(&assistant).unwrap();
         let assistant_line = serde_json::json!({
@@ -564,7 +564,8 @@ async fn review_input_isolated_from_parent_history() {
             .unwrap();
     }
     let codex =
-        resume_conversation_for_server(&server, &codex_home, session_file.clone(), |_| {}).await;
+        resume_conversation_for_server(&server, codex_home.clone(), session_file.clone(), |_| {})
+            .await;
 
     // Submit review request; it must start fresh (no parent history in `input`).
     let review_prompt = "Please review only this".to_string();
@@ -604,7 +605,9 @@ async fn review_input_isolated_from_parent_history() {
 
     let env_text = input
         .iter()
-        .filter_map(|msg| msg["content"][0]["text"].as_str())
+        .filter_map(|msg| msg.get("content").and_then(|content| content.as_array()))
+        .flat_map(|content| content.iter())
+        .filter_map(|entry| entry.get("text").and_then(|text| text.as_str()))
         .find(|text| text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG))
         .expect("env text");
     assert!(
@@ -614,7 +617,9 @@ async fn review_input_isolated_from_parent_history() {
 
     let review_text = input
         .iter()
-        .filter_map(|msg| msg["content"][0]["text"].as_str())
+        .filter_map(|msg| msg.get("content").and_then(|content| content.as_array()))
+        .flat_map(|content| content.iter())
+        .filter_map(|entry| entry.get("text").and_then(|text| text.as_str()))
         .find(|text| *text == review_prompt)
         .expect("review prompt text");
     assert_eq!(
@@ -657,6 +662,7 @@ async fn review_input_isolated_from_parent_history() {
         "expected user interruption message in rollout"
     );
 
+    let _codex_home_guard = codex_home;
     server.verify().await;
 }
 
@@ -675,8 +681,8 @@ async fn review_history_surfaces_in_parent_session() {
         {"type":"response.completed", "response": {"id": "__ID__"}}
     ]"#;
     let (server, request_log) = start_responses_server_with_sse(sse_raw, 2).await;
-    let codex_home = TempDir::new().unwrap();
-    let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let codex = new_conversation_for_server(&server, codex_home.clone(), |_| {}).await;
 
     // 1) Run a review turn that produces an assistant message (isolated in child).
     codex
@@ -755,6 +761,7 @@ async fn review_history_surfaces_in_parent_session() {
         "review assistant output missing from parent turn input"
     );
 
+    let _codex_home_guard = codex_home;
     server.verify().await;
 }
 
@@ -807,9 +814,10 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
         .trim()
         .to_string();
 
-    let codex_home = TempDir::new().unwrap();
-    let codex = new_conversation_for_server(&server, &codex_home, |config| {
-        config.cwd = initial_cwd.path().to_path_buf();
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let initial_cwd_path = initial_cwd.path().to_path_buf();
+    let codex = new_conversation_for_server(&server, codex_home.clone(), move |config| {
+        config.cwd = initial_cwd_path;
     })
     .await;
 
@@ -817,10 +825,13 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
         .submit(Op::OverrideTurnContext {
             cwd: Some(repo_path.to_path_buf()),
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -859,6 +870,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
         "expected review prompt to include merge-base sha {head_sha}"
     );
 
+    let _codex_home_guard = codex_home;
     server.verify().await;
 }
 
@@ -867,7 +879,7 @@ async fn start_responses_server_with_sse(
     sse_raw: &str,
     expected_requests: usize,
 ) -> (MockServer, ResponseMock) {
-    let server = MockServer::start().await;
+    let server = start_mock_server().await;
     let sse = load_sse_fixture_with_id_from_str(sse_raw, &Uuid::new_v4().to_string());
     let responses = vec![sse; expected_requests];
     let request_log = mount_sse_sequence(&server, responses).await;
@@ -878,57 +890,47 @@ async fn start_responses_server_with_sse(
 #[expect(clippy::expect_used)]
 async fn new_conversation_for_server<F>(
     server: &MockServer,
-    codex_home: &TempDir,
+    codex_home: Arc<TempDir>,
     mutator: F,
 ) -> Arc<CodexThread>
 where
-    F: FnOnce(&mut Config),
+    F: FnOnce(&mut Config) + Send + 'static,
 {
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-    let mut config = load_default_config_for_test(codex_home).await;
-    config.model_provider = model_provider;
-    mutator(&mut config);
-    let thread_manager = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("Test API Key"),
-        config.model_provider.clone(),
-    );
-    thread_manager
-        .start_thread(config)
+    let base_url = format!("{}/v1", server.uri());
+    let mut builder = test_codex()
+        .with_home(codex_home)
+        .with_config(move |config| {
+            config.model_provider.base_url = Some(base_url.clone());
+            mutator(config);
+        });
+    builder
+        .build(server)
         .await
         .expect("create conversation")
-        .thread
+        .codex
 }
 
 /// Create a conversation resuming from a rollout file, configured to talk to the provided mock server.
 #[expect(clippy::expect_used)]
 async fn resume_conversation_for_server<F>(
     server: &MockServer,
-    codex_home: &TempDir,
+    codex_home: Arc<TempDir>,
     resume_path: std::path::PathBuf,
     mutator: F,
 ) -> Arc<CodexThread>
 where
-    F: FnOnce(&mut Config),
+    F: FnOnce(&mut Config) + Send + 'static,
 {
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-    let mut config = load_default_config_for_test(codex_home).await;
-    config.model_provider = model_provider;
-    mutator(&mut config);
-    let thread_manager = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("Test API Key"),
-        config.model_provider.clone(),
-    );
-    let auth_manager =
-        codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    thread_manager
-        .resume_thread_from_rollout(config, resume_path, auth_manager)
+    let base_url = format!("{}/v1", server.uri());
+    let mut builder = test_codex()
+        .with_home(codex_home.clone())
+        .with_config(move |config| {
+            config.model_provider.base_url = Some(base_url.clone());
+            mutator(config);
+        });
+    builder
+        .resume(server, codex_home, resume_path)
         .await
         .expect("resume conversation")
-        .thread
+        .codex
 }

@@ -1,0 +1,1594 @@
+use super::*;
+use crate::config_loader::ConfigLayerEntry;
+use crate::config_loader::ConfigLayerStack;
+use crate::config_loader::ConfigRequirements;
+use crate::config_loader::ConfigRequirementsToml;
+use codex_app_server_protocol::ConfigLayerSource;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::GranularApprovalConfig;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use pretty_assertions::assert_eq;
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tempfile::tempdir;
+use toml::Value as TomlValue;
+
+fn config_stack_for_dot_codex_folder(dot_codex_folder: &Path) -> ConfigLayerStack {
+    let dot_codex_folder =
+        AbsolutePathBuf::from_absolute_path(dot_codex_folder).expect("absolute dot_codex_folder");
+    let layer = ConfigLayerEntry::new(
+        ConfigLayerSource::Project { dot_codex_folder },
+        TomlValue::Table(Default::default()),
+    );
+    ConfigLayerStack::new(
+        vec![layer],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("ConfigLayerStack")
+}
+
+fn host_absolute_path(segments: &[&str]) -> String {
+    let mut path = if cfg!(windows) {
+        PathBuf::from(r"C:\")
+    } else {
+        PathBuf::from("/")
+    };
+    for segment in segments {
+        path.push(segment);
+    }
+    path.to_string_lossy().into_owned()
+}
+
+fn host_program_path(name: &str) -> String {
+    let executable_name = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    host_absolute_path(&["usr", "bin", &executable_name])
+}
+
+fn starlark_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn read_only_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
+    FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+        path: FileSystemPath::Special {
+            value: FileSystemSpecialPath::Root,
+        },
+        access: FileSystemAccessMode::Read,
+    }])
+}
+
+fn unrestricted_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
+    FileSystemSandboxPolicy::unrestricted()
+}
+
+#[tokio::test]
+async fn returns_empty_policy_when_no_policy_files_exist() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
+
+    let manager = ExecPolicyManager::load(&config_stack)
+        .await
+        .expect("manager result");
+    let policy = manager.current();
+
+    let commands = [vec!["rm".to_string()]];
+    assert_eq!(
+        Evaluation {
+            decision: Decision::Allow,
+            matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
+                command: vec!["rm".to_string()],
+                decision: Decision::Allow
+            }],
+        },
+        policy.check_multiple(commands.iter(), &|_| Decision::Allow)
+    );
+    assert!(!temp_dir.path().join(RULES_DIR_NAME).exists());
+}
+
+#[tokio::test]
+async fn collect_policy_files_returns_empty_when_dir_missing() {
+    let temp_dir = tempdir().expect("create temp dir");
+
+    let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
+    let files = collect_policy_files(&policy_dir)
+        .await
+        .expect("collect policy files");
+
+    assert!(files.is_empty());
+}
+
+#[tokio::test]
+async fn format_exec_policy_error_with_source_renders_range() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
+    let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
+    fs::create_dir_all(&policy_dir).expect("create policy dir");
+    let broken_path = policy_dir.join("broken.rules");
+    fs::write(
+        &broken_path,
+        r#"prefix_rule(
+    pattern = ["tmux capture-pane"],
+    decision = "allow",
+    match = ["tmux capture-pane -p"],
+)"#,
+    )
+    .expect("write broken policy file");
+
+    let err = load_exec_policy(&config_stack)
+        .await
+        .expect_err("expected parse error");
+    let rendered = format_exec_policy_error_with_source(&err);
+
+    assert!(rendered.contains("broken.rules:1:"));
+    assert!(rendered.contains("on or around line 1"));
+}
+
+#[test]
+fn parse_starlark_line_from_message_extracts_path_and_line() {
+    let parsed = parse_starlark_line_from_message(
+        "/tmp/default.rules:143:1: starlark error: error: Parse error: unexpected new line",
+    )
+    .expect("parse should succeed");
+
+    assert_eq!(parsed.0, PathBuf::from("/tmp/default.rules"));
+    assert_eq!(parsed.1, 143);
+}
+
+#[test]
+fn parse_starlark_line_from_message_rejects_zero_line() {
+    let parsed = parse_starlark_line_from_message(
+        "/tmp/default.rules:0:1: starlark error: error: Parse error: unexpected new line",
+    );
+    assert_eq!(parsed, None);
+}
+
+#[tokio::test]
+async fn loads_policies_from_policy_subdirectory() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
+    let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
+    fs::create_dir_all(&policy_dir).expect("create policy dir");
+    fs::write(
+        policy_dir.join("deny.rules"),
+        r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
+    )
+    .expect("write policy file");
+
+    let policy = load_exec_policy(&config_stack)
+        .await
+        .expect("policy result");
+    let command = [vec!["rm".to_string()]];
+    assert_eq!(
+        Evaluation {
+            decision: Decision::Forbidden,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: vec!["rm".to_string()],
+                decision: Decision::Forbidden,
+                resolved_program: None,
+                justification: None,
+            }],
+        },
+        policy.check_multiple(command.iter(), &|_| Decision::Allow)
+    );
+}
+
+#[tokio::test]
+async fn merges_requirements_exec_policy_network_rules() -> anyhow::Result<()> {
+    let temp_dir = tempdir()?;
+
+    let mut requirements_exec_policy = Policy::empty();
+    requirements_exec_policy.add_network_rule(
+        "blocked.example.com",
+        codex_execpolicy::NetworkRuleProtocol::Https,
+        Decision::Forbidden,
+        None,
+    )?;
+
+    let requirements = ConfigRequirements {
+        exec_policy: Some(codex_config::Sourced::new(
+            codex_config::RequirementsExecPolicy::new(requirements_exec_policy),
+            codex_config::RequirementSource::Unknown,
+        )),
+        ..ConfigRequirements::default()
+    };
+    let dot_codex_folder = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+    let layer = ConfigLayerEntry::new(
+        ConfigLayerSource::Project { dot_codex_folder },
+        TomlValue::Table(Default::default()),
+    );
+    let config_stack =
+        ConfigLayerStack::new(vec![layer], requirements, ConfigRequirementsToml::default())?;
+
+    let policy = load_exec_policy(&config_stack).await?;
+    let (allowed, denied) = policy.compiled_network_domains();
+
+    assert!(allowed.is_empty());
+    assert_eq!(denied, vec!["blocked.example.com".to_string()]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn preserves_host_executables_when_requirements_overlay_is_present() -> anyhow::Result<()> {
+    let temp_dir = tempdir()?;
+    let policy_dir = temp_dir.path().join(RULES_DIR_NAME);
+    fs::create_dir_all(&policy_dir)?;
+    let git_path = host_absolute_path(&["usr", "bin", "git"]);
+    let git_path_literal = starlark_string(&git_path);
+    fs::write(
+        policy_dir.join("host.rules"),
+        format!(
+            r#"
+host_executable(name = "git", paths = ["{git_path_literal}"])
+"#
+        ),
+    )?;
+
+    let mut requirements_exec_policy = Policy::empty();
+    requirements_exec_policy.add_network_rule(
+        "blocked.example.com",
+        codex_execpolicy::NetworkRuleProtocol::Https,
+        Decision::Forbidden,
+        None,
+    )?;
+
+    let requirements = ConfigRequirements {
+        exec_policy: Some(codex_config::Sourced::new(
+            codex_config::RequirementsExecPolicy::new(requirements_exec_policy),
+            codex_config::RequirementSource::Unknown,
+        )),
+        ..ConfigRequirements::default()
+    };
+    let dot_codex_folder = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+    let layer = ConfigLayerEntry::new(
+        ConfigLayerSource::Project { dot_codex_folder },
+        TomlValue::Table(Default::default()),
+    );
+    let config_stack =
+        ConfigLayerStack::new(vec![layer], requirements, ConfigRequirementsToml::default())?;
+
+    let policy = load_exec_policy(&config_stack).await?;
+
+    assert_eq!(
+        policy
+            .host_executables()
+            .get("git")
+            .expect("missing git host executable")
+            .as_ref(),
+        [AbsolutePathBuf::try_from(git_path)?]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn ignores_policies_outside_policy_dir() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
+    fs::write(
+        temp_dir.path().join("root.rules"),
+        r#"prefix_rule(pattern=["ls"], decision="prompt")"#,
+    )
+    .expect("write policy file");
+
+    let policy = load_exec_policy(&config_stack)
+        .await
+        .expect("policy result");
+    let command = [vec!["ls".to_string()]];
+    assert_eq!(
+        Evaluation {
+            decision: Decision::Allow,
+            matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
+                command: vec!["ls".to_string()],
+                decision: Decision::Allow
+            }],
+        },
+        policy.check_multiple(command.iter(), &|_| Decision::Allow)
+    );
+}
+
+#[tokio::test]
+async fn ignores_rules_from_untrusted_project_layers() -> anyhow::Result<()> {
+    let project_dir = tempdir()?;
+    let policy_dir = project_dir.path().join(RULES_DIR_NAME);
+    fs::create_dir_all(&policy_dir)?;
+    fs::write(
+        policy_dir.join("untrusted.rules"),
+        r#"prefix_rule(pattern=["ls"], decision="forbidden")"#,
+    )?;
+
+    let project_dot_codex_folder = AbsolutePathBuf::from_absolute_path(project_dir.path())?;
+    let layers = vec![ConfigLayerEntry::new_disabled(
+        ConfigLayerSource::Project {
+            dot_codex_folder: project_dot_codex_folder,
+        },
+        TomlValue::Table(Default::default()),
+        "marked untrusted",
+    )];
+    let config_stack = ConfigLayerStack::new(
+        layers,
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )?;
+
+    let policy = load_exec_policy(&config_stack).await?;
+
+    assert_eq!(
+        Evaluation {
+            decision: Decision::Allow,
+            matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
+                command: vec!["ls".to_string()],
+                decision: Decision::Allow,
+            }],
+        },
+        policy.check_multiple([vec!["ls".to_string()]].iter(), &|_| Decision::Allow)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn loads_policies_from_multiple_config_layers() -> anyhow::Result<()> {
+    let user_dir = tempdir()?;
+    let project_dir = tempdir()?;
+
+    let user_policy_dir = user_dir.path().join(RULES_DIR_NAME);
+    fs::create_dir_all(&user_policy_dir)?;
+    fs::write(
+        user_policy_dir.join("user.rules"),
+        r#"prefix_rule(pattern=["rm"], decision="forbidden")"#,
+    )?;
+
+    let project_policy_dir = project_dir.path().join(RULES_DIR_NAME);
+    fs::create_dir_all(&project_policy_dir)?;
+    fs::write(
+        project_policy_dir.join("project.rules"),
+        r#"prefix_rule(pattern=["ls"], decision="prompt")"#,
+    )?;
+
+    let user_config_toml =
+        AbsolutePathBuf::from_absolute_path(user_dir.path().join("config.toml"))?;
+    let project_dot_codex_folder = AbsolutePathBuf::from_absolute_path(project_dir.path())?;
+    let layers = vec![
+        ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: user_config_toml,
+            },
+            TomlValue::Table(Default::default()),
+        ),
+        ConfigLayerEntry::new(
+            ConfigLayerSource::Project {
+                dot_codex_folder: project_dot_codex_folder,
+            },
+            TomlValue::Table(Default::default()),
+        ),
+    ];
+    let config_stack = ConfigLayerStack::new(
+        layers,
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )?;
+
+    let policy = load_exec_policy(&config_stack).await?;
+
+    assert_eq!(
+        Evaluation {
+            decision: Decision::Forbidden,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: vec!["rm".to_string()],
+                decision: Decision::Forbidden,
+                resolved_program: None,
+                justification: None,
+            }],
+        },
+        policy.check_multiple([vec!["rm".to_string()]].iter(), &|_| Decision::Allow)
+    );
+    assert_eq!(
+        Evaluation {
+            decision: Decision::Prompt,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: vec!["ls".to_string()],
+                decision: Decision::Prompt,
+                resolved_program: None,
+                justification: None,
+            }],
+        },
+        policy.check_multiple([vec!["ls".to_string()]].iter(), &|_| Decision::Allow)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn evaluates_bash_lc_inner_commands() {
+    let policy_src = r#"
+prefix_rule(pattern=["rm"], decision="forbidden")
+"#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", policy_src)
+        .expect("parse policy");
+    let policy = Arc::new(parser.build());
+
+    let forbidden_script = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "rm -rf /some/important/folder".to_string(),
+    ];
+
+    let manager = ExecPolicyManager::new(policy);
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &forbidden_script,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::DangerFullAccess,
+            file_system_sandbox_policy: &unrestricted_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+            requirement,
+            ExecApprovalRequirement::Forbidden {
+                reason: "`bash -lc 'rm -rf /some/important/folder'` rejected: policy forbids commands starting with `rm`".to_string()
+            }
+        );
+}
+
+#[test]
+fn commands_for_exec_policy_falls_back_for_empty_shell_script() {
+    let command = vec!["bash".to_string(), "-lc".to_string(), "".to_string()];
+
+    assert_eq!(commands_for_exec_policy(&command), (vec![command], false));
+}
+
+#[test]
+fn commands_for_exec_policy_falls_back_for_whitespace_shell_script() {
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "  \n\t  ".to_string(),
+    ];
+
+    assert_eq!(commands_for_exec_policy(&command), (vec![command], false));
+}
+
+#[tokio::test]
+async fn evaluates_heredoc_script_against_prefix_rules() {
+    let policy_src = r#"prefix_rule(pattern=["python3"], decision="allow")"#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", policy_src)
+        .expect("parse policy");
+    let policy = Arc::new(parser.build());
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "python3 <<'PY'\nprint('hello')\nPY".to_string(),
+    ];
+
+    let requirement = ExecPolicyManager::new(policy)
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn omits_auto_amendment_for_heredoc_fallback_prompts() {
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "python3 <<'PY'\nprint('hello')\nPY".to_string(),
+    ];
+
+    let requirement = ExecPolicyManager::default()
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn drops_requested_amendment_for_heredoc_fallback_prompts_when_it_wont_match() {
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "python3 <<'PY'\nprint('hello')\nPY".to_string(),
+    ];
+    let requested_prefix = vec!["python3".to_string(), "-m".to_string(), "pip".to_string()];
+
+    let requirement = ExecPolicyManager::default()
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: Some(requested_prefix.clone()),
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn justification_is_included_in_forbidden_exec_approval_requirement() {
+    let policy_src = r#"
+prefix_rule(
+    pattern=["rm"],
+    decision="forbidden",
+    justification="destructive command",
+)
+"#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", policy_src)
+        .expect("parse policy");
+    let policy = Arc::new(parser.build());
+
+    let manager = ExecPolicyManager::new(policy);
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &[
+                "rm".to_string(),
+                "-rf".to_string(),
+                "/some/important/folder".to_string(),
+            ],
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::DangerFullAccess,
+            file_system_sandbox_policy: &unrestricted_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::Forbidden {
+            reason: "`rm -rf /some/important/folder` rejected: destructive command".to_string()
+        }
+    );
+}
+
+#[tokio::test]
+async fn exec_approval_requirement_prefers_execpolicy_match() {
+    let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", policy_src)
+        .expect("parse policy");
+    let policy = Arc::new(parser.build());
+    let command = vec!["rm".to_string()];
+
+    let manager = ExecPolicyManager::new(policy);
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::DangerFullAccess,
+            file_system_sandbox_policy: &unrestricted_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: Some("`rm` requires approval by policy".to_string()),
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn absolute_path_exec_approval_requirement_matches_host_executable_rules() {
+    let git_path = host_program_path("git");
+    let git_path_literal = starlark_string(&git_path);
+    let policy_src = format!(
+        r#"
+host_executable(name = "git", paths = ["{git_path_literal}"])
+prefix_rule(pattern=["git"], decision="allow")
+"#
+    );
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", &policy_src)
+        .expect("parse policy");
+    let manager = ExecPolicyManager::new(Arc::new(parser.build()));
+    let command = vec![git_path, "status".to_string()];
+
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn absolute_path_exec_approval_requirement_ignores_disallowed_host_executable_paths() {
+    let allowed_git_path = host_program_path("git");
+    let disallowed_git_path = host_absolute_path(&[
+        "opt",
+        "homebrew",
+        "bin",
+        if cfg!(windows) { "git.exe" } else { "git" },
+    ]);
+    let allowed_git_path_literal = starlark_string(&allowed_git_path);
+    let policy_src = format!(
+        r#"
+host_executable(name = "git", paths = ["{allowed_git_path_literal}"])
+prefix_rule(pattern=["git"], decision="prompt")
+"#
+    );
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", &policy_src)
+        .expect("parse policy");
+    let manager = ExecPolicyManager::new(Arc::new(parser.build()));
+    let command = vec![disallowed_git_path, "status".to_string()];
+
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+        }
+    );
+}
+
+#[tokio::test]
+async fn requested_prefix_rule_can_approve_absolute_path_commands() {
+    let command = vec![
+        host_program_path("cargo"),
+        "install".to_string(),
+        "cargo-insta".to_string(),
+    ];
+    let manager = ExecPolicyManager::default();
+
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "cargo".to_string(),
+                "install".to_string(),
+            ])),
+        }
+    );
+}
+
+#[tokio::test]
+async fn exec_approval_requirement_respects_approval_policy() {
+    let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", policy_src)
+        .expect("parse policy");
+    let policy = Arc::new(parser.build());
+    let command = vec!["rm".to_string()];
+
+    let manager = ExecPolicyManager::new(policy);
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: &SandboxPolicy::DangerFullAccess,
+            file_system_sandbox_policy: &unrestricted_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::Forbidden {
+            reason: PROMPT_CONFLICT_REASON.to_string()
+        }
+    );
+}
+
+#[test]
+fn unmatched_granular_policy_still_prompts_for_restricted_sandbox_escalation() {
+    let command = vec!["madeup-cmd".to_string()];
+
+    assert_eq!(
+        Decision::Prompt,
+        render_decision_for_unmatched_command(
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            &SandboxPolicy::new_read_only_policy(),
+            &read_only_file_system_sandbox_policy(),
+            &command,
+            SandboxPermissions::RequireEscalated,
+            false,
+        )
+    );
+}
+
+#[test]
+fn unmatched_on_request_uses_split_filesystem_policy_for_escalation_prompts() {
+    let command = vec!["madeup-cmd".to_string()];
+    let restricted_file_system_policy = FileSystemSandboxPolicy::restricted(vec![]);
+
+    assert_eq!(
+        Decision::Prompt,
+        render_decision_for_unmatched_command(
+            AskForApproval::OnRequest,
+            &SandboxPolicy::DangerFullAccess,
+            &restricted_file_system_policy,
+            &command,
+            SandboxPermissions::RequireEscalated,
+            false,
+        )
+    );
+}
+
+#[tokio::test]
+async fn exec_approval_requirement_rejects_unmatched_sandbox_escalation_when_granular_sandbox_is_disabled()
+ {
+    let command = vec!["madeup-cmd".to_string()];
+
+    let requirement = ExecPolicyManager::default()
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: false,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::Forbidden {
+            reason: REJECT_SANDBOX_APPROVAL_REASON.to_string(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn mixed_rule_and_sandbox_prompt_prioritizes_rule_for_rejection_decision() {
+    let policy_src = r#"prefix_rule(pattern=["git"], decision="prompt")"#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", policy_src)
+        .expect("parse policy");
+    let manager = ExecPolicyManager::new(Arc::new(parser.build()));
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "git status && madeup-cmd".to_string(),
+    ];
+
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert!(matches!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval { .. }
+    ));
+}
+
+#[tokio::test]
+async fn mixed_rule_and_sandbox_prompt_rejects_when_granular_rules_are_disabled() {
+    let policy_src = r#"prefix_rule(pattern=["git"], decision="prompt")"#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", policy_src)
+        .expect("parse policy");
+    let manager = ExecPolicyManager::new(Arc::new(parser.build()));
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "git status && madeup-cmd".to_string(),
+    ];
+
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: true,
+                rules: false,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::Forbidden {
+            reason: REJECT_RULES_APPROVAL_REASON.to_string(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn exec_approval_requirement_falls_back_to_heuristics() {
+    let command = vec!["cargo".to_string(), "build".to_string()];
+
+    let manager = ExecPolicyManager::default();
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command))
+        }
+    );
+}
+
+#[tokio::test]
+async fn empty_bash_lc_script_falls_back_to_original_command() {
+    let command = vec!["bash".to_string(), "-lc".to_string(), "".to_string()];
+
+    let manager = ExecPolicyManager::default();
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+        }
+    );
+}
+
+#[tokio::test]
+async fn whitespace_bash_lc_script_falls_back_to_original_command() {
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "  \n\t  ".to_string(),
+    ];
+
+    let manager = ExecPolicyManager::default();
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+        }
+    );
+}
+
+#[tokio::test]
+async fn request_rule_uses_prefix_rule() {
+    let command = vec![
+        "cargo".to_string(),
+        "install".to_string(),
+        "cargo-insta".to_string(),
+    ];
+    let manager = ExecPolicyManager::default();
+
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "cargo".to_string(),
+                "install".to_string(),
+            ])),
+        }
+    );
+}
+
+#[tokio::test]
+async fn request_rule_falls_back_when_prefix_rule_does_not_approve_all_commands() {
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "cargo install cargo-insta && rm -rf /tmp/codex".to_string(),
+    ];
+    let manager = ExecPolicyManager::default();
+
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::DangerFullAccess,
+            file_system_sandbox_policy: &unrestricted_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "rm".to_string(),
+                "-rf".to_string(),
+                "/tmp/codex".to_string(),
+            ])),
+        }
+    );
+}
+
+#[tokio::test]
+async fn heuristics_apply_when_other_commands_match_policy() {
+    let policy_src = r#"prefix_rule(pattern=["apple"], decision="allow")"#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", policy_src)
+        .expect("parse policy");
+    let policy = Arc::new(parser.build());
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "apple | orange".to_string(),
+    ];
+
+    assert_eq!(
+        ExecPolicyManager::new(policy)
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::UnlessTrusted,
+                sandbox_policy: &SandboxPolicy::DangerFullAccess,
+                file_system_sandbox_policy: &unrestricted_file_system_sandbox_policy(),
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            })
+            .await,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "orange".to_string()
+            ]))
+        }
+    );
+}
+
+#[tokio::test]
+async fn append_execpolicy_amendment_updates_policy_and_file() {
+    let codex_home = tempdir().expect("create temp dir");
+    let prefix = vec!["echo".to_string(), "hello".to_string()];
+    let manager = ExecPolicyManager::default();
+
+    manager
+        .append_amendment_and_update(codex_home.path(), &ExecPolicyAmendment::from(prefix))
+        .await
+        .expect("update policy");
+    let updated_policy = manager.current();
+
+    let evaluation = updated_policy.check(
+        &["echo".to_string(), "hello".to_string(), "world".to_string()],
+        &|_| Decision::Allow,
+    );
+    assert!(matches!(
+        evaluation,
+        Evaluation {
+            decision: Decision::Allow,
+            ..
+        }
+    ));
+
+    let contents = fs::read_to_string(default_policy_path(codex_home.path()))
+        .expect("policy file should have been created");
+    assert_eq!(
+        contents,
+        r#"prefix_rule(pattern=["echo", "hello"], decision="allow")
+"#
+    );
+}
+
+#[tokio::test]
+async fn append_execpolicy_amendment_rejects_empty_prefix() {
+    let codex_home = tempdir().expect("create temp dir");
+    let manager = ExecPolicyManager::default();
+
+    let result = manager
+        .append_amendment_and_update(codex_home.path(), &ExecPolicyAmendment::from(vec![]))
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(ExecPolicyUpdateError::AppendRule {
+            source: AmendError::EmptyPrefix,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn proposed_execpolicy_amendment_is_present_for_single_command_without_policy_match() {
+    let command = vec!["cargo".to_string(), "build".to_string()];
+
+    let manager = ExecPolicyManager::default();
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command))
+        }
+    );
+}
+
+#[tokio::test]
+async fn proposed_execpolicy_amendment_is_omitted_when_policy_prompts() {
+    let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", policy_src)
+        .expect("parse policy");
+    let policy = Arc::new(parser.build());
+    let command = vec!["rm".to_string()];
+
+    let manager = ExecPolicyManager::new(policy);
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::DangerFullAccess,
+            file_system_sandbox_policy: &unrestricted_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: Some("`rm` requires approval by policy".to_string()),
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn proposed_execpolicy_amendment_is_present_for_multi_command_scripts() {
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "cargo build && echo ok".to_string(),
+    ];
+    let manager = ExecPolicyManager::default();
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "cargo".to_string(),
+                "build".to_string()
+            ])),
+        }
+    );
+}
+
+#[tokio::test]
+async fn proposed_execpolicy_amendment_uses_first_no_match_in_multi_command_scripts() {
+    let policy_src = r#"prefix_rule(pattern=["cat"], decision="allow")"#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", policy_src)
+        .expect("parse policy");
+    let policy = Arc::new(parser.build());
+
+    let command = vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        "cat && apple".to_string(),
+    ];
+
+    assert_eq!(
+        ExecPolicyManager::new(policy)
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &command,
+                approval_policy: AskForApproval::UnlessTrusted,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+                sandbox_permissions: SandboxPermissions::UseDefault,
+                prefix_rule: None,
+            })
+            .await,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "apple".to_string()
+            ])),
+        }
+    );
+}
+
+#[tokio::test]
+async fn proposed_execpolicy_amendment_is_present_when_heuristics_allow() {
+    let command = vec!["echo".to_string(), "safe".to_string()];
+
+    let manager = ExecPolicyManager::default();
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+        }
+    );
+}
+
+#[tokio::test]
+async fn proposed_execpolicy_amendment_is_suppressed_when_policy_matches_allow() {
+    let policy_src = r#"prefix_rule(pattern=["echo"], decision="allow")"#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", policy_src)
+        .expect("parse policy");
+    let policy = Arc::new(parser.build());
+    let command = vec!["echo".to_string(), "safe".to_string()];
+
+    let manager = ExecPolicyManager::new(policy);
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
+fn derive_requested_execpolicy_amendment_for_test(
+    prefix_rule: Option<&Vec<String>>,
+    matched_rules: &[RuleMatch],
+) -> Option<ExecPolicyAmendment> {
+    let commands = prefix_rule
+        .cloned()
+        .map(|prefix_rule| vec![prefix_rule])
+        .unwrap_or_else(|| vec![vec!["echo".to_string()]]);
+    derive_requested_execpolicy_amendment_from_prefix_rule(
+        prefix_rule,
+        matched_rules,
+        &Policy::empty(),
+        &commands,
+        &|_: &[String]| Decision::Allow,
+        &MatchOptions::default(),
+    )
+}
+
+#[test]
+fn derive_requested_execpolicy_amendment_returns_none_for_missing_prefix_rule() {
+    assert_eq!(
+        None,
+        derive_requested_execpolicy_amendment_for_test(None, &[])
+    );
+}
+
+#[test]
+fn derive_requested_execpolicy_amendment_returns_none_for_empty_prefix_rule() {
+    assert_eq!(
+        None,
+        derive_requested_execpolicy_amendment_for_test(Some(&Vec::new()), &[])
+    );
+}
+
+#[test]
+fn derive_requested_execpolicy_amendment_returns_none_for_exact_banned_prefix_rule() {
+    assert_eq!(
+        None,
+        derive_requested_execpolicy_amendment_for_test(
+            Some(&vec!["python".to_string(), "-c".to_string()]),
+            &[],
+        )
+    );
+}
+
+#[test]
+fn derive_requested_execpolicy_amendment_returns_none_for_windows_and_pypy_variants() {
+    for prefix_rule in [
+        vec!["py".to_string()],
+        vec!["py".to_string(), "-3".to_string()],
+        vec!["pythonw".to_string()],
+        vec!["pyw".to_string()],
+        vec!["pypy".to_string()],
+        vec!["pypy3".to_string()],
+    ] {
+        assert_eq!(
+            None,
+            derive_requested_execpolicy_amendment_for_test(Some(&prefix_rule), &[])
+        );
+    }
+}
+
+#[test]
+fn derive_requested_execpolicy_amendment_returns_none_for_shell_and_powershell_variants() {
+    for prefix_rule in [
+        vec!["bash".to_string(), "-lc".to_string()],
+        vec!["sh".to_string(), "-c".to_string()],
+        vec!["sh".to_string(), "-lc".to_string()],
+        vec!["zsh".to_string(), "-lc".to_string()],
+        vec!["/bin/bash".to_string(), "-lc".to_string()],
+        vec!["/bin/zsh".to_string(), "-lc".to_string()],
+        vec!["pwsh".to_string()],
+        vec!["pwsh".to_string(), "-Command".to_string()],
+        vec!["pwsh".to_string(), "-c".to_string()],
+        vec!["powershell".to_string()],
+        vec!["powershell".to_string(), "-Command".to_string()],
+        vec!["powershell".to_string(), "-c".to_string()],
+        vec!["powershell.exe".to_string()],
+        vec!["powershell.exe".to_string(), "-Command".to_string()],
+        vec!["powershell.exe".to_string(), "-c".to_string()],
+    ] {
+        assert_eq!(
+            None,
+            derive_requested_execpolicy_amendment_for_test(Some(&prefix_rule), &[])
+        );
+    }
+}
+
+#[test]
+fn derive_requested_execpolicy_amendment_allows_non_exact_banned_prefix_rule_match() {
+    let prefix_rule = vec![
+        "python".to_string(),
+        "-c".to_string(),
+        "print('hi')".to_string(),
+    ];
+
+    assert_eq!(
+        Some(ExecPolicyAmendment::new(prefix_rule.clone())),
+        derive_requested_execpolicy_amendment_for_test(Some(&prefix_rule), &[])
+    );
+}
+
+#[test]
+fn derive_requested_execpolicy_amendment_returns_none_when_policy_matches() {
+    let prefix_rule = vec!["cargo".to_string(), "build".to_string()];
+
+    let matched_rules_prompt = vec![RuleMatch::PrefixRuleMatch {
+        matched_prefix: vec!["cargo".to_string()],
+        decision: Decision::Prompt,
+        resolved_program: None,
+        justification: None,
+    }];
+    assert_eq!(
+        None,
+        derive_requested_execpolicy_amendment_for_test(Some(&prefix_rule), &matched_rules_prompt),
+        "should return none when prompt policy matches"
+    );
+    let matched_rules_allow = vec![RuleMatch::PrefixRuleMatch {
+        matched_prefix: vec!["cargo".to_string()],
+        decision: Decision::Allow,
+        resolved_program: None,
+        justification: None,
+    }];
+    assert_eq!(
+        None,
+        derive_requested_execpolicy_amendment_for_test(Some(&prefix_rule), &matched_rules_allow),
+        "should return none when prompt policy matches"
+    );
+    let matched_rules_forbidden = vec![RuleMatch::PrefixRuleMatch {
+        matched_prefix: vec!["cargo".to_string()],
+        decision: Decision::Forbidden,
+        resolved_program: None,
+        justification: None,
+    }];
+    assert_eq!(
+        None,
+        derive_requested_execpolicy_amendment_for_test(
+            Some(&prefix_rule),
+            &matched_rules_forbidden,
+        ),
+        "should return none when prompt policy matches"
+    );
+}
+
+#[tokio::test]
+async fn dangerous_rm_rf_requires_approval_in_danger_full_access() {
+    let command = vec_str(&["rm", "-rf", "/tmp/nonexistent"]);
+    let manager = ExecPolicyManager::default();
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::DangerFullAccess,
+            file_system_sandbox_policy: &unrestricted_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
+        }
+    );
+}
+
+fn vec_str(items: &[&str]) -> Vec<String> {
+    items.iter().map(std::string::ToString::to_string).collect()
+}
+
+/// Note this test behaves differently on Windows because it exercises an
+/// `if cfg!(windows)` code path in render_decision_for_unmatched_command().
+#[tokio::test]
+async fn verify_approval_requirement_for_unsafe_powershell_command() {
+    // `brew install powershell` to run this test on a Mac!
+    // Note `pwsh` is required to parse a PowerShell command to see if it
+    // is safe.
+    if which::which("pwsh").is_err() {
+        return;
+    }
+
+    let policy = ExecPolicyManager::new(Arc::new(Policy::empty()));
+    let permissions = SandboxPermissions::UseDefault;
+
+    // This command should not be run without user approval unless there is
+    // a proper sandbox in place to ensure safety.
+    let sneaky_command = vec_str(&["pwsh", "-Command", "echo hi @(calc)"]);
+    let expected_amendment = Some(ExecPolicyAmendment::new(vec_str(&[
+        "pwsh",
+        "-Command",
+        "echo hi @(calc)",
+    ])));
+    let (pwsh_approval_reason, expected_req) = if cfg!(windows) {
+        (
+            r#"On Windows, SandboxPolicy::ReadOnly should be assumed to mean
+                that no sandbox is present, so anything that is not "provably
+                safe" should require approval."#,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: expected_amendment.clone(),
+            },
+        )
+    } else {
+        (
+            "On non-Windows, rely on the read-only sandbox to prevent harm.",
+            ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: expected_amendment.clone(),
+            },
+        )
+    };
+    assert_eq!(
+        expected_req,
+        policy
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &sneaky_command,
+                approval_policy: AskForApproval::OnRequest,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+                sandbox_permissions: permissions,
+                prefix_rule: None,
+            })
+            .await,
+        "{pwsh_approval_reason}"
+    );
+
+    // This is flagged as a dangerous command on all platforms.
+    let dangerous_command = vec_str(&["rm", "-rf", "/important/data"]);
+    assert_eq!(
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec_str(&[
+                "rm",
+                "-rf",
+                "/important/data",
+            ]))),
+        },
+        policy
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &dangerous_command,
+                approval_policy: AskForApproval::OnRequest,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+                sandbox_permissions: permissions,
+                prefix_rule: None,
+            })
+            .await,
+        r#"On all platforms, a forbidden command should require approval
+            (unless AskForApproval::Never is specified)."#
+    );
+
+    // A dangerous command should be forbidden if the user has specified
+    // AskForApproval::Never.
+    assert_eq!(
+        ExecApprovalRequirement::Forbidden {
+            reason: "`rm -rf /important/data` rejected: blocked by policy".to_string(),
+        },
+        policy
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                command: &dangerous_command,
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+                file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+                sandbox_permissions: permissions,
+                prefix_rule: None,
+            })
+            .await,
+        r#"On all platforms, a forbidden command should require approval
+            (unless AskForApproval::Never is specified)."#
+    );
+}

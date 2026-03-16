@@ -15,10 +15,10 @@ Things to look out for when doing the review:
 
 ## Code Organization
 
-- Each create in the Cargo workspace in `codex-rs` has a specific purpose: make a note if you believe new code is not introduced in the correct crate.
+- Each crate in the Cargo workspace in `codex-rs` has a specific purpose: make a note if you believe new code is not introduced in the correct crate.
 - When possible, try to keep the `core` crate as small as possible. Non-core but shared logic is often a good candidate for `codex-rs/common`.
 - Be wary of large files and offer suggestions for how to break things into more reasonably-sized files.
-- Rust files should generally be organized such that the public parts of the API appear near the top of the file and helper functions go below. This is analagous to the "inverted pyramid" structure that is favored in journalism.
+- Rust files should generally be organized such that the public parts of the API appear near the top of the file and helper functions go below. This is analogous to the "inverted pyramid" structure that is favored in journalism.
 
 ## Assertions in Tests
 

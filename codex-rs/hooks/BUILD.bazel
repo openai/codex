@@ -1,0 +1,11 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+SCHEMA_FIXTURES = glob(["schema/generated/*.json"], allow_empty = False)
+
+codex_rust_crate(
+    name = "hooks",
+    crate_name = "codex_hooks",
+    compile_data = SCHEMA_FIXTURES,
+    integration_compile_data_extra = SCHEMA_FIXTURES,
+    test_data_extra = SCHEMA_FIXTURES,
+)

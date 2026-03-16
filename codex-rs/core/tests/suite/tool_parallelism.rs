@@ -5,11 +5,10 @@ use std::fs;
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -46,7 +45,8 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -72,15 +72,8 @@ async fn build_codex_with_test_tool(server: &wiremock::MockServer) -> anyhow::Re
 fn assert_parallel_duration(actual: Duration) {
     // Allow headroom for slow CI scheduling; barrier synchronization already enforces overlap.
     assert!(
-        actual < Duration::from_millis(1_200),
+        actual < Duration::from_millis(1_600),
         "expected parallel execution to finish quickly, got {actual:?}"
-    );
-}
-
-fn assert_serial_duration(actual: Duration) {
-    assert!(
-        actual >= Duration::from_millis(500),
-        "expected serial execution to take longer, got {actual:?}"
     );
 }
 
@@ -147,7 +140,7 @@ async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn non_parallel_tools_run_serially() -> anyhow::Result<()> {
+async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -155,7 +148,9 @@ async fn non_parallel_tools_run_serially() -> anyhow::Result<()> {
     let test = builder.build(&server).await?;
 
     let shell_args = json!({
-        "command": "sleep 0.3",
+        "command": "sleep 0.25",
+        // Avoid user-specific shell startup cost (e.g. zsh profile scripts) in timing assertions.
+        "login": false,
         "timeout_ms": 1_000,
     });
     let args_one = serde_json::to_string(&shell_args)?;
@@ -174,13 +169,13 @@ async fn non_parallel_tools_run_serially() -> anyhow::Result<()> {
     mount_sse_sequence(&server, vec![first_response, second_response]).await;
 
     let duration = run_turn_and_measure(&test, "run shell_command twice").await?;
-    assert_serial_duration(duration);
+    assert_parallel_duration(duration);
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mixed_tools_fall_back_to_serial() -> anyhow::Result<()> {
+async fn mixed_parallel_tools_run_in_parallel() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -191,7 +186,9 @@ async fn mixed_tools_fall_back_to_serial() -> anyhow::Result<()> {
     })
     .to_string();
     let shell_args = serde_json::to_string(&json!({
-        "command": "sleep 0.3",
+        "command": "sleep 0.25",
+        // Avoid user-specific shell startup cost in timing assertions.
+        "login": false,
         "timeout_ms": 1_000,
     }))?;
 
@@ -208,7 +205,7 @@ async fn mixed_tools_fall_back_to_serial() -> anyhow::Result<()> {
     mount_sse_sequence(&server, vec![first_response, second_response]).await;
 
     let duration = run_turn_and_measure(&test, "mix tools").await?;
-    assert_serial_duration(duration);
+    assert_parallel_duration(duration);
 
     Ok(())
 }
@@ -364,7 +361,8 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

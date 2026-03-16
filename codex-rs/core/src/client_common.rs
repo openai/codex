@@ -3,6 +3,7 @@ use crate::config::types::Personality;
 use crate::error::Result;
 pub use codex_api::common::ResponseEvent;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
 use futures::Stream;
 use serde::Deserialize;
@@ -83,23 +84,19 @@ fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
                 shell_call_ids.insert(call_id.clone());
             }
         }
-        ResponseItem::CustomToolCallOutput { call_id, output } => {
-            if shell_call_ids.remove(call_id)
-                && let Some(structured) = parse_structured_shell_output(output)
-            {
-                *output = structured
-            }
-        }
         ResponseItem::FunctionCall { name, call_id, .. }
             if is_shell_tool_name(name) || name == "apply_patch" =>
         {
             shell_call_ids.insert(call_id.clone());
         }
-        ResponseItem::FunctionCallOutput { call_id, output } => {
+        ResponseItem::FunctionCallOutput { call_id, output }
+        | ResponseItem::CustomToolCallOutput { call_id, output } => {
             if shell_call_ids.remove(call_id)
-                && let Some(structured) = parse_structured_shell_output(&output.content)
+                && let Some(structured) = output
+                    .text_content()
+                    .and_then(parse_structured_shell_output)
             {
-                output.content = structured
+                output.body = FunctionCallOutputBody::Text(structured);
             }
         }
         _ => {}
@@ -157,8 +154,13 @@ fn strip_total_output_header(output: &str) -> Option<(&str, u32)> {
 
 pub(crate) mod tools {
     use crate::tools::spec::JsonSchema;
+    use codex_protocol::config_types::WebSearchContextSize;
+    use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
+    use codex_protocol::config_types::WebSearchUserLocation as ConfigWebSearchUserLocation;
+    use codex_protocol::config_types::WebSearchUserLocationType;
     use serde::Deserialize;
     use serde::Serialize;
+    use serde_json::Value;
 
     /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
     /// Responses API.
@@ -167,8 +169,16 @@ pub(crate) mod tools {
     pub(crate) enum ToolSpec {
         #[serde(rename = "function")]
         Function(ResponsesApiTool),
+        #[serde(rename = "tool_search")]
+        ToolSearch {
+            execution: String,
+            description: String,
+            parameters: JsonSchema,
+        },
         #[serde(rename = "local_shell")]
         LocalShell {},
+        #[serde(rename = "image_generation")]
+        ImageGeneration { output_format: String },
         // TODO: Understand why we get an error on web_search although the API docs say it's supported.
         // https://platform.openai.com/docs/guides/tools-web-search?api-mode=responses#:~:text=%7B%20type%3A%20%22web_search%22%20%7D%2C
         // The `external_web_access` field determines whether the web search is over cached or live content.
@@ -177,6 +187,14 @@ pub(crate) mod tools {
         WebSearch {
             #[serde(skip_serializing_if = "Option::is_none")]
             external_web_access: Option<bool>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            filters: Option<ResponsesApiWebSearchFilters>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            user_location: Option<ResponsesApiWebSearchUserLocation>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            search_context_size: Option<WebSearchContextSize>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            search_content_types: Option<Vec<String>>,
         },
         #[serde(rename = "custom")]
         Freeform(FreeformTool),
@@ -186,9 +204,51 @@ pub(crate) mod tools {
         pub(crate) fn name(&self) -> &str {
             match self {
                 ToolSpec::Function(tool) => tool.name.as_str(),
+                ToolSpec::ToolSearch { .. } => "tool_search",
                 ToolSpec::LocalShell {} => "local_shell",
+                ToolSpec::ImageGeneration { .. } => "image_generation",
                 ToolSpec::WebSearch { .. } => "web_search",
                 ToolSpec::Freeform(tool) => tool.name.as_str(),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize, PartialEq)]
+    pub(crate) struct ResponsesApiWebSearchFilters {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) allowed_domains: Option<Vec<String>>,
+    }
+
+    impl From<ConfigWebSearchFilters> for ResponsesApiWebSearchFilters {
+        fn from(filters: ConfigWebSearchFilters) -> Self {
+            Self {
+                allowed_domains: filters.allowed_domains,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize, PartialEq)]
+    pub(crate) struct ResponsesApiWebSearchUserLocation {
+        #[serde(rename = "type")]
+        pub(crate) r#type: WebSearchUserLocationType,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) country: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) region: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) city: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) timezone: Option<String>,
+    }
+
+    impl From<ConfigWebSearchUserLocation> for ResponsesApiWebSearchUserLocation {
+        fn from(user_location: ConfigWebSearchUserLocation) -> Self {
+            Self {
+                r#type: user_location.r#type,
+                country: user_location.country,
+                region: user_location.region,
+                city: user_location.city,
+                timezone: user_location.timezone,
             }
         }
     }
@@ -215,7 +275,35 @@ pub(crate) mod tools {
         /// `required` and `additional_properties` must be present. All fields in
         /// `properties` must be present in `required`.
         pub(crate) strict: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(crate) defer_loading: Option<bool>,
         pub(crate) parameters: JsonSchema,
+        #[serde(skip)]
+        pub(crate) output_schema: Option<Value>,
+    }
+
+    #[derive(Debug, Clone, Serialize, PartialEq)]
+    #[serde(tag = "type")]
+    pub(crate) enum ToolSearchOutputTool {
+        #[allow(dead_code)]
+        #[serde(rename = "function")]
+        Function(ResponsesApiTool),
+        #[serde(rename = "namespace")]
+        Namespace(ResponsesApiNamespace),
+    }
+
+    #[derive(Debug, Clone, Serialize, PartialEq)]
+    pub(crate) struct ResponsesApiNamespace {
+        pub(crate) name: String,
+        pub(crate) description: String,
+        pub(crate) tools: Vec<ResponsesApiNamespaceTool>,
+    }
+
+    #[derive(Debug, Clone, Serialize, PartialEq)]
+    #[serde(tag = "type")]
+    pub(crate) enum ResponsesApiNamespaceTool {
+        #[serde(rename = "function")]
+        Function(ResponsesApiTool),
     }
 }
 
@@ -232,112 +320,5 @@ impl Stream for ResponseStream {
 }
 
 #[cfg(test)]
-mod tests {
-    use codex_api::ResponsesApiRequest;
-    use codex_api::common::OpenAiVerbosity;
-    use codex_api::common::TextControls;
-    use codex_api::create_text_param_for_request;
-    use pretty_assertions::assert_eq;
-
-    use super::*;
-
-    #[test]
-    fn serializes_text_verbosity_when_set() {
-        let input: Vec<ResponseItem> = vec![];
-        let tools: Vec<serde_json::Value> = vec![];
-        let req = ResponsesApiRequest {
-            model: "gpt-5.1",
-            instructions: "i",
-            input: &input,
-            tools: &tools,
-            tool_choice: "auto",
-            parallel_tool_calls: true,
-            reasoning: None,
-            store: false,
-            stream: true,
-            include: vec![],
-            prompt_cache_key: None,
-            text: Some(TextControls {
-                verbosity: Some(OpenAiVerbosity::Low),
-                format: None,
-            }),
-        };
-
-        let v = serde_json::to_value(&req).expect("json");
-        assert_eq!(
-            v.get("text")
-                .and_then(|t| t.get("verbosity"))
-                .and_then(|s| s.as_str()),
-            Some("low")
-        );
-    }
-
-    #[test]
-    fn serializes_text_schema_with_strict_format() {
-        let input: Vec<ResponseItem> = vec![];
-        let tools: Vec<serde_json::Value> = vec![];
-        let schema = serde_json::json!({
-            "type": "object",
-            "properties": {
-                "answer": {"type": "string"}
-            },
-            "required": ["answer"],
-        });
-        let text_controls =
-            create_text_param_for_request(None, &Some(schema.clone())).expect("text controls");
-
-        let req = ResponsesApiRequest {
-            model: "gpt-5.1",
-            instructions: "i",
-            input: &input,
-            tools: &tools,
-            tool_choice: "auto",
-            parallel_tool_calls: true,
-            reasoning: None,
-            store: false,
-            stream: true,
-            include: vec![],
-            prompt_cache_key: None,
-            text: Some(text_controls),
-        };
-
-        let v = serde_json::to_value(&req).expect("json");
-        let text = v.get("text").expect("text field");
-        assert!(text.get("verbosity").is_none());
-        let format = text.get("format").expect("format field");
-
-        assert_eq!(
-            format.get("name"),
-            Some(&serde_json::Value::String("codex_output_schema".into()))
-        );
-        assert_eq!(
-            format.get("type"),
-            Some(&serde_json::Value::String("json_schema".into()))
-        );
-        assert_eq!(format.get("strict"), Some(&serde_json::Value::Bool(true)));
-        assert_eq!(format.get("schema"), Some(&schema));
-    }
-
-    #[test]
-    fn omits_text_when_not_set() {
-        let input: Vec<ResponseItem> = vec![];
-        let tools: Vec<serde_json::Value> = vec![];
-        let req = ResponsesApiRequest {
-            model: "gpt-5.1",
-            instructions: "i",
-            input: &input,
-            tools: &tools,
-            tool_choice: "auto",
-            parallel_tool_calls: true,
-            reasoning: None,
-            store: false,
-            stream: true,
-            include: vec![],
-            prompt_cache_key: None,
-            text: None,
-        };
-
-        let v = serde_json::to_value(&req).expect("json");
-        assert!(v.get("text").is_none());
-    }
-}
+#[path = "client_common_tests.rs"]
+mod tests;

@@ -1,0 +1,19 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-skills"
+version.workspace = true
+build = "build.rs"
+
+[lib]
+doctest = false
+name = "codex_skills"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-utils-absolute-path = { workspace = true }
+include_dir = { workspace = true }
+thiserror = { workspace = true }

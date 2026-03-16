@@ -118,6 +118,33 @@ pub fn kill_process_group_by_pid(_pid: u32) -> io::Result<()> {
 }
 
 #[cfg(unix)]
+/// Send SIGTERM to a specific process group ID (best-effort).
+///
+/// Returns `Ok(true)` when SIGTERM was delivered to an existing group and
+/// `Ok(false)` when the group no longer exists.
+pub fn terminate_process_group(process_group_id: u32) -> io::Result<bool> {
+    use std::io::ErrorKind;
+
+    let pgid = process_group_id as libc::pid_t;
+    let result = unsafe { libc::killpg(pgid, libc::SIGTERM) };
+    if result == -1 {
+        let err = io::Error::last_os_error();
+        if err.kind() == ErrorKind::NotFound {
+            return Ok(false);
+        }
+        return Err(err);
+    }
+
+    Ok(true)
+}
+
+#[cfg(not(unix))]
+/// No-op on non-Unix platforms.
+pub fn terminate_process_group(_process_group_id: u32) -> io::Result<bool> {
+    Ok(false)
+}
+
+#[cfg(unix)]
 /// Kill a specific process group ID (best-effort).
 pub fn kill_process_group(process_group_id: u32) -> io::Result<()> {
     use std::io::ErrorKind;

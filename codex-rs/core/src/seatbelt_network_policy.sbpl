@@ -1,9 +1,14 @@
 ; when network access is enabled, these policies are added after those in seatbelt_base_policy.sbpl
+; proxy-specific allow rules are injected by codex-core based on environment.
 ; Ref https://source.chromium.org/chromium/chromium/src/+/main:sandbox/policy/mac/network.sb;drc=f8f264d5e4e7509c913f4c60c2639d15905a07e4
 
-(allow network-outbound)
-(allow network-inbound)
-(allow system-socket)
+; allow only safe AF_SYSTEM sockets used for local platform services.
+(allow system-socket
+  (require-all
+    (socket-domain AF_SYSTEM)
+    (socket-protocol 2)
+  )
+)
 
 (allow mach-lookup
     ; Used to look up the _CS_DARWIN_USER_CACHE_DIR in the sandbox.

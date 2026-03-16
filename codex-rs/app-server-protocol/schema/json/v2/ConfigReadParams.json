@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "cwd": {
+      "description": "Optional working directory to resolve project config layers. If specified, return the effective config as seen from that directory (i.e., including any project layers between `cwd` and the project/repo root).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "includeLayers": {
+      "default": false,
+      "type": "boolean"
+    }
+  },
+  "title": "ConfigReadParams",
+  "type": "object"
+}

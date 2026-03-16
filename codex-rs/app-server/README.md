@@ -13,11 +13,36 @@
 - [Events](#events)
 - [Approvals](#approvals)
 - [Skills](#skills)
+- [Apps](#apps)
 - [Auth endpoints](#auth-endpoints)
+- [Experimental API Opt-in](#experimental-api-opt-in)
 
 ## Protocol
 
-Similar to [MCP](https://modelcontextprotocol.io/), `codex app-server` supports bidirectional communication, streaming JSONL over stdio. The protocol is JSON-RPC 2.0, though the `"jsonrpc":"2.0"` header is omitted.
+Similar to [MCP](https://modelcontextprotocol.io/), `codex app-server` supports bidirectional communication using JSON-RPC 2.0 messages (with the `"jsonrpc":"2.0"` header omitted on the wire).
+
+Supported transports:
+
+- stdio (`--listen stdio://`, default): newline-delimited JSON (JSONL)
+- websocket (`--listen ws://IP:PORT`): one JSON-RPC message per websocket text frame (**experimental / unsupported**)
+
+When running with `--listen ws://IP:PORT`, the same listener also serves basic HTTP health probes:
+
+- `GET /readyz` returns `200 OK` once the listener is accepting new connections.
+- `GET /healthz` currently always returns `200 OK`.
+
+Websocket transport is currently experimental and unsupported. Do not rely on it for production workloads.
+
+Tracing/log output:
+
+- `RUST_LOG` controls log filtering/verbosity.
+- Set `LOG_FORMAT=json` to emit app-server tracing logs to `stderr` as JSON (one event per line).
+
+Backpressure behavior:
+
+- The server uses bounded queues between transport ingress, request processing, and outbound writes.
+- When request ingress is saturated, new requests are rejected with a JSON-RPC error code `-32001` and message `"Server overloaded; retry later."`.
+- Clients should treat this as retryable and use exponential backoff with jitter.
 
 ## Message Schema
 
@@ -40,15 +65,18 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 
 ## Lifecycle Overview
 
-- Initialize once: Immediately after launching the codex app-server process, send an `initialize` request with your client metadata, then emit an `initialized` notification. Any other request before this handshake gets rejected.
-- Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead. If you want to branch from an existing conversation, call `thread/fork` to create a new thread id with copied history.
-- Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, sandbox policy, etc. This immediately returns the new turn object and triggers a `turn/started` notification.
+- Initialize once per connection: Immediately after opening a transport connection, send an `initialize` request with your client metadata, then emit an `initialized` notification. Any other request on that connection before this handshake gets rejected.
+- Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead. If you want to branch from an existing conversation, call `thread/fork` to create a new thread id with copied history. Like `thread/start`, `thread/fork` also accepts `ephemeral: true` for an in-memory temporary thread.
+  The returned `thread.ephemeral` flag tells you whether the session is intentionally in-memory only; when it is `true`, `thread.path` is `null`.
+- Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, sandbox policy, approval policy, approvals reviewer, etc. This immediately returns the new turn object. The app-server emits `turn/started` when that turn actually begins running.
 - Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
 - Finish the turn: When the model is done (or the turn is interrupted via making the `turn/interrupt` call), the server sends `turn/completed` with the final turn state and token usage.
 
 ## Initialization
 
-Clients must send a single `initialize` request before invoking any other method, then acknowledge with an `initialized` notification. The server returns the user agent string it will present to upstream services; subsequent requests issued before initialization receive a `"Not initialized"` error, and repeated `initialize` calls receive an `"Already initialized"` error.
+Clients must send a single `initialize` request per transport connection before invoking any other method on that connection, then acknowledge with an `initialized` notification. The server returns the user agent string it will present to upstream services plus `platformFamily` and `platformOs` strings describing the app-server runtime target; subsequent requests issued before initialization receive a `"Not initialized"` error, and repeated `initialize` calls on the same connection receive an `"Already initialized"` error.
+
+`initialize.params.capabilities` also supports per-connection notification opt-out via `optOutNotificationMethods`, which is a list of exact method names to suppress for that connection. Matching is exact (no wildcards/prefixes). Unknown method names are accepted and ignored.
 
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
 
@@ -72,35 +100,91 @@ Example (from OpenAI's official VSCode extension):
 }
 ```
 
+Example with notification opt-out:
+
+```json
+{
+  "method": "initialize",
+  "id": 1,
+  "params": {
+    "clientInfo": {
+      "name": "my_client",
+      "title": "My Client",
+      "version": "0.1.0"
+    },
+    "capabilities": {
+      "experimentalApi": true,
+      "optOutNotificationMethods": [
+        "thread/started",
+        "item/agentMessage/delta"
+      ]
+    }
+  }
+}
+```
+
 ## API Overview
 
-- `thread/start` — create a new thread; emits `thread/started` and auto-subscribes you to turn/item events for that thread.
+- `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread.
 - `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
-- `thread/fork` — fork an existing thread into a new thread id by copying the stored history; emits `thread/started` and auto-subscribes you to turn/item events for the new thread.
-- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders` filtering.
+- `thread/fork` — fork an existing thread into a new thread id by copying the stored history; accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread.
+- `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
-- `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`.
-- `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
+- `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
+- `thread/metadata/update` — patch stored thread metadata in sqlite; currently supports updating persisted `gitInfo` fields and returns the refreshed `thread`.
+- `thread/status/changed` — notification emitted when a loaded thread’s status changes (`threadId` + new `status`).
+- `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success and emits `thread/archived`.
+- `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server shuts down and unloads the thread, then emits `thread/closed`.
+- `thread/name/set` — set or update a thread’s user-facing name for either a loaded thread or a persisted rollout; returns `{}` on success and emits `thread/name/updated` to initialized, opted-in clients. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
+- `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
+- `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
+- `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
-- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
+- `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
+- `turn/steer` — add user input to an already in-flight turn without starting a new turn; returns the active `turnId` that accepted the input.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
+- `thread/realtime/start` — start a thread-scoped realtime session (experimental); returns `{}` and streams `thread/realtime/*` notifications.
+- `thread/realtime/appendAudio` — append an input audio chunk to the active realtime session (experimental); returns `{}`.
+- `thread/realtime/appendText` — append text input to the active realtime session (experimental); returns `{}`.
+- `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
-- `model/list` — list available models (with reasoning effort options).
-- `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination).
+- `command/exec/write` — write base64-decoded stdin bytes to a running `command/exec` session or close stdin; returns `{}`.
+- `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
+- `command/exec/terminate` — terminate a running `command/exec` session by `processId`; returns `{}`.
+- `command/exec/outputDelta` — notification emitted for base64-encoded stdout/stderr chunks from a streaming `command/exec` session.
+- `fs/readFile` — read an absolute file path and return `{ dataBase64 }`.
+- `fs/writeFile` — write an absolute file path from base64-encoded `{ dataBase64 }`; returns `{}`.
+- `fs/createDirectory` — create an absolute directory path; `recursive` defaults to `true`.
+- `fs/getMetadata` — return metadata for an absolute path: `isDirectory`, `isFile`, `createdAtMs`, and `modifiedAtMs`.
+- `fs/readDirectory` — list direct child entries for an absolute directory path; each entry contains `fileName`, `isDirectory`, and `isFile`, and `fileName` is just the child name, not a path.
+- `fs/remove` — remove an absolute file or directory tree; `recursive` and `force` default to `true`.
+- `fs/copy` — copy between absolute paths; directory copies require `recursive: true`.
+- `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options, optional legacy `upgrade` model ids, optional `upgradeInfo` metadata (`model`, `upgradeCopy`, `modelLink`, `migrationMarkdown`), and optional `availabilityNux` metadata.
+- `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
+- `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
+- `plugin/list` — list discovered plugin marketplaces and plugin state, including effective marketplace install/auth policy metadata. `interface.category` uses the marketplace category when present; otherwise it falls back to the plugin manifest category. Pass `forceRemoteSync: true` to refresh curated plugin state before listing (**under development; do not call from production clients yet**).
+- `plugin/read` — read one plugin by `marketplacePath` plus `pluginName`, returning marketplace info, a list-style `summary`, manifest descriptions/interface metadata, and bundled skills/apps/MCP server names (**under development; do not call from production clients yet**).
+- `skills/changed` — notification emitted when watched local skill files change.
+- `skills/remote/list` — list public remote skills (**under development; do not call from production clients yet**).
+- `skills/remote/export` — download a remote skill by `hazelnutId` into `skills` under `codex_home` (**under development; do not call from production clients yet**).
 - `app/list` — list available apps.
 - `skills/config/write` — write user-level skill config by path.
+- `plugin/install` — install a plugin from a discovered marketplace entry, rejecting marketplace entries marked unavailable for install, and return the effective plugin auth policy plus any apps that still need auth (**under development; do not call from production clients yet**).
+- `plugin/uninstall` — uninstall a plugin by id by removing its cached files and clearing its user-level config entry (**under development; do not call from production clients yet**).
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
 - `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).
 - `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools, resources, resource templates, and auth status; supports cursor+limit pagination.
-- `feedback/upload` — submit a feedback report (classification + optional reason/logs and conversation_id); returns the tracking thread id.
-- `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
+- `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); accepts an optional absolute `cwd` to target setup for a specific workspace, returns `{ started: true }` immediately, and later emits `windowsSandbox/setupCompleted`.
+- `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); returns the tracking thread id.
 - `config/read` — fetch the effective config on disk after resolving config layering.
+- `externalAgentConfig/detect` — detect migratable external-agent artifacts with `includeHome` and optional `cwds`; each detected item includes `cwd` (`null` for home).
+- `externalAgentConfig/import` — apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home).
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
-- `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk.
-- `configRequirements/read` — fetch the loaded requirements allow-lists from `requirements.toml` and/or MDM (or `null` if none are configured).
+- `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk, with optional `reloadUserConfig: true` to hot-reload loaded threads.
+- `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), pinned feature values (`featureRequirements`), `enforceResidency`, and `network` constraints.
 
 ### Example: Start or resume a thread
 
@@ -114,7 +198,23 @@ Start a fresh thread when you need a new Codex conversation.
     "cwd": "/Users/me/project",
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
-    "personality": "friendly"
+    "personality": "friendly",
+    "serviceName": "my_app_server_client", // optional metrics tag (`service_name`)
+    // Experimental: requires opt-in
+    "dynamicTools": [
+        {
+            "name": "lookup_ticket",
+            "description": "Fetch a ticket by id",
+            "deferLoading": true,
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" }
+                },
+                "required": ["id"]
+            }
+        }
+    ],
 } }
 { "id": 10, "result": {
     "thread": {
@@ -127,7 +227,9 @@ Start a fresh thread when you need a new Codex conversation.
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
 
-To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, such as `personality`:
+Valid `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. When `"none"` is selected, the personality placeholder is replaced with an empty string.
+
+To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, including `approvalsReviewer`:
 
 ```json
 { "method": "thread/resume", "id": 11, "params": {
@@ -137,13 +239,15 @@ To continue a stored session, call `thread/resume` with the `thread.id` you prev
 { "id": 11, "result": { "thread": { "id": "thr_123", … } } }
 ```
 
-To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it:
+To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it. Pass `ephemeral: true` when the fork should stay in-memory only:
 
 ```json
-{ "method": "thread/fork", "id": 12, "params": { "threadId": "thr_123" } }
+{ "method": "thread/fork", "id": 12, "params": { "threadId": "thr_123", "ephemeral": true } }
 { "id": 12, "result": { "thread": { "id": "thr_456", … } } }
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
+
+Experimental API: `thread/start`, `thread/resume`, and `thread/fork` accept `persistExtendedHistory: true` to persist a richer subset of ThreadItems for non-lossy history when calling `thread/read`, `thread/resume`, and `thread/fork` later. This does not backfill events that were not persisted previously.
 
 ### Example: List threads (with pagination & filters)
 
@@ -153,7 +257,11 @@ To branch from a stored session, call `thread/fork` with the `thread.id`. This c
 - `limit` — server defaults to a reasonable page size if unset.
 - `sortKey` — `created_at` (default) or `updated_at`.
 - `modelProviders` — restrict results to specific providers; unset, null, or an empty array will include all providers.
+- `sourceKinds` — restrict results to specific sources; omit or pass `[]` for interactive sessions only (`cli`, `vscode`).
 - `archived` — when `true`, list archived threads only. When `false` or `null`, list non-archived threads (default).
+- `cwd` — restrict results to threads whose session cwd exactly matches this path.
+- `searchTerm` — restrict results to threads whose extracted title contains this substring (case-sensitive).
+- Responses include `agentNickname` and `agentRole` for AgentControl-spawned thread sub-agents when available.
 
 Example:
 
@@ -165,8 +273,8 @@ Example:
 } }
 { "id": 20, "result": {
     "data": [
-        { "id": "thr_a", "preview": "Create a TUI", "modelProvider": "openai", "createdAt": 1730831111, "updatedAt": 1730831111 },
-        { "id": "thr_b", "preview": "Fix tests", "modelProvider": "openai", "createdAt": 1730750000, "updatedAt": 1730750000 }
+        { "id": "thr_a", "preview": "Create a TUI", "modelProvider": "openai", "createdAt": 1730831111, "updatedAt": 1730831111, "status": { "type": "notLoaded" }, "agentNickname": "Atlas", "agentRole": "explorer" },
+        { "id": "thr_b", "preview": "Fix tests", "modelProvider": "openai", "createdAt": 1730750000, "updatedAt": 1730750000, "status": { "type": "notLoaded" } }
     ],
     "nextCursor": "opaque-token-or-null"
 } }
@@ -185,18 +293,85 @@ When `nextCursor` is `null`, you’ve reached the final page.
 } }
 ```
 
+### Example: Track thread status changes
+
+`thread/status/changed` is emitted whenever a loaded thread's status changes after it has already been introduced to the client:
+
+- Includes `threadId` and the new `status`.
+- Status can be `notLoaded`, `idle`, `systemError`, or `active` (with `activeFlags`; `active` implies running).
+- `thread/start`, `thread/fork`, and detached review threads do not emit a separate initial `thread/status/changed`; their `thread/started` notification already carries the current `thread.status`.
+
+```json
+{ "method": "thread/status/changed", "params": {
+    "threadId": "thr_123",
+    "status": { "type": "active", "activeFlags": [] }
+} }
+```
+
+### Example: Unsubscribe from a loaded thread
+
+`thread/unsubscribe` removes the current connection's subscription to a thread. The response status is one of:
+
+- `unsubscribed` when the connection was subscribed and is now removed.
+- `notSubscribed` when the connection was not subscribed to that thread.
+- `notLoaded` when the thread is not loaded.
+
+If this was the last subscriber, the server unloads the thread and emits `thread/closed` and a `thread/status/changed` transition to `notLoaded`.
+
+```json
+{ "method": "thread/unsubscribe", "id": 22, "params": { "threadId": "thr_123" } }
+{ "id": 22, "result": { "status": "unsubscribed" } }
+{ "method": "thread/status/changed", "params": {
+    "threadId": "thr_123",
+    "status": { "type": "notLoaded" }
+} }
+{ "method": "thread/closed", "params": { "threadId": "thr_123" } }
+```
+
 ### Example: Read a thread
 
-Use `thread/read` to fetch a stored thread by id without resuming it. Pass `includeTurns` when you want the rollout history loaded into `thread.turns`.
+Use `thread/read` to fetch a stored thread by id without resuming it. Pass `includeTurns` when you want the rollout history loaded into `thread.turns`. The returned thread includes `agentNickname` and `agentRole` for AgentControl-spawned thread sub-agents when available.
 
 ```json
 { "method": "thread/read", "id": 22, "params": { "threadId": "thr_123" } }
-{ "id": 22, "result": { "thread": { "id": "thr_123", "turns": [] } } }
+{ "id": 22, "result": {
+    "thread": { "id": "thr_123", "status": { "type": "notLoaded" }, "turns": [] }
+} }
 ```
 
 ```json
 { "method": "thread/read", "id": 23, "params": { "threadId": "thr_123", "includeTurns": true } }
-{ "id": 23, "result": { "thread": { "id": "thr_123", "turns": [ ... ] } } }
+{ "id": 23, "result": {
+    "thread": { "id": "thr_123", "status": { "type": "notLoaded" }, "turns": [ ... ] }
+} }
+```
+
+### Example: Update stored thread metadata
+
+Use `thread/metadata/update` to patch sqlite-backed metadata for a thread without resuming it. Today this supports persisted `gitInfo`; omitted fields are left unchanged, while explicit `null` clears a stored value.
+
+```json
+{ "method": "thread/metadata/update", "id": 24, "params": {
+    "threadId": "thr_123",
+    "gitInfo": { "branch": "feature/sidebar-pr" }
+} }
+{ "id": 24, "result": {
+    "thread": {
+        "id": "thr_123",
+        "gitInfo": { "sha": null, "branch": "feature/sidebar-pr", "originUrl": null }
+    }
+} }
+
+{ "method": "thread/metadata/update", "id": 25, "params": {
+    "threadId": "thr_123",
+    "gitInfo": { "branch": null }
+} }
+{ "id": 25, "result": {
+    "thread": {
+        "id": "thr_123",
+        "gitInfo": null
+    }
+} }
 ```
 
 ### Example: Archive a thread
@@ -206,9 +381,36 @@ Use `thread/archive` to move the persisted rollout (stored as a JSONL file on di
 ```json
 { "method": "thread/archive", "id": 21, "params": { "threadId": "thr_b" } }
 { "id": 21, "result": {} }
+{ "method": "thread/archived", "params": { "threadId": "thr_b" } }
 ```
 
 An archived thread will not appear in `thread/list` unless `archived` is set to `true`.
+
+### Example: Unarchive a thread
+
+Use `thread/unarchive` to move an archived rollout back into the sessions directory.
+
+```json
+{ "method": "thread/unarchive", "id": 24, "params": { "threadId": "thr_b" } }
+{ "id": 24, "result": { "thread": { "id": "thr_b" } } }
+{ "method": "thread/unarchived", "params": { "threadId": "thr_b" } }
+```
+
+### Example: Trigger thread compaction
+
+Use `thread/compact/start` to trigger manual history compaction for a thread. The request returns immediately with `{}`.
+
+Progress is emitted as standard `turn/*` and `item/*` notifications on the same `threadId`. Clients should expect a single compaction item:
+
+- `item/started` with `item: { "type": "contextCompaction", ... }`
+- `item/completed` with the same `contextCompaction` item id
+
+While compaction is running, the thread is effectively in a turn so clients should surface progress UI based on the notifications.
+
+```json
+{ "method": "thread/compact/start", "id": 25, "params": { "threadId": "thr_b" } }
+{ "id": 25, "result": {} }
+```
 
 ### Example: Start a turn (send user input)
 
@@ -219,6 +421,11 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 - `{"type":"localImage","path":"/tmp/screenshot.png"}`
 
 You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn.
+
+`approvalsReviewer` accepts:
+
+- `"user"` — default. Review approval requests directly in the client.
+- `"guardian_subagent"` — route approval requests to a carefully prompted subagent that gathers relevant context and applies a risk-based decision framework before approving or denying the request.
 
 ```json
 { "method": "turn/start", "id": 30, "params": {
@@ -272,6 +479,46 @@ Invoke a skill explicitly by including `$<skill-name>` in the text input and add
 } } }
 ```
 
+### Example: Start a turn (invoke an app)
+
+Invoke an app by including `$<app-slug>` in the text input and adding a `mention` input item with the app id in `app://<connector-id>` form.
+
+```json
+{ "method": "turn/start", "id": 34, "params": {
+    "threadId": "thr_123",
+    "input": [
+        { "type": "text", "text": "$demo-app Summarize the latest updates." },
+        { "type": "mention", "name": "Demo App", "path": "app://demo-app" }
+    ]
+} }
+{ "id": 34, "result": { "turn": {
+    "id": "turn_458",
+    "status": "inProgress",
+    "items": [],
+    "error": null
+} } }
+```
+
+### Example: Start a turn (invoke a plugin)
+
+Invoke a plugin by including a UI mention token such as `@sample` in the text input and adding a `mention` input item with the exact `plugin://<plugin-name>@<marketplace-name>` path returned by `plugin/list`.
+
+```json
+{ "method": "turn/start", "id": 35, "params": {
+    "threadId": "thr_123",
+    "input": [
+        { "type": "text", "text": "@sample Summarize the latest updates." },
+        { "type": "mention", "name": "Sample Plugin", "path": "plugin://sample@test" }
+    ]
+} }
+{ "id": 35, "result": { "turn": {
+    "id": "turn_459",
+    "status": "inProgress",
+    "items": [],
+    "error": null
+} } }
+```
+
 ### Example: Interrupt an active turn
 
 You can cancel a running Turn with `turn/interrupt`.
@@ -284,7 +531,34 @@ You can cancel a running Turn with `turn/interrupt`.
 { "id": 31, "result": {} }
 ```
 
-The server requests cancellations for running subprocesses, then emits a `turn/completed` event with `status: "interrupted"`. Rely on the `turn/completed` to know when Codex-side cleanup is done.
+The server requests cancellation of the active turn, then emits a `turn/completed` event with `status: "interrupted"`. This does not terminate background terminals; use `thread/backgroundTerminals/clean` when you explicitly want to stop those shells. Rely on the `turn/completed` event to know when turn interruption has finished.
+
+### Example: Clean background terminals
+
+Use `thread/backgroundTerminals/clean` to terminate all running background terminals associated with a thread. This method is experimental and requires `capabilities.experimentalApi = true`.
+
+```json
+{ "method": "thread/backgroundTerminals/clean", "id": 35, "params": {
+    "threadId": "thr_123"
+} }
+{ "id": 35, "result": {} }
+```
+
+### Example: Steer an active turn
+
+Use `turn/steer` to append additional user input to the currently active turn. This does not emit
+`turn/started` and does not accept turn context overrides.
+
+```json
+{ "method": "turn/steer", "id": 32, "params": {
+    "threadId": "thr_123",
+    "input": [ { "type": "text", "text": "Actually focus on failing tests first." } ],
+    "expectedTurnId": "turn_456"
+} }
+{ "id": 32, "result": { "turnId": "turn_456" } }
+```
+
+`expectedTurnId` is required. If there is no active turn (or `expectedTurnId` does not match the active turn), the request fails with an `invalid request` error.
 
 ### Example: Request a code review
 
@@ -362,11 +636,21 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
 ```json
 { "method": "command/exec", "id": 32, "params": {
     "command": ["ls", "-la"],
+    "processId": "ls-1",                           // optional string; required for streaming and ability to terminate the process
     "cwd": "/Users/me/project",                    // optional; defaults to server cwd
+    "env": { "FOO": "override" },                  // optional; merges into the server env and overrides matching names
+    "size": { "rows": 40, "cols": 120 },           // optional; PTY size in character cells, only valid with tty=true
     "sandboxPolicy": { "type": "workspaceWrite" }, // optional; defaults to user config
-    "timeoutMs": 10000                             // optional; ms timeout; defaults to server timeout
+    "outputBytesCap": 1048576,                     // optional; per-stream capture cap
+    "disableOutputCap": false,                     // optional; cannot be combined with outputBytesCap
+    "timeoutMs": 10000,                            // optional; ms timeout; defaults to server timeout
+    "disableTimeout": false                        // optional; cannot be combined with timeoutMs
 } }
-{ "id": 32, "result": { "exitCode": 0, "stdout": "...", "stderr": "" } }
+{ "id": 32, "result": {
+    "exitCode": 0,
+    "stdout": "...",
+    "stderr": ""
+} }
 ```
 
 - For clients that are already sandboxed externally, set `sandboxPolicy` to `{"type":"externalSandbox","networkAccess":"enabled"}` (or omit `networkAccess` to keep it restricted). Codex will not enforce its own sandbox in this mode; it tells the model it has full file-system access and passes the `networkAccess` state through `environment_context`.
@@ -375,20 +659,163 @@ Notes:
 
 - Empty `command` arrays are rejected.
 - `sandboxPolicy` accepts the same shape used by `turn/start` (e.g., `dangerFullAccess`, `readOnly`, `workspaceWrite` with flags, `externalSandbox` with `networkAccess` `restricted|enabled`).
+- `env` merges into the environment produced by the server's shell environment policy. Matching names are overridden; unspecified variables are left intact.
 - When omitted, `timeoutMs` falls back to the server default.
+- When omitted, `outputBytesCap` falls back to the server default of 1 MiB per stream.
+- `disableOutputCap: true` disables stdout/stderr capture truncation for that `command/exec` request. It cannot be combined with `outputBytesCap`.
+- `disableTimeout: true` disables the timeout entirely for that `command/exec` request. It cannot be combined with `timeoutMs`.
+- `processId` is optional for buffered execution. When omitted, Codex generates an internal id for lifecycle tracking, but `tty`, `streamStdin`, and `streamStdoutStderr` must stay disabled and follow-up `command/exec/write` / `command/exec/terminate` calls are not available for that command.
+- `size` is only valid when `tty: true`. It sets the initial PTY size in character cells.
+- Buffered Windows sandbox execution accepts `processId` for correlation, but `command/exec/write` and `command/exec/terminate` are still unsupported for those requests.
+- Buffered Windows sandbox execution also requires the default output cap; custom `outputBytesCap` and `disableOutputCap` are unsupported there.
+- `tty`, `streamStdin`, and `streamStdoutStderr` are optional booleans. Legacy requests that omit them continue to use buffered execution.
+- `tty: true` implies PTY mode plus `streamStdin: true` and `streamStdoutStderr: true`.
+- `tty` and `streamStdin` do not disable the timeout on their own; omit `timeoutMs` to use the server default timeout, or set `disableTimeout: true` to keep the process alive until exit or explicit termination.
+- `outputBytesCap` applies independently to `stdout` and `stderr`, and streamed bytes are not duplicated into the final response.
+- The `command/exec` response is deferred until the process exits and is sent only after all `command/exec/outputDelta` notifications for that connection have been emitted.
+- `command/exec/outputDelta` notifications are connection-scoped. If the originating connection closes, the server terminates the process.
+
+Streaming stdin/stdout uses base64 so PTY sessions can carry arbitrary bytes:
+
+```json
+{ "method": "command/exec", "id": 33, "params": {
+    "command": ["bash", "-i"],
+    "processId": "bash-1",
+    "tty": true,
+    "outputBytesCap": 32768
+} }
+{ "method": "command/exec/outputDelta", "params": {
+    "processId": "bash-1",
+    "stream": "stdout",
+    "deltaBase64": "YmFzaC00LjQkIA==",
+    "capReached": false
+} }
+{ "method": "command/exec/write", "id": 34, "params": {
+    "processId": "bash-1",
+    "deltaBase64": "cHdkCg=="
+} }
+{ "id": 34, "result": {} }
+{ "method": "command/exec/write", "id": 35, "params": {
+    "processId": "bash-1",
+    "closeStdin": true
+} }
+{ "id": 35, "result": {} }
+{ "method": "command/exec/resize", "id": 36, "params": {
+    "processId": "bash-1",
+    "size": { "rows": 48, "cols": 160 }
+} }
+{ "id": 36, "result": {} }
+{ "method": "command/exec/terminate", "id": 37, "params": {
+    "processId": "bash-1"
+} }
+{ "id": 37, "result": {} }
+{ "id": 33, "result": {
+    "exitCode": 137,
+    "stdout": "",
+    "stderr": ""
+} }
+```
+
+- `command/exec/write` accepts either `deltaBase64`, `closeStdin`, or both.
+- Clients may supply a connection-scoped string `processId` in `command/exec`; `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` only accept those client-supplied string ids.
+- `command/exec/outputDelta.processId` is always the client-supplied string id from the original `command/exec` request.
+- `command/exec/outputDelta.stream` is `stdout` or `stderr`. PTY mode multiplexes terminal output through `stdout`.
+- `command/exec/outputDelta.capReached` is `true` on the final streamed chunk for a stream when `outputBytesCap` truncates that stream; later output on that stream is dropped.
+- `command/exec.params.env` overrides the server-computed environment per key; set a key to `null` to unset an inherited variable.
+- `command/exec/resize` is only supported for PTY-backed `command/exec` sessions.
+
+### Example: Filesystem utilities
+
+These methods operate on absolute paths on the host filesystem and cover reading, writing, directory traversal, copying, removal, and change notifications.
+
+All filesystem paths in this section must be absolute.
+
+```json
+{ "method": "fs/createDirectory", "id": 40, "params": {
+    "path": "/tmp/example/nested",
+    "recursive": true
+} }
+{ "id": 40, "result": {} }
+{ "method": "fs/writeFile", "id": 41, "params": {
+    "path": "/tmp/example/nested/note.txt",
+    "dataBase64": "aGVsbG8="
+} }
+{ "id": 41, "result": {} }
+{ "method": "fs/getMetadata", "id": 42, "params": {
+    "path": "/tmp/example/nested/note.txt"
+} }
+{ "id": 42, "result": {
+    "isDirectory": false,
+    "isFile": true,
+    "createdAtMs": 1730910000000,
+    "modifiedAtMs": 1730910000000
+} }
+{ "method": "fs/readFile", "id": 43, "params": {
+    "path": "/tmp/example/nested/note.txt"
+} }
+{ "id": 43, "result": {
+    "dataBase64": "aGVsbG8="
+} }
+```
+
+- `fs/getMetadata` returns whether the path currently resolves to a directory or regular file, plus `createdAtMs` and `modifiedAtMs` in Unix milliseconds. If a timestamp is unavailable on the current platform, that field is `0`.
+- `fs/createDirectory` defaults `recursive` to `true` when omitted.
+- `fs/remove` defaults both `recursive` and `force` to `true` when omitted.
+- `fs/readFile` always returns base64 bytes via `dataBase64`, and `fs/writeFile` always expects base64 bytes in `dataBase64`.
+- `fs/copy` handles both file copies and directory-tree copies; it requires `recursive: true` when `sourcePath` is a directory. Recursive copies traverse regular files, directories, and symlinks; other entry types are skipped.
 
 ## Events
 
-Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
+Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `thread/archived`, `thread/unarchived`, `thread/closed`, `turn/*`, and `item/*` notifications.
+
+Thread realtime uses a separate thread-scoped notification surface. `thread/realtime/*` notifications are ephemeral transport events, not `ThreadItem`s, and are not returned by `thread/read`, `thread/resume`, or `thread/fork`.
+
+### Notification opt-out
+
+Clients can suppress specific notifications per connection by sending exact method names in `initialize.params.capabilities.optOutNotificationMethods`.
+
+- Exact-match only: `item/agentMessage/delta` suppresses only that method.
+- Unknown method names are ignored.
+- Applies to app-server typed notifications such as `thread/*`, `turn/*`, `item/*`, and `rawResponseItem/*`.
+- Does not apply to requests/responses/errors.
+
+Examples:
+
+- Opt out of thread lifecycle notifications: `thread/started`
+- Opt out of streamed agent text deltas: `item/agentMessage/delta`
+
+### Fuzzy file search events (experimental)
+
+The fuzzy file search session API emits per-query notifications:
+
+- `fuzzyFileSearch/sessionUpdated` — `{ sessionId, query, files }` with the current matching files for the active query.
+- `fuzzyFileSearch/sessionCompleted` — `{ sessionId, query }` once indexing/matching for that query has completed.
+
+### Thread realtime events (experimental)
+
+The thread realtime API emits thread-scoped notifications for session lifecycle and streaming media:
+
+- `thread/realtime/started` — `{ threadId, sessionId }` once realtime starts for the thread (experimental).
+- `thread/realtime/itemAdded` — `{ threadId, item }` for non-audio realtime items (experimental). `item` is forwarded as raw JSON while the upstream websocket item schema remains unstable.
+- `thread/realtime/outputAudio/delta` — `{ threadId, audio }` for streamed output audio chunks (experimental). `audio` uses camelCase fields (`data`, `sampleRate`, `numChannels`, `samplesPerChannel`).
+- `thread/realtime/error` — `{ threadId, message }` when realtime encounters a transport or backend error (experimental).
+- `thread/realtime/closed` — `{ threadId, reason }` when the realtime transport closes (experimental).
+
+Because audio is intentionally separate from `ThreadItem`, clients can opt out of `thread/realtime/outputAudio/delta` independently with `optOutNotificationMethods`.
+
+### Windows sandbox setup events
+
+- `windowsSandbox/setupCompleted` — `{ mode, success, error }` after a `windowsSandbox/setupStart` request finishes.
 
 ### Turn events
 
-The app-server streams JSON-RPC notifications while a turn is running. Each turn starts with `turn/started` (initial `turn`) and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
+The app-server streams JSON-RPC notifications while a turn is running. Each turn emits `turn/started` when it begins running and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
 
 - `turn/started` — `{ turn }` with the turn id, empty `items`, and `status: "inProgress"`.
 - `turn/completed` — `{ turn }` where `turn.status` is `completed`, `interrupted`, or `failed`; failures carry `{ error: { message, codexErrorInfo?, additionalDetails? } }`.
 - `turn/diff/updated` — `{ threadId, turnId, diff }` represents the up-to-date snapshot of the turn-level unified diff, emitted after every FileChange item. `diff` is the latest aggregated unified diff across every file change in the turn. UIs can render this to show the full "what changed" view without stitching individual `fileChange` items.
 - `turn/plan/updated` — `{ turnId, explanation?, plan }` whenever the agent shares or changes its plan; each `plan` entry is `{ step, status }` with `status` in `pending`, `inProgress`, or `completed`.
+- `model/rerouted` — `{ threadId, turnId, fromModel, toModel, reason }` when the backend reroutes a request to a different model (for example, due to high-risk cyber safety checks).
 
 Today both notifications carry an empty `items` array even when item events were streamed; rely on `item/*` notifications for the canonical item list until this is fixed.
 
@@ -398,27 +825,37 @@ Today both notifications carry an empty `items` array even when item events were
 
 - `userMessage` — `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`).
 - `agentMessage` — `{id, text}` containing the accumulated agent reply.
+- `plan` — `{id, text}` emitted for plan-mode turns; plan text can stream via `item/plan/delta` (experimental).
 - `reasoning` — `{id, summary, content}` where `summary` holds streamed reasoning summaries (applicable for most OpenAI models) and `content` holds raw reasoning blocks (applicable for e.g. open source models).
 - `commandExecution` — `{id, command, cwd, status, commandActions, aggregatedOutput?, exitCode?, durationMs?}` for sandboxed commands; `status` is `inProgress`, `completed`, `failed`, or `declined`.
 - `fileChange` — `{id, changes, status}` describing proposed edits; `changes` list `{path, kind, diff}` and `status` is `inProgress`, `completed`, `failed`, or `declined`.
 - `mcpToolCall` — `{id, server, tool, status, arguments, result?, error?}` describing MCP calls; `status` is `inProgress`, `completed`, or `failed`.
-- `collabToolCall` — `{id, tool, status, senderThreadId, receiverThreadId?, newThreadId?, prompt?, agentStatus?}` describing collab tool calls (`spawn_agent`, `send_input`, `wait`, `close_agent`); `status` is `inProgress`, `completed`, or `failed`.
-- `webSearch` — `{id, query}` for a web search request issued by the agent.
+- `collabToolCall` — `{id, tool, status, senderThreadId, receiverThreadId?, newThreadId?, prompt?, agentStatus?}` describing collab tool calls (`spawn_agent`, `send_input`, `resume_agent`, `wait`, `close_agent`); `status` is `inProgress`, `completed`, or `failed`.
+- `webSearch` — `{id, query, action?}` for a web search request issued by the agent; `action` mirrors the Responses API web_search action payload (`search`, `open_page`, `find_in_page`) and may be omitted until completion.
 - `imageView` — `{id, path}` emitted when the agent invokes the image viewer tool.
 - `enteredReviewMode` — `{id, review}` sent when the reviewer starts; `review` is a short user-facing label such as `"current changes"` or the requested target description.
 - `exitedReviewMode` — `{id, review}` emitted when the reviewer finishes; `review` is the full plain-text review (usually, overall notes plus bullet point findings).
-- `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically.
+- `contextCompaction` — `{id}` emitted when codex compacts the conversation history. This can happen automatically.
+- `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically. **Deprecated:** Use `contextCompaction` instead.
 
-All items emit two shared lifecycle events:
+All items emit shared lifecycle events:
 
 - `item/started` — emits the full `item` when a new unit of work begins so the UI can render it immediately; the `item.id` in this payload matches the `itemId` used by deltas.
-- `item/completed` — sends the final `item` once that work finishes (e.g., after a tool call or message completes); treat this as the authoritative state.
+- `item/completed` — sends the final `item` once that work itself finishes (for example, after a tool call or message completes); treat this as the authoritative execution/result state.
+- `item/autoApprovalReview/started` — [UNSTABLE] temporary guardian notification carrying `{threadId, turnId, targetItemId, review, action?}` when guardian approval review begins. This shape is expected to change soon.
+- `item/autoApprovalReview/completed` — [UNSTABLE] temporary guardian notification carrying `{threadId, turnId, targetItemId, review, action?}` when guardian approval review resolves. This shape is expected to change soon.
+
+`review` is [UNSTABLE] and currently has `{status, riskScore?, riskLevel?, rationale?}`, where `status` is one of `inProgress`, `approved`, `denied`, or `aborted`. `action` is the guardian action summary payload from core when available and is intended to support temporary standalone pending-review UI. These notifications are separate from the target item's own `item/completed` lifecycle and are intentionally temporary while the guardian app protocol is still being designed.
 
 There are additional item-specific events:
 
 #### agentMessage
 
 - `item/agentMessage/delta` — appends streamed text for the agent message; concatenate `delta` values for the same `itemId` in order to reconstruct the full reply.
+
+#### plan
+
+- `item/plan/delta` — streams proposed plan content for plan items (experimental); concatenate `delta` values for the same plan `itemId`. These deltas correspond to the `<proposed_plan>` block.
 
 #### reasoning
 
@@ -460,27 +897,140 @@ When an upstream HTTP status is available (for example, from the Responses API o
 Certain actions (shell commands or modifying files) may require explicit user approval depending on the user's config. When `turn/start` is used, the app-server drives an approval flow by sending a server-initiated JSON-RPC request to the client. The client must respond to tell Codex whether to proceed. UIs should present these requests inline with the active turn so users can review the proposed command or diff before choosing.
 
 - Requests include `threadId` and `turnId`—use them to scope UI state to the active conversation.
-- Respond with a single `{ "decision": "accept" | "decline" }` payload (plus optional `acceptSettings` on command executions). The server resumes or declines the work and ends the item with `item/completed`.
+- Respond with a single `{ "decision": ... }` payload. Command approvals support `accept`, `acceptForSession`, `acceptWithExecpolicyAmendment`, `applyNetworkPolicyAmendment`, `decline`, or `cancel`. The server resumes or declines the work and ends the item with `item/completed`.
 
 ### Command execution approvals
 
 Order of messages:
 
 1. `item/started` — shows the pending `commandExecution` item with `command`, `cwd`, and other fields so you can render the proposed action.
-2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `reason`, plus `command`, `cwd`, and `commandActions` for friendly display.
-3. Client response — `{ "decision": "accept", "acceptSettings": { "forSession": false } }` or `{ "decision": "decline" }`.
-4. `item/completed` — final `commandExecution` item with `status: "completed" | "failed" | "declined"` and execution output. Render this as the authoritative result.
+2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `approvalId` (for subcommand callbacks), and `reason`. For normal command approvals, it also includes `command`, `cwd`, and `commandActions` for friendly display. When `initialize.params.capabilities.experimentalApi = true`, it may also include experimental `additionalPermissions` describing requested per-command sandbox access; any filesystem paths in that payload are absolute on the wire, and network access is represented as `additionalPermissions.network.enabled`. For network-only approvals, those command fields may be omitted and `networkApprovalContext` is provided instead. Optional persistence hints may also be included via `proposedExecpolicyAmendment` and `proposedNetworkPolicyAmendments`. Clients can prefer `availableDecisions` when present to render the exact set of choices the server wants to expose, while still falling back to the older heuristics if it is omitted.
+3. Client response — for example `{ "decision": "accept" }`, `{ "decision": "acceptForSession" }`, `{ "decision": { "acceptWithExecpolicyAmendment": { "execpolicy_amendment": [...] } } }`, `{ "decision": { "applyNetworkPolicyAmendment": { "network_policy_amendment": { "host": "example.com", "action": "allow" } } } }`, `{ "decision": "decline" }`, or `{ "decision": "cancel" }`.
+4. `serverRequest/resolved` — `{ threadId, requestId }` confirms the pending request has been resolved or cleared, including lifecycle cleanup on turn start/complete/interrupt.
+5. `item/completed` — final `commandExecution` item with `status: "completed" | "failed" | "declined"` and execution output. Render this as the authoritative result.
 
 ### File change approvals
 
 Order of messages:
 
 1. `item/started` — emits a `fileChange` item with `changes` (diff chunk summaries) and `status: "inProgress"`. Show the proposed edits and paths to the user.
-2. `item/fileChange/requestApproval` (request) — includes `itemId`, `threadId`, `turnId`, and an optional `reason`.
-3. Client response — `{ "decision": "accept" }` or `{ "decision": "decline" }`.
-4. `item/completed` — returns the same `fileChange` item with `status` updated to `completed`, `failed`, or `declined` after the patch attempt. Rely on this to show success/failure and finalize the diff state in your UI.
+2. `item/fileChange/requestApproval` (request) — includes `itemId`, `threadId`, `turnId`, an optional `reason`, and may include unstable `grantRoot` when the agent is asking for session-scoped write access under a specific root.
+3. Client response — `{ "decision": "accept" }`, `{ "decision": "acceptForSession" }`, `{ "decision": "decline" }`, or `{ "decision": "cancel" }`.
+4. `serverRequest/resolved` — `{ threadId, requestId }` confirms the pending request has been resolved or cleared, including lifecycle cleanup on turn start/complete/interrupt.
+5. `item/completed` — returns the same `fileChange` item with `status` updated to `completed`, `failed`, or `declined` after the patch attempt. Rely on this to show success/failure and finalize the diff state in your UI.
 
 UI guidance for IDEs: surface an approval dialog as soon as the request arrives. The turn will proceed after the server receives a response to the approval request. The terminal `item/completed` notification will be sent with the appropriate status.
+
+### request_user_input
+
+When the client responds to `item/tool/requestUserInput`, the server emits `serverRequest/resolved` with `{ threadId, requestId }`. If the pending request is cleared by turn start, turn completion, or turn interruption before the client answers, the server emits the same notification for that cleanup.
+
+### MCP server elicitations
+
+MCP servers can interrupt a turn and ask the client for structured input via `mcpServer/elicitation/request`.
+
+Order of messages:
+
+1. `mcpServer/elicitation/request` (request) — includes `threadId`, nullable `turnId`, `serverName`, and either:
+   - a form request: `{ "mode": "form", "message": "...", "requestedSchema": { ... } }`
+   - a URL request: `{ "mode": "url", "message": "...", "url": "...", "elicitationId": "..." }`
+2. Client response — `{ "action": "accept", "content": ... }`, `{ "action": "decline", "content": null }`, or `{ "action": "cancel", "content": null }`.
+3. `serverRequest/resolved` — `{ threadId, requestId }` confirms the pending request has been resolved or cleared, including lifecycle cleanup on turn start/complete/interrupt.
+
+`turnId` is best-effort. When the elicitation is correlated with an active turn, the request includes that turn id; otherwise it is `null`.
+
+### Permission requests
+
+The built-in `request_permissions` tool sends an `item/permissions/requestApproval` JSON-RPC request to the client with the requested permission profile. This v2 payload mirrors the standalone tool's narrower permission shape, so it can request network access and additional filesystem access but does not include the broader `macos` branch used by command-execution `additionalPermissions`.
+
+```json
+{
+  "method": "item/permissions/requestApproval",
+  "id": 61,
+  "params": {
+    "threadId": "thr_123",
+    "turnId": "turn_123",
+    "itemId": "call_123",
+    "reason": "Select a workspace root",
+    "permissions": {
+      "fileSystem": {
+        "write": [
+          "/Users/me/project",
+          "/Users/me/shared"
+        ]
+      }
+    }
+  }
+}
+```
+
+The client responds with `result.permissions`, which should be the granted subset of the requested permission profile. It may also set `result.scope` to `"session"` to make the grant persist for later turns in the same session; omitted or `"turn"` keeps the existing turn-scoped behavior:
+
+```json
+{
+  "id": 61,
+  "result": {
+    "scope": "session",
+    "permissions": {
+      "fileSystem": {
+        "write": [
+          "/Users/me/project"
+        ]
+      }
+    }
+  }
+}
+```
+
+Only the granted subset matters on the wire. Any permissions omitted from `result.permissions` are treated as denied, including omitted nested keys inside `result.permissions.macos`, so a sparse response like `{ "permissions": { "macos": { "accessibility": true } } }` grants only accessibility. Any permissions not present in the original request are ignored by the server.
+
+Within the same turn, granted permissions are sticky: later shell-like tool calls can automatically reuse the granted subset without reissuing a separate permission request.
+
+If the session approval policy uses `Granular` with `request_permissions: false`, standalone `request_permissions` tool calls are auto-denied and no `item/permissions/requestApproval` prompt is sent. Inline `with_additional_permissions` command requests remain controlled by `sandbox_approval`, and any previously granted permissions remain sticky for later shell-like calls in the same turn.
+
+### Dynamic tool calls (experimental)
+
+`dynamicTools` on `thread/start` and the corresponding `item/tool/call` request/response flow are experimental APIs. To enable them, set `initialize.params.capabilities.experimentalApi = true`.
+
+Each dynamic tool may set `deferLoading`. When omitted, it defaults to `false`. Set it to `true` to keep the tool registered and callable by runtime features such as `js_repl`, while excluding it from the model-facing tool list sent on ordinary turns.
+
+When a dynamic tool is invoked during a turn, the server sends an `item/tool/call` JSON-RPC request to the client:
+
+```json
+{
+  "method": "item/tool/call",
+  "id": 60,
+  "params": {
+    "threadId": "thr_123",
+    "turnId": "turn_123",
+    "callId": "call_123",
+    "tool": "lookup_ticket",
+    "arguments": { "id": "ABC-123" }
+  }
+}
+```
+
+The server also emits item lifecycle notifications around the request:
+
+1. `item/started` with `item.type = "dynamicToolCall"`, `status = "inProgress"`, plus `tool` and `arguments`.
+2. `item/tool/call` request.
+3. Client response.
+4. `item/completed` with `item.type = "dynamicToolCall"`, final `status`, and the returned `contentItems`/`success`.
+
+The client must respond with content items. Use `inputText` for text and `inputImage` for image URLs/data URLs:
+
+```json
+{
+  "id": 60,
+  "result": {
+    "contentItems": [
+      { "type": "inputText", "text": "Ticket ABC-123 is open." },
+      { "type": "inputImage", "imageUrl": "data:image/png;base64,AAA" }
+    ],
+    "success": true
+  }
+}
+```
 
 ## Skills
 
@@ -516,11 +1066,21 @@ $skill-creator Add a new skill for triaging flaky CI and include step-by-step us
 ```
 
 Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`).
+You can also add `perCwdExtraUserRoots` to scan additional absolute paths as `user` scope for specific `cwd` entries.
+Entries whose `cwd` is not present in `cwds` are ignored.
+`skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk.
+The server also emits `skills/changed` notifications when watched local skill files change. Treat this as an invalidation signal and re-run `skills/list` with your current params when needed.
 
 ```json
 { "method": "skills/list", "id": 25, "params": {
-    "cwds": ["/Users/me/project"],
-    "forceReload": false
+    "cwds": ["/Users/me/project", "/Users/me/other-project"],
+    "forceReload": true,
+    "perCwdExtraUserRoots": [
+      {
+        "cwd": "/Users/me/project",
+        "extraUserRoots": ["/Users/me/shared-skills"]
+      }
+    ]
 } }
 { "id": 25, "result": {
     "data": [{
@@ -545,6 +1105,13 @@ Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, wi
 } }
 ```
 
+```json
+{
+  "method": "skills/changed",
+  "params": {}
+}
+```
+
 To enable or disable a skill by path:
 
 ```json
@@ -558,18 +1125,112 @@ To enable or disable a skill by path:
 }
 ```
 
+## Apps
+
+Use `app/list` to fetch available apps (connectors). Each entry includes metadata like the app `id`, display `name`, `installUrl`, `branding`, `appMetadata`, `labels`, whether it is currently accessible, and whether it is enabled in config.
+
+```json
+{ "method": "app/list", "id": 50, "params": {
+    "cursor": null,
+    "limit": 50,
+    "threadId": "thr_123",
+    "forceRefetch": false
+} }
+{ "id": 50, "result": {
+    "data": [
+        {
+            "id": "demo-app",
+            "name": "Demo App",
+            "description": "Example connector for documentation.",
+            "logoUrl": "https://example.com/demo-app.png",
+            "logoUrlDark": null,
+            "distributionChannel": null,
+            "branding": null,
+            "appMetadata": null,
+            "labels": null,
+            "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
+            "isAccessible": true,
+            "isEnabled": true
+        }
+    ],
+    "nextCursor": null
+} }
+```
+
+When `threadId` is provided, app feature gating (`Feature::Apps`) is evaluated using that thread's config snapshot. When omitted, the latest global config is used.
+
+`app/list` returns after both accessible apps and directory apps are loaded. Set `forceRefetch: true` to bypass app caches and fetch fresh data from sources. Cache entries are only replaced when those refetches succeed.
+
+The server also emits `app/list/updated` notifications whenever either source (accessible apps or directory apps) finishes loading. Each notification includes the latest merged app list.
+
+```json
+{
+  "method": "app/list/updated",
+  "params": {
+    "data": [
+      {
+        "id": "demo-app",
+        "name": "Demo App",
+        "description": "Example connector for documentation.",
+        "logoUrl": "https://example.com/demo-app.png",
+        "logoUrlDark": null,
+        "distributionChannel": null,
+        "branding": null,
+        "appMetadata": null,
+        "labels": null,
+        "installUrl": "https://chatgpt.com/apps/demo-app/demo-app",
+        "isAccessible": true,
+        "isEnabled": true
+      }
+    ]
+  }
+}
+```
+
+Invoke an app by inserting `$<app-slug>` in the text input. The slug is derived from the app name and lowercased with non-alphanumeric characters replaced by `-` (for example, "Demo App" becomes `$demo-app`). Add a `mention` input item (recommended) so the server uses the exact `app://<connector-id>` path rather than guessing by name. Plugins use the same `mention` item shape, but with `plugin://<plugin-name>@<marketplace-name>` paths from `plugin/list`.
+
+Example:
+
+```
+$demo-app Pull the latest updates from the team.
+```
+
+```json
+{
+  "method": "turn/start",
+  "id": 51,
+  "params": {
+    "threadId": "thread-1",
+    "input": [
+      {
+        "type": "text",
+        "text": "$demo-app Pull the latest updates from the team."
+      },
+      { "type": "mention", "name": "Demo App", "path": "app://demo-app" }
+    ]
+  }
+}
+```
+
 ## Auth endpoints
 
 The JSON-RPC auth/account surface exposes request/response methods plus server-initiated notifications (no `id`). Use these to determine auth state, start or cancel logins, logout, and inspect ChatGPT rate limits.
 
+### Authentication modes
+
+Codex supports these authentication modes. The current mode is surfaced in `account/updated` (`authMode`), which also includes the current ChatGPT `planType` when available, and can be inferred from `account/read`.
+
+- **API key (`apiKey`)**: Caller supplies an OpenAI API key via `account/login/start` with `type: "apiKey"`. The API key is saved and used for API requests.
+- **ChatGPT managed (`chatgpt`)** (recommended): Codex owns the ChatGPT OAuth flow and refresh tokens. Start via `account/login/start` with `type: "chatgpt"`; Codex persists tokens to disk and refreshes them automatically.
+
 ### API Overview
 
 - `account/read` — fetch current account info; optionally refresh tokens.
-- `account/login/start` — begin login (`apiKey` or `chatgpt`).
+- `account/login/start` — begin login (`apiKey`, `chatgpt`).
 - `account/login/completed` (notify) — emitted when a login attempt finishes (success or error).
 - `account/login/cancel` — cancel a pending ChatGPT login by `loginId`.
 - `account/logout` — sign out; triggers `account/updated`.
-- `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`).
+- `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`) and includes the current ChatGPT `planType` when available.
 - `account/rateLimits/read` — fetch ChatGPT rate limits; updates arrive via `account/rateLimits/updated` (notify).
 - `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change.
 - `mcpServer/oauthLogin/completed` (notify) — emitted after a `mcpServer/oauth/login` flow finishes for a server; payload includes `{ name, success, error? }`.
@@ -613,7 +1274,7 @@ Field notes:
 3. Notifications:
    ```json
    { "method": "account/login/completed", "params": { "loginId": null, "success": true, "error": null } }
-   { "method": "account/updated", "params": { "authMode": "apikey" } }
+   { "method": "account/updated", "params": { "authMode": "apikey", "planType": null } }
    ```
 
 ### 3) Log in with ChatGPT (browser flow)
@@ -627,7 +1288,7 @@ Field notes:
 3. Wait for notifications:
    ```json
    { "method": "account/login/completed", "params": { "loginId": "<uuid>", "success": true, "error": null } }
-   { "method": "account/updated", "params": { "authMode": "chatgpt" } }
+   { "method": "account/updated", "params": { "authMode": "chatgpt", "planType": "plus" } }
    ```
 
 ### 4) Cancel a ChatGPT login
@@ -642,7 +1303,7 @@ Field notes:
 ```json
 { "method": "account/logout", "id": 5 }
 { "id": 5, "result": {} }
-{ "method": "account/updated", "params": { "authMode": null } }
+{ "method": "account/updated", "params": { "authMode": null, "planType": null } }
 ```
 
 ### 6) Rate limits (ChatGPT)
@@ -658,3 +1319,117 @@ Field notes:
 - `usedPercent` is current usage within the OpenAI quota window.
 - `windowDurationMins` is the quota window length.
 - `resetsAt` is a Unix timestamp (seconds) for the next reset.
+
+## Experimental API Opt-in
+
+Some app-server methods and fields are intentionally gated behind an experimental capability with no backwards-compatible guarantees. This lets clients choose between:
+
+- Stable surface only (default): no opt-in, no experimental methods/fields exposed.
+- Experimental surface: opt in during `initialize`.
+
+### Generating stable vs experimental client schemas
+
+`codex app-server` schema generation defaults to the stable API surface (experimental fields and methods filtered out). Pass `--experimental` to include experimental methods/fields in generated TypeScript or JSON schema:
+
+```bash
+# Stable-only output (default)
+codex app-server generate-ts --out DIR
+codex app-server generate-json-schema --out DIR
+
+# Include experimental API surface
+codex app-server generate-ts --out DIR --experimental
+codex app-server generate-json-schema --out DIR --experimental
+```
+
+### How clients opt in at runtime
+
+Set `capabilities.experimentalApi` to `true` in your single `initialize` request:
+
+```json
+{
+  "method": "initialize",
+  "id": 1,
+  "params": {
+    "clientInfo": {
+      "name": "my_client",
+      "title": "My Client",
+      "version": "0.1.0"
+    },
+    "capabilities": {
+      "experimentalApi": true
+    }
+  }
+}
+```
+
+Then send the standard `initialized` notification and proceed normally.
+
+Notes:
+
+- If `capabilities` is omitted, `experimentalApi` is treated as `false`.
+- This setting is negotiated once at initialization time for the process lifetime (re-initializing is rejected with `"Already initialized"`).
+
+### What happens without opt-in
+
+If a request uses an experimental method or sets an experimental field without opting in, app-server rejects it with a JSON-RPC error. The message is:
+
+`<descriptor> requires experimentalApi capability`
+
+Examples of descriptor strings:
+
+- `mock/experimentalMethod` (method-level gate)
+- `thread/start.mockExperimentalField` (field-level gate)
+- `askForApproval.granular` (enum-variant gate, for `approvalPolicy: { "granular": ... }`)
+
+### For maintainers: Adding experimental fields and methods
+
+Use this checklist when introducing a field/method that should only be available when the client opts into experimental APIs.
+
+At runtime, clients must send `initialize` with `capabilities.experimentalApi = true` to use experimental methods or fields.
+
+1. Annotate the field in the protocol type (usually `app-server-protocol/src/protocol/v2.rs`) with:
+   ```rust
+   #[experimental("thread/start.myField")]
+   pub my_field: Option<String>,
+   ```
+2. Ensure the params type derives `ExperimentalApi` so field-level gating can be detected at runtime.
+
+3. In `app-server-protocol/src/protocol/common.rs`, keep the method stable and use `inspect_params: true` when only some fields are experimental (like `thread/start`). If the entire method is experimental, annotate the method variant with `#[experimental("method/name")]`.
+
+Enum variants can be gated too:
+
+```rust
+#[derive(ExperimentalApi)]
+enum AskForApproval {
+    #[experimental("askForApproval.granular")]
+    Granular { /* ... */ },
+}
+```
+
+If a stable field contains a nested type that may itself be experimental, mark
+the field with `#[experimental(nested)]` so `ExperimentalApi` bubbles the nested
+reason up through the containing type:
+
+```rust
+#[derive(ExperimentalApi)]
+struct ProfileV2 {
+    #[experimental(nested)]
+    approval_policy: Option<AskForApproval>,
+}
+```
+
+For server-initiated request payloads, annotate the field the same way so schema generation treats it as experimental, and make sure app-server omits that field when the client did not opt into `experimentalApi`.
+
+4. Regenerate protocol fixtures:
+
+   ```bash
+   just write-app-server-schema
+   # Include experimental API fields/methods in fixtures.
+   just write-app-server-schema --experimental
+   ```
+
+5. Verify the protocol crate:
+
+   ```bash
+   cargo test -p codex-app-server-protocol
+   ```

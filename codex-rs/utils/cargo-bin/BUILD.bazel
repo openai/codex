@@ -1,6 +1,17 @@
 load("//:defs.bzl", "codex_rust_crate")
 
+exports_files(
+    ["repo_root.marker"],
+    visibility = ["//visibility:public"],
+)
+
 codex_rust_crate(
     name = "cargo-bin",
     crate_name = "codex_utils_cargo_bin",
+    compile_data = ["repo_root.marker"],
+    lib_data_extra = ["repo_root.marker"],
+    test_data_extra = ["repo_root.marker"],
+    rustc_env = {
+        "CODEX_REPO_ROOT_MARKER": "$(rlocationpath :repo_root.marker)",
+    },
 )

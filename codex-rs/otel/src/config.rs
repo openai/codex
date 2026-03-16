@@ -37,6 +37,7 @@ pub struct OtelSettings {
     pub exporter: OtelExporter,
     pub trace_exporter: OtelExporter,
     pub metrics_exporter: OtelExporter,
+    pub runtime_metrics: bool,
 }
 
 #[derive(Clone, Debug)]

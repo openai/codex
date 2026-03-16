@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used)]
 
 use anyhow::Result;
+use codex_test_macros::large_stack_test;
 use core_test_support::responses::ev_apply_patch_call;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_shell_command_call;
@@ -11,11 +12,10 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 
 use codex_core::features::Feature;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_apply_patch_function_call;
@@ -23,6 +23,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::ev_shell_command_call_with_args;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
@@ -84,7 +85,7 @@ fn apply_patch_responses(
     ]
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -131,7 +132,7 @@ D delete.txt
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -158,7 +159,7 @@ async fn apply_patch_cli_multiple_chunks(model_output: ApplyPatchModelOutput) ->
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -187,7 +188,7 @@ async fn apply_patch_cli_moves_file_to_new_directory(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -215,7 +216,7 @@ async fn apply_patch_cli_updates_file_appends_trailing_newline(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -241,7 +242,7 @@ async fn apply_patch_cli_insert_only_hunk_modifies_file(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -272,7 +273,7 @@ async fn apply_patch_cli_move_overwrites_existing_destination(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -310,7 +311,8 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -333,7 +335,7 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -359,7 +361,7 @@ async fn apply_patch_cli_add_overwrites_existing_file(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -391,7 +393,7 @@ async fn apply_patch_cli_rejects_invalid_hunk_header(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -425,7 +427,7 @@ async fn apply_patch_cli_reports_missing_context(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -461,7 +463,7 @@ async fn apply_patch_cli_reports_missing_target_file(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -498,7 +500,7 @@ async fn apply_patch_cli_delete_missing_file_reports_error(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -523,7 +525,7 @@ async fn apply_patch_cli_rejects_empty_patch(model_output: ApplyPatchModelOutput
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -550,7 +552,7 @@ async fn apply_patch_cli_delete_directory_reports_verification_error(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -578,6 +580,7 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -603,7 +606,7 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -634,6 +637,7 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
+        read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -657,7 +661,7 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -670,7 +674,10 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects(
 
     let harness = apply_patch_harness_with(|builder| {
         builder.with_config(|config| {
-            config.features.enable(Feature::ApplyPatchFreeform);
+            config
+                .features
+                .enable(Feature::ApplyPatchFreeform)
+                .expect("test config should allow feature update");
         })
     })
     .await?;
@@ -691,7 +698,7 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -729,7 +736,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() ->
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -783,9 +790,13 @@ async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result
                     } else {
                         "cat source.txt"
                     };
+                    let args = json!({
+                        "command": command,
+                        "login": false,
+                    });
                     let body = sse(vec![
                         ev_response_created("resp-1"),
-                        ev_shell_command_call(&self.read_call_id, command),
+                        ev_shell_command_call_with_args(&self.read_call_id, &args),
                         ev_completed("resp-1"),
                     ]);
                     ResponseTemplate::new(200)
@@ -855,7 +866,7 @@ async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -899,7 +910,8 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -938,7 +950,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -979,7 +991,8 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1014,7 +1027,7 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 #[test_case(ApplyPatchModelOutput::ShellCommandViaHeredoc)]
 async fn apply_patch_function_accepts_lenient_heredoc_wrapped_patch(
@@ -1037,7 +1050,7 @@ async fn apply_patch_function_accepts_lenient_heredoc_wrapped_patch(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -1060,7 +1073,7 @@ async fn apply_patch_cli_end_of_file_anchor(model_output: ApplyPatchModelOutput)
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -1095,7 +1108,7 @@ async fn apply_patch_cli_missing_second_chunk_context_rejected(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -1129,7 +1142,8 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1154,7 +1168,7 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]
@@ -1192,7 +1206,8 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1220,7 +1235,7 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1263,7 +1278,8 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1288,7 +1304,7 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1334,7 +1350,8 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1378,7 +1395,7 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[large_stack_test]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
 #[test_case(ApplyPatchModelOutput::Shell)]

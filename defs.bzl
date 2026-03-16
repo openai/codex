@@ -1,7 +1,7 @@
 load("@crates//:data.bzl", "DEP_DATA")
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_platform//platform_data:defs.bzl", "platform_data")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_proc_macro", "rust_test")
 load("@rules_rust//cargo/private:cargo_build_script_wrapper.bzl", "cargo_build_script")
 
 PLATFORMS = [
@@ -17,7 +17,7 @@ def multiplatform_binaries(name, platforms = PLATFORMS):
     for platform in platforms:
         platform_data(
             name = name + "_" + platform,
-            platform = "@toolchains_llvm_bootstrapped//platforms:" + platform,
+            platform = "@llvm//platforms:" + platform,
             target = name,
             tags = ["manual"],
         )
@@ -28,16 +28,78 @@ def multiplatform_binaries(name, platforms = PLATFORMS):
         tags = ["manual"],
     )
 
+def _workspace_root_test_impl(ctx):
+    is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
+    launcher = ctx.actions.declare_file(ctx.label.name + ".bat" if is_windows else ctx.label.name)
+    test_bin = ctx.executable.test_bin
+    workspace_root_marker = ctx.file.workspace_root_marker
+    launcher_template = ctx.file._windows_launcher_template if is_windows else ctx.file._bash_launcher_template
+    ctx.actions.expand_template(
+        template = launcher_template,
+        output = launcher,
+        is_executable = True,
+        substitutions = {
+            "__TEST_BIN__": test_bin.short_path,
+            "__WORKSPACE_ROOT_MARKER__": workspace_root_marker.short_path,
+        },
+    )
+
+    runfiles = ctx.runfiles(files = [test_bin, workspace_root_marker]).merge(ctx.attr.test_bin[DefaultInfo].default_runfiles)
+
+    return [
+        DefaultInfo(
+            executable = launcher,
+            files = depset([launcher]),
+            runfiles = runfiles,
+        ),
+        RunEnvironmentInfo(
+            environment = ctx.attr.env,
+        ),
+    ]
+
+workspace_root_test = rule(
+    implementation = _workspace_root_test_impl,
+    test = True,
+    attrs = {
+        "env": attr.string_dict(),
+        "test_bin": attr.label(
+            cfg = "target",
+            executable = True,
+            mandatory = True,
+        ),
+        "workspace_root_marker": attr.label(
+            allow_single_file = True,
+            mandatory = True,
+        ),
+        "_windows_constraint": attr.label(
+            default = "@platforms//os:windows",
+            providers = [platform_common.ConstraintValueInfo],
+        ),
+        "_bash_launcher_template": attr.label(
+            allow_single_file = True,
+            default = "//:workspace_root_test_launcher.sh.tpl",
+        ),
+        "_windows_launcher_template": attr.label(
+            allow_single_file = True,
+            default = "//:workspace_root_test_launcher.bat.tpl",
+        ),
+    },
+)
+
 def codex_rust_crate(
         name,
         crate_name,
         crate_features = [],
         crate_srcs = None,
         crate_edition = None,
+        proc_macro = False,
+        build_script_enabled = True,
         build_script_data = [],
         compile_data = [],
+        lib_data_extra = [],
+        rustc_flags_extra = [],
+        rustc_env = {},
         deps_extra = [],
-        integration_deps_extra = [],
         integration_compile_data_extra = [],
         test_data_extra = [],
         test_tags = [],
@@ -61,11 +123,13 @@ def codex_rust_crate(
         crate_srcs: Optional explicit srcs; defaults to `src/**/*.rs`.
         crate_edition: Rust edition override, if not default.
             You probably don't want this, it's only here for a single caller.
+        proc_macro: Whether this crate builds a proc-macro library.
         build_script_data: Data files exposed to the build script at runtime.
         compile_data: Non-Rust compile-time data for the library target.
+        lib_data_extra: Extra runtime data for the library target.
+        rustc_env: Extra rustc_env entries to merge with defaults.
         deps_extra: Extra normal deps beyond @crates resolution.
             Typically only needed when features add additional deps.
-        integration_deps_extra: Extra deps for integration tests only.
         integration_compile_data_extra: Extra compile_data for integration tests.
         test_data_extra: Extra runtime data for tests.
         test_tags: Tags applied to unit + integration test targets.
@@ -73,80 +137,94 @@ def codex_rust_crate(
         extra_binaries: Additional binary labels to surface as test data and
             `CARGO_BIN_EXE_*` environment variables. These are only needed for binaries from a different crate.
     """
-    deps = all_crate_deps(normal = True) + deps_extra
-    dev_deps = all_crate_deps(normal_dev = True)
-    proc_macro_deps = all_crate_deps(proc_macro = True)
-    proc_macro_dev_deps = all_crate_deps(proc_macro_dev = True)
-
     test_env = {
+        # The launcher resolves an absolute workspace root at runtime so
+        # manifest-only platforms like macOS still point Insta at the real
+        # `codex-rs` checkout.
         "INSTA_WORKSPACE_ROOT": ".",
         "INSTA_SNAPSHOT_PATH": "src",
     }
 
     rustc_env = {
         "BAZEL_PACKAGE": native.package_name(),
-    }
+    } | rustc_env
 
     binaries = DEP_DATA.get(native.package_name())["binaries"]
 
     lib_srcs = crate_srcs or native.glob(["src/**/*.rs"], exclude = binaries.values(), allow_empty = True)
 
-    if native.glob(["build.rs"], allow_empty = True):
+    maybe_deps = []
+
+    if build_script_enabled and native.glob(["build.rs"], allow_empty = True):
         cargo_build_script(
             name = name + "-build-script",
             srcs = ["build.rs"],
             deps = all_crate_deps(build = True),
-            proc_macro_deps = all_crate_deps(build_proc_macro = True),
             data = build_script_data,
             # Some build script deps sniff version-related env vars...
             version = "0.0.0",
         )
 
-        deps = deps + [name + "-build-script"]
+        maybe_deps += [name + "-build-script"]
 
     if lib_srcs:
-        rust_library(
+        lib_rule = rust_proc_macro if proc_macro else rust_library
+        lib_rule(
             name = name,
             crate_name = crate_name,
             crate_features = crate_features,
-            deps = deps,
-            proc_macro_deps = proc_macro_deps,
+            deps = all_crate_deps() + maybe_deps + deps_extra,
             compile_data = compile_data,
+            data = lib_data_extra,
             srcs = lib_srcs,
             edition = crate_edition,
+            rustc_flags = rustc_flags_extra,
             rustc_env = rustc_env,
             visibility = ["//visibility:public"],
         )
 
+        unit_test_binary = name + "-unit-tests-bin"
         rust_test(
-            name = name + "-unit-tests",
+            name = unit_test_binary,
             crate = name,
-            env = test_env,
-            deps = deps + dev_deps,
-            proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
+            deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
+            # Bazel has emitted both `codex-rs/<crate>/...` and
+            # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
+            # prefix so the workspace-root launcher sees Cargo-like metadata
+            # such as `tui/src/...`.
+            rustc_flags = rustc_flags_extra + [
+                "--remap-path-prefix=../codex-rs=",
+                "--remap-path-prefix=codex-rs=",
+            ],
             rustc_env = rustc_env,
             data = test_data_extra,
+            tags = test_tags + ["manual"],
+        )
+
+        workspace_root_test(
+            name = name + "-unit-tests",
+            env = test_env,
+            test_bin = ":" + unit_test_binary,
+            workspace_root_marker = "//codex-rs/utils/cargo-bin:repo_root.marker",
             tags = test_tags,
         )
 
-        maybe_lib = [name]
-    else:
-        maybe_lib = []
+        maybe_deps += [name]
 
     sanitized_binaries = []
     cargo_env = {}
     for binary, main in binaries.items():
         #binary = binary.replace("-", "_")
         sanitized_binaries.append(binary)
-        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rootpath :%s)" % binary
+        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath :%s)" % binary
 
         rust_binary(
             name = binary,
             crate_name = binary.replace("-", "_"),
             crate_root = main,
-            deps = maybe_lib + deps,
-            proc_macro_deps = proc_macro_deps,
+            deps = all_crate_deps() + maybe_deps + deps_extra,
             edition = crate_edition,
+            rustc_flags = rustc_flags_extra,
             srcs = native.glob(["src/**/*.rs"]),
             visibility = ["//visibility:public"],
         )
@@ -154,22 +232,34 @@ def codex_rust_crate(
     for binary_label in extra_binaries:
         sanitized_binaries.append(binary_label)
         binary = Label(binary_label).name
-        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rootpath %s)" % binary_label
+        cargo_env["CARGO_BIN_EXE_" + binary] = "$(rlocationpath %s)" % binary_label
 
     for test in native.glob(["tests/*.rs"], allow_empty = True):
-        test_name = name + "-" + test.removeprefix("tests/").removesuffix(".rs").replace("/", "-")
+        test_file_stem = test.removeprefix("tests/").removesuffix(".rs")
+        test_crate_name = test_file_stem.replace("-", "_")
+        test_name = name + "-" + test_file_stem.replace("/", "-")
         if not test_name.endswith("-test"):
             test_name += "-test"
 
         rust_test(
             name = test_name,
+            crate_name = test_crate_name,
             crate_root = test,
             srcs = [test],
             data = native.glob(["tests/**"], allow_empty = True) + sanitized_binaries + test_data_extra,
             compile_data = native.glob(["tests/**"], allow_empty = True) + integration_compile_data_extra,
-            deps = maybe_lib + deps + dev_deps + integration_deps_extra,
-            proc_macro_deps = proc_macro_deps + proc_macro_dev_deps,
+            deps = all_crate_deps(normal = True, normal_dev = True) + maybe_deps + deps_extra,
+            # Bazel has emitted both `codex-rs/<crate>/...` and
+            # `../codex-rs/<crate>/...` paths for `file!()`. Strip either
+            # prefix so Insta records Cargo-like metadata such as `core/tests/...`.
+            rustc_flags = rustc_flags_extra + [
+                "--remap-path-prefix=../codex-rs=",
+                "--remap-path-prefix=codex-rs=",
+            ],
             rustc_env = rustc_env,
-            env = test_env | cargo_env,
+            # Important: do not merge `test_env` here. Its unit-test-only
+            # `INSTA_WORKSPACE_ROOT="codex-rs"` is tuned for unit tests that
+            # execute from the repo root and can misplace integration snapshots.
+            env = cargo_env,
             tags = test_tags,
         )

@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Final buffered result for `command/exec`.",
+  "properties": {
+    "exitCode": {
+      "description": "Process exit code.",
+      "format": "int32",
+      "type": "integer"
+    },
+    "stderr": {
+      "description": "Buffered stderr capture.\n\nEmpty when stderr was streamed via `command/exec/outputDelta`.",
+      "type": "string"
+    },
+    "stdout": {
+      "description": "Buffered stdout capture.\n\nEmpty when stdout was streamed via `command/exec/outputDelta`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "exitCode",
+    "stderr",
+    "stdout"
+  ],
+  "title": "CommandExecResponse",
+  "type": "object"
+}

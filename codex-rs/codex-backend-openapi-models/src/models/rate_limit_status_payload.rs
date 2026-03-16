@@ -30,6 +30,13 @@ pub struct RateLimitStatusPayload {
         skip_serializing_if = "Option::is_none"
     )]
     pub credits: Option<Option<Box<models::CreditStatusDetails>>>,
+    #[serde(
+        rename = "additional_rate_limits",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub additional_rate_limits: Option<Option<Vec<models::AdditionalRateLimitDetails>>>,
 }
 
 impl RateLimitStatusPayload {
@@ -38,6 +45,7 @@ impl RateLimitStatusPayload {
             plan_type,
             rate_limit: None,
             credits: None,
+            additional_rate_limits: None,
         }
     }
 }

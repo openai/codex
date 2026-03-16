@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "oneOf": [
+    {
+      "properties": {
+        "type": {
+          "enum": [
+            "apiKey"
+          ],
+          "title": "ApiKeyv2::LoginAccountResponseType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ApiKeyv2::LoginAccountResponse",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "authUrl": {
+          "description": "URL the client should open in a browser to initiate the OAuth flow.",
+          "type": "string"
+        },
+        "loginId": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "chatgpt"
+          ],
+          "title": "Chatgptv2::LoginAccountResponseType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authUrl",
+        "loginId",
+        "type"
+      ],
+      "title": "Chatgptv2::LoginAccountResponse",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "type": {
+          "enum": [
+            "chatgptAuthTokens"
+          ],
+          "title": "ChatgptAuthTokensv2::LoginAccountResponseType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ChatgptAuthTokensv2::LoginAccountResponse",
+      "type": "object"
+    }
+  ],
+  "title": "LoginAccountResponse"
+}

@@ -3,28 +3,25 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core::CodexThread;
-use codex_core::protocol::FileChange;
-use codex_core::protocol::Op;
-use codex_core::protocol::ReviewDecision;
 use codex_protocol::ThreadId;
-use mcp_types::ElicitRequest;
-use mcp_types::ElicitRequestParamsRequestedSchema;
-use mcp_types::JSONRPCErrorError;
-use mcp_types::ModelContextProtocolRequest;
-use mcp_types::RequestId;
+use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
+use rmcp::model::ErrorData;
+use rmcp::model::RequestId;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 use serde_json::json;
 use tracing::error;
 
-use crate::codex_tool_runner::INVALID_PARAMS_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PatchApprovalElicitRequestParams {
     pub message: String,
     #[serde(rename = "requestedSchema")]
-    pub requested_schema: ElicitRequestParamsRequestedSchema,
+    pub requested_schema: Value,
     #[serde(rename = "threadId")]
     pub thread_id: ThreadId,
     pub codex_elicitation: String,
@@ -56,6 +53,7 @@ pub(crate) async fn handle_patch_approval_request(
     event_id: String,
     thread_id: ThreadId,
 ) {
+    let approval_id = call_id.clone();
     let mut message_lines = Vec::new();
     if let Some(r) = &reason {
         message_lines.push(r.clone());
@@ -64,11 +62,7 @@ pub(crate) async fn handle_patch_approval_request(
 
     let params = PatchApprovalElicitRequestParams {
         message: message_lines.join("\n"),
-        requested_schema: ElicitRequestParamsRequestedSchema {
-            r#type: "object".to_string(),
-            properties: json!({}),
-            required: None,
-        },
+        requested_schema: json!({"type":"object","properties":{}}),
         thread_id,
         codex_elicitation: "patch-approval".to_string(),
         codex_mcp_tool_call_id: tool_call_id.clone(),
@@ -85,14 +79,7 @@ pub(crate) async fn handle_patch_approval_request(
             error!("{message}");
 
             outgoing
-                .send_error(
-                    request_id.clone(),
-                    JSONRPCErrorError {
-                        code: INVALID_PARAMS_ERROR_CODE,
-                        message,
-                        data: None,
-                    },
-                )
+                .send_error(request_id.clone(), ErrorData::invalid_params(message, None))
                 .await;
 
             return;
@@ -100,22 +87,22 @@ pub(crate) async fn handle_patch_approval_request(
     };
 
     let on_response = outgoing
-        .send_request(ElicitRequest::METHOD, Some(params_json))
+        .send_request("elicitation/create", Some(params_json))
         .await;
 
     // Listen for the response on a separate task so we don't block the main agent loop.
     {
         let codex = codex.clone();
-        let event_id = event_id.clone();
+        let approval_id = approval_id.clone();
         tokio::spawn(async move {
-            on_patch_approval_response(event_id, on_response, codex).await;
+            on_patch_approval_response(approval_id, on_response, codex).await;
         });
     }
 }
 
 pub(crate) async fn on_patch_approval_response(
-    event_id: String,
-    receiver: tokio::sync::oneshot::Receiver<mcp_types::Result>,
+    approval_id: String,
+    receiver: tokio::sync::oneshot::Receiver<serde_json::Value>,
     codex: Arc<CodexThread>,
 ) {
     let response = receiver.await;
@@ -125,7 +112,7 @@ pub(crate) async fn on_patch_approval_response(
             error!("request failed: {err:?}");
             if let Err(submit_err) = codex
                 .submit(Op::PatchApproval {
-                    id: event_id.clone(),
+                    id: approval_id.clone(),
                     decision: ReviewDecision::Denied,
                 })
                 .await
@@ -145,7 +132,7 @@ pub(crate) async fn on_patch_approval_response(
 
     if let Err(err) = codex
         .submit(Op::PatchApproval {
-            id: event_id,
+            id: approval_id,
             decision: response.decision,
         })
         .await

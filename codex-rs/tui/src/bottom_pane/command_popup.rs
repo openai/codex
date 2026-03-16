@@ -6,20 +6,18 @@ use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::render_rows;
+use super::slash_commands;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
-use crate::slash_command::built_in_slash_commands;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
 
-fn windows_degraded_sandbox_active() -> bool {
-    cfg!(target_os = "windows")
-        && codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-        && codex_core::get_platform_sandbox().is_some()
-        && !codex_core::is_windows_elevated_sandbox_enabled()
-}
+// Hide alias commands in the default popup list so each unique action appears once.
+// `quit` is an alias of `exit`, so we skip `quit` here.
+// `approvals` is an alias of `permissions`.
+const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit, SlashCommand::Approvals];
 
 /// A selectable item in the popup: either a built-in command or a user prompt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,16 +37,36 @@ pub(crate) struct CommandPopup {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CommandPopupFlags {
     pub(crate) collaboration_modes_enabled: bool,
+    pub(crate) connectors_enabled: bool,
+    pub(crate) fast_command_enabled: bool,
+    pub(crate) personality_command_enabled: bool,
+    pub(crate) realtime_conversation_enabled: bool,
+    pub(crate) audio_device_selection_enabled: bool,
+    pub(crate) windows_degraded_sandbox_active: bool,
+}
+
+impl From<CommandPopupFlags> for slash_commands::BuiltinCommandFlags {
+    fn from(value: CommandPopupFlags) -> Self {
+        Self {
+            collaboration_modes_enabled: value.collaboration_modes_enabled,
+            connectors_enabled: value.connectors_enabled,
+            fast_command_enabled: value.fast_command_enabled,
+            personality_command_enabled: value.personality_command_enabled,
+            realtime_conversation_enabled: value.realtime_conversation_enabled,
+            audio_device_selection_enabled: value.audio_device_selection_enabled,
+            allow_elevate_sandbox: value.windows_degraded_sandbox_active,
+        }
+    }
 }
 
 impl CommandPopup {
     pub(crate) fn new(mut prompts: Vec<CustomPrompt>, flags: CommandPopupFlags) -> Self {
-        let allow_elevate_sandbox = windows_degraded_sandbox_active();
-        let builtins: Vec<(&'static str, SlashCommand)> = built_in_slash_commands()
-            .into_iter()
-            .filter(|(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
-            .filter(|(_, cmd)| flags.collaboration_modes_enabled || *cmd != SlashCommand::Collab)
-            .collect();
+        // Keep built-in availability in sync with the composer.
+        let builtins: Vec<(&'static str, SlashCommand)> =
+            slash_commands::builtins_for_input(flags.into())
+                .into_iter()
+                .filter(|(name, _)| !name.starts_with("debug"))
+                .collect();
         // Exclude prompts that collide with builtin command names and sort by name.
         let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
         prompts.retain(|p| !exclude.contains(&p.name));
@@ -78,7 +96,7 @@ impl CommandPopup {
 
     /// Update the filter string based on the current composer text. The text
     /// passed in is expected to start with a leading '/'. Everything after the
-    /// *first* '/" on the *first* line becomes the active filter that is used
+    /// *first* '/' on the *first* line becomes the active filter that is used
     /// to narrow down the list of available commands.
     pub(crate) fn on_composer_text_change(&mut self, text: String) {
         let first_line = text.lines().next().unwrap_or("");
@@ -125,6 +143,9 @@ impl CommandPopup {
         if filter.is_empty() {
             // Built-ins first, in presentation order.
             for (_, cmd) in self.builtins.iter() {
+                if ALIAS_COMMANDS.contains(cmd) {
+                    continue;
+                }
                 out.push((CommandItem::Builtin(*cmd), None));
             }
             // Then prompts, already sorted by name.
@@ -212,10 +233,13 @@ impl CommandPopup {
                 };
                 GenericDisplayRow {
                     name,
+                    name_prefix_spans: Vec::new(),
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                     display_shortcut: None,
                     description: Some(description),
+                    category_tag: None,
                     wrap_indent: None,
+                    is_disabled: false,
                     disabled_reason: None,
                 }
             })
@@ -442,9 +466,21 @@ mod tests {
     }
 
     #[test]
+    fn quit_hidden_in_empty_filter_but_shown_for_prefix() {
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
+        popup.on_composer_text_change("/".to_string());
+        let items = popup.filtered_items();
+        assert!(!items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+
+        popup.on_composer_text_change("/qu".to_string());
+        let items = popup.filtered_items();
+        assert!(items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+    }
+
+    #[test]
     fn collab_command_hidden_when_collaboration_modes_disabled() {
         let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
-        popup.on_composer_text_change("/coll".to_string());
+        popup.on_composer_text_change("/".to_string());
 
         let cmds: Vec<&str> = popup
             .filtered_items()
@@ -458,6 +494,10 @@ mod tests {
             !cmds.contains(&"collab"),
             "expected '/collab' to be hidden when collaboration modes are disabled, got {cmds:?}"
         );
+        assert!(
+            !cmds.contains(&"plan"),
+            "expected '/plan' to be hidden when collaboration modes are disabled, got {cmds:?}"
+        );
     }
 
     #[test]
@@ -466,6 +506,12 @@ mod tests {
             Vec::new(),
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                fast_command_enabled: false,
+                personality_command_enabled: true,
+                realtime_conversation_enabled: false,
+                audio_device_selection_enabled: false,
+                windows_degraded_sandbox_active: false,
             },
         );
         popup.on_composer_text_change("/collab".to_string());
@@ -474,5 +520,128 @@ mod tests {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "collab"),
             other => panic!("expected collab to be selected for exact match, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn plan_command_visible_when_collaboration_modes_enabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                fast_command_enabled: false,
+                personality_command_enabled: true,
+                realtime_conversation_enabled: false,
+                audio_device_selection_enabled: false,
+                windows_degraded_sandbox_active: false,
+            },
+        );
+        popup.on_composer_text_change("/plan".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "plan"),
+            other => panic!("expected plan to be selected for exact match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn personality_command_hidden_when_disabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                fast_command_enabled: false,
+                personality_command_enabled: false,
+                realtime_conversation_enabled: false,
+                audio_device_selection_enabled: false,
+                windows_degraded_sandbox_active: false,
+            },
+        );
+        popup.on_composer_text_change("/pers".to_string());
+
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                CommandItem::UserPrompt(_) => None,
+            })
+            .collect();
+        assert!(
+            !cmds.contains(&"personality"),
+            "expected '/personality' to be hidden when disabled, got {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn personality_command_visible_when_enabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                connectors_enabled: false,
+                fast_command_enabled: false,
+                personality_command_enabled: true,
+                realtime_conversation_enabled: false,
+                audio_device_selection_enabled: false,
+                windows_degraded_sandbox_active: false,
+            },
+        );
+        popup.on_composer_text_change("/personality".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "personality"),
+            other => panic!("expected personality to be selected for exact match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn settings_command_hidden_when_audio_device_selection_is_disabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: false,
+                connectors_enabled: false,
+                fast_command_enabled: false,
+                personality_command_enabled: true,
+                realtime_conversation_enabled: true,
+                audio_device_selection_enabled: false,
+                windows_degraded_sandbox_active: false,
+            },
+        );
+        popup.on_composer_text_change("/aud".to_string());
+
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                CommandItem::UserPrompt(_) => None,
+            })
+            .collect();
+
+        assert!(
+            !cmds.contains(&"settings"),
+            "expected '/settings' to be hidden when audio device selection is disabled, got {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn debug_commands_are_hidden_from_popup() {
+        let popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                CommandItem::UserPrompt(_) => None,
+            })
+            .collect();
+
+        assert!(
+            !cmds.iter().any(|name| name.starts_with("debug")),
+            "expected no /debug* command in popup menu, got {cmds:?}"
+        );
     }
 }

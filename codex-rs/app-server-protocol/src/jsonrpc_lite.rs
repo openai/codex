@@ -1,19 +1,32 @@
 //! We do not do true JSON-RPC 2.0, as we neither send nor expect the
 //! "jsonrpc": "2.0" field.
 
+use codex_protocol::protocol::W3cTraceContext;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use std::fmt;
 use ts_rs::TS;
 
 pub const JSONRPC_VERSION: &str = "2.0";
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Hash, Eq, JsonSchema, TS)]
+#[derive(
+    Debug, Clone, PartialEq, PartialOrd, Ord, Deserialize, Serialize, Hash, Eq, JsonSchema, TS,
+)]
 #[serde(untagged)]
 pub enum RequestId {
     String(String),
     #[ts(type = "number")]
     Integer(i64),
+}
+
+impl fmt::Display for RequestId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::String(value) => f.write_str(value),
+            Self::Integer(value) => write!(f, "{value}"),
+        }
+    }
 }
 
 pub type Result = serde_json::Value;
@@ -36,6 +49,10 @@ pub struct JSONRPCRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub params: Option<serde_json::Value>,
+    /// Optional W3C Trace Context for distributed tracing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub trace: Option<W3cTraceContext>,
 }
 
 /// A notification which does not expect a response.

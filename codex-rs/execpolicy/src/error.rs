@@ -38,16 +38,47 @@ pub enum Error {
     ExampleDidNotMatch {
         rules: Vec<String>,
         examples: Vec<String>,
+        location: Option<ErrorLocation>,
     },
     #[error("expected example to not match rule `{rule}`: {example}")]
-    ExampleDidMatch { rule: String, example: String },
+    ExampleDidMatch {
+        rule: String,
+        example: String,
+        location: Option<ErrorLocation>,
+    },
     #[error("starlark error: {0}")]
     Starlark(StarlarkError),
 }
 
 impl Error {
+    pub fn with_location(self, location: ErrorLocation) -> Self {
+        match self {
+            Error::ExampleDidNotMatch {
+                rules,
+                examples,
+                location: None,
+            } => Error::ExampleDidNotMatch {
+                rules,
+                examples,
+                location: Some(location),
+            },
+            Error::ExampleDidMatch {
+                rule,
+                example,
+                location: None,
+            } => Error::ExampleDidMatch {
+                rule,
+                example,
+                location: Some(location),
+            },
+            other => other,
+        }
+    }
+
     pub fn location(&self) -> Option<ErrorLocation> {
         match self {
+            Error::ExampleDidNotMatch { location, .. }
+            | Error::ExampleDidMatch { location, .. } => location.clone(),
             Error::Starlark(err) => err.span().map(|span| {
                 let resolved = span.resolve_span();
                 ErrorLocation {

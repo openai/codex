@@ -1,12 +1,25 @@
 load("//:defs.bzl", "codex_rust_crate")
 
+exports_files(
+    [
+        "templates/collaboration_mode/default.md",
+        "templates/collaboration_mode/plan.md",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "model_availability_nux_fixtures",
+    srcs = [
+        "models.json",
+        "tests/cli_responses_fixture.sse",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 codex_rust_crate(
     name = "core",
     crate_name = "codex_core",
-    # TODO(mbolin): Eliminate the use of features in the version of the
-    # rust_library() that is used by rust_binary() rules for release artifacts
-    # such as the Codex CLI.
-    crate_features = ["deterministic_process_ids", "test-support"],
     compile_data = glob(
         include = ["**"],
         exclude = [
@@ -15,7 +28,15 @@ codex_rust_crate(
             "Cargo.toml",
         ],
         allow_empty = True,
-    ),
+    ) + [
+        "//codex-rs:node-version.txt",
+    ],
+    rustc_env = {
+        # Askama resolves template paths relative to CARGO_MANIFEST_DIR. In
+        # Bazel, the Cargo-provided absolute source path points outside the
+        # sandbox, so keep the manifest root anchored inside the execroot.
+        "CARGO_MANIFEST_DIR": "codex-rs/core",
+    },
     integration_compile_data_extra = [
         "//codex-rs/apply-patch:apply_patch_tool_instructions.md",
         "models.json",
@@ -23,6 +44,9 @@ codex_rust_crate(
     ],
     test_data_extra = [
         "config.schema.json",
+    ] + glob([
+        "src/**/snapshots/**",
+    ]) + [
         # This is a bit of a hack, but empirically, some of our integration tests
         # are relying on the presence of this file as a repo root marker. When
         # running tests locally, this "just works," but in remote execution,
@@ -33,7 +57,6 @@ codex_rust_crate(
         # succeeds without this workaround.
         "//:AGENTS.md",
     ],
-    integration_deps_extra = ["//codex-rs/core/tests/common:common"],
     test_tags = ["no-sandbox"],
     extra_binaries = [
         "//codex-rs/linux-sandbox:codex-linux-sandbox",

@@ -8,6 +8,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use reqwest::ClientBuilder;
+use reqwest::Url;
 use rmcp::transport::auth::OAuthState;
 use tiny_http::Response;
 use tiny_http::Server;
@@ -38,6 +39,37 @@ impl Drop for CallbackServerGuard {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OAuthProviderError {
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+impl OAuthProviderError {
+    pub fn new(error: Option<String>, error_description: Option<String>) -> Self {
+        Self {
+            error,
+            error_description,
+        }
+    }
+}
+
+impl std::fmt::Display for OAuthProviderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.error.as_deref(), self.error_description.as_deref()) {
+            (Some(error), Some(error_description)) => {
+                write!(f, "OAuth provider returned `{error}`: {error_description}")
+            }
+            (Some(error), None) => write!(f, "OAuth provider returned `{error}`"),
+            (None, Some(error_description)) => write!(f, "OAuth error: {error_description}"),
+            (None, None) => write!(f, "OAuth provider returned an error"),
+        }
+    }
+}
+
+impl std::error::Error for OAuthProviderError {}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn perform_oauth_login(
     server_name: &str,
     server_url: &str,
@@ -45,7 +77,9 @@ pub async fn perform_oauth_login(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
+    oauth_resource: Option<&str>,
     callback_port: Option<u16>,
+    callback_url: Option<&str>,
 ) -> Result<()> {
     let headers = OauthHeaders {
         http_headers,
@@ -57,8 +91,10 @@ pub async fn perform_oauth_login(
         store_mode,
         headers,
         scopes,
+        oauth_resource,
         true,
         callback_port,
+        callback_url,
         None,
     )
     .await?
@@ -74,8 +110,10 @@ pub async fn perform_oauth_login_return_url(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
+    oauth_resource: Option<&str>,
     timeout_secs: Option<i64>,
     callback_port: Option<u16>,
+    callback_url: Option<&str>,
 ) -> Result<OauthLoginHandle> {
     let headers = OauthHeaders {
         http_headers,
@@ -87,8 +125,10 @@ pub async fn perform_oauth_login_return_url(
         store_mode,
         headers,
         scopes,
+        oauth_resource,
         false,
         callback_port,
+        callback_url,
         timeout_secs,
     )
     .await?;
@@ -99,59 +139,109 @@ pub async fn perform_oauth_login_return_url(
     Ok(OauthLoginHandle::new(authorization_url, completion))
 }
 
-fn spawn_callback_server(server: Arc<Server>, tx: oneshot::Sender<(String, String)>) {
+fn spawn_callback_server(
+    server: Arc<Server>,
+    tx: oneshot::Sender<CallbackResult>,
+    expected_callback_path: String,
+) {
     tokio::task::spawn_blocking(move || {
         while let Ok(request) = server.recv() {
             let path = request.url().to_string();
-            if let Some(OauthCallbackResult { code, state }) = parse_oauth_callback(&path) {
-                let response =
-                    Response::from_string("Authentication complete. You may close this window.");
-                if let Err(err) = request.respond(response) {
-                    eprintln!("Failed to respond to OAuth callback: {err}");
+            match parse_oauth_callback(&path, &expected_callback_path) {
+                CallbackOutcome::Success(OauthCallbackResult { code, state }) => {
+                    let response = Response::from_string(
+                        "Authentication complete. You may close this window.",
+                    );
+                    if let Err(err) = request.respond(response) {
+                        eprintln!("Failed to respond to OAuth callback: {err}");
+                    }
+                    if let Err(err) =
+                        tx.send(CallbackResult::Success(OauthCallbackResult { code, state }))
+                    {
+                        eprintln!("Failed to send OAuth callback: {err:?}");
+                    }
+                    break;
                 }
-                if let Err(err) = tx.send((code, state)) {
-                    eprintln!("Failed to send OAuth callback: {err:?}");
+                CallbackOutcome::Error(error) => {
+                    let response = Response::from_string(error.to_string()).with_status_code(400);
+                    if let Err(err) = request.respond(response) {
+                        eprintln!("Failed to respond to OAuth callback: {err}");
+                    }
+                    if let Err(err) = tx.send(CallbackResult::Error(error)) {
+                        eprintln!("Failed to send OAuth callback error: {err:?}");
+                    }
+                    break;
                 }
-                break;
-            } else {
-                let response =
-                    Response::from_string("Invalid OAuth callback").with_status_code(400);
-                if let Err(err) = request.respond(response) {
-                    eprintln!("Failed to respond to OAuth callback: {err}");
+                CallbackOutcome::Invalid => {
+                    let response =
+                        Response::from_string("Invalid OAuth callback").with_status_code(400);
+                    if let Err(err) = request.respond(response) {
+                        eprintln!("Failed to respond to OAuth callback: {err}");
+                    }
                 }
             }
         }
     });
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct OauthCallbackResult {
     code: String,
     state: String,
 }
 
-fn parse_oauth_callback(path: &str) -> Option<OauthCallbackResult> {
-    let (route, query) = path.split_once('?')?;
-    if route != "/callback" {
-        return None;
+#[derive(Debug)]
+enum CallbackResult {
+    Success(OauthCallbackResult),
+    Error(OAuthProviderError),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CallbackOutcome {
+    Success(OauthCallbackResult),
+    Error(OAuthProviderError),
+    Invalid,
+}
+
+fn parse_oauth_callback(path: &str, expected_callback_path: &str) -> CallbackOutcome {
+    let Some((route, query)) = path.split_once('?') else {
+        return CallbackOutcome::Invalid;
+    };
+    if route != expected_callback_path {
+        return CallbackOutcome::Invalid;
     }
 
     let mut code = None;
     let mut state = None;
+    let mut error = None;
+    let mut error_description = None;
 
     for pair in query.split('&') {
-        let (key, value) = pair.split_once('=')?;
-        let decoded = decode(value).ok()?.into_owned();
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        let Ok(decoded) = decode(value) else {
+            continue;
+        };
+        let decoded = decoded.into_owned();
         match key {
             "code" => code = Some(decoded),
             "state" => state = Some(decoded),
+            "error" => error = Some(decoded),
+            "error_description" => error_description = Some(decoded),
             _ => {}
         }
     }
 
-    Some(OauthCallbackResult {
-        code: code?,
-        state: state?,
-    })
+    if let (Some(code), Some(state)) = (code, state) {
+        return CallbackOutcome::Success(OauthCallbackResult { code, state });
+    }
+
+    if error.is_some() || error_description.is_some() {
+        return CallbackOutcome::Error(OAuthProviderError::new(error, error_description));
+    }
+
+    CallbackOutcome::Invalid
 }
 
 pub struct OauthLoginHandle {
@@ -185,7 +275,7 @@ impl OauthLoginHandle {
 struct OauthLoginFlow {
     auth_url: String,
     oauth_state: OAuthState,
-    rx: oneshot::Receiver<(String, String)>,
+    rx: oneshot::Receiver<CallbackResult>,
     guard: CallbackServerGuard,
     server_name: String,
     server_url: String,
@@ -207,6 +297,53 @@ fn resolve_callback_port(callback_port: Option<u16>) -> Result<Option<u16>> {
     Ok(None)
 }
 
+fn local_redirect_uri(server: &Server) -> Result<String> {
+    match server.server_addr() {
+        tiny_http::ListenAddr::IP(std::net::SocketAddr::V4(addr)) => {
+            let ip = addr.ip();
+            let port = addr.port();
+            Ok(format!("http://{ip}:{port}/callback"))
+        }
+        tiny_http::ListenAddr::IP(std::net::SocketAddr::V6(addr)) => {
+            let ip = addr.ip();
+            let port = addr.port();
+            Ok(format!("http://[{ip}]:{port}/callback"))
+        }
+        #[cfg(not(target_os = "windows"))]
+        _ => Err(anyhow!("unable to determine callback address")),
+    }
+}
+
+fn resolve_redirect_uri(server: &Server, callback_url: Option<&str>) -> Result<String> {
+    let Some(callback_url) = callback_url else {
+        return local_redirect_uri(server);
+    };
+    Url::parse(callback_url)
+        .with_context(|| format!("invalid MCP OAuth callback URL `{callback_url}`"))?;
+    Ok(callback_url.to_string())
+}
+
+fn callback_path_from_redirect_uri(redirect_uri: &str) -> Result<String> {
+    let parsed = Url::parse(redirect_uri)
+        .with_context(|| format!("invalid redirect URI `{redirect_uri}`"))?;
+    Ok(parsed.path().to_string())
+}
+
+fn callback_bind_host(callback_url: Option<&str>) -> &'static str {
+    let Some(callback_url) = callback_url else {
+        return "127.0.0.1";
+    };
+
+    let Ok(parsed) = Url::parse(callback_url) else {
+        return "127.0.0.1";
+    };
+
+    match parsed.host_str() {
+        Some("localhost" | "127.0.0.1" | "::1") | None => "127.0.0.1",
+        Some(_) => "0.0.0.0",
+    }
+}
+
 impl OauthLoginFlow {
     #[allow(clippy::too_many_arguments)]
     async fn new(
@@ -215,16 +352,19 @@ impl OauthLoginFlow {
         store_mode: OAuthCredentialsStoreMode,
         headers: OauthHeaders,
         scopes: &[String],
+        oauth_resource: Option<&str>,
         launch_browser: bool,
         callback_port: Option<u16>,
+        callback_url: Option<&str>,
         timeout_secs: Option<i64>,
     ) -> Result<Self> {
         const DEFAULT_OAUTH_TIMEOUT_SECS: i64 = 300;
 
+        let bind_host = callback_bind_host(callback_url);
         let callback_port = resolve_callback_port(callback_port)?;
         let bind_addr = match callback_port {
-            Some(port) => format!("127.0.0.1:{port}"),
-            None => "127.0.0.1:0".to_string(),
+            Some(port) => format!("{bind_host}:{port}"),
+            None => format!("{bind_host}:0"),
         };
 
         let server = Arc::new(Server::http(&bind_addr).map_err(|err| anyhow!(err))?);
@@ -232,23 +372,11 @@ impl OauthLoginFlow {
             server: Arc::clone(&server),
         };
 
-        let redirect_uri = match server.server_addr() {
-            tiny_http::ListenAddr::IP(std::net::SocketAddr::V4(addr)) => {
-                let ip = addr.ip();
-                let port = addr.port();
-                format!("http://{ip}:{port}/callback")
-            }
-            tiny_http::ListenAddr::IP(std::net::SocketAddr::V6(addr)) => {
-                let ip = addr.ip();
-                let port = addr.port();
-                format!("http://[{ip}]:{port}/callback")
-            }
-            #[cfg(not(target_os = "windows"))]
-            _ => return Err(anyhow!("unable to determine callback address")),
-        };
+        let redirect_uri = resolve_redirect_uri(&server, callback_url)?;
+        let callback_path = callback_path_from_redirect_uri(&redirect_uri)?;
 
         let (tx, rx) = oneshot::channel();
-        spawn_callback_server(server, tx);
+        spawn_callback_server(server, tx, callback_path);
 
         let OauthHeaders {
             http_headers,
@@ -262,7 +390,11 @@ impl OauthLoginFlow {
         oauth_state
             .start_authorization(&scope_refs, &redirect_uri, Some("Codex"))
             .await?;
-        let auth_url = oauth_state.get_authorization_url().await?;
+        let auth_url = append_query_param(
+            &oauth_state.get_authorization_url().await?,
+            "resource",
+            oauth_resource,
+        );
         let timeout_secs = timeout_secs.unwrap_or(DEFAULT_OAUTH_TIMEOUT_SECS).max(1);
         let timeout = Duration::from_secs(timeout_secs as u64);
 
@@ -297,10 +429,17 @@ impl OauthLoginFlow {
         }
 
         let result = async {
-            let (code, csrf_state) = timeout(self.timeout, &mut self.rx)
+            let callback = timeout(self.timeout, &mut self.rx)
                 .await
                 .context("timed out waiting for OAuth callback")?
                 .context("OAuth callback was cancelled")?;
+            let OauthCallbackResult {
+                code,
+                state: csrf_state,
+            } = match callback {
+                CallbackResult::Success(callback) => callback,
+                CallbackResult::Error(error) => return Err(anyhow!(error)),
+            };
 
             self.oauth_state
                 .handle_callback(&code, &csrf_state)
@@ -350,5 +489,106 @@ impl OauthLoginFlow {
         });
 
         rx
+    }
+}
+
+fn append_query_param(url: &str, key: &str, value: Option<&str>) -> String {
+    let Some(value) = value else {
+        return url.to_string();
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return url.to_string();
+    }
+    if let Ok(mut parsed) = Url::parse(url) {
+        parsed.query_pairs_mut().append_pair(key, value);
+        return parsed.to_string();
+    }
+    let encoded = urlencoding::encode(value);
+    let separator = if url.contains('?') { "&" } else { "?" };
+    format!("{url}{separator}{key}={encoded}")
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::CallbackOutcome;
+    use super::OAuthProviderError;
+    use super::append_query_param;
+    use super::callback_path_from_redirect_uri;
+    use super::parse_oauth_callback;
+
+    #[test]
+    fn parse_oauth_callback_accepts_default_path() {
+        let parsed = parse_oauth_callback("/callback?code=abc&state=xyz", "/callback");
+        assert!(matches!(parsed, CallbackOutcome::Success(_)));
+    }
+
+    #[test]
+    fn parse_oauth_callback_accepts_custom_path() {
+        let parsed = parse_oauth_callback("/oauth/callback?code=abc&state=xyz", "/oauth/callback");
+        assert!(matches!(parsed, CallbackOutcome::Success(_)));
+    }
+
+    #[test]
+    fn parse_oauth_callback_rejects_wrong_path() {
+        let parsed = parse_oauth_callback("/callback?code=abc&state=xyz", "/oauth/callback");
+        assert!(matches!(parsed, CallbackOutcome::Invalid));
+    }
+
+    #[test]
+    fn parse_oauth_callback_returns_provider_error() {
+        let parsed = parse_oauth_callback(
+            "/callback?error=invalid_scope&error_description=scope%20rejected",
+            "/callback",
+        );
+
+        assert_eq!(
+            parsed,
+            CallbackOutcome::Error(OAuthProviderError::new(
+                Some("invalid_scope".to_string()),
+                Some("scope rejected".to_string()),
+            ))
+        );
+    }
+
+    #[test]
+    fn callback_path_comes_from_redirect_uri() {
+        let path = callback_path_from_redirect_uri("https://example.com/oauth/callback")
+            .expect("redirect URI should parse");
+        assert_eq!(path, "/oauth/callback");
+    }
+
+    #[test]
+    fn append_query_param_adds_resource_to_absolute_url() {
+        let url = append_query_param(
+            "https://example.com/authorize?scope=read",
+            "resource",
+            Some("https://api.example.com"),
+        );
+
+        assert_eq!(
+            url,
+            "https://example.com/authorize?scope=read&resource=https%3A%2F%2Fapi.example.com"
+        );
+    }
+
+    #[test]
+    fn append_query_param_ignores_empty_values() {
+        let url = append_query_param(
+            "https://example.com/authorize?scope=read",
+            "resource",
+            Some("   "),
+        );
+
+        assert_eq!(url, "https://example.com/authorize?scope=read");
+    }
+
+    #[test]
+    fn append_query_param_handles_unparseable_url() {
+        let url = append_query_param("not a url", "resource", Some("api/resource"));
+
+        assert_eq!(url, "not a url?resource=api%2Fresource");
     }
 }

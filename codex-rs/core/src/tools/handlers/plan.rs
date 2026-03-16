@@ -3,13 +3,14 @@ use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::EventMsg;
 use std::collections::BTreeMap;
@@ -51,21 +52,25 @@ At most one step can be in_progress at a time.
 "#
         .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["plan".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 });
 
 #[async_trait]
 impl ToolHandler for PlanHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -86,11 +91,7 @@ impl ToolHandler for PlanHandler {
         let content =
             handle_update_plan(session.as_ref(), turn.as_ref(), arguments, call_id).await?;
 
-        Ok(ToolOutput::Function {
-            content,
-            content_items: None,
-            success: Some(true),
-        })
+        Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
 
@@ -103,6 +104,11 @@ pub(crate) async fn handle_update_plan(
     arguments: String,
     _call_id: String,
 ) -> Result<String, FunctionCallError> {
+    if turn_context.collaboration_mode.mode == ModeKind::Plan {
+        return Err(FunctionCallError::RespondToModel(
+            "update_plan is a TODO/checklist tool and is not allowed in Plan mode".to_string(),
+        ));
+    }
     let args = parse_update_plan_arguments(&arguments)?;
     session
         .send_event(turn_context, EventMsg::PlanUpdate(args))

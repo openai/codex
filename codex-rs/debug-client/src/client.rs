@@ -20,6 +20,7 @@ use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::FileChangeApprovalDecision;
+use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -99,6 +100,10 @@ impl AppServerClient {
                     title: Some("Debug Client".to_string()),
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
+                capabilities: Some(InitializeCapabilities {
+                    experimental_api: true,
+                    opt_out_notification_methods: None,
+                }),
             },
         };
 
@@ -173,7 +178,10 @@ impl AppServerClient {
                 limit: None,
                 sort_key: None,
                 model_providers: None,
+                source_kinds: None,
                 archived: None,
+                cwd: None,
+                search_term: None,
             },
         };
         self.send(&request)?;

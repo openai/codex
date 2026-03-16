@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::fs;
 use tracing::error;
+use tracing::info;
 
 /// Manages loading and saving of models cache to disk.
 #[derive(Debug)]
@@ -27,7 +28,12 @@ impl ModelsCacheManager {
     }
 
     /// Attempt to load a fresh cache entry. Returns `None` if the cache doesn't exist or is stale.
-    pub(crate) async fn load_fresh(&self) -> Option<ModelsCache> {
+    pub(crate) async fn load_fresh(&self, expected_version: &str) -> Option<ModelsCache> {
+        info!(
+                cache_path = %self.cache_path.display(),
+                expected_version,
+            "models cache: attempting load_fresh"
+        );
         let cache = match self.load().await {
             Ok(cache) => cache?,
             Err(err) => {
@@ -35,17 +41,49 @@ impl ModelsCacheManager {
                 return None;
             }
         };
-        if !cache.is_fresh(self.cache_ttl) {
+        info!(
+            cache_path = %self.cache_path.display(),
+            cached_version = ?cache.client_version,
+            fetched_at = %cache.fetched_at,
+            "models cache: loaded cache file"
+        );
+        if cache.client_version.as_deref() != Some(expected_version) {
+            info!(
+                cache_path = %self.cache_path.display(),
+                expected_version,
+                cached_version = ?cache.client_version,
+                "models cache: cache version mismatch"
+            );
             return None;
         }
+        if !cache.is_fresh(self.cache_ttl) {
+            info!(
+                cache_path = %self.cache_path.display(),
+                cache_ttl_secs = self.cache_ttl.as_secs(),
+                fetched_at = %cache.fetched_at,
+                "models cache: cache is stale"
+            );
+            return None;
+        }
+        info!(
+            cache_path = %self.cache_path.display(),
+            cache_ttl_secs = self.cache_ttl.as_secs(),
+            "models cache: cache hit"
+        );
         Some(cache)
     }
 
     /// Persist the cache to disk, creating parent directories as needed.
-    pub(crate) async fn persist_cache(&self, models: &[ModelInfo], etag: Option<String>) {
+    pub(crate) async fn persist_cache(
+        &self,
+        models: &[ModelInfo],
+        etag: Option<String>,
+        client_version: String,
+    ) {
         let cache = ModelsCache {
             fetched_at: Utc::now(),
             etag,
+            client_version: Some(client_version),
             models: models.to_vec(),
         };
         if let Err(err) = self.save_internal(&cache).await {
@@ -103,6 +141,20 @@ impl ModelsCacheManager {
         f(&mut cache.fetched_at);
         self.save_internal(&cache).await
     }
+
+    #[cfg(test)]
+    /// Mutate the full cache contents for testing.
+    pub(crate) async fn mutate_cache_for_test<F>(&self, f: F) -> io::Result<()>
+    where
+        F: FnOnce(&mut ModelsCache),
+    {
+        let mut cache = match self.load().await? {
+            Some(cache) => cache,
+            None => return Err(io::Error::new(ErrorKind::NotFound, "cache not found")),
+        };
+        f(&mut cache);
+        self.save_internal(&cache).await
+    }
 }
 
 /// Serialized snapshot of models and metadata cached on disk.
@@ -111,6 +163,8 @@ pub(crate) struct ModelsCache {
     pub(crate) fetched_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) etag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) client_version: Option<String>,
     pub(crate) models: Vec<ModelInfo>,
 }
 

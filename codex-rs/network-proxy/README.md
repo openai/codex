@@ -3,7 +3,7 @@
 `codex-network-proxy` is Codex's local network policy enforcement proxy. It runs:
 
 - an HTTP proxy (default `127.0.0.1:3128`)
-- an admin HTTP API (default `127.0.0.1:8080`)
+- a SOCKS5 proxy (default `127.0.0.1:8081`, enabled by default)
 
 It enforces an allow/deny policy and a "limited" mode intended for read-only network access.
 
@@ -13,27 +13,35 @@ It enforces an allow/deny policy and a "limited" mode intended for read-only net
 
 `codex-network-proxy` reads from Codex's merged `config.toml` (via `codex-core` config loading).
 
-Example config:
+Network settings live under the selected permissions profile. Example config:
 
 ```toml
-[network_proxy]
+default_permissions = "workspace"
+
+[permissions.workspace.network]
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
-admin_url = "http://127.0.0.1:8080"
+# SOCKS5 listener (enabled by default).
+enable_socks5 = true
+socks_url = "http://127.0.0.1:8081"
+enable_socks5_udp = true
 # When `enabled` is false, the proxy no-ops and does not bind listeners.
 # When true, respect HTTP(S)_PROXY/ALL_PROXY for upstream requests (HTTP(S) proxies only),
 # including CONNECT tunnels in full mode.
-allow_upstream_proxy = false
+allow_upstream_proxy = true
 # By default, non-loopback binds are clamped to loopback for safety.
 # If you want to expose these listeners beyond localhost, you must opt in explicitly.
 dangerously_allow_non_loopback_proxy = false
-dangerously_allow_non_loopback_admin = false
-mode = "limited" # or "full"
+mode = "full" # default when unset; use "limited" for read-only mode
+# When true, HTTPS CONNECT can be terminated so limited-mode method policy still applies.
+mitm = false
+# CA cert/key are managed internally under $CODEX_HOME/proxy/ (ca.pem + ca.key).
 
-[network_proxy.policy]
 # Hosts must match the allowlist (unless denied).
+# Use exact hosts or scoped wildcards like `*.openai.com` or `**.openai.com`.
+# The global `*` wildcard is rejected.
 # If `allowed_domains` is empty, the proxy blocks requests until an allowlist is configured.
-allowed_domains = ["*.openai.com"]
+allowed_domains = ["*.openai.com", "localhost", "127.0.0.1", "::1"]
 denied_domains = ["evil.example"]
 
 # If false, local/private networking is rejected. Explicit allowlisting of local IP literals
@@ -43,6 +51,9 @@ allow_local_binding = false
 
 # macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
 allow_unix_sockets = ["/tmp/example.sock"]
+# DANGEROUS (macOS-only): bypasses unix socket allowlisting and permits any
+# absolute socket path from `x-unix-socket`.
+dangerously_allow_all_unix_sockets = false
 ```
 
 ### 2) Run the proxy
@@ -58,6 +69,14 @@ For HTTP(S) traffic:
 ```bash
 export HTTP_PROXY="http://127.0.0.1:3128"
 export HTTPS_PROXY="http://127.0.0.1:3128"
+export WS_PROXY="http://127.0.0.1:3128"
+export WSS_PROXY="http://127.0.0.1:3128"
+```
+
+For SOCKS5 traffic (when `enable_socks5 = true`):
+
+```bash
+export ALL_PROXY="socks5h://127.0.0.1:8081"
 ```
 
 ### 4) Understand blocks / debugging
@@ -70,8 +89,12 @@ When a request is blocked, the proxy responds with `403` and includes:
   - `blocked-by-method-policy`
   - `blocked-by-policy`
 
-In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed for plain HTTP. HTTPS `CONNECT`
-remains a transparent tunnel, so limited-mode method enforcement does not apply to HTTPS.
+In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. HTTPS `CONNECT` requests require
+MITM to enforce limited-mode method policy; otherwise they are blocked. SOCKS5 remains blocked in
+limited mode.
+
+Websocket clients typically tunnel `wss://` through HTTPS `CONNECT`; those CONNECT targets still go
+through the same host allowlist/denylist checks.
 
 ## Library API
 
@@ -82,7 +105,6 @@ use codex_network_proxy::{NetworkProxy, NetworkDecision, NetworkPolicyRequest};
 
 let proxy = NetworkProxy::builder()
     .http_addr("127.0.0.1:8080".parse()?)
-    .admin_addr("127.0.0.1:9000".parse()?)
     .policy_decider(|request: NetworkPolicyRequest| async move {
         // Example: auto-allow when exec policy already approved a command prefix.
         if let Some(command) = request.command.as_deref() {
@@ -101,8 +123,9 @@ let handle = proxy.run().await?;
 handle.shutdown().await?;
 ```
 
-When unix socket proxying is enabled, HTTP/admin bind overrides are still clamped to loopback
-to avoid turning the proxy into a remote bridge to local daemons.
+When unix socket proxying is enabled (`allow_unix_sockets` or
+`dangerously_allow_all_unix_sockets`), proxy bind overrides are still clamped to loopback to
+avoid turning the proxy into a remote bridge to local daemons.
 
 ### Policy hook (exec-policy mapping)
 
@@ -114,31 +137,51 @@ the decider can auto-allow network requests originating from that command.
 **Important:** Explicit deny rules still win. The decider only gets a chance to override
 `not_allowed` (allowlist misses), not `denied` or `not_allowed_local`.
 
-## Admin API
+## OTEL Audit Events (embedded/managed)
 
-The admin API is a small HTTP server intended for debugging and runtime adjustments.
+When `codex-network-proxy` is embedded in managed Codex runtime, policy decisions emit structured
+OTEL-compatible events with `target=codex_otel.network_proxy`.
 
-Endpoints:
+Event name:
 
-```bash
-curl -sS http://127.0.0.1:8080/health
-curl -sS http://127.0.0.1:8080/config
-curl -sS http://127.0.0.1:8080/patterns
-curl -sS http://127.0.0.1:8080/blocked
+- `codex.network_proxy.policy_decision`
+  - emitted for each policy decision (`domain` and `non_domain`).
+  - `network.policy.scope = "domain"` for host-policy evaluations (`evaluate_host_policy`).
+  - `network.policy.scope = "non_domain"` for mode-guard/proxy-state checks (including unix-socket guard paths and unix-socket allow decisions).
 
-# Switch modes without restarting:
-curl -sS -X POST http://127.0.0.1:8080/mode -d '{"mode":"full"}'
+Common fields:
 
-# Force a config reload:
-curl -sS -X POST http://127.0.0.1:8080/reload
-```
+- `event.name`
+- `event.timestamp` (RFC3339 UTC, millisecond precision)
+- optional metadata:
+  - `conversation.id`
+  - `app.version`
+  - `user.account_id`
+- policy/network:
+  - `network.policy.scope` (`domain` or `non_domain`)
+  - `network.policy.decision` (`allow`, `deny`, or `ask`)
+  - `network.policy.source` (`baseline_policy`, `mode_guard`, `proxy_state`, `decider`)
+  - `network.policy.reason`
+  - `network.transport.protocol`
+  - `server.address`
+  - `server.port`
+  - `http.request.method` (defaults to `"none"` when absent)
+  - `client.address` (defaults to `"unknown"` when absent)
+  - `network.policy.override` (`true` only when decider-allow overrides baseline `not_allowed`)
+
+Unix-socket block-path audits use sentinel endpoint values:
+
+- `server.address = "unix-socket"`
+- `server.port = 0`
+
+Audit events intentionally avoid logging full URL/path/query data.
 
 ## Platform notes
 
 - Unix socket proxying via the `x-unix-socket` header is **macOS-only**; other platforms will
   reject unix socket requests.
-- HTTPS tunneling uses BoringSSL via Rama's `rama-tls-boring`; building the proxy requires a
-  native toolchain and CMake on macOS/Linux/Windows.
+- HTTPS tunneling uses rustls via Rama's `rama-tls-rustls`; this avoids BoringSSL/OpenSSL symbol
+  collisions in mixed TLS dependency graphs.
 
 ## Security notes (important)
 
@@ -146,6 +189,7 @@ This section documents the protections implemented by `codex-network-proxy`, and
 what it can reasonably guarantee.
 
 - Allowlist-first policy: if `allowed_domains` is empty, requests are blocked until an allowlist is configured.
+- Domain patterns: exact hosts plus scoped wildcards (`*.example.com`, `**.example.com`) are supported; the global `*` wildcard is rejected.
 - Deny wins: entries in `denied_domains` always override the allowlist.
 - Local/private network protection: when `allow_local_binding = false`, the proxy blocks loopback
   and common private/link-local ranges. Explicit allowlisting of local IP literals (or `localhost`)
@@ -155,12 +199,12 @@ what it can reasonably guarantee.
   - only `GET`, `HEAD`, and `OPTIONS` are allowed
   - HTTPS `CONNECT` remains a tunnel; limited-mode method enforcement does not apply to HTTPS
 - Listener safety defaults:
-  - the admin API is unauthenticated; non-loopback binds are clamped unless explicitly enabled via
-    `dangerously_allow_non_loopback_admin`
-- the HTTP proxy listener similarly clamps non-loopback binds unless explicitly enabled via
+  - the HTTP proxy listener clamps non-loopback binds unless explicitly enabled via
     `dangerously_allow_non_loopback_proxy`
-- when unix socket proxying is enabled, both listeners are forced to loopback to avoid turning the
+- when unix socket proxying is enabled, all proxy listeners are forced to loopback to avoid turning the
     proxy into a remote bridge into local daemons.
+- `dangerously_allow_all_unix_sockets = true` bypasses the unix socket allowlist entirely (still
+  macOS-only and absolute-path-only). Use only in tightly controlled environments.
 - `enabled` is enforced at runtime; when false the proxy no-ops and does not bind listeners.
 Limitations:
 

@@ -1,16 +1,12 @@
 {
   "name": "@openai/codex-shell-tool-mcp",
   "version": "0.0.0-dev",
-  "description": "Codex MCP server for the shell tool with patched Bash and exec wrappers.",
+  "description": "Patched Bash and Zsh binaries for Codex shell execution.",
   "license": "Apache-2.0",
-  "bin": {
-    "codex-shell-tool-mcp": "bin/mcp-server.js"
-  },
   "engines": {
     "node": ">=18"
   },
   "files": [
-    "bin",
     "vendor",
     "README.md"
   ],
@@ -36,5 +32,6 @@
     "ts-jest": "^29.3.4",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2"
-  }
+  },
+  "packageManager": "pnpm@10.29.3+sha512.498e1fb4cca5aa06c1dcf2611e6fafc50972ffe7189998c409e90de74566444298ffe43e6cd2acdc775ba1aa7cc5e092a8b7054c811ba8c5770f84693d33d2dc"
 }

@@ -1,0 +1,36 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-shell-escalation"
+version.workspace = true
+
+[[bin]]
+name = "codex-execve-wrapper"
+path = "src/bin/main_execve_wrapper.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+libc = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+socket2 = { workspace = true, features = ["all"] }
+tokio = { workspace = true, features = [
+    "io-std",
+    "net",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+    "time",
+] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

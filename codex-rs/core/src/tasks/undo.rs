@@ -31,6 +31,10 @@ impl SessionTask for UndoTask {
         TaskKind::Regular
     }
 
+    fn span_name(&self) -> &'static str {
+        "session_task.undo"
+    }
+
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
@@ -41,7 +45,7 @@ impl SessionTask for UndoTask {
         let _ = session
             .session
             .services
-            .otel_manager
+            .session_telemetry
             .counter("codex.task.undo", 1, &[]);
         let sess = session.clone_session();
         sess.send_event(
@@ -101,7 +105,8 @@ impl SessionTask for UndoTask {
         match restore_result {
             Ok(Ok(())) => {
                 items.remove(idx);
-                sess.replace_history(items).await;
+                let reference_context_item = sess.reference_context_item().await;
+                sess.replace_history(items, reference_context_item).await;
                 let short_id: String = commit_id.chars().take(7).collect();
                 info!(commit_id = commit_id, "Undo restored ghost snapshot");
                 completed.success = true;

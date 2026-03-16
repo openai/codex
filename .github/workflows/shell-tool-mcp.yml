@@ -67,64 +67,6 @@ jobs:
           echo "npm_tag=${npm_tag}" >> "$GITHUB_OUTPUT"
           echo "should_publish=${should_publish}" >> "$GITHUB_OUTPUT"
 
-  rust-binaries:
-    name: Build Rust - ${{ matrix.target }}
-    needs: metadata
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: codex-rs
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-          - runner: macos-15-xlarge
-            target: x86_64-apple-darwin
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-musl
-            install_musl: true
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-            install_musl: true
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@1.92
-        with:
-          targets: ${{ matrix.target }}
-
-      - if: ${{ matrix.install_musl }}
-        name: Install Zig
-        uses: mlugg/setup-zig@3a27cba13dd9b83cb045d5eb2d29970d6e8c4972 # v2
-        with:
-          version: 0.14.0
-
-      - if: ${{ matrix.install_musl }}
-        name: Install musl build dependencies
-        env:
-          TARGET: ${{ matrix.target }}
-        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
-
-      - name: Build exec server binaries
-        run: cargo build --release --target ${{ matrix.target }} --bin codex-exec-mcp-server --bin codex-execve-wrapper
-
-      - name: Stage exec server binaries
-        run: |
-          dest="${GITHUB_WORKSPACE}/artifacts/vendor/${{ matrix.target }}"
-          mkdir -p "$dest"
-          cp "target/${{ matrix.target }}/release/codex-exec-mcp-server" "$dest/"
-          cp "target/${{ matrix.target }}/release/codex-execve-wrapper" "$dest/"
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: shell-tool-mcp-rust-${{ matrix.target }}
-          path: artifacts/**
-          if-no-files-found: error
-
   bash-linux:
     name: Build Bash (Linux) - ${{ matrix.variant }} - ${{ matrix.target }}
     needs: metadata
@@ -187,11 +129,11 @@ jobs:
           set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
             apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential bison autoconf gettext
+            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential bison autoconf gettext libncursesw5-dev
           elif command -v dnf >/dev/null 2>&1; then
-            dnf install -y git gcc gcc-c++ make bison autoconf gettext
+            dnf install -y git gcc gcc-c++ make bison autoconf gettext ncurses-devel
           elif command -v yum >/dev/null 2>&1; then
-            yum install -y git gcc gcc-c++ make bison autoconf gettext
+            yum install -y git gcc gcc-c++ make bison autoconf gettext ncurses-devel
           else
             echo "Unsupported package manager in container"
             exit 1
@@ -204,9 +146,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/bolinfest/bash /tmp/bash
+          git clone https://git.savannah.gnu.org/git/bash /tmp/bash
           cd /tmp/bash
-          git fetch --depth 1 origin a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
           git checkout a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
           git apply "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/bash-exec-wrapper.patch"
           ./configure --without-bash-malloc
@@ -217,7 +158,7 @@ jobs:
           mkdir -p "$dest"
           cp bash "$dest/bash"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: shell-tool-mcp-bash-${{ matrix.target }}-${{ matrix.variant }}
           path: artifacts/**
@@ -246,9 +187,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/bolinfest/bash /tmp/bash
+          git clone https://git.savannah.gnu.org/git/bash /tmp/bash
           cd /tmp/bash
-          git fetch --depth 1 origin a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
           git checkout a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
           git apply "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/bash-exec-wrapper.patch"
           ./configure --without-bash-malloc
@@ -259,9 +199,213 @@ jobs:
           mkdir -p "$dest"
           cp bash "$dest/bash"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: shell-tool-mcp-bash-${{ matrix.target }}-${{ matrix.variant }}
+          path: artifacts/**
+          if-no-files-found: error
+
+  zsh-linux:
+    name: Build zsh (Linux) - ${{ matrix.variant }} - ${{ matrix.target }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    container:
+      image: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            variant: ubuntu-24.04
+            image: ubuntu:24.04
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            variant: ubuntu-22.04
+            image: ubuntu:22.04
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            variant: debian-12
+            image: debian:12
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            variant: debian-11
+            image: debian:11
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            variant: centos-9
+            image: quay.io/centos/centos:stream9
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: ubuntu-24.04
+            image: arm64v8/ubuntu:24.04
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: ubuntu-22.04
+            image: arm64v8/ubuntu:22.04
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: ubuntu-20.04
+            image: arm64v8/ubuntu:20.04
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: debian-12
+            image: arm64v8/debian:12
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: debian-11
+            image: arm64v8/debian:11
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: centos-9
+            image: quay.io/centos/centos:stream9
+    steps:
+      - name: Install build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential bison autoconf gettext libncursesw5-dev
+          elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y git gcc gcc-c++ make bison autoconf gettext ncurses-devel
+          elif command -v yum >/dev/null 2>&1; then
+            yum install -y git gcc gcc-c++ make bison autoconf gettext ncurses-devel
+          else
+            echo "Unsupported package manager in container"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build patched zsh
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://git.code.sf.net/p/zsh/code /tmp/zsh
+          cd /tmp/zsh
+          git checkout 77045ef899e53b9598bebc5a41db93a548a40ca6
+          git apply "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/zsh-exec-wrapper.patch"
+          ./Util/preconfig
+          ./configure
+          cores="$(command -v nproc >/dev/null 2>&1 && nproc || getconf _NPROCESSORS_ONLN)"
+          make -j"${cores}"
+
+          dest="${GITHUB_WORKSPACE}/artifacts/vendor/${{ matrix.target }}/zsh/${{ matrix.variant }}"
+          mkdir -p "$dest"
+          cp Src/zsh "$dest/zsh"
+
+      - name: Smoke test zsh exec wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmpdir="$(mktemp -d)"
+          cat > "$tmpdir/exec-wrapper" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          : "${CODEX_WRAPPER_LOG:?missing CODEX_WRAPPER_LOG}"
+          printf '%s\n' "$@" > "$CODEX_WRAPPER_LOG"
+          file="$1"
+          shift
+          if [[ "$#" -eq 0 ]]; then
+            exec "$file"
+          fi
+          arg0="$1"
+          shift
+          exec -a "$arg0" "$file" "$@"
+          EOF
+          chmod +x "$tmpdir/exec-wrapper"
+
+          CODEX_WRAPPER_LOG="$tmpdir/wrapper.log" \
+          EXEC_WRAPPER="$tmpdir/exec-wrapper" \
+          /tmp/zsh/Src/zsh -fc '/bin/echo smoke-zsh' > "$tmpdir/stdout.txt"
+
+          grep -Fx "smoke-zsh" "$tmpdir/stdout.txt"
+          grep -Fx "/bin/echo" "$tmpdir/wrapper.log"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: shell-tool-mcp-zsh-${{ matrix.target }}-${{ matrix.variant }}
+          path: artifacts/**
+          if-no-files-found: error
+
+  zsh-darwin:
+    name: Build zsh (macOS) - ${{ matrix.variant }} - ${{ matrix.target }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            variant: macos-15
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            variant: macos-14
+    steps:
+      - name: Install build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v autoconf >/dev/null 2>&1; then
+            brew install autoconf
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build patched zsh
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://git.code.sf.net/p/zsh/code /tmp/zsh
+          cd /tmp/zsh
+          git checkout 77045ef899e53b9598bebc5a41db93a548a40ca6
+          git apply "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/zsh-exec-wrapper.patch"
+          ./Util/preconfig
+          ./configure
+          cores="$(getconf _NPROCESSORS_ONLN)"
+          make -j"${cores}"
+
+          dest="${GITHUB_WORKSPACE}/artifacts/vendor/${{ matrix.target }}/zsh/${{ matrix.variant }}"
+          mkdir -p "$dest"
+          cp Src/zsh "$dest/zsh"
+
+      - name: Smoke test zsh exec wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmpdir="$(mktemp -d)"
+          cat > "$tmpdir/exec-wrapper" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          : "${CODEX_WRAPPER_LOG:?missing CODEX_WRAPPER_LOG}"
+          printf '%s\n' "$@" > "$CODEX_WRAPPER_LOG"
+          file="$1"
+          shift
+          if [[ "$#" -eq 0 ]]; then
+            exec "$file"
+          fi
+          arg0="$1"
+          shift
+          exec -a "$arg0" "$file" "$@"
+          EOF
+          chmod +x "$tmpdir/exec-wrapper"
+
+          CODEX_WRAPPER_LOG="$tmpdir/wrapper.log" \
+          EXEC_WRAPPER="$tmpdir/exec-wrapper" \
+          /tmp/zsh/Src/zsh -fc '/bin/echo smoke-zsh' > "$tmpdir/stdout.txt"
+
+          grep -Fx "smoke-zsh" "$tmpdir/stdout.txt"
+          grep -Fx "/bin/echo" "$tmpdir/wrapper.log"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: shell-tool-mcp-zsh-${{ matrix.target }}-${{ matrix.variant }}
           path: artifacts/**
           if-no-files-found: error
 
@@ -269,9 +413,10 @@ jobs:
     name: Package npm module
     needs:
       - metadata
-      - rust-binaries
       - bash-linux
       - bash-darwin
+      - zsh-linux
+      - zsh-darwin
     runs-on: ubuntu-latest
     env:
       PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
@@ -282,7 +427,6 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10.8.1
           run_install: false
 
       - name: Setup Node.js
@@ -297,7 +441,7 @@ jobs:
         run: pnpm --filter @openai/codex-shell-tool-mcp run build
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -310,7 +454,6 @@ jobs:
           mkdir -p "$staging" "$staging/vendor"
           cp shell-tool-mcp/README.md "$staging/"
           cp shell-tool-mcp/package.json "$staging/"
-          cp -R shell-tool-mcp/bin "$staging/"
 
           found_vendor="false"
           shopt -s nullglob
@@ -344,9 +487,8 @@ jobs:
           set -euo pipefail
           staging="${{ steps.staging.outputs.dir }}"
           chmod +x \
-            "$staging"/vendor/*/codex-exec-mcp-server \
-            "$staging"/vendor/*/codex-execve-wrapper \
-            "$staging"/vendor/*/bash/*/bash
+            "$staging"/vendor/*/bash/*/bash \
+            "$staging"/vendor/*/zsh/*/zsh
 
       - name: Create npm tarball
         shell: bash
@@ -358,7 +500,7 @@ jobs:
           filename=$(PACK_INFO="$pack_info" node -e 'const data = JSON.parse(process.env.PACK_INFO); console.log(data[0].filename);')
           mv "dist/npm/${filename}" "dist/npm/codex-shell-tool-mcp-npm-${PACKAGE_VERSION}.tgz"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: codex-shell-tool-mcp-npm
           path: dist/npm/codex-shell-tool-mcp-npm-${{ env.PACKAGE_VERSION }}.tgz
@@ -375,12 +517,6 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.8.1
-          run_install: false
-
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -388,11 +524,12 @@ jobs:
           registry-url: https://registry.npmjs.org
           scope: "@openai"
 
+      # Trusted publishing requires npm CLI version 11.5.1 or later.
       - name: Update npm
         run: npm install -g npm@latest
 
       - name: Download npm tarball
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: codex-shell-tool-mcp-npm
           path: dist/npm

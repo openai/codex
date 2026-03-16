@@ -1,11 +1,11 @@
 use anyhow::Result;
-use codex_core::protocol::COLLABORATION_MODE_CLOSE_TAG;
-use codex_core::protocol::COLLABORATION_MODE_OPEN_TAG;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::protocol::COLLABORATION_MODE_CLOSE_TAG;
+use codex_protocol::protocol::COLLABORATION_MODE_OPEN_TAG;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -18,13 +18,12 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 
-fn sse_completed(id: &str) -> String {
-    sse(vec![ev_response_created(id), ev_completed(id)])
-}
-
-fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMode {
+fn collab_mode_with_mode_and_instructions(
+    mode: ModeKind,
+    instructions: Option<&str>,
+) -> CollaborationMode {
     CollaborationMode {
-        mode: ModeKind::Custom,
+        mode,
         settings: Settings {
             model: "gpt-5.1".to_string(),
             reasoning_effort: None,
@@ -33,31 +32,36 @@ fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMod
     }
 }
 
+fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMode {
+    collab_mode_with_mode_and_instructions(ModeKind::Default, instructions)
+}
+
 fn developer_texts(input: &[Value]) -> Vec<String> {
     input
         .iter()
-        .filter_map(|item| {
-            let role = item.get("role")?.as_str()?;
-            if role != "developer" {
-                return None;
-            }
-            let text = item
-                .get("content")?
-                .as_array()?
-                .first()?
-                .get("text")?
-                .as_str()?;
+        .filter(|item| item.get("role").and_then(Value::as_str) == Some("developer"))
+        .filter_map(|item| item.get("content")?.as_array().cloned())
+        .flatten()
+        .filter_map(|content| {
+            let text = content.get("text")?.as_str()?;
             Some(text.to_string())
         })
         .collect()
+}
+
+fn developer_message_count(input: &[Value]) -> usize {
+    input
+        .iter()
+        .filter(|item| item.get("role").and_then(Value::as_str) == Some("developer"))
+        .count()
 }
 
 fn collab_xml(text: &str) -> String {
     format!("{COLLABORATION_MODE_OPEN_TAG}{text}{COLLABORATION_MODE_CLOSE_TAG}")
 }
 
-fn count_exact(texts: &[String], target: &str) -> usize {
-    texts.iter().filter(|text| text.as_str() == target).count()
+fn count_messages_containing(texts: &[String], target: &str) -> usize {
+    texts.iter().filter(|text| text.contains(target)).count()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -65,7 +69,11 @@ async fn no_collaboration_instructions_by_default() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
 
@@ -81,9 +89,18 @@ async fn no_collaboration_instructions_by_default() -> Result<()> {
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let input = req.single_request().input();
+    assert_eq!(developer_message_count(&input), 1);
     let dev_texts = developer_texts(&input);
-    assert_eq!(dev_texts.len(), 1);
-    assert!(dev_texts[0].contains("`approval_policy`"));
+    assert!(
+        dev_texts
+            .iter()
+            .any(|text| text.contains("<permissions instructions>")),
+        "expected permissions instructions in developer messages, got {dev_texts:?}"
+    );
+    assert_eq!(
+        count_messages_containing(&dev_texts, COLLABORATION_MODE_OPEN_TAG),
+        0
+    );
 
     Ok(())
 }
@@ -93,7 +110,11 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
 
@@ -103,10 +124,13 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
         })
@@ -126,7 +150,7 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
     let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &collab_text), 1);
 
     Ok(())
 }
@@ -136,7 +160,11 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
     let collab_text = "turn instructions";
@@ -149,11 +177,16 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             cwd: test.config.cwd.clone(),
-            approval_policy: test.config.approval_policy.value(),
-            sandbox_policy: test.config.sandbox_policy.get().clone(),
+            approval_policy: test.config.permissions.approval_policy.value(),
+            sandbox_policy: test.config.permissions.sandbox_policy.get().clone(),
             model: test.session_configured.model.clone(),
             effort: None,
-            summary: test.config.model_reasoning_summary,
+            summary: Some(
+                test.config
+                    .model_reasoning_summary
+                    .unwrap_or(codex_protocol::config_types::ReasoningSummary::Auto),
+            ),
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
             personality: None,
@@ -164,17 +197,21 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
     let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &collab_text), 1);
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn override_then_user_turn_uses_updated_collaboration_instructions() -> Result<()> {
+async fn override_then_next_turn_uses_updated_collaboration_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
     let collab_text = "override instructions";
@@ -184,30 +221,25 @@ async fn override_then_user_turn_uses_updated_collaboration_instructions() -> Re
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
         })
         .await?;
 
     test.codex
-        .submit(Op::UserTurn {
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
-            cwd: test.config.cwd.clone(),
-            approval_policy: test.config.approval_policy.value(),
-            sandbox_policy: test.config.sandbox_policy.get().clone(),
-            model: test.session_configured.model.clone(),
-            effort: None,
-            summary: test.config.model_reasoning_summary,
-            collaboration_mode: None,
             final_output_json_schema: None,
-            personality: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -215,7 +247,7 @@ async fn override_then_user_turn_uses_updated_collaboration_instructions() -> Re
     let input = req.single_request().input();
     let dev_texts = developer_texts(&input);
     let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &collab_text), 1);
 
     Ok(())
 }
@@ -225,7 +257,11 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
     let base_text = "base instructions";
@@ -237,10 +273,13 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(base_mode),
             personality: None,
         })
@@ -253,11 +292,16 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
                 text_elements: Vec::new(),
             }],
             cwd: test.config.cwd.clone(),
-            approval_policy: test.config.approval_policy.value(),
-            sandbox_policy: test.config.sandbox_policy.get().clone(),
+            approval_policy: test.config.permissions.approval_policy.value(),
+            sandbox_policy: test.config.permissions.sandbox_policy.get().clone(),
             model: test.session_configured.model.clone(),
             effort: None,
-            summary: test.config.model_reasoning_summary,
+            summary: Some(
+                test.config
+                    .model_reasoning_summary
+                    .unwrap_or(codex_protocol::config_types::ReasoningSummary::Auto),
+            ),
+            service_tier: None,
             collaboration_mode: Some(turn_mode),
             final_output_json_schema: None,
             personality: None,
@@ -269,8 +313,8 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
     let dev_texts = developer_texts(&input);
     let base_text = collab_xml(base_text);
     let turn_text = collab_xml(turn_text);
-    assert_eq!(count_exact(&dev_texts, &base_text), 1);
-    assert_eq!(count_exact(&dev_texts, &turn_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &base_text), 0);
+    assert_eq!(count_messages_containing(&dev_texts, &turn_text), 1);
 
     Ok(())
 }
@@ -280,8 +324,16 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let _req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let _req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
     let first_text = "first instructions";
@@ -291,10 +343,13 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(first_text))),
             personality: None,
         })
@@ -315,10 +370,13 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(second_text))),
             personality: None,
         })
@@ -339,8 +397,8 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
     let dev_texts = developer_texts(&input);
     let first_text = collab_xml(first_text);
     let second_text = collab_xml(second_text);
-    assert_eq!(count_exact(&dev_texts, &first_text), 1);
-    assert_eq!(count_exact(&dev_texts, &second_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &first_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &second_text), 1);
 
     Ok(())
 }
@@ -350,8 +408,16 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let _req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let _req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
     let collab_text = "same instructions";
@@ -360,10 +426,13 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
             personality: None,
         })
@@ -384,10 +453,13 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
             personality: None,
         })
@@ -407,7 +479,184 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
     let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &collab_text), 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn collaboration_mode_update_emits_new_instruction_message_when_mode_changes() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
+
+    let test = test_codex().build(&server).await?;
+    let default_text = "default mode instructions";
+    let plan_text = "plan mode instructions";
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: Some(collab_mode_with_mode_and_instructions(
+                ModeKind::Default,
+                Some(default_text),
+            )),
+            personality: None,
+        })
+        .await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello 1".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: Some(collab_mode_with_mode_and_instructions(
+                ModeKind::Plan,
+                Some(plan_text),
+            )),
+            personality: None,
+        })
+        .await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello 2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let input = req2.single_request().input();
+    let dev_texts = developer_texts(&input);
+    let default_text = collab_xml(default_text);
+    let plan_text = collab_xml(plan_text);
+    assert_eq!(count_messages_containing(&dev_texts, &default_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &plan_text), 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn collaboration_mode_update_noop_does_not_append_when_mode_is_unchanged() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
+
+    let test = test_codex().build(&server).await?;
+    let collab_text = "mode-stable instructions";
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: Some(collab_mode_with_mode_and_instructions(
+                ModeKind::Default,
+                Some(collab_text),
+            )),
+            personality: None,
+        })
+        .await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello 1".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox_policy: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: Some(collab_mode_with_mode_and_instructions(
+                ModeKind::Default,
+                Some(collab_text),
+            )),
+            personality: None,
+        })
+        .await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello 2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let input = req2.single_request().input();
+    let dev_texts = developer_texts(&input);
+    let collab_text = collab_xml(collab_text);
+    assert_eq!(count_messages_containing(&dev_texts, &collab_text), 1);
 
     Ok(())
 }
@@ -417,8 +666,16 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let _req1 = mount_sse_once(&server, sse_completed("resp-1")).await;
-    let req2 = mount_sse_once(&server, sse_completed("resp-2")).await;
+    let _req1 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let req2 = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
 
     let mut builder = test_codex();
     let initial = builder.build(&server).await?;
@@ -435,10 +692,13 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
             personality: None,
         })
@@ -472,7 +732,7 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
     let input = req2.single_request().input();
     let dev_texts = developer_texts(&input);
     let collab_text = collab_xml(collab_text);
-    assert_eq!(count_exact(&dev_texts, &collab_text), 1);
+    assert_eq!(count_messages_containing(&dev_texts, &collab_text), 1);
 
     Ok(())
 }
@@ -482,19 +742,34 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let req = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
 
     let test = test_codex().build(&server).await?;
+    let current_model = test.session_configured.model.clone();
 
     test.codex
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
-            collaboration_mode: Some(collab_mode_with_instructions(Some(""))),
+            service_tier: None,
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: current_model,
+                    reasoning_effort: None,
+                    developer_instructions: Some("".to_string()),
+                },
+            }),
             personality: None,
         })
         .await?;
@@ -511,10 +786,10 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let input = req.single_request().input();
+    assert_eq!(developer_message_count(&input), 1);
     let dev_texts = developer_texts(&input);
-    assert_eq!(dev_texts.len(), 1);
     let collab_text = collab_xml("");
-    assert_eq!(count_exact(&dev_texts, &collab_text), 0);
+    assert_eq!(count_messages_containing(&dev_texts, &collab_text), 0);
 
     Ok(())
 }

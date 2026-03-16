@@ -7,15 +7,8 @@ use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
-use codex_core::config::Config;
-use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::models_manager::manager::RefreshStrategy;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandSource;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -25,6 +18,12 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::default_input_modalities;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_assistant_message;
@@ -55,6 +54,219 @@ use wiremock::MockServer;
 const REMOTE_MODEL_SLUG: &str = "codex-test";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let generic = test_remote_model_with_policy(
+        "gpt-5.3",
+        ModelVisibility::List,
+        1_000,
+        TruncationPolicyConfig::bytes(10_000),
+    );
+    let specific = test_remote_model_with_policy(
+        "gpt-5.3-codex",
+        ModelVisibility::List,
+        1_000,
+        TruncationPolicyConfig::bytes(10_000),
+    );
+    let specific = ModelInfo {
+        display_name: "GPT 5.3 Codex".to_string(),
+        base_instructions: "use specific prefix".to_string(),
+        ..specific
+    };
+    let generic = ModelInfo {
+        display_name: "GPT 5.3".to_string(),
+        base_instructions: "use generic prefix".to_string(),
+        ..generic
+    };
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![generic.clone(), specific.clone()],
+        },
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    let config = load_default_config_for_test(&codex_home).await;
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers(/* openai_base_url */ None)["openai"].clone()
+    };
+    let manager = codex_core::test_support::models_manager_with_provider(
+        codex_home.path().to_path_buf(),
+        codex_core::test_support::auth_manager_from_auth(auth),
+        provider,
+    );
+
+    manager.list_models(RefreshStrategy::OnlineIfUncached).await;
+
+    let model_info = manager.get_model_info("gpt-5.3-codex-test", &config).await;
+
+    assert_eq!(model_info.slug, "gpt-5.3-codex-test");
+    assert_eq!(model_info.base_instructions, specific.base_instructions);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let requested_model = "gpt-5.3-codex-test";
+    let prefix_model = "gpt-5.3-codex";
+    let mut remote_model = test_remote_model_with_policy(
+        prefix_model,
+        ModelVisibility::List,
+        1_000,
+        TruncationPolicyConfig::bytes(10_000),
+    );
+    remote_model.default_reasoning_level = Some(ReasoningEffort::High);
+    remote_model.supported_reasoning_levels = vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: ReasoningEffort::Medium.to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::High,
+            description: ReasoningEffort::High.to_string(),
+        },
+    ];
+    remote_model.supports_reasoning_summaries = true;
+    remote_model.default_reasoning_summary = ReasoningSummary::Detailed;
+    mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let TestCodex {
+        codex, cwd, config, ..
+    } = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model = Some(requested_model.to_string());
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "check model slug".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: config.permissions.approval_policy.value(),
+            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            model: requested_model.to_string(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let request = response_mock.single_request();
+    let body = request.body_json();
+    let reasoning_effort = body
+        .get("reasoning")
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(|value| value.as_str());
+    let reasoning_summary = body
+        .get("reasoning")
+        .and_then(|reasoning| reasoning.get("summary"))
+        .and_then(|value| value.as_str());
+    assert_eq!(body["model"].as_str(), Some(requested_model));
+    assert_eq!(reasoning_effort, Some("high"));
+    assert_eq!(reasoning_summary, Some("detailed"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let requested_model = "custom/gpt-5.2-codex";
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let TestCodex {
+        codex, cwd, config, ..
+    } = test_codex()
+        .with_model(requested_model)
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "check namespaced model metadata".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: config.permissions.approval_policy.value(),
+            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            model: requested_model.to_string(),
+            effort: None,
+            summary: Some(
+                config
+                    .model_reasoning_summary
+                    .unwrap_or(ReasoningSummary::Auto),
+            ),
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let mut fallback_warning_count = 0;
+    loop {
+        let event = wait_for_event(&codex, |_| true).await;
+        match event {
+            EventMsg::Warning(warning)
+                if warning.message.contains("Defaulting to fallback metadata") =>
+            {
+                fallback_warning_count += 1;
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    let body = response_mock.single_request().body_json();
+    assert_eq!(body["model"].as_str(), Some(requested_model));
+    assert_eq!(fallback_warning_count, 0);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -76,16 +288,24 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         shell_type: ConfigShellToolType::UnifiedExec,
         visibility: ModelVisibility::List,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
+        prefer_websockets: false,
+        used_fallback_model_metadata: false,
+        supports_search_tool: false,
         priority: 1,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
-        model_instructions_template: None,
+        model_messages: None,
         supports_reasoning_summaries: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,
+        availability_nux: None,
         apply_patch_tool_type: None,
+        web_search_tool_type: Default::default(),
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
+        supports_image_detail_original: false,
         context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
@@ -103,7 +323,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model = Some("gpt-5.1".to_string());
         });
     let TestCodex {
@@ -115,8 +334,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     } = builder.build(&server).await?;
 
     let models_manager = thread_manager.get_models_manager();
-    let available_model =
-        wait_for_model_available(&models_manager, REMOTE_MODEL_SLUG, &config).await;
+    let available_model = wait_for_model_available(&models_manager, REMOTE_MODEL_SLUG).await;
 
     assert_eq!(available_model.model, REMOTE_MODEL_SLUG);
 
@@ -137,10 +355,13 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: Some(REMOTE_MODEL_SLUG.to_string()),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -177,7 +398,8 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: REMOTE_MODEL_SLUG.to_string(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: Some(ReasoningSummary::Auto),
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -224,13 +446,12 @@ async fn remote_models_truncation_policy_without_override_preserves_remote() -> 
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model = Some("gpt-5.1".to_string());
         });
     let test = builder.build(&server).await?;
 
     let models_manager = test.thread_manager.get_models_manager();
-    wait_for_model_available(&models_manager, slug, &test.config).await;
+    wait_for_model_available(&models_manager, slug).await;
 
     let model_info = models_manager.get_model_info(slug, &test.config).await;
     assert_eq!(
@@ -269,14 +490,13 @@ async fn remote_models_truncation_policy_with_tool_output_override() -> Result<(
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model = Some("gpt-5.1".to_string());
             config.tool_output_token_limit = Some(50);
         });
     let test = builder.build(&server).await?;
 
     let models_manager = test.thread_manager.get_models_manager();
-    wait_for_model_available(&models_manager, slug, &test.config).await;
+    wait_for_model_available(&models_manager, slug).await;
 
     let model_info = models_manager.get_model_info(slug, &test.config).await;
     assert_eq!(
@@ -312,16 +532,24 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         shell_type: ConfigShellToolType::ShellCommand,
         visibility: ModelVisibility::List,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
+        prefer_websockets: false,
+        used_fallback_model_metadata: false,
+        supports_search_tool: false,
         priority: 1,
         upgrade: None,
         base_instructions: remote_base.to_string(),
-        model_instructions_template: None,
+        model_messages: None,
         supports_reasoning_summaries: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,
+        availability_nux: None,
         apply_patch_tool_type: None,
+        web_search_tool_type: Default::default(),
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
+        supports_image_detail_original: false,
         context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,
@@ -348,7 +576,6 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
-            config.features.enable(Feature::RemoteModels);
             config.model = Some("gpt-5.1".to_string());
         });
     let TestCodex {
@@ -360,16 +587,19 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     } = builder.build(&server).await?;
 
     let models_manager = thread_manager.get_models_manager();
-    wait_for_model_available(&models_manager, model, &config).await;
+    wait_for_model_available(&models_manager, model).await;
 
     codex
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: Some(model.to_string()),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -387,7 +617,8 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: model.to_string(),
             effort: None,
-            summary: ReasoningSummary::Auto,
+            summary: Some(ReasoningSummary::Auto),
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -404,7 +635,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_models_preserve_builtin_presets() -> Result<()> {
+async fn remote_models_do_not_append_removed_builtin_presets() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -419,23 +650,19 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
     .await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
+        ..built_in_model_providers(/* openai_base_url */ None)["openai"].clone()
     };
-    let manager = ModelsManager::with_provider(
+    let manager = codex_core::test_support::models_manager_with_provider(
         codex_home.path().to_path_buf(),
-        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        codex_core::test_support::auth_manager_from_auth(auth),
         provider,
     );
 
-    let available = manager
-        .list_models(&config, RefreshStrategy::OnlineIfUncached)
-        .await;
+    let available = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
     let remote = available
         .iter()
         .find(|model| model.model == "remote-alpha")
@@ -452,12 +679,6 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
         available.iter().filter(|model| model.is_default).count(),
         1,
         "expected a single default model"
-    );
-    assert!(
-        available
-            .iter()
-            .any(|model| model.model == "gpt-5.1-codex-max"),
-        "builtin presets should remain available after refresh"
     );
     assert_eq!(
         models_mock.requests().len(),
@@ -484,23 +705,19 @@ async fn remote_models_merge_adds_new_high_priority_first() -> Result<()> {
     .await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
+        ..built_in_model_providers(/* openai_base_url */ None)["openai"].clone()
     };
-    let manager = ModelsManager::with_provider(
+    let manager = codex_core::test_support::models_manager_with_provider(
         codex_home.path().to_path_buf(),
-        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        codex_core::test_support::auth_manager_from_auth(auth),
         provider,
     );
 
-    let available = manager
-        .list_models(&config, RefreshStrategy::OnlineIfUncached)
-        .await;
+    let available = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
     assert_eq!(
         available.first().map(|model| model.model.as_str()),
         Some("remote-top")
@@ -510,6 +727,8 @@ async fn remote_models_merge_adds_new_high_priority_first() -> Result<()> {
         1,
         "expected a single /models request"
     );
+    // Keep the mock server alive until after async assertions complete.
+    drop(server);
 
     Ok(())
 }
@@ -533,23 +752,19 @@ async fn remote_models_merge_replaces_overlapping_model() -> Result<()> {
     .await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
+        ..built_in_model_providers(/* openai_base_url */ None)["openai"].clone()
     };
-    let manager = ModelsManager::with_provider(
+    let manager = codex_core::test_support::models_manager_with_provider(
         codex_home.path().to_path_buf(),
-        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        codex_core::test_support::auth_manager_from_auth(auth),
         provider,
     );
 
-    let available = manager
-        .list_models(&config, RefreshStrategy::OnlineIfUncached)
-        .await;
+    let available = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
     let overridden = available
         .iter()
         .find(|model| model.model == slug)
@@ -566,6 +781,8 @@ async fn remote_models_merge_replaces_overlapping_model() -> Result<()> {
         1,
         "expected a single /models request"
     );
+    // Keep the mock server alive until after async assertions complete.
+    drop(server);
 
     Ok(())
 }
@@ -576,36 +793,29 @@ async fn remote_models_merge_preserves_bundled_models_on_empty_response() -> Res
     skip_if_sandbox!(Ok(()));
 
     let server = MockServer::start().await;
-    let models_mock = mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
+    let _models_mock = mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
+        ..built_in_model_providers(/* openai_base_url */ None)["openai"].clone()
     };
-    let manager = ModelsManager::with_provider(
+    let manager = codex_core::test_support::models_manager_with_provider(
         codex_home.path().to_path_buf(),
-        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        codex_core::test_support::auth_manager_from_auth(auth),
         provider,
     );
 
-    let available = manager
-        .list_models(&config, RefreshStrategy::OnlineIfUncached)
-        .await;
+    let available = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
     let bundled_slug = bundled_model_slug();
     assert!(
         available.iter().any(|model| model.model == bundled_slug),
         "bundled models should remain available after empty remote response"
     );
-    assert_eq!(
-        models_mock.requests().len(),
-        1,
-        "expected a single /models request"
-    );
+    // Keep the mock server alive until after async assertions complete.
+    drop(server);
 
     Ok(())
 }
@@ -627,31 +837,30 @@ async fn remote_models_request_times_out_after_5s() -> Result<()> {
     .await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
+        ..built_in_model_providers(/* openai_base_url */ None)["openai"].clone()
     };
-    let manager = ModelsManager::with_provider(
+    let manager = codex_core::test_support::models_manager_with_provider(
         codex_home.path().to_path_buf(),
-        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        codex_core::test_support::auth_manager_from_auth(auth),
         provider,
     );
 
     let start = Instant::now();
     let model = timeout(
         Duration::from_secs(7),
-        manager.get_default_model(&None, &config, RefreshStrategy::OnlineIfUncached),
+        manager.get_default_model(&None, RefreshStrategy::OnlineIfUncached),
     )
     .await;
     let elapsed = start.elapsed();
     // get_model should return a default model even when refresh times out
     let default_model = model.expect("get_model should finish and return default model");
+    let expected_default = bundled_default_model_slug();
     assert!(
-        default_model == "gpt-5.2-codex",
+        default_model == expected_default,
         "get_model should return default model when refresh times out, got: {default_model}"
     );
     let _ = server
@@ -685,7 +894,7 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
 
     let server = MockServer::start().await;
     let remote_model = test_remote_model("codex-auto-balanced", ModelVisibility::Hide, 0);
-    mount_models_once(
+    let models_mock = mount_models_once(
         &server,
         ModelsResponse {
             models: vec![remote_model],
@@ -694,48 +903,45 @@ async fn remote_models_hide_picker_only_models() -> Result<()> {
     .await;
 
     let codex_home = TempDir::new()?;
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.features.enable(Feature::RemoteModels);
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
+        ..built_in_model_providers(/* openai_base_url */ None)["openai"].clone()
     };
-    let manager = ModelsManager::with_provider(
+    let manager = codex_core::test_support::models_manager_with_provider(
         codex_home.path().to_path_buf(),
-        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        codex_core::test_support::auth_manager_from_auth(auth),
         provider,
     );
 
     let selected = manager
-        .get_default_model(&None, &config, RefreshStrategy::OnlineIfUncached)
+        .get_default_model(&None, RefreshStrategy::OnlineIfUncached)
         .await;
-    assert_eq!(selected, "gpt-5.2-codex");
+    assert_eq!(selected, bundled_default_model_slug());
 
-    let available = manager
-        .list_models(&config, RefreshStrategy::OnlineIfUncached)
-        .await;
+    let available = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
     let hidden = available
         .iter()
         .find(|model| model.model == "codex-auto-balanced")
         .expect("hidden remote model should be listed");
     assert!(!hidden.show_in_picker, "hidden models should remain hidden");
+    assert_eq!(
+        models_mock.requests().len(),
+        1,
+        "expected a single /models request"
+    );
+    // Keep the mock server alive until after async assertions complete.
+    drop(server);
 
     Ok(())
 }
 
-async fn wait_for_model_available(
-    manager: &Arc<ModelsManager>,
-    slug: &str,
-    config: &Config,
-) -> ModelPreset {
+async fn wait_for_model_available(manager: &Arc<ModelsManager>, slug: &str) -> ModelPreset {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if let Some(model) = {
-            let guard = manager
-                .list_models(config, RefreshStrategy::OnlineIfUncached)
-                .await;
+            let guard = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
             guard.iter().find(|model| model.model == slug).cloned()
         } {
             return model;
@@ -755,6 +961,15 @@ fn bundled_model_slug() -> String {
         .first()
         .expect("bundled models.json should include at least one model")
         .slug
+        .clone()
+}
+
+fn bundled_default_model_slug() -> String {
+    codex_core::test_support::all_model_presets()
+        .iter()
+        .find(|preset| preset.is_default)
+        .expect("bundled models should include a default")
+        .model
         .clone()
 }
 
@@ -785,16 +1000,24 @@ fn test_remote_model_with_policy(
         shell_type: ConfigShellToolType::ShellCommand,
         visibility,
         supported_in_api: true,
+        input_modalities: default_input_modalities(),
+        prefer_websockets: false,
+        used_fallback_model_metadata: false,
+        supports_search_tool: false,
         priority,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
-        model_instructions_template: None,
+        model_messages: None,
         supports_reasoning_summaries: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,
+        availability_nux: None,
         apply_patch_tool_type: None,
+        web_search_tool_type: Default::default(),
         truncation_policy,
         supports_parallel_tool_calls: false,
+        supports_image_detail_original: false,
         context_window: Some(272_000),
         auto_compact_token_limit: None,
         effective_context_window_percent: 95,

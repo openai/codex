@@ -34,4 +34,13 @@ pub enum MetricsError {
         #[source]
         source: opentelemetry_sdk::error::OTelSdkError,
     },
+
+    #[error("runtime metrics snapshot reader is not enabled")]
+    RuntimeSnapshotUnavailable,
+
+    #[error("failed to collect runtime metrics snapshot from metrics reader")]
+    RuntimeSnapshotCollect {
+        #[source]
+        source: opentelemetry_sdk::error::OTelSdkError,
+    },
 }

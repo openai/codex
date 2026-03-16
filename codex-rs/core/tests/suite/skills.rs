@@ -2,9 +2,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -77,14 +77,15 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
-            summary: codex_protocol::config_types::ReasoningSummary::Auto,
+            summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
         .await?;
 
     core_test_support::wait_for_event(test.codex.as_ref(), |event| {
-        matches!(event, codex_core::protocol::EventMsg::TurnComplete(_))
+        matches!(event, codex_protocol::protocol::EventMsg::TurnComplete(_))
     })
     .await;
 
@@ -124,7 +125,9 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
         .await?;
     let response =
         core_test_support::wait_for_event_match(test.codex.as_ref(), |event| match event {
-            codex_core::protocol::EventMsg::ListSkillsResponse(response) => Some(response.clone()),
+            codex_protocol::protocol::EventMsg::ListSkillsResponse(response) => {
+                Some(response.clone())
+            }
             _ => None,
         })
         .await;
@@ -192,7 +195,9 @@ async fn list_skills_includes_system_cache_entries() -> Result<()> {
         .await?;
     let response =
         core_test_support::wait_for_event_match(test.codex.as_ref(), |event| match event {
-            codex_core::protocol::EventMsg::ListSkillsResponse(response) => Some(response.clone()),
+            codex_protocol::protocol::EventMsg::ListSkillsResponse(response) => {
+                Some(response.clone())
+            }
             _ => None,
         })
         .await;

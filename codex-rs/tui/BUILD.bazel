@@ -12,7 +12,7 @@ codex_rust_crate(
         ],
         allow_empty = True,
     ),
-    test_data_extra = glob(["src/**/snapshots/**"]),
+    test_data_extra = glob(["src/**/snapshots/**"]) + ["//codex-rs/core:model_availability_nux_fixtures"],
     integration_compile_data_extra = ["src/test_backend.rs"],
     extra_binaries = [
         "//codex-rs/cli:codex",

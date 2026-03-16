@@ -39,9 +39,13 @@ pub fn run(socket_path: &Path) -> anyhow::Result<()> {
         io::copy(&mut handle, &mut stream).context("failed to copy data from stdin to socket")?;
     }
 
-    stream
-        .shutdown(Shutdown::Write)
-        .context("failed to shutdown socket writer")?;
+    // The peer can close immediately after sending its response; in that race,
+    // half-closing our write side can report NotConnected on some platforms.
+    if let Err(err) = stream.shutdown(Shutdown::Write)
+        && err.kind() != io::ErrorKind::NotConnected
+    {
+        return Err(err).context("failed to shutdown socket writer");
+    }
 
     let stdout_result = stdout_thread
         .join()

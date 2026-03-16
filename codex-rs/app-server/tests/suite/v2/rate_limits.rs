@@ -6,7 +6,7 @@ use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::LoginApiKeyParams;
+use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RateLimitWindow;
 use codex_app_server_protocol::RequestId;
@@ -117,7 +117,23 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
                 "reset_after_seconds": 43200,
                 "reset_at": secondary_reset_timestamp,
             }
-        }
+        },
+        "additional_rate_limits": [
+            {
+                "limit_name": "codex_other",
+                "metered_feature": "codex_other",
+                "rate_limit": {
+                    "allowed": true,
+                    "limit_reached": false,
+                    "primary_window": {
+                        "used_percent": 88,
+                        "limit_window_seconds": 1800,
+                        "reset_after_seconds": 600,
+                        "reset_at": 1735693200
+                    }
+                }
+            }
+        ]
     });
 
     Mock::given(method("GET"))
@@ -143,6 +159,8 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
 
     let expected = GetAccountRateLimitsResponse {
         rate_limits: RateLimitSnapshot {
+            limit_id: Some("codex".to_string()),
+            limit_name: None,
             primary: Some(RateLimitWindow {
                 used_percent: 42,
                 window_duration_mins: Some(60),
@@ -156,6 +174,46 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
             credits: None,
             plan_type: Some(AccountPlanType::Pro),
         },
+        rate_limits_by_limit_id: Some(
+            [
+                (
+                    "codex".to_string(),
+                    RateLimitSnapshot {
+                        limit_id: Some("codex".to_string()),
+                        limit_name: None,
+                        primary: Some(RateLimitWindow {
+                            used_percent: 42,
+                            window_duration_mins: Some(60),
+                            resets_at: Some(primary_reset_timestamp),
+                        }),
+                        secondary: Some(RateLimitWindow {
+                            used_percent: 5,
+                            window_duration_mins: Some(1440),
+                            resets_at: Some(secondary_reset_timestamp),
+                        }),
+                        credits: None,
+                        plan_type: Some(AccountPlanType::Pro),
+                    },
+                ),
+                (
+                    "codex_other".to_string(),
+                    RateLimitSnapshot {
+                        limit_id: Some("codex_other".to_string()),
+                        limit_name: Some("codex_other".to_string()),
+                        primary: Some(RateLimitWindow {
+                            used_percent: 88,
+                            window_duration_mins: Some(30),
+                            resets_at: Some(1735693200),
+                        }),
+                        secondary: None,
+                        credits: None,
+                        plan_type: Some(AccountPlanType::Pro),
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ),
     };
     assert_eq!(received, expected);
 
@@ -163,17 +221,14 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
 }
 
 async fn login_with_api_key(mcp: &mut McpProcess, api_key: &str) -> Result<()> {
-    let request_id = mcp
-        .send_login_api_key_request(LoginApiKeyParams {
-            api_key: api_key.to_string(),
-        })
-        .await?;
-
-    timeout(
+    let request_id = mcp.send_login_account_api_key_request(api_key).await?;
+    let response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
+    let login: LoginAccountResponse = to_response(response)?;
+    assert_eq!(login, LoginAccountResponse::ApiKey {});
 
     Ok(())
 }

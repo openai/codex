@@ -6,28 +6,14 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use futures::Stream;
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
-
-/// Canonical prompt input for Chat and Responses endpoints.
-#[derive(Debug, Clone)]
-pub struct Prompt {
-    /// Fully-resolved system instructions for this turn.
-    pub instructions: String,
-    /// Conversation history and user/tool messages.
-    pub input: Vec<ResponseItem>,
-    /// JSON-encoded tool definitions compatible with the target API.
-    // TODO(jif) have a proper type here
-    pub tools: Vec<Value>,
-    /// Whether parallel tool calls are permitted.
-    pub parallel_tool_calls: bool,
-    /// Optional output schema used to build the `text.format` controls.
-    pub output_schema: Option<Value>,
-}
 
 /// Canonical input payload for the compaction endpoint.
 #[derive(Debug, Clone, Serialize)]
@@ -35,6 +21,41 @@ pub struct CompactionInput<'a> {
     pub model: &'a str,
     pub input: &'a [ResponseItem],
     pub instructions: &'a str,
+    pub tools: Vec<Value>,
+    pub parallel_tool_calls: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<Reasoning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<TextControls>,
+}
+
+/// Canonical input payload for the memory summarize endpoint.
+#[derive(Debug, Clone, Serialize)]
+pub struct MemorySummarizeInput {
+    pub model: String,
+    #[serde(rename = "traces")]
+    pub raw_memories: Vec<RawMemory>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<Reasoning>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RawMemory {
+    pub id: String,
+    pub metadata: RawMemoryMetadata,
+    pub items: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RawMemoryMetadata {
+    pub source_path: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct MemorySummarizeOutput {
+    #[serde(rename = "trace_summary", alias = "raw_memory")]
+    pub raw_memory: String,
+    pub memory_summary: String,
 }
 
 #[derive(Debug)]
@@ -42,6 +63,9 @@ pub enum ResponseEvent {
     Created,
     OutputItemDone(ResponseItem),
     OutputItemAdded(ResponseItem),
+    /// Emitted when the server includes `OpenAI-Model` on the stream response.
+    /// This can differ from the requested model when backend safety routing applies.
+    ServerModel(String),
     /// Emitted when `X-Reasoning-Included: true` is present on the response,
     /// meaning the server already accounted for past reasoning tokens and the
     /// client should not re-estimate them.
@@ -66,7 +90,7 @@ pub enum ResponseEvent {
     ModelsEtag(String),
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct Reasoning {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,
@@ -74,14 +98,14 @@ pub struct Reasoning {
     pub summary: Option<ReasoningSummaryConfig>,
 }
 
-#[derive(Debug, Serialize, Default, Clone)]
+#[derive(Debug, Serialize, Default, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum TextFormatType {
     #[default]
     JsonSchema,
 }
 
-#[derive(Debug, Serialize, Default, Clone)]
+#[derive(Debug, Serialize, Default, Clone, PartialEq)]
 pub struct TextFormat {
     /// Format type used by the OpenAI text controls.
     pub r#type: TextFormatType,
@@ -95,7 +119,7 @@ pub struct TextFormat {
 
 /// Controls the `text` field for the Responses API, combining verbosity and
 /// optional JSON schema output formatting.
-#[derive(Debug, Serialize, Default, Clone)]
+#[derive(Debug, Serialize, Default, Clone, PartialEq)]
 pub struct TextControls {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verbosity: Option<OpenAiVerbosity>,
@@ -103,7 +127,7 @@ pub struct TextControls {
     pub format: Option<TextFormat>,
 }
 
-#[derive(Debug, Serialize, Default, Clone)]
+#[derive(Debug, Serialize, Default, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum OpenAiVerbosity {
     Low,
@@ -122,28 +146,55 @@ impl From<VerbosityConfig> for OpenAiVerbosity {
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct ResponsesApiRequest<'a> {
-    pub model: &'a str,
-    pub instructions: &'a str,
-    pub input: &'a [ResponseItem],
-    pub tools: &'a [serde_json::Value],
-    pub tool_choice: &'static str,
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct ResponsesApiRequest {
+    pub model: String,
+    pub instructions: String,
+    pub input: Vec<ResponseItem>,
+    pub tools: Vec<serde_json::Value>,
+    pub tool_choice: String,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,
     pub store: bool,
     pub stream: bool,
     pub include: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+}
+
+impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
+    fn from(request: &ResponsesApiRequest) -> Self {
+        Self {
+            model: request.model.clone(),
+            instructions: request.instructions.clone(),
+            previous_response_id: None,
+            input: request.input.clone(),
+            tools: request.tools.clone(),
+            tool_choice: request.tool_choice.clone(),
+            parallel_tool_calls: request.parallel_tool_calls,
+            reasoning: request.reasoning.clone(),
+            store: request.store,
+            stream: request.stream,
+            include: request.include.clone(),
+            service_tier: request.service_tier.clone(),
+            prompt_cache_key: request.prompt_cache_key.clone(),
+            text: request.text.clone(),
+            generate: None,
+            client_metadata: None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
 pub struct ResponseCreateWsRequest {
     pub model: String,
     pub instructions: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_response_id: Option<String>,
     pub input: Vec<ResponseItem>,
     pub tools: Vec<Value>,
     pub tool_choice: String,
@@ -153,23 +204,23 @@ pub struct ResponseCreateWsRequest {
     pub stream: bool,
     pub include: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generate: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_metadata: Option<HashMap<String, String>>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct ResponseAppendWsRequest {
-    pub input: Vec<ResponseItem>,
-}
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum ResponsesWsRequest {
     #[serde(rename = "response.create")]
     ResponseCreate(ResponseCreateWsRequest),
-    #[serde(rename = "response.append")]
-    ResponseAppend(ResponseAppendWsRequest),
 }
 
 pub fn create_text_param_for_request(

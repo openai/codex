@@ -1,16 +1,16 @@
 use anyhow::Context;
-use codex_core::NewThread;
-use codex_core::ThreadManager;
 use codex_core::features::Feature;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecCommandEndEvent;
-use codex_core::protocol::ExecCommandSource;
-use codex_core::protocol::ExecOutputStream;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::TurnAbortReason;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::ExecOutputStream;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
-use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -23,9 +23,13 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_event_with_timeout;
+use pretty_assertions::assert_eq;
 use regex_lite::escape;
 use std::path::PathBuf;
 use tempfile::TempDir;
+use tokio::time::Duration;
+use tokio::time::timeout;
 
 #[tokio::test]
 async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
@@ -38,19 +42,17 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
         .await
         .expect("write temp file");
 
-    // Load config and pin cwd to the temp dir so ls/cat operate there.
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home).await;
-    config.cwd = cwd.path().to_path_buf();
-
-    let thread_manager = ThreadManager::with_models_provider(
-        codex_core::CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let NewThread { thread: codex, .. } = thread_manager
-        .start_thread(config)
+    // Pin cwd to the temp dir so ls/cat operate there.
+    let server = start_mock_server().await;
+    let cwd_path = cwd.path().to_path_buf();
+    let mut builder = test_codex().with_config(move |config| {
+        config.cwd = cwd_path;
+    });
+    let codex = builder
+        .build(&server)
         .await
-        .expect("create new conversation");
+        .expect("create new conversation")
+        .codex;
 
     // 1) shell command should list the file
     let list_cmd = "ls".to_string();
@@ -97,16 +99,13 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
 #[tokio::test]
 async fn user_shell_cmd_can_be_interrupted() {
     // Set up isolated config and conversation.
-    let codex_home = TempDir::new().unwrap();
-    let config = load_default_config_for_test(&codex_home).await;
-    let thread_manager = ThreadManager::with_models_provider(
-        codex_core::CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let NewThread { thread: codex, .. } = thread_manager
-        .start_thread(config)
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let fixture = builder
+        .build(&server)
         .await
         .expect("create new conversation");
+    let codex = &fixture.codex;
 
     // Start a long-running command and then interrupt it.
     let sleep_cmd = "sleep 5".to_string();
@@ -116,11 +115,22 @@ async fn user_shell_cmd_can_be_interrupted() {
         .unwrap();
 
     // Wait until it has started (ExecCommandBegin), then interrupt.
-    let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_))).await;
+    let _begin = wait_for_event_match(codex, |ev| match ev {
+        EventMsg::ExecCommandBegin(event) if event.source == ExecCommandSource::UserShell => {
+            Some(event.clone())
+        }
+        _ => None,
+    })
+    .await;
     codex.submit(Op::Interrupt).await.unwrap();
 
     // Expect a TurnAborted(Interrupted) notification.
-    let msg = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
+    let msg = wait_for_event_with_timeout(
+        codex,
+        |ev| matches!(ev, EventMsg::TurnAborted(_)),
+        Duration::from_secs(60),
+    )
+    .await;
     let EventMsg::TurnAborted(ev) = msg else {
         unreachable!()
     };
@@ -128,11 +138,124 @@ async fn user_shell_cmd_can_be_interrupted() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_model("gpt-5.1");
+    let fixture = builder.build(&server).await?;
+
+    let call_id = "active-turn-shell-call";
+    let args = if cfg!(windows) {
+        serde_json::json!({
+            "command": "Start-Sleep -Seconds 2; Write-Output model-shell",
+            "timeout_ms": 10_000,
+        })
+    } else {
+        serde_json::json!({
+            "command": "sleep 2; echo model-shell",
+            "timeout_ms": 10_000,
+        })
+    };
+    let first = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
+        ev_completed("resp-1"),
+    ]);
+    let second = sse(vec![
+        ev_assistant_message("msg-1", "done"),
+        ev_completed("resp-2"),
+    ]);
+    let mock = responses::mount_sse_sequence(&server, vec![first, second]).await;
+
+    fixture
+        .codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "run model shell command".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: fixture.cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: fixture.session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let _ = wait_for_event_match(&fixture.codex, |ev| match ev {
+        EventMsg::ExecCommandBegin(event) if event.source == ExecCommandSource::Agent => {
+            Some(event.clone())
+        }
+        _ => None,
+    })
+    .await;
+
+    #[cfg(windows)]
+    let user_shell_command = "Write-Output user-shell".to_string();
+    #[cfg(not(windows))]
+    let user_shell_command = "printf user-shell".to_string();
+    fixture
+        .codex
+        .submit(Op::RunUserShellCommand {
+            command: user_shell_command,
+        })
+        .await?;
+
+    let mut saw_replaced_abort = false;
+    let mut saw_user_shell_end = false;
+    let mut saw_turn_complete = false;
+    for _ in 0..200 {
+        let event = timeout(Duration::from_secs(20), fixture.codex.next_event())
+            .await
+            .context("timed out waiting for event")?
+            .context("event stream ended unexpectedly")?;
+        match event.msg {
+            EventMsg::TurnAborted(ev) if ev.reason == TurnAbortReason::Replaced => {
+                saw_replaced_abort = true;
+            }
+            EventMsg::ExecCommandEnd(ev) if ev.source == ExecCommandSource::UserShell => {
+                saw_user_shell_end = true;
+            }
+            EventMsg::TurnComplete(_) => {
+                saw_turn_complete = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_turn_complete, "expected turn to complete");
+    assert!(
+        saw_user_shell_end,
+        "expected user shell command to finish while turn was active"
+    );
+    assert!(
+        !saw_replaced_abort,
+        "user shell command should not replace the active turn"
+    );
+
+    assert_eq!(
+        mock.requests().len(),
+        2,
+        "active turn should continue and issue the follow-up model request"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
     // Disable it to ease command matching.
     let mut builder = core_test_support::test_codex::test_codex().with_config(move |config| {
-        config.features.disable(Feature::ShellSnapshot);
+        config
+            .features
+            .disable(Feature::ShellSnapshot)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -203,6 +326,35 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
         r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\nnot-set\n</result>\n</user_shell_command>\z"
     );
     assert_regex_match(&expected_pattern, &command_message);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn user_shell_command_does_not_set_network_sandbox_env_var() -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let mut builder = core_test_support::test_codex::test_codex().with_config(|config| {
+        config.permissions.network_sandbox_policy = NetworkSandboxPolicy::Restricted;
+    });
+    let test = builder.build(&server).await?;
+
+    #[cfg(windows)]
+    let command = r#"$val = $env:CODEX_SANDBOX_NETWORK_DISABLED; if ([string]::IsNullOrEmpty($val)) { $val = 'not-set' } ; [System.Console]::Write($val)"#.to_string();
+    #[cfg(not(windows))]
+    let command =
+        r#"sh -c "printf '%s' \"${CODEX_SANDBOX_NETWORK_DISABLED:-not-set}\"""#.to_string();
+
+    test.codex
+        .submit(Op::RunUserShellCommand { command })
+        .await?;
+
+    let end_event = wait_for_event_match(&test.codex, |ev| match ev {
+        EventMsg::ExecCommandEnd(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(end_event.exit_code, 0);
+    assert_eq!(end_event.stdout.trim(), "not-set");
 
     Ok(())
 }

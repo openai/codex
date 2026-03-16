@@ -9,6 +9,7 @@ use ts_rs::TS;
 pub enum PlanType {
     #[default]
     Free,
+    Go,
     Plus,
     Pro,
     Team,

@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "cwds": {
+      "description": "Zero or more working directories to include for repo-scoped detection.",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "includeHome": {
+      "description": "If true, include detection under the user's home (~/.claude, ~/.codex, etc.).",
+      "type": "boolean"
+    }
+  },
+  "title": "ExternalAgentConfigDetectParams",
+  "type": "object"
+}

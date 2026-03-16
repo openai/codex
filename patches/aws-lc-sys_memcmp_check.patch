@@ -1,0 +1,86 @@
+diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
+--- a/builder/cc_builder.rs
++++ b/builder/cc_builder.rs
+@@ -26,7 +26,7 @@
+ };
+ use std::cell::Cell;
+ use std::collections::HashMap;
+-use std::path::PathBuf;
++use std::path::{Path, PathBuf};
+ 
+ #[non_exhaustive]
+ #[derive(PartialEq, Eq)]
+@@ -661,6 +661,16 @@
+         }
+         let mut memcmp_compile_args = Vec::from(memcmp_compiler.args());
+ 
++        // Keep the probe self-contained and avoid invoking external debug tools
++        // (for example `dsymutil`) that may be missing in hermetic sandboxes.
++        memcmp_compile_args.retain(|arg| {
++            let Some(arg_str) = arg.to_str() else {
++                return true;
++            };
++            !arg_str.starts_with("-g")
++        });
++        memcmp_compile_args.push("-g0".into());
++
+         // This check invokes the compiled executable and hence needs to link
+         // it. CMake handles this via LDFLAGS but `cc` doesn't. In setups with
+         // custom linker setups this could lead to a mismatch between the
+@@ -672,6 +682,15 @@
+             }
+         }
+ 
++        if let Some(execroot) = Self::bazel_execroot(self.manifest_dir.as_path()) {
++            // In Bazel build-script sandboxes, `cc` can pass `bazel-out/...` args
++            // relative to the execroot while the process runs from elsewhere.
++            // Normalize those args to absolute paths so this check can still link.
++            for arg in &mut memcmp_compile_args {
++                Self::rewrite_bazel_execroot_arg(execroot.as_path(), arg);
++            }
++        }
++
+         memcmp_compile_args.push(
+             self.manifest_dir
+                 .join("aws-lc")
+@@ -725,6 +744,40 @@
+         }
+         let _ = fs::remove_file(exec_path);
+     }
++
++    fn rewrite_bazel_execroot_arg(execroot: &Path, arg: &mut std::ffi::OsString) {
++        let Some(arg_str) = arg.to_str() else {
++            return;
++        };
++
++        if arg_str.starts_with("bazel-out/") {
++            *arg = execroot.join(arg_str).into_os_string();
++            return;
++        }
++
++        for flag_prefix in ["-B", "-L"] {
++            if let Some(path) = arg_str.strip_prefix(flag_prefix) {
++                if path.starts_with("bazel-out/") {
++                    *arg = format!("{flag_prefix}{}", execroot.join(path).display()).into();
++                    return;
++                }
++            }
++        }
++    }
++
++    fn bazel_execroot(path: &Path) -> Option<PathBuf> {
++        let mut prefix = PathBuf::new();
++        for component in path.components() {
++            if component.as_os_str() == "bazel-out" {
++                return Some(prefix);
++            }
++
++            prefix.push(component.as_os_str());
++        }
++
++        None
++    }
++
+     fn run_compiler_checks(&self, cc_build: &mut cc::Build) {
+         if self.compiler_check("stdalign_check", Vec::<&'static str>::new()) {
+             cc_build.define("AWS_LC_STDALIGN_AVAILABLE", Some("1"));

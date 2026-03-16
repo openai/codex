@@ -1,0 +1,17 @@
+filegroup(
+    name = "bubblewrap_c_sources",
+    srcs = glob(["bubblewrap/*.c"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "bubblewrap_headers",
+    srcs = glob(["bubblewrap/*.h"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "bubblewrap_sources",
+    srcs = [":bubblewrap_c_sources", ":bubblewrap_headers"],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ConfigEdit": {
+      "properties": {
+        "keyPath": {
+          "type": "string"
+        },
+        "mergeStrategy": {
+          "$ref": "#/definitions/MergeStrategy"
+        },
+        "value": true
+      },
+      "required": [
+        "keyPath",
+        "mergeStrategy",
+        "value"
+      ],
+      "type": "object"
+    },
+    "MergeStrategy": {
+      "enum": [
+        "replace",
+        "upsert"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "edits": {
+      "items": {
+        "$ref": "#/definitions/ConfigEdit"
+      },
+      "type": "array"
+    },
+    "expectedVersion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "filePath": {
+      "description": "Path to the config file to write; defaults to the user's `config.toml` when omitted.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reloadUserConfig": {
+      "description": "When true, hot-reload the updated user config into all loaded threads after writing.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "edits"
+  ],
+  "title": "ConfigBatchWriteParams",
+  "type": "object"
+}

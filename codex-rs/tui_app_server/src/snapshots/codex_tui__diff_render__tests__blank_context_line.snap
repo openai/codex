@@ -1,0 +1,15 @@
+---
+source: tui/src/diff_render.rs
+assertion_line: 765
+expression: terminal.backend()
+---
+"• Proposed Change example.txt (+1 -1)                                           "
+"    1                                                                           "
+"    2     -Y                                                                    "
+"    2     +Y changed                                                            "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "

@@ -2,8 +2,8 @@
 
 ## Overview
 
-- Policy engine and CLI built around `prefix_rule(pattern=[...], decision?, justification?, match?, not_match?)`.
-- This release covers the prefix-rule subset of the execpolicy language; a richer language will follow.
+- Policy engine and CLI built around `prefix_rule(pattern=[...], decision?, justification?, match?, not_match?)` plus `host_executable(name=..., paths=[...])`.
+- This release covers the prefix-rule subset of the execpolicy language plus host executable metadata; a richer language will follow.
 - Tokens are matched in order; any `pattern` element may be a list to denote alternatives. `decision` defaults to `allow`; valid values: `allow`, `prompt`, `forbidden`.
 - `justification` is an optional human-readable rationale for why a rule exists. It can be provided for any `decision` and may be surfaced in different contexts (for example, in approval prompts or rejection messages). When `decision = "forbidden"` is used, include a recommended alternative in the `justification`, when appropriate (e.g., ``"Use `jj` instead of `git`."``).
 - `match` / `not_match` supply example invocations that are validated at load time (think of them as unit tests); examples can be token arrays or strings (strings are tokenized with `shlex`).
@@ -24,12 +24,41 @@ prefix_rule(
 )
 ```
 
+- Host executable metadata can optionally constrain which absolute paths may
+  resolve through basename rules:
+
+```starlark
+host_executable(
+    name = "git",
+    paths = [
+        "/opt/homebrew/bin/git",
+        "/usr/bin/git",
+    ],
+)
+```
+
+- Matching semantics:
+  - execpolicy always tries exact first-token matches first.
+  - With host-executable resolution disabled, `/usr/bin/git status` only matches a rule whose first token is `/usr/bin/git`.
+  - With host-executable resolution enabled, if no exact rule matches, execpolicy may fall back from `/usr/bin/git` to basename rules for `git`.
+  - If `host_executable(name="git", ...)` exists, basename fallback is only allowed for listed absolute paths.
+  - If no `host_executable()` entry exists for a basename, basename fallback is allowed.
+
 ## CLI
 
 - From the Codex CLI, run `codex execpolicy check` subcommand with one or more policy files (for example `src/default.rules`) to check a command:
 
 ```bash
 codex execpolicy check --rules path/to/policy.rules git status
+```
+
+- To opt into basename fallback for absolute program paths, pass `--resolve-host-executables`:
+
+```bash
+codex execpolicy check \
+  --rules path/to/policy.rules \
+  --resolve-host-executables \
+  /usr/bin/git status
 ```
 
 - Pass multiple `--rules` flags to merge rules, evaluated in the order provided, and use `--pretty` for formatted JSON.
@@ -52,6 +81,7 @@ cargo run -p codex-execpolicy -- check --rules path/to/policy.rules git status
       "prefixRuleMatch": {
         "matchedPrefix": ["<token>", "..."],
         "decision": "allow|prompt|forbidden",
+        "resolvedProgram": "/absolute/path/to/program",
         "justification": "..."
       }
     }
@@ -62,6 +92,7 @@ cargo run -p codex-execpolicy -- check --rules path/to/policy.rules git status
 
 - When no rules match, `matchedRules` is an empty array and `decision` is omitted.
 - `matchedRules` lists every rule whose prefix matched the command; `matchedPrefix` is the exact prefix that matched.
+- `resolvedProgram` is omitted unless an absolute executable path matched via basename fallback.
 - The effective `decision` is the strictest severity across all matches (`forbidden` > `prompt` > `allow`).
 
 Note: `execpolicy` commands are still in preview. The API may have breaking changes in the future.

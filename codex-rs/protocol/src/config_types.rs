@@ -2,6 +2,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
+use strum_macros::EnumIter;
 use ts_rs::TS;
 
 use crate::openai_models::ReasoningEffort;
@@ -66,6 +67,34 @@ pub enum SandboxMode {
 }
 
 #[derive(
+    Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, JsonSchema, TS,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+/// Configures who approval requests are routed to for review. Examples
+/// include sandbox escapes, blocked network access, MCP approval prompts, and
+/// ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully
+/// prompted subagent to gather relevant context and apply a risk-based
+/// decision framework before approving or denying the request.
+pub enum ApprovalsReviewer {
+    #[default]
+    User,
+    GuardianSubagent,
+}
+
+#[derive(
+    Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, JsonSchema, TS,
+)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum WindowsSandboxLevel {
+    #[default]
+    Disabled,
+    RestrictedToken,
+    Elevated,
+}
+
+#[derive(
     Debug,
     Serialize,
     Deserialize,
@@ -78,10 +107,12 @@ pub enum SandboxMode {
     TS,
     PartialOrd,
     Ord,
+    EnumIter,
 )]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum Personality {
+    None,
     Friendly,
     Pragmatic,
 }
@@ -92,10 +123,134 @@ pub enum Personality {
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum WebSearchMode {
-    #[default]
     Disabled,
+    #[default]
     Cached,
     Live,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum WebSearchContextSize {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[schemars(deny_unknown_fields)]
+pub struct WebSearchLocation {
+    pub country: Option<String>,
+    pub region: Option<String>,
+    pub city: Option<String>,
+    pub timezone: Option<String>,
+}
+
+impl WebSearchLocation {
+    pub fn merge(&self, other: &Self) -> Self {
+        Self {
+            country: other.country.clone().or_else(|| self.country.clone()),
+            region: other.region.clone().or_else(|| self.region.clone()),
+            city: other.city.clone().or_else(|| self.city.clone()),
+            timezone: other.timezone.clone().or_else(|| self.timezone.clone()),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[schemars(deny_unknown_fields)]
+pub struct WebSearchToolConfig {
+    pub context_size: Option<WebSearchContextSize>,
+    pub allowed_domains: Option<Vec<String>>,
+    pub location: Option<WebSearchLocation>,
+}
+
+impl WebSearchToolConfig {
+    pub fn merge(&self, other: &Self) -> Self {
+        Self {
+            context_size: other.context_size.or(self.context_size),
+            allowed_domains: other
+                .allowed_domains
+                .clone()
+                .or_else(|| self.allowed_domains.clone()),
+            location: match (&self.location, &other.location) {
+                (Some(location), Some(other_location)) => Some(location.merge(other_location)),
+                (Some(location), None) => Some(location.clone()),
+                (None, Some(other_location)) => Some(other_location.clone()),
+                (None, None) => None,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[schemars(deny_unknown_fields)]
+pub struct WebSearchFilters {
+    pub allowed_domains: Option<Vec<String>>,
+}
+
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq, Display, JsonSchema, TS,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum WebSearchUserLocationType {
+    #[default]
+    Approximate,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[schemars(deny_unknown_fields)]
+pub struct WebSearchUserLocation {
+    #[serde(default)]
+    pub r#type: WebSearchUserLocationType,
+    pub country: Option<String>,
+    pub region: Option<String>,
+    pub city: Option<String>,
+    pub timezone: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
+#[schemars(deny_unknown_fields)]
+pub struct WebSearchConfig {
+    pub filters: Option<WebSearchFilters>,
+    pub user_location: Option<WebSearchUserLocation>,
+    pub search_context_size: Option<WebSearchContextSize>,
+}
+
+impl From<WebSearchLocation> for WebSearchUserLocation {
+    fn from(location: WebSearchLocation) -> Self {
+        Self {
+            r#type: WebSearchUserLocationType::Approximate,
+            country: location.country,
+            region: location.region,
+            city: location.city,
+            timezone: location.timezone,
+        }
+    }
+}
+
+impl From<WebSearchToolConfig> for WebSearchConfig {
+    fn from(config: WebSearchToolConfig) -> Self {
+        Self {
+            filters: config
+                .allowed_domains
+                .map(|allowed_domains| WebSearchFilters {
+                    allowed_domains: Some(allowed_domains),
+                }),
+            user_location: config.location.map(Into::into),
+            search_context_size: config.context_size,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum ServiceTier {
+    Fast,
+    Flex,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
@@ -152,14 +307,51 @@ pub enum AltScreenMode {
 }
 
 /// Initial collaboration mode to use when the TUI starts.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, TS)]
+#[derive(
+    Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, TS, Default,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ModeKind {
     Plan,
-    Code,
+    #[default]
+    #[serde(
+        alias = "code",
+        alias = "pair_programming",
+        alias = "execute",
+        alias = "custom"
+    )]
+    Default,
+    #[doc(hidden)]
+    #[serde(skip_serializing, skip_deserializing)]
+    #[schemars(skip)]
+    #[ts(skip)]
     PairProgramming,
+    #[doc(hidden)]
+    #[serde(skip_serializing, skip_deserializing)]
+    #[schemars(skip)]
+    #[ts(skip)]
     Execute,
-    Custom,
+}
+
+pub const TUI_VISIBLE_COLLABORATION_MODES: [ModeKind; 2] = [ModeKind::Default, ModeKind::Plan];
+
+impl ModeKind {
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Plan => "Plan",
+            Self::Default => "Default",
+            Self::PairProgramming => "Pair Programming",
+            Self::Execute => "Execute",
+        }
+    }
+
+    pub const fn is_tui_visible(self) -> bool {
+        matches!(self, Self::Plan | Self::Default)
+    }
+
+    pub const fn allows_request_user_input(self) -> bool {
+        matches!(self, Self::Plan)
+    }
 }
 
 /// Collaboration mode for a Codex session.
@@ -259,7 +451,7 @@ mod tests {
     #[test]
     fn apply_mask_can_clear_optional_fields() {
         let mode = CollaborationMode {
-            mode: ModeKind::Code,
+            mode: ModeKind::Default,
             settings: Settings {
                 model: "gpt-5.2-codex".to_string(),
                 reasoning_effort: Some(ReasoningEffort::High),
@@ -275,7 +467,7 @@ mod tests {
         };
 
         let expected = CollaborationMode {
-            mode: ModeKind::Code,
+            mode: ModeKind::Default,
             settings: Settings {
                 model: "gpt-5.2-codex".to_string(),
                 reasoning_effort: None,
@@ -283,5 +475,89 @@ mod tests {
             },
         };
         assert_eq!(expected, mode.apply_mask(&mask));
+    }
+
+    #[test]
+    fn mode_kind_deserializes_alias_values_to_default() {
+        for alias in ["code", "pair_programming", "execute", "custom"] {
+            let json = format!("\"{alias}\"");
+            let mode: ModeKind = serde_json::from_str(&json).expect("deserialize mode");
+            assert_eq!(ModeKind::Default, mode);
+        }
+    }
+
+    #[test]
+    fn tui_visible_collaboration_modes_match_mode_kind_visibility() {
+        let expected = [ModeKind::Default, ModeKind::Plan];
+        assert_eq!(expected, TUI_VISIBLE_COLLABORATION_MODES);
+
+        for mode in TUI_VISIBLE_COLLABORATION_MODES {
+            assert!(mode.is_tui_visible());
+        }
+
+        assert!(!ModeKind::PairProgramming.is_tui_visible());
+        assert!(!ModeKind::Execute.is_tui_visible());
+    }
+
+    #[test]
+    fn web_search_location_merge_prefers_overlay_values() {
+        let base = WebSearchLocation {
+            country: Some("US".to_string()),
+            region: Some("CA".to_string()),
+            city: None,
+            timezone: Some("America/Los_Angeles".to_string()),
+        };
+        let overlay = WebSearchLocation {
+            country: None,
+            region: Some("WA".to_string()),
+            city: Some("Seattle".to_string()),
+            timezone: None,
+        };
+
+        let expected = WebSearchLocation {
+            country: Some("US".to_string()),
+            region: Some("WA".to_string()),
+            city: Some("Seattle".to_string()),
+            timezone: Some("America/Los_Angeles".to_string()),
+        };
+
+        assert_eq!(expected, base.merge(&overlay));
+    }
+
+    #[test]
+    fn web_search_tool_config_merge_prefers_overlay_values() {
+        let base = WebSearchToolConfig {
+            context_size: Some(WebSearchContextSize::Low),
+            allowed_domains: Some(vec!["openai.com".to_string()]),
+            location: Some(WebSearchLocation {
+                country: Some("US".to_string()),
+                region: Some("CA".to_string()),
+                city: None,
+                timezone: Some("America/Los_Angeles".to_string()),
+            }),
+        };
+        let overlay = WebSearchToolConfig {
+            context_size: Some(WebSearchContextSize::High),
+            allowed_domains: None,
+            location: Some(WebSearchLocation {
+                country: None,
+                region: Some("WA".to_string()),
+                city: Some("Seattle".to_string()),
+                timezone: None,
+            }),
+        };
+
+        let expected = WebSearchToolConfig {
+            context_size: Some(WebSearchContextSize::High),
+            allowed_domains: Some(vec!["openai.com".to_string()]),
+            location: Some(WebSearchLocation {
+                country: Some("US".to_string()),
+                region: Some("WA".to_string()),
+                city: Some("Seattle".to_string()),
+                timezone: Some("America/Los_Angeles".to_string()),
+            }),
+        };
+
+        assert_eq!(expected, base.merge(&overlay));
     }
 }

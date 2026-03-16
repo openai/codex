@@ -6,11 +6,12 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::DateTime;
 use chrono::Utc;
+use codex_app_server_protocol::AuthMode;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::AuthDotJson;
 use codex_core::auth::save_auth;
 use codex_core::token_data::TokenData;
-use codex_core::token_data::parse_id_token;
+use codex_core::token_data::parse_chatgpt_jwt_claims;
 use serde_json::json;
 
 /// Builder for writing a fake ChatGPT auth.json in tests.
@@ -147,7 +148,7 @@ pub fn write_chatgpt_auth(
     cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> Result<()> {
     let id_token_raw = encode_id_token(&fixture.claims)?;
-    let id_token = parse_id_token(&id_token_raw).context("parse id token")?;
+    let id_token = parse_chatgpt_jwt_claims(&id_token_raw).context("parse id token")?;
     let tokens = TokenData {
         id_token,
         access_token: fixture.access_token,
@@ -158,6 +159,7 @@ pub fn write_chatgpt_auth(
     let last_refresh = fixture.last_refresh.unwrap_or_else(|| Some(Utc::now()));
 
     let auth = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
         openai_api_key: None,
         tokens: Some(tokens),
         last_refresh,

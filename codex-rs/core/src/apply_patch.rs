@@ -1,6 +1,7 @@
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::FileChange;
+use crate::protocol::FileSystemSandboxPolicy;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_patch_safety;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -8,8 +9,6 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-pub const CODEX_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
 
 pub(crate) enum InternalApplyPatchInvocation {
     /// The `apply_patch` call was handled programmatically, without any sort
@@ -20,7 +19,8 @@ pub(crate) enum InternalApplyPatchInvocation {
     /// The `apply_patch` call was approved, either automatically because it
     /// appears that it should be allowed based on the user's sandbox policy
     /// *or* because the user explicitly approved it. In either case, we use
-    /// exec with [`CODEX_APPLY_PATCH_ARG1`] to realize the `apply_patch` call,
+    /// exec with [`codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1`] to realize
+    /// the `apply_patch` call,
     /// but [`ApplyPatchExec::auto_approved`] is used to determine the sandbox
     /// used with the `exec()`.
     DelegateToExec(ApplyPatchExec),
@@ -35,13 +35,16 @@ pub(crate) struct ApplyPatchExec {
 
 pub(crate) async fn apply_patch(
     turn_context: &TurnContext,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
     match assess_patch_safety(
         &action,
-        turn_context.approval_policy,
-        &turn_context.sandbox_policy,
+        turn_context.approval_policy.value(),
+        turn_context.sandbox_policy.get(),
+        file_system_sandbox_policy,
         &turn_context.cwd,
+        turn_context.windows_sandbox_level,
     ) {
         SafetyCheck::AutoApprove {
             user_explicitly_approved,
@@ -101,26 +104,5 @@ pub(crate) fn convert_apply_patch_to_protocol(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    use tempfile::tempdir;
-
-    #[test]
-    fn convert_apply_patch_maps_add_variant() {
-        let tmp = tempdir().expect("tmp");
-        let p = tmp.path().join("a.txt");
-        // Create an action with a single Add change
-        let action = ApplyPatchAction::new_add_for_test(&p, "hello".to_string());
-
-        let got = convert_apply_patch_to_protocol(&action);
-
-        assert_eq!(
-            got.get(&p),
-            Some(&FileChange::Add {
-                content: "hello".to_string()
-            })
-        );
-    }
-}
+#[path = "apply_patch_tests.rs"]
+mod tests;

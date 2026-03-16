@@ -2,9 +2,12 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use codex_protocol::ThreadId;
 use rand::Rng;
 use tracing::debug;
 use tracing::error;
+
+use crate::parse_command::shlex_join;
 
 const INITIAL_DELAY_MS: u64 = 200;
 const BACKOFF_FACTOR: f64 = 2.0;
@@ -34,7 +37,112 @@ macro_rules! feedback_tags {
     };
 }
 
-pub(crate) fn backoff(attempt: u64) -> Duration {
+pub(crate) struct FeedbackRequestTags<'a> {
+    pub endpoint: &'a str,
+    pub auth_header_attached: bool,
+    pub auth_header_name: Option<&'a str>,
+    pub auth_mode: Option<&'a str>,
+    pub auth_retry_after_unauthorized: Option<bool>,
+    pub auth_recovery_mode: Option<&'a str>,
+    pub auth_recovery_phase: Option<&'a str>,
+    pub auth_connection_reused: Option<bool>,
+    pub auth_request_id: Option<&'a str>,
+    pub auth_cf_ray: Option<&'a str>,
+    pub auth_error: Option<&'a str>,
+    pub auth_error_code: Option<&'a str>,
+    pub auth_recovery_followup_success: Option<bool>,
+    pub auth_recovery_followup_status: Option<u16>,
+}
+
+struct Auth401FeedbackSnapshot<'a> {
+    request_id: &'a str,
+    cf_ray: &'a str,
+    error: &'a str,
+    error_code: &'a str,
+}
+
+impl<'a> Auth401FeedbackSnapshot<'a> {
+    fn from_optional_fields(
+        request_id: Option<&'a str>,
+        cf_ray: Option<&'a str>,
+        error: Option<&'a str>,
+        error_code: Option<&'a str>,
+    ) -> Self {
+        Self {
+            request_id: request_id.unwrap_or(""),
+            cf_ray: cf_ray.unwrap_or(""),
+            error: error.unwrap_or(""),
+            error_code: error_code.unwrap_or(""),
+        }
+    }
+}
+
+pub(crate) fn emit_feedback_request_tags(tags: &FeedbackRequestTags<'_>) {
+    let auth_header_name = tags.auth_header_name.unwrap_or("");
+    let auth_mode = tags.auth_mode.unwrap_or("");
+    let auth_retry_after_unauthorized = tags
+        .auth_retry_after_unauthorized
+        .map_or_else(String::new, |value| value.to_string());
+    let auth_recovery_mode = tags.auth_recovery_mode.unwrap_or("");
+    let auth_recovery_phase = tags.auth_recovery_phase.unwrap_or("");
+    let auth_connection_reused = tags
+        .auth_connection_reused
+        .map_or_else(String::new, |value| value.to_string());
+    let auth_request_id = tags.auth_request_id.unwrap_or("");
+    let auth_cf_ray = tags.auth_cf_ray.unwrap_or("");
+    let auth_error = tags.auth_error.unwrap_or("");
+    let auth_error_code = tags.auth_error_code.unwrap_or("");
+    let auth_recovery_followup_success = tags
+        .auth_recovery_followup_success
+        .map_or_else(String::new, |value| value.to_string());
+    let auth_recovery_followup_status = tags
+        .auth_recovery_followup_status
+        .map_or_else(String::new, |value| value.to_string());
+    feedback_tags!(
+        endpoint = tags.endpoint,
+        auth_header_attached = tags.auth_header_attached,
+        auth_header_name = auth_header_name,
+        auth_mode = auth_mode,
+        auth_retry_after_unauthorized = auth_retry_after_unauthorized,
+        auth_recovery_mode = auth_recovery_mode,
+        auth_recovery_phase = auth_recovery_phase,
+        auth_connection_reused = auth_connection_reused,
+        auth_request_id = auth_request_id,
+        auth_cf_ray = auth_cf_ray,
+        auth_error = auth_error,
+        auth_error_code = auth_error_code,
+        auth_recovery_followup_success = auth_recovery_followup_success,
+        auth_recovery_followup_status = auth_recovery_followup_status
+    );
+}
+
+pub(crate) fn emit_feedback_auth_recovery_tags(
+    auth_recovery_mode: &str,
+    auth_recovery_phase: &str,
+    auth_recovery_outcome: &str,
+    auth_request_id: Option<&str>,
+    auth_cf_ray: Option<&str>,
+    auth_error: Option<&str>,
+    auth_error_code: Option<&str>,
+) {
+    let auth_401 = Auth401FeedbackSnapshot::from_optional_fields(
+        auth_request_id,
+        auth_cf_ray,
+        auth_error,
+        auth_error_code,
+    );
+    feedback_tags!(
+        auth_recovery_mode = auth_recovery_mode,
+        auth_recovery_phase = auth_recovery_phase,
+        auth_recovery_outcome = auth_recovery_outcome,
+        auth_401_request_id = auth_401.request_id,
+        auth_401_cf_ray = auth_401.cf_ray,
+        auth_401_error = auth_401.error,
+        auth_401_error_code = auth_401.error_code
+    );
+}
+
+pub fn backoff(attempt: u64) -> Duration {
     let exp = BACKOFF_FACTOR.powi(attempt.saturating_sub(1) as i32);
     let base = (INITIAL_DELAY_MS as f64 * exp) as u64;
     let jitter = rand::rng().random_range(0.9..1.1);
@@ -72,39 +180,32 @@ pub fn resolve_path(base: &Path, path: &PathBuf) -> PathBuf {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_try_parse_error_message() {
-        let text = r#"{
-  "error": {
-    "message": "Your refresh token has already been used to generate a new access token. Please try signing in again.",
-    "type": "invalid_request_error",
-    "param": null,
-    "code": "refresh_token_reused"
-  }
-}"#;
-        let message = try_parse_error_message(text);
-        assert_eq!(
-            message,
-            "Your refresh token has already been used to generate a new access token. Please try signing in again."
-        );
-    }
-
-    #[test]
-    fn test_try_parse_error_message_no_error() {
-        let text = r#"{"message": "test"}"#;
-        let message = try_parse_error_message(text);
-        assert_eq!(message, r#"{"message": "test"}"#);
-    }
-
-    #[test]
-    fn feedback_tags_macro_compiles() {
-        #[derive(Debug)]
-        struct OnlyDebug;
-
-        feedback_tags!(model = "gpt-5", cached = true, debug_only = OnlyDebug);
+/// Trim a thread name and return `None` if it is empty after trimming.
+pub fn normalize_thread_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
+
+pub fn resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>) -> Option<String> {
+    let resume_target = thread_name
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .or_else(|| thread_id.map(|thread_id| thread_id.to_string()));
+    resume_target.map(|target| {
+        let needs_double_dash = target.starts_with('-');
+        let escaped = shlex_join(&[target]);
+        if needs_double_dash {
+            format!("codex resume -- {escaped}")
+        } else {
+            format!("codex resume {escaped}")
+        }
+    })
+}
+
+#[cfg(test)]
+#[path = "util_tests.rs"]
+mod tests;
