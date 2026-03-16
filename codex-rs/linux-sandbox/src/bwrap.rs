@@ -96,7 +96,8 @@ pub(crate) struct BwrapArgs {
 pub(crate) fn create_bwrap_command_args(
     command: Vec<String>,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &Path,
+    sandbox_policy_cwd: &Path,
+    command_cwd: &Path,
     options: BwrapOptions,
 ) -> Result<BwrapArgs> {
     if file_system_sandbox_policy.has_full_disk_write_access() {
@@ -110,7 +111,13 @@ pub(crate) fn create_bwrap_command_args(
         };
     }
 
-    create_bwrap_flags(command, file_system_sandbox_policy, cwd, options)
+    create_bwrap_flags(
+        command,
+        file_system_sandbox_policy,
+        sandbox_policy_cwd,
+        command_cwd,
+        options,
+    )
 }
 
 fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOptions) -> BwrapArgs {
@@ -144,13 +151,15 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
 fn create_bwrap_flags(
     command: Vec<String>,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &Path,
+    sandbox_policy_cwd: &Path,
+    command_cwd: &Path,
     options: BwrapOptions,
 ) -> Result<BwrapArgs> {
     let BwrapArgs {
         args: filesystem_args,
         preserved_files,
-    } = create_filesystem_args(file_system_sandbox_policy, cwd)?;
+    } = create_filesystem_args(file_system_sandbox_policy, sandbox_policy_cwd)?;
+    let normalized_command_cwd = normalize_command_cwd_for_bwrap(command_cwd);
     let mut args = Vec::new();
     args.push("--new-session".to_string());
     args.push("--die-with-parent".to_string());
@@ -167,6 +176,14 @@ fn create_bwrap_flags(
     if options.mount_proc {
         args.push("--proc".to_string());
         args.push("/proc".to_string());
+    }
+    if normalized_command_cwd.as_path() != command_cwd {
+        // Bubblewrap otherwise inherits the helper's logical cwd, which can be
+        // a symlink alias that disappears once the sandbox only mounts
+        // canonical roots. Enter the canonical command cwd explicitly so
+        // relative paths stay aligned with the mounted filesystem view.
+        args.push("--chdir".to_string());
+        args.push(path_to_string(normalized_command_cwd.as_path()));
     }
     args.push("--".to_string());
     args.extend(command);
@@ -393,6 +410,12 @@ fn path_depth(path: &Path) -> usize {
     path.components().count()
 }
 
+fn normalize_command_cwd_for_bwrap(command_cwd: &Path) -> PathBuf {
+    command_cwd
+        .canonicalize()
+        .unwrap_or_else(|_| command_cwd.to_path_buf())
+}
+
 fn append_mount_target_parent_dir_args(args: &mut Vec<String>, mount_target: &Path, anchor: &Path) {
     let mount_target_dir = if mount_target.is_dir() {
         mount_target
@@ -607,6 +630,7 @@ mod tests {
             command.clone(),
             &FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
             Path::new("/"),
+            Path::new("/"),
             BwrapOptions {
                 mount_proc: true,
                 network_mode: BwrapNetworkMode::FullAccess,
@@ -623,6 +647,7 @@ mod tests {
         let args = create_bwrap_command_args(
             command,
             &FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
+            Path::new("/"),
             Path::new("/"),
             BwrapOptions {
                 mount_proc: true,
@@ -647,6 +672,62 @@ mod tests {
                 "--".to_string(),
                 "/bin/true".to_string(),
             ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restricted_policy_chdirs_to_canonical_command_cwd() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let real_root = temp_dir.path().join("real");
+        let real_subdir = real_root.join("subdir");
+        let link_root = temp_dir.path().join("link");
+        std::fs::create_dir_all(&real_subdir).expect("create real subdir");
+        std::os::unix::fs::symlink(&real_root, &link_root).expect("create symlinked root");
+
+        let sandbox_policy_cwd = AbsolutePathBuf::from_absolute_path(&link_root)
+            .expect("absolute symlinked root")
+            .to_path_buf();
+        let command_cwd = link_root.join("subdir");
+        let canonical_command_cwd = real_subdir
+            .canonicalize()
+            .expect("canonicalize command cwd");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Minimal,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+        ]);
+
+        let args = create_bwrap_command_args(
+            vec!["/bin/true".to_string()],
+            &policy,
+            sandbox_policy_cwd.as_path(),
+            &command_cwd,
+            BwrapOptions::default(),
+        )
+        .expect("create bwrap args");
+        let canonical_command_cwd = path_to_string(&canonical_command_cwd);
+        let link_command_cwd = path_to_string(&command_cwd);
+
+        assert!(
+            args.args
+                .windows(2)
+                .any(|window| { window == ["--chdir", canonical_command_cwd.as_str()] })
+        );
+        assert!(
+            !args
+                .args
+                .windows(2)
+                .any(|window| { window == ["--chdir", link_command_cwd.as_str()] })
         );
     }
 

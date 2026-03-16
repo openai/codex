@@ -44,6 +44,7 @@ fn inserts_bwrap_argv0_before_command_separator() {
         vec!["/bin/true".to_string()],
         &FileSystemSandboxPolicy::from(&sandbox_policy),
         Path::new("/"),
+        Path::new("/"),
         BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
@@ -80,6 +81,7 @@ fn inserts_unshare_net_when_network_isolation_requested() {
         vec!["/bin/true".to_string()],
         &FileSystemSandboxPolicy::from(&sandbox_policy),
         Path::new("/"),
+        Path::new("/"),
         BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::Isolated,
@@ -95,6 +97,7 @@ fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
     let argv = build_bwrap_argv(
         vec!["/bin/true".to_string()],
         &FileSystemSandboxPolicy::from(&sandbox_policy),
+        Path::new("/"),
         Path::new("/"),
         BwrapOptions {
             mount_proc: true,
@@ -163,6 +166,7 @@ fn root_write_read_only_carveout_requires_direct_runtime_enforcement() {
 fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
     let mode = bwrap_network_mode(NetworkSandboxPolicy::Enabled, true);
     let argv = build_preflight_bwrap_argv(
+        Path::new("/"),
         Path::new("/"),
         &FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
         mode,

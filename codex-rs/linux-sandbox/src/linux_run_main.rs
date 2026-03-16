@@ -395,10 +395,13 @@ fn run_bwrap_with_proc_fallback(
 ) -> ! {
     let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
     let mut mount_proc = mount_proc;
+    let command_cwd = std::env::current_dir()
+        .unwrap_or_else(|err| panic!("failed to resolve command cwd for bubblewrap: {err}"));
 
     if mount_proc
         && !preflight_proc_mount_support(
             sandbox_policy_cwd,
+            command_cwd.as_path(),
             file_system_sandbox_policy,
             network_mode,
         )
@@ -416,6 +419,7 @@ fn run_bwrap_with_proc_fallback(
         inner,
         file_system_sandbox_policy,
         sandbox_policy_cwd,
+        command_cwd.as_path(),
         options,
     );
     exec_vendored_bwrap(bwrap_args.args, bwrap_args.preserved_files);
@@ -438,12 +442,14 @@ fn build_bwrap_argv(
     inner: Vec<String>,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     sandbox_policy_cwd: &Path,
+    command_cwd: &Path,
     options: BwrapOptions,
 ) -> crate::bwrap::BwrapArgs {
     let mut bwrap_args = create_bwrap_command_args(
         inner,
         file_system_sandbox_policy,
         sandbox_policy_cwd,
+        command_cwd,
         options,
     )
     .unwrap_or_else(|err| panic!("error building bubblewrap command: {err:?}"));
@@ -468,17 +474,23 @@ fn build_bwrap_argv(
 
 fn preflight_proc_mount_support(
     sandbox_policy_cwd: &Path,
+    command_cwd: &Path,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_mode: BwrapNetworkMode,
 ) -> bool {
-    let preflight_argv =
-        build_preflight_bwrap_argv(sandbox_policy_cwd, file_system_sandbox_policy, network_mode);
+    let preflight_argv = build_preflight_bwrap_argv(
+        sandbox_policy_cwd,
+        command_cwd,
+        file_system_sandbox_policy,
+        network_mode,
+    );
     let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
     !is_proc_mount_failure(stderr.as_str())
 }
 
 fn build_preflight_bwrap_argv(
     sandbox_policy_cwd: &Path,
+    command_cwd: &Path,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_mode: BwrapNetworkMode,
 ) -> crate::bwrap::BwrapArgs {
@@ -487,6 +499,7 @@ fn build_preflight_bwrap_argv(
         preflight_command,
         file_system_sandbox_policy,
         sandbox_policy_cwd,
+        command_cwd,
         BwrapOptions {
             mount_proc: true,
             network_mode,
