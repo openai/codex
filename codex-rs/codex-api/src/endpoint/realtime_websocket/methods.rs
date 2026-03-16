@@ -33,6 +33,7 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::trace;
@@ -71,6 +72,7 @@ impl WsStream {
                         };
                         match command {
                             WsCommand::Send { message, tx_result } => {
+                                debug!("realtime websocket sending message");
                                 let result = inner.send(message).await;
                                 let should_break = result.is_err();
                                 if let Err(err) = &result {
@@ -325,6 +327,7 @@ impl RealtimeWebsocketWriter {
     async fn send_json(&self, message: &RealtimeOutboundMessage) -> Result<(), ApiError> {
         let payload = serde_json::to_string(message)
             .map_err(|err| ApiError::Stream(format!("failed to encode realtime request: {err}")))?;
+        debug!(?message, "realtime websocket request");
         self.send_payload(payload).await
     }
 
@@ -370,8 +373,10 @@ impl RealtimeWebsocketEvents {
                 Message::Text(text) => {
                     if let Some(mut event) = parse_realtime_event(&text, self.event_parser) {
                         self.update_active_transcript(&mut event).await;
+                        debug!(?event, "realtime websocket parsed event");
                         return Ok(Some(event));
                     }
+                    debug!("realtime websocket ignored unsupported text frame");
                 }
                 Message::Close(frame) => {
                     self.is_closed.store(true, Ordering::SeqCst);
@@ -490,6 +495,10 @@ impl RealtimeWebsocketClient {
 
         let (stream, rx_message) = WsStream::new(stream);
         let connection = RealtimeWebsocketConnection::new(stream, rx_message, config.event_parser);
+        debug!(
+            session_id = config.session_id.as_deref().unwrap_or("<none>"),
+            "realtime websocket sending session.update"
+        );
         connection
             .writer
             .send_session_update(config.instructions, config.session_mode)
