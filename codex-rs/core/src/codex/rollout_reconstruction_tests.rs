@@ -257,7 +257,7 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
         serde_json::to_value(
             reconstructed
                 .reference_turn_context_state
-                .latest_turn_context_item(),
+                .turn_context_item(),
         )
         .expect("serialize surviving turn context item"),
         serde_json::to_value(Some(first_context_item))
@@ -491,7 +491,7 @@ async fn reconstruct_history_rollback_backfills_surviving_turn_context_from_olde
         serde_json::to_value(
             reconstructed
                 .reference_turn_context_state
-                .latest_turn_context_item(),
+                .turn_context_item(),
         )
         .expect("serialize surviving turn context item"),
         serde_json::to_value(Some(first_context_item))

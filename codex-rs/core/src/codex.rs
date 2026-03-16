@@ -187,12 +187,13 @@ pub enum SteerInputError {
     EmptyInput,
 }
 
-/// Notes from the previous real user turn.
+/// Notes from the last stored turn-context snapshot that future prompt construction
+/// should diff against.
 ///
-/// Conceptually this is the same role that `previous_model` used to fill, but
-/// it can carry other prior-turn settings that matter when constructing
-/// sensible state-change diffs or full-context reinjection, such as model
-/// switches or detecting a prior `realtime_active -> false` transition.
+/// Conceptually this is the same role that `previous_model` used to fill, but it
+/// can carry other prior-turn settings that matter when constructing sensible
+/// state-change diffs or full-context reinjection, such as model switches or
+/// detecting a prior `realtime_active -> false` transition.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PreviousTurnSettings {
     pub(crate) model: String,
@@ -2144,6 +2145,8 @@ impl Session {
                     .await;
                 {
                     let mut state = self.state.lock().await;
+                    // The injected initial context becomes the new baseline for future diffs,
+                    // so advance both the stored settings snapshot and the reference baseline.
                     state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
                 }
 
@@ -2171,7 +2174,7 @@ impl Session {
             .previous_turn_settings();
         let surviving_turn_context_item = reconstructed_rollout
             .reference_turn_context_state
-            .latest_turn_context_item();
+            .turn_context_item();
         let mut state = self.state.lock().await;
         state.replace_history_with_reference_turn_context_state(
             reconstructed_rollout.history,
