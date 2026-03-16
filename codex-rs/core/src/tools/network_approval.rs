@@ -185,9 +185,12 @@ impl Default for NetworkApprovalService {
 }
 
 impl NetworkApprovalService {
-    pub(crate) async fn copy_session_approved_hosts_to(&self, other: &Self) {
-        let approved_hosts = self.session_approved_hosts.lock().await;
+    /// Replace the target session's approval cache with the source session's
+    /// currently approved hosts.
+    pub(crate) async fn sync_session_approved_hosts_to(&self, other: &Self) {
+        let approved_hosts = self.session_approved_hosts.lock().await.clone();
         let mut other_approved_hosts = other.session_approved_hosts.lock().await;
+        other_approved_hosts.clear();
         other_approved_hosts.extend(approved_hosts.iter().cloned());
     }
 

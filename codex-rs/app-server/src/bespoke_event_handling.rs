@@ -110,7 +110,6 @@ use codex_core::sandboxing::intersect_permission_profiles;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
-use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
@@ -775,7 +774,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     turn_id: request.turn_id.clone(),
                     item_id: request.call_id.clone(),
                     reason: request.reason,
-                    permissions: CorePermissionProfile::from(request.permissions).into(),
+                    permissions: request.permissions.into(),
                 };
                 let (pending_request_id, rx) = outgoing
                     .send_request(ServerRequestPayload::PermissionsRequestApproval(params))

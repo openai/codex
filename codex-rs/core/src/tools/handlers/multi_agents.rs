@@ -307,6 +307,8 @@ fn apply_spawn_agent_runtime_overrides(
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!("sandbox_policy is invalid: {err}"))
         })?;
+    config.permissions.file_system_sandbox_policy = turn.file_system_sandbox_policy.clone();
+    config.permissions.network_sandbox_policy = turn.network_sandbox_policy;
     Ok(())
 }
 

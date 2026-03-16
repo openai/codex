@@ -2172,9 +2172,6 @@ impl ChatWidget {
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
-        if reason == TurnAbortReason::Interrupted {
-            self.clear_unified_exec_processes();
-        }
         let send_pending_steers_immediately = self.submit_pending_steers_after_interrupt;
         self.submit_pending_steers_after_interrupt = false;
         if reason != TurnAbortReason::ReviewEnded {
@@ -2832,14 +2829,6 @@ impl ChatWidget {
             let drop_count = process.recent_chunks.len() - MAX_RECENT_CHUNKS;
             process.recent_chunks.drain(0..drop_count);
         }
-    }
-
-    fn clear_unified_exec_processes(&mut self) {
-        if self.unified_exec_processes.is_empty() {
-            return;
-        }
-        self.unified_exec_processes.clear();
-        self.sync_unified_exec_footer();
     }
 
     fn on_mcp_tool_call_begin(&mut self, ev: McpToolCallBeginEvent) {
@@ -4282,7 +4271,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn can_run_ctrl_l_clear_now(&mut self) -> bool {
-        // Ctrl+L is not a slash command, but it follows /clear's current rule:
+        // Ctrl+L is not a slash command, but it follows /clear's rule:
         // block while a task is running.
         if !self.bottom_pane.is_task_running() {
             return true;
@@ -4557,7 +4546,7 @@ impl ChatWidget {
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
-            SlashCommand::Clean => {
+            SlashCommand::Stop => {
                 self.clean_background_terminals();
             }
             SlashCommand::MemoryDrop => {
@@ -6477,7 +6466,7 @@ impl ChatWidget {
     fn model_menu_warning_line(&self) -> Option<Line<'static>> {
         let base_url = self.custom_openai_base_url()?;
         let warning = format!(
-            "Warning: OPENAI_BASE_URL is set to {base_url}. Selecting models may not be supported or work properly."
+            "Warning: OpenAI base URL is overridden to {base_url}. Selecting models may not be supported or work properly."
         );
         Some(Line::from(warning.red()))
     }
@@ -7163,7 +7152,7 @@ impl ChatWidget {
 
                 if guardian_approval_enabled {
                     items.push(SelectionItem {
-                        name: "Smart Approvals".to_string(),
+                        name: "Guardian Approvals".to_string(),
                         description: Some(
                             "Same workspace-write permissions as Default, but eligible `on-request` approvals are routed through the guardian reviewer subagent."
                                 .to_string(),
@@ -7177,7 +7166,7 @@ impl ChatWidget {
                         actions: Self::approval_preset_actions(
                             preset.approval,
                             preset.sandbox.clone(),
-                            "Smart Approvals".to_string(),
+                            "Guardian Approvals".to_string(),
                             ApprovalsReviewer::GuardianSubagent,
                         ),
                         dismiss_on_select: true,
@@ -8601,7 +8590,7 @@ impl ChatWidget {
     ///
     /// The first press arms a time-bounded quit shortcut and shows a footer hint via the bottom
     /// pane. If cancellable work is active, Ctrl+C also submits `Op::Interrupt` after the shortcut
-    /// is armed.
+    /// is armed; this interrupts the turn but intentionally preserves background terminals.
     ///
     /// If the same quit shortcut is pressed again before expiry, this requests a shutdown-first
     /// quit.

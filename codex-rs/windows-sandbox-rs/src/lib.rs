@@ -25,6 +25,14 @@ windows_modules!(
 );
 
 #[cfg(target_os = "windows")]
+#[path = "conpty/mod.rs"]
+mod conpty;
+
+#[cfg(target_os = "windows")]
+#[path = "elevated/ipc_framed.rs"]
+pub mod ipc_framed;
+
+#[cfg(target_os = "windows")]
 #[path = "setup_orchestrator.rs"]
 mod setup;
 
@@ -36,6 +44,7 @@ mod setup_error;
 
 #[cfg(target_os = "windows")]
 pub use acl::add_deny_write_ace;
+
 #[cfg(target_os = "windows")]
 pub use acl::allow_null_device;
 #[cfg(target_os = "windows")]
@@ -54,6 +63,8 @@ pub use audit::apply_world_writable_scan_and_denies;
 pub use cap::load_or_create_cap_sids;
 #[cfg(target_os = "windows")]
 pub use cap::workspace_cap_sid_for_cwd;
+#[cfg(target_os = "windows")]
+pub use conpty::spawn_conpty_process_as_user;
 #[cfg(target_os = "windows")]
 pub use dpapi::protect as dpapi_protect;
 #[cfg(target_os = "windows")]
@@ -82,6 +93,16 @@ pub use policy::parse_policy;
 pub use policy::SandboxPolicy;
 #[cfg(target_os = "windows")]
 pub use process::create_process_as_user;
+#[cfg(target_os = "windows")]
+pub use process::read_handle_loop;
+#[cfg(target_os = "windows")]
+pub use process::spawn_process_with_pipes;
+#[cfg(target_os = "windows")]
+pub use process::PipeSpawnHandles;
+#[cfg(target_os = "windows")]
+pub use process::StderrMode;
+#[cfg(target_os = "windows")]
+pub use process::StdinMode;
 #[cfg(target_os = "windows")]
 pub use setup::run_elevated_setup;
 #[cfg(target_os = "windows")]

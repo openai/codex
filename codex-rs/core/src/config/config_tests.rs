@@ -2807,7 +2807,7 @@ async fn set_feature_enabled_updates_profile() -> anyhow::Result<()> {
 
     ConfigEditsBuilder::new(codex_home.path())
         .with_profile(Some("dev"))
-        .set_feature_enabled("smart_approvals", true)
+        .set_feature_enabled("guardian_approval", true)
         .apply()
         .await?;
 
@@ -2822,14 +2822,14 @@ async fn set_feature_enabled_updates_profile() -> anyhow::Result<()> {
         profile
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("smart_approvals")),
+            .and_then(|features| features.entries.get("guardian_approval")),
         Some(&true),
     );
     assert_eq!(
         parsed
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("smart_approvals")),
+            .and_then(|features| features.entries.get("guardian_approval")),
         None,
     );
 
@@ -2843,13 +2843,13 @@ async fn set_feature_enabled_persists_default_false_feature_disable_in_profile()
 
     ConfigEditsBuilder::new(codex_home.path())
         .with_profile(Some("dev"))
-        .set_feature_enabled("smart_approvals", true)
+        .set_feature_enabled("guardian_approval", true)
         .apply()
         .await?;
 
     ConfigEditsBuilder::new(codex_home.path())
         .with_profile(Some("dev"))
-        .set_feature_enabled("smart_approvals", false)
+        .set_feature_enabled("guardian_approval", false)
         .apply()
         .await?;
 
@@ -2864,14 +2864,14 @@ async fn set_feature_enabled_persists_default_false_feature_disable_in_profile()
         profile
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("smart_approvals")),
+            .and_then(|features| features.entries.get("guardian_approval")),
         Some(&false),
     );
     assert_eq!(
         parsed
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("smart_approvals")),
+            .and_then(|features| features.entries.get("guardian_approval")),
         None,
     );
 
@@ -2883,13 +2883,13 @@ async fn set_feature_enabled_profile_disable_overrides_root_enable() -> anyhow::
     let codex_home = TempDir::new()?;
 
     ConfigEditsBuilder::new(codex_home.path())
-        .set_feature_enabled("smart_approvals", true)
+        .set_feature_enabled("guardian_approval", true)
         .apply()
         .await?;
 
     ConfigEditsBuilder::new(codex_home.path())
         .with_profile(Some("dev"))
-        .set_feature_enabled("smart_approvals", false)
+        .set_feature_enabled("guardian_approval", false)
         .apply()
         .await?;
 
@@ -2904,14 +2904,14 @@ async fn set_feature_enabled_profile_disable_overrides_root_enable() -> anyhow::
         parsed
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("smart_approvals")),
+            .and_then(|features| features.entries.get("guardian_approval")),
         Some(&true),
     );
     assert_eq!(
         profile
             .features
             .as_ref()
-            .and_then(|features| features.entries.get("smart_approvals")),
+            .and_then(|features| features.entries.get("guardian_approval")),
         Some(&false),
     );
 
@@ -4134,7 +4134,7 @@ model_verbosity = "high"
         supports_websockets: false,
     };
     let model_provider_map = {
-        let mut model_provider_map = built_in_model_providers();
+        let mut model_provider_map = built_in_model_providers(/* openai_base_url */ None);
         model_provider_map.insert("openai-custom".to_string(), openai_custom_provider.clone());
         model_provider_map
     };
@@ -5518,7 +5518,7 @@ async fn approvals_reviewer_stays_manual_only_when_guardian_feature_is_enabled()
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features]
-smart_approvals = true
+guardian_approval = true
 "#,
     )?;
 
@@ -5533,7 +5533,8 @@ smart_approvals = true
 }
 
 #[tokio::test]
-async fn approvals_reviewer_can_be_set_in_config_without_smart_approvals() -> std::io::Result<()> {
+async fn approvals_reviewer_can_be_set_in_config_without_guardian_approval() -> std::io::Result<()>
+{
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -5552,7 +5553,8 @@ async fn approvals_reviewer_can_be_set_in_config_without_smart_approvals() -> st
 }
 
 #[tokio::test]
-async fn approvals_reviewer_can_be_set_in_profile_without_smart_approvals() -> std::io::Result<()> {
+async fn approvals_reviewer_can_be_set_in_profile_without_guardian_approval() -> std::io::Result<()>
+{
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -5577,12 +5579,12 @@ approvals_reviewer = "guardian_subagent"
 }
 
 #[tokio::test]
-async fn guardian_approval_alias_is_migrated_to_smart_approvals() -> std::io::Result<()> {
+async fn smart_approvals_alias_is_migrated_to_guardian_approval() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"[features]
-guardian_approval = true
+smart_approvals = true
 "#,
     )?;
 
@@ -5600,22 +5602,22 @@ guardian_approval = true
     );
 
     let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    assert!(serialized.contains("smart_approvals = true"));
+    assert!(serialized.contains("guardian_approval = true"));
     assert!(serialized.contains("approvals_reviewer = \"guardian_subagent\""));
-    assert!(!serialized.contains("guardian_approval"));
+    assert!(!serialized.contains("smart_approvals"));
 
     Ok(())
 }
 
 #[tokio::test]
-async fn guardian_approval_alias_is_migrated_in_profiles() -> std::io::Result<()> {
+async fn smart_approvals_alias_is_migrated_in_profiles() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"profile = "guardian"
 
 [profiles.guardian.features]
-guardian_approval = true
+smart_approvals = true
 "#,
     )?;
 
@@ -5634,15 +5636,51 @@ guardian_approval = true
 
     let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
     assert!(serialized.contains("[profiles.guardian.features]"));
-    assert!(serialized.contains("smart_approvals = true"));
+    assert!(serialized.contains("guardian_approval = true"));
     assert!(serialized.contains("approvals_reviewer = \"guardian_subagent\""));
-    assert!(!serialized.contains("guardian_approval"));
+    assert!(!serialized.contains("smart_approvals"));
 
     Ok(())
 }
 
 #[tokio::test]
-async fn guardian_approval_alias_migration_preserves_existing_approvals_reviewer()
+async fn smart_approvals_alias_migration_preserves_disabled_profile_override() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+guardian_approval = true
+
+[profiles.guardian.features]
+smart_approvals = false
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .harness_overrides(ConfigOverrides {
+            config_profile: Some("guardian".to_string()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert!(!config.features.enabled(Feature::GuardianApproval));
+    assert_eq!(config.features.legacy_feature_usages().count(), 0);
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    assert!(serialized.contains("[profiles.guardian.features]"));
+    assert!(serialized.contains("guardian_approval = false"));
+    assert!(!serialized.contains("smart_approvals"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn smart_approvals_alias_migration_preserves_existing_approvals_reviewer()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
@@ -5650,7 +5688,7 @@ async fn guardian_approval_alias_migration_preserves_existing_approvals_reviewer
         r#"approvals_reviewer = "user"
 
 [features]
-guardian_approval = true
+smart_approvals = true
 "#,
     )?;
 
@@ -5664,9 +5702,38 @@ guardian_approval = true
     assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
 
     let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    assert!(serialized.contains("smart_approvals = true"));
+    assert!(serialized.contains("guardian_approval = true"));
     assert!(serialized.contains("approvals_reviewer = \"user\""));
-    assert!(!serialized.contains("guardian_approval"));
+    assert!(!serialized.contains("smart_approvals"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn smart_approvals_alias_migration_does_not_override_canonical_disabled_flag()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+guardian_approval = false
+smart_approvals = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(!config.features.enabled(Feature::GuardianApproval));
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    assert!(serialized.contains("guardian_approval = false"));
+    assert!(!serialized.contains("approvals_reviewer = \"guardian_subagent\""));
+    assert!(!serialized.contains("smart_approvals"));
 
     Ok(())
 }

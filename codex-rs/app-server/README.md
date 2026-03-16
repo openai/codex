@@ -205,6 +205,7 @@ Start a fresh thread when you need a new Codex conversation.
         {
             "name": "lookup_ticket",
             "description": "Fetch a ticket by id",
+            "deferLoading": true,
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -530,7 +531,7 @@ You can cancel a running Turn with `turn/interrupt`.
 { "id": 31, "result": {} }
 ```
 
-The server requests cancellations for running subprocesses, then emits a `turn/completed` event with `status: "interrupted"`. Rely on the `turn/completed` to know when Codex-side cleanup is done.
+The server requests cancellation of the active turn, then emits a `turn/completed` event with `status: "interrupted"`. This does not terminate background terminals; use `thread/backgroundTerminals/clean` when you explicitly want to stop those shells. Rely on the `turn/completed` event to know when turn interruption has finished.
 
 ### Example: Clean background terminals
 
@@ -940,7 +941,7 @@ Order of messages:
 
 ### Permission requests
 
-The built-in `request_permissions` tool sends an `item/permissions/requestApproval` JSON-RPC request to the client with the requested permission profile. Today that commonly means additional filesystem access, but the payload is intentionally general so future requests can include non-filesystem permissions too. This request is part of the v2 protocol surface.
+The built-in `request_permissions` tool sends an `item/permissions/requestApproval` JSON-RPC request to the client with the requested permission profile. This v2 payload mirrors the standalone tool's narrower permission shape, so it can request network access and additional filesystem access but does not include the broader `macos` branch used by command-execution `additionalPermissions`.
 
 ```json
 {
@@ -990,6 +991,8 @@ If the session approval policy uses `Granular` with `request_permissions: false`
 ### Dynamic tool calls (experimental)
 
 `dynamicTools` on `thread/start` and the corresponding `item/tool/call` request/response flow are experimental APIs. To enable them, set `initialize.params.capabilities.experimentalApi = true`.
+
+Each dynamic tool may set `deferLoading`. When omitted, it defaults to `false`. Set it to `true` to keep the tool registered and callable by runtime features such as `js_repl`, while excluding it from the model-facing tool list sent on ordinary turns.
 
 When a dynamic tool is invoked during a turn, the server sends an `item/tool/call` JSON-RPC request to the client:
 

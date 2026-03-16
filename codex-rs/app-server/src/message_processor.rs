@@ -456,6 +456,12 @@ impl MessageProcessor {
         self.codex_message_processor.drain_background_tasks().await;
     }
 
+    pub(crate) async fn clear_all_thread_listeners(&self) {
+        self.codex_message_processor
+            .clear_all_thread_listeners()
+            .await;
+    }
+
     pub(crate) async fn shutdown_threads(&self) {
         self.codex_message_processor.shutdown_threads().await;
     }

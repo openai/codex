@@ -191,9 +191,29 @@ impl UnifiedExecProcessManager {
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
         start_streaming_output(&process, context, Arc::clone(&transcript));
-        let yield_time_ms = clamp_yield_time(request.yield_time_ms);
-
         let start = Instant::now();
+        // Persist live sessions before the initial yield wait so interrupting the
+        // turn cannot drop the last Arc and terminate the background process.
+        let process_started_alive = !process.has_exited() && process.exit_code().is_none();
+        if process_started_alive {
+            let network_approval_id = deferred_network_approval
+                .as_ref()
+                .map(|deferred| deferred.registration_id().to_string());
+            self.store_process(
+                Arc::clone(&process),
+                context,
+                &request.command,
+                cwd.clone(),
+                start,
+                request.process_id,
+                request.tty,
+                network_approval_id,
+                Arc::clone(&transcript),
+            )
+            .await;
+        }
+
+        let yield_time_ms = clamp_yield_time(request.yield_time_ms);
         // For the initial exec_command call, we both stream output to events
         // (via start_streaming_output above) and collect a snapshot here for
         // the tool response body.
@@ -222,15 +242,28 @@ impl UnifiedExecProcessManager {
         let wall_time = Instant::now().saturating_duration_since(start);
 
         let text = String::from_utf8_lossy(&collected).to_string();
-        let exit_code = process.exit_code();
-        let has_exited = process.has_exited() || exit_code.is_some();
         let chunk_id = generate_chunk_id();
         let process_id = request.process_id;
-
-        if has_exited {
+        let (response_process_id, exit_code) = if process_started_alive {
+            match self.refresh_process_state(process_id).await {
+                ProcessStatus::Alive {
+                    exit_code,
+                    process_id,
+                    ..
+                } => (Some(process_id), exit_code),
+                ProcessStatus::Exited { exit_code, .. } => {
+                    process.check_for_sandbox_denial_with_text(&text).await?;
+                    (None, exit_code)
+                }
+                ProcessStatus::Unknown => {
+                    return Err(UnifiedExecError::UnknownProcessId { process_id });
+                }
+            }
+        } else {
             // Short‑lived command: emit ExecCommandEnd immediately using the
             // same helper as the background watcher, so all end events share
             // one implementation.
+            let exit_code = process.exit_code();
             let exit = exit_code.unwrap_or(-1);
             emit_exec_end_for_unified_exec(
                 Arc::clone(&context.session),
@@ -253,26 +286,7 @@ impl UnifiedExecProcessManager {
             )
             .await;
             process.check_for_sandbox_denial_with_text(&text).await?;
-        } else {
-            // Long‑lived command: persist the process so write_stdin can reuse
-            // it, and register a background watcher that will emit
-            // ExecCommandEnd when the PTY eventually exits (even if no further
-            // tool calls are made).
-            let network_approval_id = deferred_network_approval
-                .as_ref()
-                .map(|deferred| deferred.registration_id().to_string());
-            self.store_process(
-                Arc::clone(&process),
-                context,
-                &request.command,
-                cwd.clone(),
-                start,
-                process_id,
-                request.tty,
-                network_approval_id,
-                Arc::clone(&transcript),
-            )
-            .await;
+            (None, exit_code)
         };
 
         let original_token_count = approx_token_count(&text);
@@ -282,11 +296,7 @@ impl UnifiedExecProcessManager {
             wall_time,
             raw_output: collected,
             max_output_tokens: request.max_output_tokens,
-            process_id: if has_exited {
-                None
-            } else {
-                Some(request.process_id)
-            },
+            process_id: response_process_id,
             exit_code,
             original_token_count: Some(original_token_count),
             session_command: Some(request.command.clone()),
@@ -578,8 +588,10 @@ impl UnifiedExecProcessManager {
             Some(context.session.conversation_id),
         ));
         let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime =
-            UnifiedExecRuntime::new(self, context.turn.tools_config.unified_exec_backend);
+        let mut runtime = UnifiedExecRuntime::new(
+            self,
+            context.turn.tools_config.unified_exec_shell_mode.clone(),
+        );
         let exec_approval_requirement = context
             .session
             .services

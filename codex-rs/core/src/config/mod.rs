@@ -47,6 +47,7 @@ use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
+use crate::model_provider_info::OPENAI_PROVIDER_ID;
 use crate::model_provider_info::built_in_model_providers;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
@@ -138,6 +139,12 @@ pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+const OPENAI_BASE_URL_ENV_VAR: &str = "OPENAI_BASE_URL";
+const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
+    OPENAI_PROVIDER_ID,
+    OLLAMA_OSS_PROVIDER_ID,
+    LMSTUDIO_OSS_PROVIDER_ID,
+];
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
@@ -366,7 +373,7 @@ pub struct Config {
     /// to 127.0.0.1 (using `mcp_oauth_callback_port` when provided).
     pub mcp_oauth_callback_url: Option<String>,
 
-    /// Combined provider map (defaults merged with user-defined overrides).
+    /// Combined provider map (defaults plus user-defined providers).
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
@@ -607,8 +614,8 @@ impl ConfigBuilder {
             fallback_cwd,
         } = self;
         let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
-        if let Err(err) = maybe_migrate_guardian_approval_alias(&codex_home).await {
-            tracing::warn!(error = %err, "failed to migrate guardian_approval feature alias");
+        if let Err(err) = maybe_migrate_smart_approvals_alias(&codex_home).await {
+            tracing::warn!(error = %err, "failed to migrate smart_approvals feature alias");
         }
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
@@ -657,17 +664,63 @@ impl ConfigBuilder {
     }
 }
 
-/// Rewrites the legacy `guardian_approval` feature flag to
-/// `smart_approvals` in `config.toml` before normal config loading.
+fn config_scope_segments(scope: &[String], key: &str) -> Vec<String> {
+    let mut segments = scope.to_vec();
+    segments.push(key.to_string());
+    segments
+}
+
+fn feature_scope_segments(scope: &[String], feature_key: &str) -> Vec<String> {
+    let mut segments = scope.to_vec();
+    segments.push("features".to_string());
+    segments.push(feature_key.to_string());
+    segments
+}
+
+fn push_smart_approvals_alias_migration_edits(
+    edits: &mut Vec<ConfigEdit>,
+    scope: &[String],
+    features: &FeaturesToml,
+    approvals_reviewer_missing: bool,
+) {
+    let Some(alias_enabled) = features.entries.get("smart_approvals").copied() else {
+        return;
+    };
+    let canonical_enabled = features
+        .entries
+        .get("guardian_approval")
+        .copied()
+        .unwrap_or(alias_enabled);
+
+    if !features.entries.contains_key("guardian_approval") {
+        edits.push(ConfigEdit::SetPath {
+            segments: feature_scope_segments(scope, "guardian_approval"),
+            value: value(alias_enabled),
+        });
+    }
+    if canonical_enabled && approvals_reviewer_missing {
+        edits.push(ConfigEdit::SetPath {
+            segments: config_scope_segments(scope, "approvals_reviewer"),
+            value: value(ApprovalsReviewer::GuardianSubagent.to_string()),
+        });
+    }
+    edits.push(ConfigEdit::ClearPath {
+        segments: feature_scope_segments(scope, "smart_approvals"),
+    });
+}
+
+/// Rewrites the legacy `smart_approvals` feature flag to
+/// `guardian_approval` in `config.toml` before normal config loading.
 ///
-/// If the old key is present and enabled, this preserves the enabled state by
-/// setting `smart_approvals = true` when the new key is not already present.
+/// If the old key is present, this preserves its value by setting
+/// `guardian_approval = <alias value>` when the new key is not already present.
 /// Because the deprecated flag historically meant "turn guardian review on",
 /// this migration also backfills `approvals_reviewer = "guardian_subagent"`
-/// in the same scope when that reviewer is not already configured there.
-/// In all cases it removes the deprecated `guardian_approval` entry so future
+/// in the same scope when that reviewer is not already configured there and the
+/// migrated feature value is `true`.
+/// In all cases it removes the deprecated `smart_approvals` entry so future
 /// loads only see the canonical feature flag name.
-async fn maybe_migrate_guardian_approval_alias(codex_home: &Path) -> std::io::Result<bool> {
+async fn maybe_migrate_smart_approvals_alias(codex_home: &Path) -> std::io::Result<bool> {
     let config_path = codex_home.join(CONFIG_TOML_FILE);
     if !tokio::fs::try_exists(&config_path).await? {
         return Ok(false);
@@ -680,59 +733,25 @@ async fn maybe_migrate_guardian_approval_alias(codex_home: &Path) -> std::io::Re
 
     let mut edits = Vec::new();
 
-    if let Some(features) = config_toml.features.as_ref()
-        && let Some(enabled) = features.entries.get("guardian_approval").copied()
-    {
-        if enabled && !features.entries.contains_key("smart_approvals") {
-            edits.push(ConfigEdit::SetPath {
-                segments: vec!["features".to_string(), "smart_approvals".to_string()],
-                value: value(true),
-            });
-        }
-        if enabled && config_toml.approvals_reviewer.is_none() {
-            edits.push(ConfigEdit::SetPath {
-                segments: vec!["approvals_reviewer".to_string()],
-                value: value(ApprovalsReviewer::GuardianSubagent.to_string()),
-            });
-        }
-        edits.push(ConfigEdit::ClearPath {
-            segments: vec!["features".to_string(), "guardian_approval".to_string()],
-        });
+    let root_scope = Vec::new();
+    if let Some(features) = config_toml.features.as_ref() {
+        push_smart_approvals_alias_migration_edits(
+            &mut edits,
+            &root_scope,
+            features,
+            config_toml.approvals_reviewer.is_none(),
+        );
     }
 
     for (profile_name, profile) in &config_toml.profiles {
-        if let Some(features) = profile.features.as_ref()
-            && let Some(enabled) = features.entries.get("guardian_approval").copied()
-        {
-            if enabled && !features.entries.contains_key("smart_approvals") {
-                edits.push(ConfigEdit::SetPath {
-                    segments: vec![
-                        "profiles".to_string(),
-                        profile_name.clone(),
-                        "features".to_string(),
-                        "smart_approvals".to_string(),
-                    ],
-                    value: value(true),
-                });
-            }
-            if enabled && profile.approvals_reviewer.is_none() {
-                edits.push(ConfigEdit::SetPath {
-                    segments: vec![
-                        "profiles".to_string(),
-                        profile_name.clone(),
-                        "approvals_reviewer".to_string(),
-                    ],
-                    value: value(ApprovalsReviewer::GuardianSubagent.to_string()),
-                });
-            }
-            edits.push(ConfigEdit::ClearPath {
-                segments: vec![
-                    "profiles".to_string(),
-                    profile_name.clone(),
-                    "features".to_string(),
-                    "guardian_approval".to_string(),
-                ],
-            });
+        if let Some(features) = profile.features.as_ref() {
+            let scope = vec!["profiles".to_string(), profile_name.clone()];
+            push_smart_approvals_alias_migration_edits(
+                &mut edits,
+                &scope,
+                features,
+                profile.approvals_reviewer.is_none(),
+            );
         }
     }
 
@@ -745,7 +764,7 @@ async fn maybe_migrate_guardian_approval_alias(codex_home: &Path) -> std::io::Re
         .apply()
         .await
         .map_err(|err| {
-            std::io::Error::other(format!("failed to migrate smart_approvals alias: {err}"))
+            std::io::Error::other(format!("failed to migrate guardian_approval alias: {err}"))
         })?;
     Ok(true)
 }
@@ -811,8 +830,8 @@ pub async fn load_config_as_toml_with_cli_overrides(
     cwd: &AbsolutePathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
-    if let Err(err) = maybe_migrate_guardian_approval_alias(codex_home).await {
-        tracing::warn!(error = %err, "failed to migrate guardian_approval feature alias");
+    if let Err(err) = maybe_migrate_smart_approvals_alias(codex_home).await {
+        tracing::warn!(error = %err, "failed to migrate smart_approvals feature alias");
     }
     let config_layer_stack = load_config_layers_state(
         codex_home,
@@ -1261,8 +1280,9 @@ pub struct ConfigToml {
     /// to 127.0.0.1 (using `mcp_oauth_callback_port` when provided).
     pub mcp_oauth_callback_url: Option<String>,
 
-    /// User-defined provider entries that extend/override the built-in list.
-    #[serde(default)]
+    /// User-defined provider entries that extend the built-in list. Built-in
+    /// IDs cannot be overridden.
+    #[serde(default, deserialize_with = "deserialize_model_providers")]
     pub model_providers: HashMap<String, ModelProviderInfo>,
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
@@ -1342,6 +1362,9 @@ pub struct ConfigToml {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
+
+    /// Base URL override for the built-in `openai` model provider.
+    pub openai_base_url: Option<String>,
 
     /// Machine-local realtime audio device preferences used by realtime voice.
     #[serde(default)]
@@ -1886,6 +1909,37 @@ pub struct ConfigOverrides {
     pub additional_writable_roots: Vec<PathBuf>,
 }
 
+fn validate_reserved_model_provider_ids(
+    model_providers: &HashMap<String, ModelProviderInfo>,
+) -> Result<(), String> {
+    let mut conflicts = model_providers
+        .keys()
+        .filter(|key| RESERVED_MODEL_PROVIDER_IDS.contains(&key.as_str()))
+        .map(|key| format!("`{key}`"))
+        .collect::<Vec<_>>();
+    conflicts.sort_unstable();
+    if conflicts.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "model_providers contains reserved built-in provider IDs: {}. \
+Built-in providers cannot be overridden. Rename your custom provider (for example, `openai-custom`).",
+            conflicts.join(", ")
+        ))
+    }
+}
+
+fn deserialize_model_providers<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, ModelProviderInfo>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let model_providers = HashMap::<String, ModelProviderInfo>::deserialize(deserializer)?;
+    validate_reserved_model_provider_ids(&model_providers).map_err(serde::de::Error::custom)?;
+    Ok(model_providers)
+}
+
 /// Resolves the OSS provider from CLI override, profile config, or global config.
 /// Returns `None` if no provider is configured at any level.
 pub fn resolve_oss_provider(
@@ -2007,6 +2061,8 @@ impl Config {
         codex_home: PathBuf,
         config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
+        validate_reserved_model_provider_ids(&cfg.model_providers)
+            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
         // Ensure that every field of ConfigRequirements is applied to the final
         // Config.
         let ConfigRequirements {
@@ -2249,7 +2305,28 @@ impl Config {
         let agent_roles =
             agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
 
-        let mut model_providers = built_in_model_providers();
+        let openai_base_url = cfg
+            .openai_base_url
+            .clone()
+            .filter(|value| !value.is_empty());
+        let openai_base_url_from_env = std::env::var(OPENAI_BASE_URL_ENV_VAR)
+            .ok()
+            .filter(|value| !value.is_empty());
+        if openai_base_url_from_env.is_some() {
+            if openai_base_url.is_some() {
+                tracing::warn!(
+                    env_var = OPENAI_BASE_URL_ENV_VAR,
+                    "deprecated env var is ignored because `openai_base_url` is set in config.toml"
+                );
+            } else {
+                startup_warnings.push(format!(
+                    "`{OPENAI_BASE_URL_ENV_VAR}` is deprecated. Set `openai_base_url` in config.toml instead."
+                ));
+            }
+        }
+        let effective_openai_base_url = openai_base_url.or(openai_base_url_from_env);
+
+        let mut model_providers = built_in_model_providers(effective_openai_base_url);
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);

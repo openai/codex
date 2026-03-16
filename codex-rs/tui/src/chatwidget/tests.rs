@@ -3820,7 +3820,7 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
 }
 
 #[tokio::test]
-async fn streaming_final_answer_keeps_task_running_state() {
+async fn streaming_final_answer_ctrl_c_interrupt_preserves_background_shells() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
 
@@ -3843,12 +3843,16 @@ async fn streaming_final_answer_keeps_task_running_state() {
     );
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 
+    begin_unified_exec_startup(&mut chat, "call-1", "process-1", "npm run dev");
+    assert_eq!(chat.unified_exec_processes.len(), 1);
+
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     match op_rx.try_recv() {
         Ok(Op::Interrupt) => {}
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+    assert_eq!(chat.unified_exec_processes.len(), 1);
 }
 
 #[tokio::test]
@@ -6025,10 +6029,10 @@ async fn slash_exit_requests_exit() {
 }
 
 #[tokio::test]
-async fn slash_clean_submits_background_terminal_cleanup() {
+async fn slash_stop_submits_background_terminal_cleanup() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
-    chat.dispatch_command(SlashCommand::Clean);
+    chat.dispatch_command(SlashCommand::Stop);
 
     assert_matches!(op_rx.try_recv(), Ok(Op::CleanBackgroundTerminals));
     let cells = drain_insert_history(&mut rx);
@@ -8392,7 +8396,7 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
     chat.handle_key_event(KeyEvent::from(KeyCode::Up));
-    if popup.contains("Smart Approvals") {
+    if popup.contains("Guardian Approvals") {
         chat.handle_key_event(KeyEvent::from(KeyCode::Up));
     }
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -8449,7 +8453,7 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
 }
 
 #[tokio::test]
-async fn permissions_selection_hides_smart_approvals_when_feature_disabled() {
+async fn permissions_selection_hides_guardian_approvals_when_feature_disabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     #[cfg(target_os = "windows")]
     {
@@ -8462,13 +8466,13 @@ async fn permissions_selection_hides_smart_approvals_when_feature_disabled() {
     let popup = render_bottom_popup(&chat, 120);
 
     assert!(
-        !popup.contains("Smart Approvals"),
-        "expected Smart Approvals to stay hidden until the experimental feature is enabled: {popup}"
+        !popup.contains("Guardian Approvals"),
+        "expected Guardian Approvals to stay hidden until the experimental feature is enabled: {popup}"
     );
 }
 
 #[tokio::test]
-async fn permissions_selection_hides_smart_approvals_when_feature_disabled_even_if_auto_review_is_active()
+async fn permissions_selection_hides_guardian_approvals_when_feature_disabled_even_if_auto_review_is_active()
  {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     #[cfg(target_os = "windows")]
@@ -8493,13 +8497,13 @@ async fn permissions_selection_hides_smart_approvals_when_feature_disabled_even_
     let popup = render_bottom_popup(&chat, 120);
 
     assert!(
-        !popup.contains("Smart Approvals"),
-        "expected Smart Approvals to stay hidden when the experimental feature is disabled: {popup}"
+        !popup.contains("Guardian Approvals"),
+        "expected Guardian Approvals to stay hidden when the experimental feature is disabled: {popup}"
     );
 }
 
 #[tokio::test]
-async fn permissions_selection_marks_smart_approvals_current_after_session_configured() {
+async fn permissions_selection_marks_guardian_approvals_current_after_session_configured() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     #[cfg(target_os = "windows")]
     {
@@ -8538,13 +8542,14 @@ async fn permissions_selection_marks_smart_approvals_current_after_session_confi
     let popup = render_bottom_popup(&chat, 120);
 
     assert!(
-        popup.contains("Smart Approvals (current)"),
-        "expected Smart Approvals to be current after SessionConfigured sync: {popup}"
+        popup.contains("Guardian Approvals (current)"),
+        "expected Guardian Approvals to be current after SessionConfigured sync: {popup}"
     );
 }
 
 #[tokio::test]
-async fn permissions_selection_marks_smart_approvals_current_with_custom_workspace_write_details() {
+async fn permissions_selection_marks_guardian_approvals_current_with_custom_workspace_write_details()
+ {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     #[cfg(target_os = "windows")]
     {
@@ -8557,7 +8562,7 @@ async fn permissions_selection_marks_smart_approvals_current_with_custom_workspa
         .features
         .set_enabled(Feature::GuardianApproval, true);
 
-    let extra_root = AbsolutePathBuf::try_from("/tmp/smart-approvals-extra")
+    let extra_root = AbsolutePathBuf::try_from("/tmp/guardian-approvals-extra")
         .expect("absolute extra writable root");
 
     chat.handle_codex_event(Event {
@@ -8592,13 +8597,13 @@ async fn permissions_selection_marks_smart_approvals_current_with_custom_workspa
     let popup = render_bottom_popup(&chat, 120);
 
     assert!(
-        popup.contains("Smart Approvals (current)"),
-        "expected Smart Approvals to be current even with custom workspace-write details: {popup}"
+        popup.contains("Guardian Approvals (current)"),
+        "expected Guardian Approvals to be current even with custom workspace-write details: {popup}"
     );
 }
 
 #[tokio::test]
-async fn permissions_selection_can_disable_smart_approvals() {
+async fn permissions_selection_can_disable_guardian_approvals() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     #[cfg(target_os = "windows")]
     {
@@ -8628,7 +8633,7 @@ async fn permissions_selection_can_disable_smart_approvals() {
             event,
             AppEvent::UpdateApprovalsReviewer(ApprovalsReviewer::User)
         )),
-        "expected selecting Default from Smart Approvals to switch back to manual approval review: {events:?}"
+        "expected selecting Default from Guardian Approvals to switch back to manual approval review: {events:?}"
     );
     assert!(
         !events
@@ -8648,9 +8653,35 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
     }
     chat.config.notices.hide_full_access_warning = Some(true);
     chat.set_feature_enabled(Feature::GuardianApproval, true);
+    chat.config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest)
+        .expect("set approval policy");
+    chat.config
+        .permissions
+        .sandbox_policy
+        .set(SandboxPolicy::new_workspace_write_policy())
+        .expect("set sandbox policy");
+    chat.set_approvals_reviewer(ApprovalsReviewer::User);
 
     chat.open_permissions_popup();
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup
+            .lines()
+            .any(|line| line.contains("(current)") && line.contains('›')),
+        "expected permissions popup to open with the current preset selected: {popup}"
+    );
+
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup
+            .lines()
+            .any(|line| line.contains("Guardian Approvals") && line.contains('›')),
+        "expected one Down from Default to select Guardian Approvals: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let op = std::iter::from_fn(|| rx.try_recv().ok())
@@ -9035,7 +9066,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
 }
 
 #[tokio::test]
-async fn interrupt_clears_unified_exec_processes() {
+async fn interrupt_keeps_unified_exec_processes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
@@ -9050,7 +9081,7 @@ async fn interrupt_clears_unified_exec_processes() {
         }),
     });
 
-    assert!(chat.unified_exec_processes.is_empty());
+    assert_eq!(chat.unified_exec_processes.len(), 2);
 
     let _ = drain_insert_history(&mut rx);
 }
@@ -9093,7 +9124,7 @@ async fn review_ended_keeps_unified_exec_processes() {
 }
 
 #[tokio::test]
-async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
+async fn interrupt_preserves_unified_exec_wait_streak_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_codex_event(Event {
@@ -9124,7 +9155,7 @@ async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
         .collect::<Vec<_>>()
         .join("\n");
     let snapshot = format!("cells={}\n{combined}", cells.len());
-    assert_snapshot!("interrupt_clears_unified_exec_wait_streak", snapshot);
+    assert_snapshot!("interrupt_preserves_unified_exec_wait_streak", snapshot);
 }
 
 #[tokio::test]

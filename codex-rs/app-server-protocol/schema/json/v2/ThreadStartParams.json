@@ -61,6 +61,9 @@
     },
     "DynamicToolSpec": {
       "properties": {
+        "deferLoading": {
+          "type": "boolean"
+        },
         "description": {
           "type": "string"
         },

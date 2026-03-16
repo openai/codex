@@ -58,7 +58,10 @@ async fn plugin_read_returns_plugin_details_with_bundle_contents() -> Result<()>
     "websiteURL": "https://openai.com/",
     "privacyPolicyURL": "https://openai.com/policies/row-privacy-policy/",
     "termsOfServiceURL": "https://openai.com/policies/row-terms-of-use/",
-    "defaultPrompt": "Starter prompt for trying a plugin",
+    "defaultPrompt": [
+      "Draft the reply",
+      "Find my next action"
+    ],
     "brandColor": "#3B82F6",
     "composerIcon": "./assets/icon.png",
     "logo": "./assets/logo.png",
@@ -162,6 +165,18 @@ enabled = true
             .and_then(|interface| interface.category.as_deref()),
         Some("Design")
     );
+    assert_eq!(
+        response
+            .plugin
+            .summary
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.default_prompt.clone()),
+        Some(vec![
+            "Draft the reply".to_string(),
+            "Find my next action".to_string()
+        ])
+    );
     assert_eq!(response.plugin.skills.len(), 1);
     assert_eq!(
         response.plugin.skills[0].name,
@@ -180,6 +195,70 @@ enabled = true
     );
     assert_eq!(response.plugin.mcp_servers.len(), 1);
     assert_eq!(response.plugin.mcp_servers[0], "demo");
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_read_accepts_legacy_string_default_prompt() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    let plugin_root = repo_root.path().join("plugins/demo-plugin");
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    std::fs::write(
+        repo_root.path().join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "demo-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugins/demo-plugin"
+      }
+    }
+  ]
+}"#,
+    )?;
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r##"{
+  "name": "demo-plugin",
+  "interface": {
+    "defaultPrompt": "Starter prompt for trying a plugin"
+  }
+}"##,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_read_request(PluginReadParams {
+            marketplace_path: AbsolutePathBuf::try_from(
+                repo_root.path().join(".agents/plugins/marketplace.json"),
+            )?,
+            plugin_name: "demo-plugin".to_string(),
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginReadResponse = to_response(response)?;
+
+    assert_eq!(
+        response
+            .plugin
+            .summary
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.default_prompt.clone()),
+        Some(vec!["Starter prompt for trying a plugin".to_string()])
+    );
     Ok(())
 }
 

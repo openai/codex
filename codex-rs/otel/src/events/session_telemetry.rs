@@ -340,17 +340,43 @@ impl SessionTelemetry {
             Ok(response) => (Some(response.status().as_u16()), None),
             Err(error) => (error.status().map(|s| s.as_u16()), Some(error.to_string())),
         };
-        self.record_api_request(attempt, status, error.as_deref(), duration);
+        self.record_api_request(
+            attempt,
+            status,
+            error.as_deref(),
+            duration,
+            false,
+            None,
+            false,
+            None,
+            None,
+            "unknown",
+            None,
+            None,
+            None,
+            None,
+        );
 
         response
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_api_request(
         &self,
         attempt: u64,
         status: Option<u16>,
         error: Option<&str>,
         duration: Duration,
+        auth_header_attached: bool,
+        auth_header_name: Option<&str>,
+        retry_after_unauthorized: bool,
+        recovery_mode: Option<&str>,
+        recovery_phase: Option<&str>,
+        endpoint: &str,
+        request_id: Option<&str>,
+        cf_ray: Option<&str>,
+        auth_error: Option<&str>,
+        auth_error_code: Option<&str>,
     ) {
         let success = status.is_some_and(|code| (200..=299).contains(&code)) && error.is_none();
         let success_str = if success { "true" } else { "false" };
@@ -375,13 +401,76 @@ impl SessionTelemetry {
                 http.response.status_code = status,
                 error.message = error,
                 attempt = attempt,
+                auth.header_attached = auth_header_attached,
+                auth.header_name = auth_header_name,
+                auth.retry_after_unauthorized = retry_after_unauthorized,
+                auth.recovery_mode = recovery_mode,
+                auth.recovery_phase = recovery_phase,
+                endpoint = endpoint,
+                auth.request_id = request_id,
+                auth.cf_ray = cf_ray,
+                auth.error = auth_error,
+                auth.error_code = auth_error_code,
             },
             log: {},
             trace: {},
         );
     }
 
-    pub fn record_websocket_request(&self, duration: Duration, error: Option<&str>) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_websocket_connect(
+        &self,
+        duration: Duration,
+        status: Option<u16>,
+        error: Option<&str>,
+        auth_header_attached: bool,
+        auth_header_name: Option<&str>,
+        retry_after_unauthorized: bool,
+        recovery_mode: Option<&str>,
+        recovery_phase: Option<&str>,
+        endpoint: &str,
+        connection_reused: bool,
+        request_id: Option<&str>,
+        cf_ray: Option<&str>,
+        auth_error: Option<&str>,
+        auth_error_code: Option<&str>,
+    ) {
+        let success = error.is_none()
+            && status
+                .map(|code| (200..=299).contains(&code))
+                .unwrap_or(true);
+        let success_str = if success { "true" } else { "false" };
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.websocket_connect",
+                duration_ms = %duration.as_millis(),
+                http.response.status_code = status,
+                success = success_str,
+                error.message = error,
+                auth.header_attached = auth_header_attached,
+                auth.header_name = auth_header_name,
+                auth.retry_after_unauthorized = retry_after_unauthorized,
+                auth.recovery_mode = recovery_mode,
+                auth.recovery_phase = recovery_phase,
+                endpoint = endpoint,
+                auth.connection_reused = connection_reused,
+                auth.request_id = request_id,
+                auth.cf_ray = cf_ray,
+                auth.error = auth_error,
+                auth.error_code = auth_error_code,
+            },
+            log: {},
+            trace: {},
+        );
+    }
+
+    pub fn record_websocket_request(
+        &self,
+        duration: Duration,
+        error: Option<&str>,
+        connection_reused: bool,
+    ) {
         let success_str = if error.is_none() { "true" } else { "false" };
         self.counter(
             WEBSOCKET_REQUEST_COUNT_METRIC,
@@ -400,6 +489,39 @@ impl SessionTelemetry {
                 duration_ms = %duration.as_millis(),
                 success = success_str,
                 error.message = error,
+                auth.connection_reused = connection_reused,
+            },
+            log: {},
+            trace: {},
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_auth_recovery(
+        &self,
+        mode: &str,
+        step: &str,
+        outcome: &str,
+        request_id: Option<&str>,
+        cf_ray: Option<&str>,
+        auth_error: Option<&str>,
+        auth_error_code: Option<&str>,
+        recovery_reason: Option<&str>,
+        auth_state_changed: Option<bool>,
+    ) {
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.auth_recovery",
+                auth.mode = mode,
+                auth.step = step,
+                auth.outcome = outcome,
+                auth.request_id = request_id,
+                auth.cf_ray = cf_ray,
+                auth.error = auth_error,
+                auth.error_code = auth_error_code,
+                auth.recovery_reason = recovery_reason,
+                auth.state_changed = auth_state_changed,
             },
             log: {},
             trace: {},

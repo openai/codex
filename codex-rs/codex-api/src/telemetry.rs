@@ -33,7 +33,7 @@ pub trait SseTelemetry: Send + Sync {
 
 /// Telemetry for Responses WebSocket transport.
 pub trait WebsocketTelemetry: Send + Sync {
-    fn on_ws_request(&self, duration: Duration, error: Option<&ApiError>);
+    fn on_ws_request(&self, duration: Duration, error: Option<&ApiError>, connection_reused: bool);
 
     fn on_ws_event(
         &self,

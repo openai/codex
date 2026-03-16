@@ -47,6 +47,7 @@ fn approval_metadata(
         connector_description: connector_description.map(str::to_string),
         tool_title: tool_title.map(str::to_string),
         tool_description: tool_description.map(str::to_string),
+        codex_apps_meta: None,
     }
 }
 
@@ -108,7 +109,7 @@ fn approval_question_text_prepends_safety_reason() {
 }
 
 #[tokio::test]
-async fn approval_elicitation_request_uses_message_override_and_readable_tool_params() {
+async fn approval_elicitation_request_uses_message_override_and_preserves_tool_params_keys() {
     let (session, turn_context) = make_session_and_context().await;
     let question = build_mcp_tool_approval_question(
         "q".to_string(),
@@ -132,10 +133,21 @@ async fn approval_elicitation_request_uses_message_override_and_readable_tool_pa
                 Some("Create a calendar event."),
             )),
             tool_params: Some(&serde_json::json!({
-                "Calendar": "primary",
-                "Title": "Roadmap review",
+                "calendar_id": "primary",
+                "title": "Roadmap review",
             })),
-            tool_params_display: None,
+            tool_params_display: Some(&[
+                RenderedMcpToolApprovalParam {
+                    name: "calendar_id".to_string(),
+                    value: serde_json::json!("primary"),
+                    display_name: "Calendar".to_string(),
+                },
+                RenderedMcpToolApprovalParam {
+                    name: "title".to_string(),
+                    value: serde_json::json!("Roadmap review"),
+                    display_name: "Title".to_string(),
+                },
+            ]),
             question,
             message_override: Some("Allow Calendar to create an event?"),
             prompt_options: prompt_options(true, true),
@@ -162,9 +174,21 @@ async fn approval_elicitation_request_uses_message_override_and_readable_tool_pa
                     MCP_TOOL_APPROVAL_TOOL_TITLE_KEY: "Create Event",
                     MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY: "Create a calendar event.",
                     MCP_TOOL_APPROVAL_TOOL_PARAMS_KEY: {
-                        "Calendar": "primary",
-                        "Title": "Roadmap review",
+                        "calendar_id": "primary",
+                        "title": "Roadmap review",
                     },
+                    MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY: [
+                        {
+                            "name": "calendar_id",
+                            "value": "primary",
+                            "display_name": "Calendar",
+                        },
+                        {
+                            "name": "title",
+                            "value": "Roadmap review",
+                            "display_name": "Title",
+                        },
+                    ],
                 })),
                 message: "Allow Calendar to create an event?".to_string(),
                 requested_schema: McpElicitationSchema {
@@ -416,6 +440,39 @@ fn sanitize_mcp_tool_result_for_model_preserves_image_when_supported() {
 }
 
 #[test]
+fn codex_apps_tool_call_request_meta_includes_codex_apps_meta() {
+    let metadata = McpToolApprovalMetadata {
+        annotations: None,
+        connector_id: Some("calendar".to_string()),
+        connector_name: Some("Calendar".to_string()),
+        connector_description: Some("Manage events".to_string()),
+        tool_title: Some("Create Event".to_string()),
+        tool_description: Some("Create a calendar event.".to_string()),
+        codex_apps_meta: Some(
+            serde_json::json!({
+                "resource_uri": "connector://calendar/tools/calendar_create_event",
+                "contains_mcp_source": true,
+                "connector_id": "calendar",
+            })
+            .as_object()
+            .cloned()
+            .expect("_codex_apps metadata should be an object"),
+        ),
+    };
+
+    assert_eq!(
+        build_mcp_tool_call_request_meta(CODEX_APPS_MCP_SERVER_NAME, Some(&metadata)),
+        Some(serde_json::json!({
+            MCP_TOOL_CODEX_APPS_META_KEY: {
+                "resource_uri": "connector://calendar/tools/calendar_create_event",
+                "contains_mcp_source": true,
+                "connector_id": "calendar",
+            },
+        }))
+    );
+}
+
+#[test]
 fn accepted_elicitation_content_converts_to_request_user_input_response() {
     let response = request_user_input_response_from_elicitation_content(Some(serde_json::json!(
         {
@@ -535,6 +592,7 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
         connector_description: None,
         tool_title: None,
         tool_description: None,
+        codex_apps_meta: None,
     };
 
     let request = build_guardian_mcp_tool_review_request("call-1", &invocation, Some(&metadata));
@@ -856,6 +914,7 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         connector_description: None,
         tool_title: Some("Read Only Tool".to_string()),
         tool_description: None,
+        codex_apps_meta: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -919,6 +978,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         connector_description: Some("Manage events".to_string()),
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
+        codex_apps_meta: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1021,6 +1081,7 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
         connector_description: Some("Manage events".to_string()),
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
+        codex_apps_meta: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
