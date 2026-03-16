@@ -1829,6 +1829,7 @@ async fn make_chatwidget_manual(
         codex_home,
         auth_manager.clone(),
         None,
+        HashMap::new(),
         CollaborationModesConfig::default(),
     ));
     let reasoning_effort = None;
@@ -1974,6 +1975,7 @@ pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
         None,
+        HashMap::new(),
         CollaborationModesConfig::default(),
     ));
 }

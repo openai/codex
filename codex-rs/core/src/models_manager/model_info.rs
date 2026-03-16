@@ -62,6 +62,7 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
     warn!("Unknown model {slug} is used. This will use fallback model metadata.");
     ModelInfo {
         slug: slug.to_string(),
+        request_model: None,
         display_name: slug.to_string(),
         description: None,
         default_reasoning_level: None,
