@@ -12,7 +12,6 @@ use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
-use std::collections::HashSet;
 
 /// A selectable item in the popup: either a built-in command or a user prompt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,7 +23,8 @@ pub(crate) enum CommandItem {
 
 pub(crate) struct CommandPopup {
     command_filter: String,
-    builtins: Vec<(&'static str, SlashCommand)>,
+    builtins: Vec<SlashCommand>,
+    reserved_builtin_names: std::collections::HashSet<String>,
     prompts: Vec<CustomPrompt>,
     state: ScrollState,
 }
@@ -57,30 +57,27 @@ impl From<CommandPopupFlags> for slash_commands::BuiltinCommandFlags {
 impl CommandPopup {
     pub(crate) fn new(mut prompts: Vec<CustomPrompt>, flags: CommandPopupFlags) -> Self {
         // Keep built-in availability in sync with the composer.
-        let builtins: Vec<(&'static str, SlashCommand)> =
-            slash_commands::builtins_for_input(flags.into())
-                .into_iter()
-                .filter(|(name, _)| !name.starts_with("debug"))
-                .collect();
+        let builtin_flags = flags.into();
+        let builtins = slash_commands::visible_builtins_for_input(builtin_flags)
+            .into_iter()
+            .filter(|cmd| !cmd.command().starts_with("debug"))
+            .collect();
         // Exclude prompts that collide with builtin command names and sort by name.
-        let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
-        prompts.retain(|p| !exclude.contains(&p.name));
+        let reserved_builtin_names =
+            slash_commands::reserved_builtin_names_for_input(builtin_flags);
+        prompts.retain(|p| !reserved_builtin_names.contains(&p.name));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
             command_filter: String::new(),
             builtins,
+            reserved_builtin_names,
             prompts,
             state: ScrollState::new(),
         }
     }
 
     pub(crate) fn set_prompts(&mut self, mut prompts: Vec<CustomPrompt>) {
-        let exclude: HashSet<String> = self
-            .builtins
-            .iter()
-            .map(|(n, _)| (*n).to_string())
-            .collect();
-        prompts.retain(|p| !exclude.contains(&p.name));
+        prompts.retain(|p| !self.reserved_builtin_names.contains(&p.name));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
         self.prompts = prompts;
     }
@@ -137,7 +134,7 @@ impl CommandPopup {
         let mut out: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
         if filter.is_empty() {
             // Built-ins first, in presentation order.
-            for (_, cmd) in self.builtins.iter() {
+            for cmd in self.builtins.iter() {
                 if !cmd.show_in_command_popup() {
                     continue;
                 }
@@ -157,6 +154,29 @@ impl CommandPopup {
         let prompt_prefix_len = PROMPTS_CMD_PREFIX.chars().count() + 1;
         let indices_for = |offset| Some((offset..offset + filter_chars).collect());
 
+        for cmd in self.builtins.iter() {
+            if cmd.command() == filter_lower.as_str() {
+                exact.push((CommandItem::Builtin(*cmd), indices_for(0)));
+                continue;
+            }
+            if cmd.command().starts_with(&filter_lower) {
+                prefix.push((CommandItem::Builtin(*cmd), indices_for(0)));
+                continue;
+            }
+            // Keep the popup searchable by accepted aliases, but keep rendering the
+            // canonical command name so the list stays deduplicated and stable.
+            if cmd.command_aliases().contains(&filter_lower.as_str()) {
+                exact.push((CommandItem::Builtin(*cmd), None));
+                continue;
+            }
+            if cmd
+                .command_aliases()
+                .iter()
+                .any(|alias| alias.starts_with(&filter_lower))
+            {
+                prefix.push((CommandItem::Builtin(*cmd), None));
+            }
+        }
         let mut push_match =
             |item: CommandItem, display: &str, name: Option<&str>, name_offset: usize| {
                 let display_lower = display.to_lowercase();
@@ -177,10 +197,6 @@ impl CommandPopup {
                     prefix.push((item, indices_for(offset)));
                 }
             };
-
-        for (_, cmd) in self.builtins.iter() {
-            push_match(CommandItem::Builtin(*cmd), cmd.command(), None, 0);
-        }
         // Support both search styles:
         // - Typing "name" should surface "/prompts:name" results.
         // - Typing "prompts:name" should also work.
@@ -334,6 +350,20 @@ mod tests {
     }
 
     #[test]
+    fn help_is_first_suggestion_for_root_popup() {
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
+        popup.on_composer_text_change("/".to_string());
+        let matches = popup.filtered_items();
+        match matches.first() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "help"),
+            Some(CommandItem::UserPrompt(_)) => {
+                panic!("unexpected prompt ranked before '/help' for '/'")
+            }
+            None => panic!("expected at least one match for '/'"),
+        }
+    }
+
+    #[test]
     fn filtered_commands_keep_presentation_order_for_prefix() {
         let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
         popup.on_composer_text_change("/m".to_string());
@@ -346,7 +376,7 @@ mod tests {
                 CommandItem::UserPrompt(_) => None,
             })
             .collect();
-        assert_eq!(cmds, vec!["model", "mention", "mcp"]);
+        assert_eq!(cmds, vec!["model", "mention", "mcp", "subagents"]);
     }
 
     #[test]
@@ -401,6 +431,31 @@ mod tests {
         assert!(
             !has_collision_prompt,
             "prompt with builtin name should be ignored"
+        );
+    }
+
+    #[test]
+    fn prompt_name_collision_with_builtin_alias_is_ignored() {
+        let popup = CommandPopup::new(
+            vec![CustomPrompt {
+                name: "multi-agents".to_string(),
+                path: "/tmp/multi-agents.md".to_string().into(),
+                content: "should be ignored".to_string(),
+                description: None,
+                argument_hint: None,
+            }],
+            CommandPopupFlags::default(),
+        );
+        let items = popup.filtered_items();
+        let has_collision_prompt = items.into_iter().any(|it| match it {
+            CommandItem::UserPrompt(i) => popup
+                .prompt(i)
+                .is_some_and(|prompt| prompt.name == "multi-agents"),
+            CommandItem::Builtin(_) => false,
+        });
+        assert!(
+            !has_collision_prompt,
+            "prompt with builtin alias should be ignored"
         );
     }
 
@@ -470,6 +525,32 @@ mod tests {
         popup.on_composer_text_change("/qu".to_string());
         let items = popup.filtered_items();
         assert!(items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+    }
+
+    #[test]
+    fn multi_agents_alias_matches_subagents_entry() {
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
+        popup.on_composer_text_change("/multi".to_string());
+        assert_eq!(
+            popup.selected_item(),
+            Some(CommandItem::Builtin(SlashCommand::MultiAgents))
+        );
+
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                CommandItem::UserPrompt(_) => None,
+            })
+            .collect();
+        assert_eq!(cmds, vec!["subagents"]);
+
+        popup.on_composer_text_change("/multi-agents".to_string());
+        assert_eq!(
+            popup.selected_item(),
+            Some(CommandItem::Builtin(SlashCommand::MultiAgents))
+        );
     }
 
     #[test]

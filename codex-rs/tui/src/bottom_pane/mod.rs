@@ -15,6 +15,7 @@
 //! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
 use std::path::PathBuf;
 
+use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::pending_input_preview::PendingInputPreview;
@@ -31,6 +32,7 @@ use codex_core::features::Features;
 use codex_core::plugins::PluginCapabilitySummary;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
+use codex_protocol::protocol::Op;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
@@ -79,6 +81,7 @@ pub mod custom_prompt_view;
 mod experimental_features_view;
 mod file_search_popup;
 mod footer;
+mod help_view;
 mod list_selection_view;
 mod prompt_args;
 mod skill_popup;
@@ -95,6 +98,7 @@ pub(crate) use feedback_view::FeedbackAudience;
 pub(crate) use feedback_view::feedback_disabled_params;
 pub(crate) use feedback_view::feedback_selection_params;
 pub(crate) use feedback_view::feedback_upload_consent_params;
+pub(crate) use help_view::SlashHelpView;
 pub(crate) use skills_toggle_view::SkillsToggleItem;
 pub(crate) use skills_toggle_view::SkillsToggleView;
 pub(crate) use status_line_setup::StatusLineItem;
@@ -137,18 +141,20 @@ pub(crate) enum CancellationEvent {
     NotHandled,
 }
 
-use crate::bottom_pane::prompt_args::parse_slash_name;
+use crate::status_indicator_widget::StatusDetailsCapitalization;
+use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
-
-use crate::status_indicator_widget::StatusDetailsCapitalization;
-use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
+pub(crate) use prompt_args::parse_slash_name;
+pub(crate) use slash_commands::BuiltinCommandFlags;
+pub(crate) use slash_commands::find_builtin_command;
+pub(crate) use slash_commands::visible_builtins_for_input;
 
 /// Pane displayed in the lower half of the chat UI.
 ///
@@ -263,20 +269,8 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub fn take_mention_bindings(&mut self) -> Vec<MentionBinding> {
-        self.composer.take_mention_bindings()
-    }
-
     pub fn take_recent_submission_mention_bindings(&mut self) -> Vec<MentionBinding> {
         self.composer.take_recent_submission_mention_bindings()
-    }
-
-    /// Clear pending attachments and mention bindings e.g. when a slash command doesn't submit text.
-    pub(crate) fn drain_pending_submission_state(&mut self) {
-        let _ = self.take_recent_submission_images_with_placeholders();
-        let _ = self.take_remote_image_urls();
-        let _ = self.take_recent_submission_mention_bindings();
-        let _ = self.take_mention_bindings();
     }
 
     pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
@@ -421,25 +415,15 @@ impl BottomPane {
             self.request_redraw();
             InputResult::None
         } else {
-            let is_agent_command = self
-                .composer_text()
-                .lines()
-                .next()
-                .and_then(parse_slash_name)
-                .is_some_and(|(name, _, _)| name == "agent");
-
-            // If a task is running and a status line is visible, allow Esc to
-            // send an interrupt even while the composer has focus.
-            // When a popup is active, prefer dismissing it over interrupting the task.
+            // If a task is running, allow Esc to send an interrupt when no popup is active.
+            // Final-message streaming can temporarily hide the status widget, but that should not
+            // disable interrupt.
             if key_event.code == KeyCode::Esc
                 && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
                 && self.is_task_running
-                && !is_agent_command
                 && !self.composer.popup_active()
-                && let Some(status) = &self.status
             {
-                // Send Op::Interrupt
-                status.interrupt();
+                self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
                 self.request_redraw();
                 return InputResult::None;
             }
@@ -723,7 +707,6 @@ impl BottomPane {
             if !was_running {
                 if self.status.is_none() {
                     self.status = Some(StatusIndicatorWidget::new(
-                        self.app_event_tx.clone(),
                         self.frame_requester.clone(),
                         self.animations_enabled,
                     ));
@@ -750,7 +733,6 @@ impl BottomPane {
     pub(crate) fn ensure_status_indicator(&mut self) {
         if self.status.is_none() {
             self.status = Some(StatusIndicatorWidget::new(
-                self.app_event_tx.clone(),
                 self.frame_requester.clone(),
                 self.animations_enabled,
             ));
@@ -1029,6 +1011,7 @@ impl BottomPane {
     fn on_active_view_complete(&mut self) {
         self.resume_status_timer_after_modal();
         self.set_composer_input_enabled(true, None);
+        self.app_event_tx.send(AppEvent::BottomPaneViewCompleted);
     }
 
     fn pause_status_timer_for_modal(&mut self) {
@@ -1633,29 +1616,6 @@ mod tests {
     }
 
     #[test]
-    fn drain_pending_submission_state_clears_remote_image_urls() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut pane = BottomPane::new(BottomPaneParams {
-            app_event_tx: tx,
-            frame_requester: FrameRequester::test_dummy(),
-            has_input_focus: true,
-            enhanced_keys_supported: false,
-            placeholder_text: "Ask Codex to do anything".to_string(),
-            disable_paste_burst: false,
-            animations_enabled: true,
-            skills: Some(Vec::new()),
-        });
-
-        pane.set_remote_image_urls(vec!["https://example.com/one.png".to_string()]);
-        assert_eq!(pane.remote_image_urls().len(), 1);
-
-        pane.drain_pending_submission_state();
-
-        assert!(pane.remote_image_urls().is_empty());
-    }
-
-    #[test]
     fn esc_with_skill_popup_does_not_interrupt_task() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -1740,7 +1700,7 @@ mod tests {
     }
 
     #[test]
-    fn esc_with_agent_command_without_popup_does_not_interrupt_task() {
+    fn esc_with_agent_command_without_popup_interrupts_task() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
@@ -1756,8 +1716,8 @@ mod tests {
 
         pane.set_task_running(true);
 
-        // Repro: `/agent ` hides the popup (cursor past command name). Esc should
-        // keep editing command text instead of interrupting the running task.
+        // `/agent ` hides the popup once the cursor moves past the command name.
+        // Without an active popup, Esc should interrupt even though the composer has text.
         pane.insert_str("/agent ");
         assert!(
             !pane.composer.popup_active(),
@@ -1766,12 +1726,10 @@ mod tests {
 
         pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
-        while let Ok(ev) = rx.try_recv() {
-            assert!(
-                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
-                "expected Esc to not send Op::Interrupt while typing `/agent`"
-            );
-        }
+        assert!(
+            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
+            "expected Esc to send Op::Interrupt while typing `/agent` with no popup"
+        );
         assert_eq!(pane.composer_text(), "/agent ");
     }
 
@@ -1845,6 +1803,59 @@ mod tests {
         assert!(
             matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
             "expected Esc to send Op::Interrupt while a task is running"
+        );
+    }
+
+    #[test]
+    fn esc_with_nonempty_composer_interrupts_task_when_no_popup() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.insert_str("still editing");
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(
+            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
+            "expected Esc to send Op::Interrupt while composer has text and no popup is active"
+        );
+        assert_eq!(pane.composer_text(), "still editing");
+    }
+
+    #[test]
+    fn esc_interrupts_running_task_when_status_indicator_hidden() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.hide_status_indicator();
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(
+            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
+            "expected Esc to send Op::Interrupt even when the status indicator is hidden"
         );
     }
 

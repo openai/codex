@@ -50,8 +50,8 @@
 //!
 //! The numeric auto-submit path used by the slash popup performs the same pending-paste expansion
 //! and attachment pruning, and clears pending paste state on success.
-//! Slash commands with arguments (like `/plan` and `/review`) reuse the same preparation path so
-//! pasted content and text elements are preserved when extracting args.
+//! Slash commands with arguments (like `/model`, `/plan`, and `/review`) reuse the same
+//! preparation path so pasted content and text elements are preserved when extracting args.
 //!
 //! # Remote Image Rows (Up/Down/Delete)
 //!
@@ -192,7 +192,6 @@ use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
-use crate::slash_command_invocation::SlashCommandInvocation;
 use crate::style::user_message_style;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
@@ -571,23 +570,6 @@ impl ChatComposer {
     pub fn set_connector_mentions(&mut self, connectors_snapshot: Option<ConnectorsSnapshot>) {
         self.connectors_snapshot = connectors_snapshot;
         self.sync_popups();
-    }
-
-    pub(crate) fn take_mention_bindings(&mut self) -> Vec<MentionBinding> {
-        let elements = self.current_mention_elements();
-        let mut ordered = Vec::new();
-        for (id, mention) in elements {
-            if let Some(binding) = self.mention_bindings.remove(&id)
-                && binding.mention == mention
-            {
-                ordered.push(MentionBinding {
-                    mention: binding.mention,
-                    path: binding.path,
-                });
-            }
-        }
-        self.mention_bindings.clear();
-        ordered
     }
 
     pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
@@ -1412,13 +1394,12 @@ impl ChatComposer {
                                 return (InputResult::Command(cmd), true);
                             }
 
-                            let bare_command =
-                                SlashCommandInvocation::bare(cmd).into_prefixed_string();
-                            let starts_with_cmd =
-                                first_line.trim_start().starts_with(&bare_command);
+                            let starts_with_cmd = first_line
+                                .trim_start()
+                                .starts_with(&format!("/{}", cmd.command()));
                             if !starts_with_cmd {
                                 self.textarea
-                                    .set_text_clearing_elements(&format!("{bare_command} "));
+                                    .set_text_clearing_elements(&format!("/{} ", cmd.command()));
                             }
                             if !self.textarea.text().is_empty() {
                                 cursor_target = Some(self.textarea.text().len());
@@ -2527,9 +2508,6 @@ impl ChatComposer {
             && let Some(cmd) =
                 slash_commands::find_builtin_command(name, self.builtin_command_flags())
         {
-            if self.reject_slash_command_if_unavailable(cmd) {
-                return Some(InputResult::None);
-            }
             self.textarea.set_text_clearing_elements("");
             Some(InputResult::Command(cmd))
         } else {
@@ -2555,13 +2533,6 @@ impl ChatComposer {
 
         let cmd = slash_commands::find_builtin_command(name, self.builtin_command_flags())?;
 
-        if !cmd.supports_inline_args() {
-            return None;
-        }
-        if self.reject_slash_command_if_unavailable(cmd) {
-            return Some(InputResult::None);
-        }
-
         let mut args_elements =
             Self::slash_command_args_elements(rest, rest_offset, &self.textarea.text_elements());
         let trimmed_rest = rest.trim();
@@ -2575,10 +2546,10 @@ impl ChatComposer {
 
     /// Expand pending placeholders and extract normalized inline-command args.
     ///
-    /// Inline-arg commands are initially dispatched using the raw draft so command rejection does
-    /// not consume user input. Once a command is accepted, this helper performs the usual
-    /// submission preparation (paste expansion, element trimming) and rebases element ranges from
-    /// full-text offsets to command-arg offsets.
+    /// Inline-arg commands are initially dispatched using the raw draft so command-specific
+    /// handling can decide whether to consume the input. Once a command is accepted, this helper
+    /// performs the usual submission preparation (paste expansion, element trimming) and rebases
+    /// element ranges from full-text offsets to command-arg offsets.
     pub(crate) fn prepare_inline_args_submission(
         &mut self,
         record_history: bool,
@@ -2593,20 +2564,6 @@ impl ChatComposer {
         let trimmed_rest = prepared_rest.trim();
         args_elements = Self::trim_text_elements(prepared_rest, trimmed_rest, args_elements);
         Some((trimmed_rest.to_string(), args_elements))
-    }
-
-    fn reject_slash_command_if_unavailable(&self, cmd: SlashCommand) -> bool {
-        if !self.is_task_running || cmd.available_during_task() {
-            return false;
-        }
-        let message = format!(
-            "'/{}' is disabled while a task is in progress.",
-            cmd.command()
-        );
-        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-            history_cell::new_error_event(message),
-        )));
-        true
     }
 
     /// Translate full-text element ranges into command-argument ranges.
@@ -6425,6 +6382,69 @@ mod tests {
     }
 
     #[test]
+    fn slash_popup_help_first_for_root_ui() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        type_chars_humanlike(&mut composer, &['/']);
+
+        let mut terminal = match Terminal::new(TestBackend::new(60, 8)) {
+            Ok(t) => t,
+            Err(e) => panic!("Failed to create terminal: {e}"),
+        };
+        terminal
+            .draw(|f| composer.render(f.area(), f.buffer_mut()))
+            .unwrap_or_else(|e| panic!("Failed to draw composer: {e}"));
+
+        if cfg!(target_os = "windows") {
+            insta::with_settings!({ snapshot_suffix => "windows" }, {
+                insta::assert_snapshot!("slash_popup_root", terminal.backend());
+            });
+        } else {
+            insta::assert_snapshot!("slash_popup_root", terminal.backend());
+        }
+    }
+
+    #[test]
+    fn slash_popup_help_first_for_root_logic() {
+        use super::super::command_popup::CommandItem;
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        type_chars_humanlike(&mut composer, &['/']);
+
+        match &composer.active_popup {
+            ActivePopup::Command(popup) => match popup.selected_item() {
+                Some(CommandItem::Builtin(cmd)) => {
+                    assert_eq!(cmd.command(), "help")
+                }
+                Some(CommandItem::UserPrompt(_)) => {
+                    panic!("unexpected prompt selected for '/'")
+                }
+                None => panic!("no selected command for '/'"),
+            },
+            _ => panic!("slash popup not active after typing '/'"),
+        }
+    }
+
+    #[test]
     fn slash_popup_model_first_for_mo_ui() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
@@ -6680,7 +6700,7 @@ mod tests {
     }
 
     #[test]
-    fn slash_command_disabled_while_task_running_keeps_text() {
+    fn slash_command_while_task_running_still_dispatches() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -6702,24 +6722,16 @@ mod tests {
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        assert_eq!(InputResult::None, result);
+        assert_eq!(
+            InputResult::CommandWithArgs(
+                SlashCommand::Review,
+                "these changes".to_string(),
+                Vec::new(),
+            ),
+            result
+        );
         assert_eq!("/review these changes", composer.textarea.text());
-
-        let mut found_error = false;
-        while let Ok(event) = rx.try_recv() {
-            if let AppEvent::InsertHistoryCell(cell) = event {
-                let message = cell
-                    .display_lines(80)
-                    .into_iter()
-                    .map(|line| line.to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                assert!(message.contains("disabled while a task is in progress"));
-                found_error = true;
-                break;
-            }
-        }
-        assert!(found_error, "expected error history cell to be sent");
+        assert!(rx.try_recv().is_err(), "no error should be emitted");
     }
 
     #[test]
@@ -7628,7 +7640,7 @@ mod tests {
             composer.take_recent_submission_mention_bindings(),
             mention_bindings
         );
-        assert!(composer.take_mention_bindings().is_empty());
+        assert!(composer.mention_bindings().is_empty());
     }
 
     #[test]

@@ -8,8 +8,8 @@
 //!   the preview panel and any visible code blocks.
 //! - **Cancel-restore:** on dismiss (Esc / Ctrl+C) the `on_cancel` callback
 //!   restores the theme snapshot taken when the picker opened.
-//! - **Persist on confirm:** the `AppEvent::SyntaxThemeSelected` action persists
-//!   `[tui] theme = "..."` to `config.toml` via `ConfigEditsBuilder`.
+//! - **Persist on confirm:** the picker emits a canonical `/theme <name>` draft,
+//!   which then persists `[tui] theme = "..."` through normal slash-command handling.
 //!
 //! Two preview renderables adapt to terminal width:
 //!
@@ -35,6 +35,8 @@ use crate::diff_render::push_wrapped_diff_line_with_style_context;
 use crate::diff_render::push_wrapped_diff_line_with_syntax_and_style_context;
 use crate::render::highlight;
 use crate::render::renderable::Renderable;
+use crate::slash_command::SlashCommand;
+use crate::slash_command_invocation::SlashCommandInvocation;
 use crate::status::format_directory_display;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -344,9 +346,13 @@ pub(crate) fn build_theme_picker_params(
                 dismiss_on_select: true,
                 search_value: Some(entry.name.clone()),
                 actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::SyntaxThemeSelected {
-                        name: name_for_action.clone(),
-                    });
+                    tx.send(AppEvent::HandleSlashCommandDraft(
+                        SlashCommandInvocation::with_args(
+                            SlashCommand::Theme,
+                            [name_for_action.clone()],
+                        )
+                        .into_user_message(),
+                    ));
                 })],
                 ..Default::default()
             }

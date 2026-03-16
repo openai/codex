@@ -34,6 +34,7 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
+use crate::resume_picker::SessionTarget;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -53,6 +54,7 @@ use codex_core::config::types::ApprovalsReviewer;
 use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::Feature;
+use codex_core::find_thread_path_by_id_str;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
@@ -728,6 +730,7 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
+    pending_async_queue_resume_barriers: usize,
 }
 
 #[derive(Default)]
@@ -755,6 +758,28 @@ fn normalize_harness_overrides_for_cwd(
 }
 
 impl App {
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    fn begin_async_queue_resume_barrier(&mut self) {
+        self.pending_async_queue_resume_barriers += 1;
+    }
+
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    fn finish_async_queue_resume_barrier(&mut self) {
+        if self.pending_async_queue_resume_barriers == 0 {
+            tracing::warn!("finished async queue-resume barrier with no pending barrier");
+            return;
+        }
+        self.pending_async_queue_resume_barriers -= 1;
+    }
+
+    fn maybe_resume_queued_inputs_after_app_events(&mut self, app_events_drained: bool) {
+        if !app_events_drained || self.pending_async_queue_resume_barriers != 0 {
+            return;
+        }
+
+        self.chat_widget.maybe_resume_queued_inputs_when_idle();
+    }
+
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
@@ -832,6 +857,104 @@ impl App {
                 }
             }
         }
+    }
+
+    async fn resume_session_target(
+        &mut self,
+        tui: &mut tui::Tui,
+        target_session: SessionTarget,
+    ) -> Result<AppRunControl> {
+        let current_cwd = self.config.cwd.clone();
+        let resume_cwd = match crate::resolve_cwd_for_resume_or_fork(
+            tui,
+            &self.config,
+            &current_cwd,
+            target_session.thread_id,
+            &target_session.path,
+            CwdPromptAction::Resume,
+            true,
+        )
+        .await?
+        {
+            crate::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
+            crate::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
+            crate::ResolveCwdOutcome::Exit => {
+                return Ok(self.handle_exit_mode(ExitMode::ShutdownFirst));
+            }
+        };
+        let mut resume_config = match self
+            .rebuild_config_for_resume_or_fallback(&current_cwd, resume_cwd)
+            .await
+        {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to rebuild configuration for resume: {err}"
+                ));
+                return Ok(AppRunControl::Continue);
+            }
+        };
+        self.apply_runtime_policy_overrides(&mut resume_config);
+        let summary = session_summary(
+            self.chat_widget.token_usage(),
+            self.chat_widget.thread_id(),
+            self.chat_widget.thread_name(),
+        );
+        match self
+            .server
+            .resume_thread_from_rollout(
+                resume_config.clone(),
+                target_session.path.clone(),
+                self.auth_manager.clone(),
+                None,
+            )
+            .await
+        {
+            Ok(resumed) => {
+                let input_state = self.chat_widget.capture_thread_input_state();
+                self.shutdown_current_thread().await;
+                self.config = resume_config;
+                tui.set_notification_method(self.config.tui_notification_method);
+                self.file_search.update_search_dir(self.config.cwd.clone());
+                let init =
+                    self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
+                self.chat_widget =
+                    ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured);
+                self.reset_thread_event_state();
+                if let Some(summary) = summary {
+                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
+                    if let Some(command) = summary.resume_command {
+                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
+                        lines.push(spans.into());
+                    }
+                    self.chat_widget.add_plain_history_lines(lines);
+                }
+                self.restore_input_state_after_thread_switch(input_state);
+            }
+            Err(err) => {
+                let path_display = target_session.path.display();
+                self.chat_widget.add_error_message(format!(
+                    "Failed to resume session from {path_display}: {err}"
+                ));
+            }
+        }
+        Ok(AppRunControl::Continue)
+    }
+
+    async fn resume_session_by_thread_id(
+        &mut self,
+        tui: &mut tui::Tui,
+        thread_id: ThreadId,
+    ) -> Result<AppRunControl> {
+        let Some(path) =
+            find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await?
+        else {
+            self.chat_widget
+                .add_error_message(format!("No saved session found for thread {thread_id}."));
+            return Ok(AppRunControl::Continue);
+        };
+        self.resume_session_target(tui, SessionTarget { path, thread_id })
+            .await
     }
 
     fn apply_runtime_policy_overrides(&mut self, config: &mut Config) {
@@ -1656,7 +1779,13 @@ impl App {
                     description: Some(uuid.clone()),
                     is_current: self.active_thread_id == Some(*thread_id),
                     actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::SelectAgentThread(id));
+                        tx.send(AppEvent::HandleSlashCommandDraft(
+                            crate::slash_command_invocation::SlashCommandInvocation::with_args(
+                                crate::slash_command::SlashCommand::Agent,
+                                [id.to_string()],
+                            )
+                            .into_user_message(),
+                        ));
                     })],
                     dismiss_on_select: true,
                     search_value: Some(format!("{name} {uuid}")),
@@ -1784,6 +1913,11 @@ impl App {
         self.sync_active_agent_label();
     }
 
+    fn restore_input_state_after_thread_switch(&mut self, input_state: Option<ThreadInputState>) {
+        self.chat_widget.restore_thread_input_state(input_state);
+        self.chat_widget.drain_queued_inputs_until_blocked();
+    }
+
     async fn start_fresh_session_with_summary_hint(&mut self, tui: &mut tui::Tui) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history.
@@ -1796,6 +1930,7 @@ impl App {
             self.chat_widget.thread_id(),
             self.chat_widget.thread_name(),
         );
+        let input_state = self.chat_widget.capture_thread_input_state();
         self.shutdown_current_thread().await;
         let report = self
             .server
@@ -1835,6 +1970,7 @@ impl App {
             }
             self.chat_widget.add_plain_history_lines(lines);
         }
+        self.restore_input_state_after_thread_switch(input_state);
         tui.frame_requester().schedule_frame();
     }
 
@@ -1912,7 +2048,7 @@ impl App {
         }
         self.chat_widget.set_queue_autosend_suppressed(false);
         if resume_restored_queue {
-            self.chat_widget.maybe_send_next_queued_input();
+            self.chat_widget.drain_queued_inputs_until_blocked();
         }
         self.refresh_status_line();
     }
@@ -2180,6 +2316,7 @@ impl App {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            pending_async_queue_resume_barriers: 0,
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -2198,6 +2335,7 @@ impl App {
                     .hide_world_writable_warning
                     .unwrap_or(false);
             if should_check {
+                app.begin_async_queue_resume_barrier();
                 let cwd = app.config.cwd.clone();
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
@@ -2308,6 +2446,11 @@ impl App {
                 ) {
                     waiting_for_initial_session_configured = false;
                 }
+                // Some replayed slash commands pause queue draining until their app-side updates,
+                // popup flows, or async follow-up work settle. Only resume once the app-event
+                // queue is fully drained and no background slash-command completions are still
+                // pending, so later queued input cannot interleave with those updates.
+                app.maybe_resume_queued_inputs_after_app_events(app_event_rx.is_empty());
                 match control {
                     AppRunControl::Continue => {}
                     AppRunControl::Exit(reason) => break Ok(reason),
@@ -2414,87 +2557,10 @@ impl App {
             AppEvent::OpenResumePicker => {
                 match crate::resume_picker::run_resume_picker(tui, &self.config, false).await? {
                     SessionSelection::Resume(target_session) => {
-                        let current_cwd = self.config.cwd.clone();
-                        let resume_cwd = match crate::resolve_cwd_for_resume_or_fork(
-                            tui,
-                            &self.config,
-                            &current_cwd,
-                            target_session.thread_id,
-                            &target_session.path,
-                            CwdPromptAction::Resume,
-                            true,
-                        )
-                        .await?
-                        {
-                            crate::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
-                            crate::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
-                            crate::ResolveCwdOutcome::Exit => {
-                                return Ok(AppRunControl::Exit(ExitReason::UserRequested));
-                            }
-                        };
-                        let mut resume_config = match self
-                            .rebuild_config_for_resume_or_fallback(&current_cwd, resume_cwd)
-                            .await
-                        {
-                            Ok(cfg) => cfg,
-                            Err(err) => {
-                                self.chat_widget.add_error_message(format!(
-                                    "Failed to rebuild configuration for resume: {err}"
-                                ));
-                                return Ok(AppRunControl::Continue);
-                            }
-                        };
-                        self.apply_runtime_policy_overrides(&mut resume_config);
-                        let summary = session_summary(
-                            self.chat_widget.token_usage(),
-                            self.chat_widget.thread_id(),
-                            self.chat_widget.thread_name(),
+                        self.chat_widget.handle_serialized_slash_command(
+                            ChatWidget::resume_selection_draft(&target_session),
                         );
-                        match self
-                            .server
-                            .resume_thread_from_rollout(
-                                resume_config.clone(),
-                                target_session.path.clone(),
-                                self.auth_manager.clone(),
-                                None,
-                            )
-                            .await
-                        {
-                            Ok(resumed) => {
-                                self.shutdown_current_thread().await;
-                                self.config = resume_config;
-                                tui.set_notification_method(self.config.tui_notification_method);
-                                self.file_search.update_search_dir(self.config.cwd.clone());
-                                let init = self.chatwidget_init_for_forked_or_resumed_thread(
-                                    tui,
-                                    self.config.clone(),
-                                );
-                                self.chat_widget = ChatWidget::new_from_existing(
-                                    init,
-                                    resumed.thread,
-                                    resumed.session_configured,
-                                );
-                                self.reset_thread_event_state();
-                                if let Some(summary) = summary {
-                                    let mut lines: Vec<Line<'static>> =
-                                        vec![summary.usage_line.clone().into()];
-                                    if let Some(command) = summary.resume_command {
-                                        let spans = vec![
-                                            "To continue this session, run ".into(),
-                                            command.cyan(),
-                                        ];
-                                        lines.push(spans.into());
-                                    }
-                                    self.chat_widget.add_plain_history_lines(lines);
-                                }
-                            }
-                            Err(err) => {
-                                let path_display = target_session.path.display();
-                                self.chat_widget.add_error_message(format!(
-                                    "Failed to resume session from {path_display}: {err}"
-                                ));
-                            }
-                        }
+                        self.refresh_status_line();
                     }
                     SessionSelection::Exit
                     | SessionSelection::StartFresh
@@ -2503,6 +2569,12 @@ impl App {
 
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::ResumeSession(thread_id) => {
+                return self.resume_session_by_thread_id(tui, thread_id).await;
+            }
+            AppEvent::ResumeSessionTarget(target_session) => {
+                return self.resume_session_target(tui, target_session).await;
             }
             AppEvent::ForkCurrentSession => {
                 self.session_telemetry.counter(
@@ -2529,6 +2601,7 @@ impl App {
                             .await
                         {
                             Ok(forked) => {
+                                let input_state = self.chat_widget.capture_thread_input_state();
                                 self.shutdown_current_thread().await;
                                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                     tui,
@@ -2552,6 +2625,7 @@ impl App {
                                     }
                                     self.chat_widget.add_plain_history_lines(lines);
                                 }
+                                self.restore_input_state_after_thread_switch(input_state);
                             }
                             Err(err) => {
                                 let path_display = path.display();
@@ -2717,6 +2791,11 @@ impl App {
                 self.chat_widget.set_model(&model);
                 self.refresh_status_line();
             }
+            AppEvent::HandleSlashCommandDraft(draft) => {
+                self.chat_widget.handle_serialized_slash_command(draft);
+                self.refresh_status_line();
+            }
+            AppEvent::BottomPaneViewCompleted => {}
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
                 self.refresh_status_line();
@@ -2746,12 +2825,14 @@ impl App {
             }
             AppEvent::OpenWorldWritableWarningConfirmation {
                 preset,
+                approvals_reviewer,
                 sample_paths,
                 extra_count,
                 failed_scan,
             } => {
                 self.chat_widget.open_world_writable_warning_confirmation(
                     preset,
+                    approvals_reviewer,
                     sample_paths,
                     extra_count,
                     failed_scan,
@@ -2771,10 +2852,17 @@ impl App {
                     self.launch_external_editor(tui).await;
                 }
             }
-            AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
-                self.chat_widget.open_windows_sandbox_enable_prompt(preset);
+            AppEvent::OpenWindowsSandboxEnablePrompt {
+                preset,
+                approvals_reviewer,
+            } => {
+                self.chat_widget
+                    .open_windows_sandbox_enable_prompt(preset, approvals_reviewer);
             }
-            AppEvent::OpenWindowsSandboxFallbackPrompt { preset } => {
+            AppEvent::OpenWindowsSandboxFallbackPrompt {
+                preset,
+                approvals_reviewer,
+            } => {
                 self.session_telemetry.counter(
                     "codex.windows_sandbox.fallback_prompt_shown",
                     1,
@@ -2789,9 +2877,12 @@ impl App {
                     );
                 }
                 self.chat_widget
-                    .open_windows_sandbox_fallback_prompt(preset);
+                    .open_windows_sandbox_fallback_prompt(preset, approvals_reviewer);
             }
-            AppEvent::BeginWindowsSandboxElevatedSetup { preset } => {
+            AppEvent::BeginWindowsSandboxElevatedSetup {
+                preset,
+                approvals_reviewer,
+            } => {
                 #[cfg(target_os = "windows")]
                 {
                     let policy = preset.sandbox.clone();
@@ -2809,12 +2900,14 @@ impl App {
                         tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                             preset,
                             mode: WindowsSandboxEnableMode::Elevated,
+                            approvals_reviewer,
                         });
                         return Ok(AppRunControl::Continue);
                     }
 
                     self.chat_widget.show_windows_sandbox_setup_status();
                     self.windows_sandbox.setup_started_at = Some(Instant::now());
+                    self.begin_async_queue_resume_barrier();
                     let session_telemetry = self.session_telemetry.clone();
                     tokio::task::spawn_blocking(move || {
                         let result = codex_core::windows_sandbox::run_elevated_setup(
@@ -2831,9 +2924,10 @@ impl App {
                                     1,
                                     &[],
                                 );
-                                AppEvent::EnableWindowsSandboxForAgentMode {
+                                AppEvent::WindowsSandboxElevatedSetupCompleted {
                                     preset: preset.clone(),
-                                    mode: WindowsSandboxEnableMode::Elevated,
+                                    approvals_reviewer,
+                                    setup_succeeded: true,
                                 }
                             }
                             Err(err) => {
@@ -2865,7 +2959,11 @@ impl App {
                                     error = %err,
                                     "failed to run elevated Windows sandbox setup"
                                 );
-                                AppEvent::OpenWindowsSandboxFallbackPrompt { preset }
+                                AppEvent::WindowsSandboxElevatedSetupCompleted {
+                                    preset,
+                                    approvals_reviewer,
+                                    setup_succeeded: false,
+                                }
                             }
                         };
                         tx.send(event);
@@ -2873,10 +2971,40 @@ impl App {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = preset;
+                    let _ = (preset, approvals_reviewer);
                 }
             }
-            AppEvent::BeginWindowsSandboxLegacySetup { preset } => {
+            AppEvent::WindowsSandboxElevatedSetupCompleted {
+                preset,
+                approvals_reviewer,
+                setup_succeeded,
+            } => {
+                #[cfg(target_os = "windows")]
+                {
+                    self.finish_async_queue_resume_barrier();
+                    let event = if setup_succeeded {
+                        AppEvent::EnableWindowsSandboxForAgentMode {
+                            preset,
+                            mode: WindowsSandboxEnableMode::Elevated,
+                            approvals_reviewer,
+                        }
+                    } else {
+                        AppEvent::OpenWindowsSandboxFallbackPrompt {
+                            preset,
+                            approvals_reviewer,
+                        }
+                    };
+                    self.app_event_tx.send(event);
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = (preset, approvals_reviewer, setup_succeeded);
+                }
+            }
+            AppEvent::BeginWindowsSandboxLegacySetup {
+                preset,
+                approvals_reviewer,
+            } => {
                 #[cfg(target_os = "windows")]
                 {
                     let policy = preset.sandbox.clone();
@@ -2886,36 +3014,70 @@ impl App {
                         std::env::vars().collect();
                     let codex_home = self.config.codex_home.clone();
                     let tx = self.app_event_tx.clone();
-                    let session_telemetry = self.session_telemetry.clone();
 
-                    self.chat_widget.show_windows_sandbox_setup_status();
+                    self.begin_async_queue_resume_barrier();
                     tokio::task::spawn_blocking(move || {
-                        if let Err(err) = codex_core::windows_sandbox::run_legacy_setup_preflight(
+                        let preset_for_error = preset.clone();
+                        let result = codex_core::windows_sandbox::run_legacy_setup_preflight(
                             &policy,
                             policy_cwd.as_path(),
                             command_cwd.as_path(),
                             &env_map,
                             codex_home.as_path(),
-                        ) {
-                            session_telemetry.counter(
-                                "codex.windows_sandbox.legacy_setup_preflight_failed",
-                                1,
-                                &[],
-                            );
-                            tracing::warn!(
-                                error = %err,
-                                "failed to preflight non-admin Windows sandbox setup"
-                            );
-                        }
-                        tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
-                            preset,
-                            mode: WindowsSandboxEnableMode::Legacy,
-                        });
+                        );
+                        let event = match result {
+                            Ok(()) => AppEvent::WindowsSandboxLegacySetupCompleted {
+                                preset,
+                                approvals_reviewer,
+                                error: None,
+                            },
+                            Err(err) => {
+                                tracing::error!(
+                                    error = %err,
+                                    "failed to run legacy Windows sandbox setup preflight"
+                                );
+                                AppEvent::WindowsSandboxLegacySetupCompleted {
+                                    preset: preset_for_error,
+                                    approvals_reviewer,
+                                    error: Some(err.to_string()),
+                                }
+                            }
+                        };
+                        tx.send(event);
                     });
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = preset;
+                    let _ = (preset, approvals_reviewer);
+                }
+            }
+            AppEvent::WindowsSandboxLegacySetupCompleted {
+                preset,
+                approvals_reviewer,
+                error,
+            } => {
+                #[cfg(target_os = "windows")]
+                {
+                    self.finish_async_queue_resume_barrier();
+                    match error {
+                        None => {
+                            self.app_event_tx
+                                .send(AppEvent::EnableWindowsSandboxForAgentMode {
+                                    preset,
+                                    mode: WindowsSandboxEnableMode::Legacy,
+                                    approvals_reviewer,
+                                });
+                        }
+                        Some(err) => {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to enable the Windows sandbox feature: {err}"
+                            ));
+                        }
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = (preset, approvals_reviewer, error);
                 }
             }
             AppEvent::BeginWindowsSandboxGrantReadRoot { path } => {
@@ -2975,7 +3137,11 @@ impl App {
                         ));
                 }
             },
-            AppEvent::EnableWindowsSandboxForAgentMode { preset, mode } => {
+            AppEvent::EnableWindowsSandboxForAgentMode {
+                preset,
+                mode,
+                approvals_reviewer,
+            } => {
                 #[cfg(target_os = "windows")]
                 {
                     self.chat_widget.clear_windows_sandbox_setup_status();
@@ -3031,6 +3197,7 @@ impl App {
                                 self.app_event_tx.send(
                                     AppEvent::OpenWorldWritableWarningConfirmation {
                                         preset: Some(preset.clone()),
+                                        approvals_reviewer: Some(approvals_reviewer),
                                         sample_paths,
                                         extra_count,
                                         failed_scan,
@@ -3041,7 +3208,7 @@ impl App {
                                     Op::OverrideTurnContext {
                                         cwd: None,
                                         approval_policy: Some(preset.approval),
-                                        approvals_reviewer: Some(self.config.approvals_reviewer),
+                                        approvals_reviewer: Some(approvals_reviewer),
                                         sandbox_policy: Some(preset.sandbox.clone()),
                                         windows_sandbox_level: Some(windows_sandbox_level),
                                         model: None,
@@ -3056,6 +3223,8 @@ impl App {
                                     .send(AppEvent::UpdateAskForApprovalPolicy(preset.approval));
                                 self.app_event_tx
                                     .send(AppEvent::UpdateSandboxPolicy(preset.sandbox.clone()));
+                                self.app_event_tx
+                                    .send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
                                 let _ = mode;
                                 self.chat_widget.add_plain_history_lines(vec![
                                     Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
@@ -3080,7 +3249,7 @@ impl App {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = (preset, mode);
+                    let _ = (preset, mode, approvals_reviewer);
                 }
             }
             AppEvent::PersistModelSelection { model, effort } => {
@@ -3300,6 +3469,7 @@ impl App {
                         && policy_is_workspace_write_or_ro
                         && !self.chat_widget.world_writable_warning_hidden();
                     if should_check {
+                        self.begin_async_queue_resume_barrier();
                         let cwd = self.config.cwd.clone();
                         let env_map: std::collections::HashMap<String, String> =
                             std::env::vars().collect();
@@ -3472,14 +3642,15 @@ impl App {
             AppEvent::OpenApprovalsPopup => {
                 self.chat_widget.open_approvals_popup();
             }
+            AppEvent::WorldWritableScanCompleted => {
+                #[cfg(target_os = "windows")]
+                self.finish_async_queue_resume_barrier();
+            }
             AppEvent::OpenAgentPicker => {
                 self.open_agent_picker().await;
             }
             AppEvent::SelectAgentThread(thread_id) => {
                 self.select_agent_thread(tui, thread_id).await?;
-            }
-            AppEvent::OpenSkillsList => {
-                self.chat_widget.open_skills_list();
             }
             AppEvent::OpenManageSkillsPopup => {
                 self.chat_widget.open_manage_skills_popup();
@@ -4163,11 +4334,13 @@ impl App {
                 // Scan failed: warn without examples.
                 tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
                     preset: None,
+                    approvals_reviewer: None,
                     sample_paths: Vec::new(),
                     extra_count: 0usize,
                     failed_scan: true,
                 });
             }
+            tx.send(AppEvent::WorldWritableScanCompleted);
         });
     }
 }
@@ -4178,6 +4351,7 @@ mod tests {
     use crate::app_backtrack::BacktrackSelection;
     use crate::app_backtrack::BacktrackState;
     use crate::app_backtrack::user_count;
+    use crate::chatwidget::UserMessage;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::chatwidget::tests::set_chatgpt_auth;
     use crate::file_search::FileSearchManager;
@@ -4665,6 +4839,60 @@ mod tests {
             },
             true,
         );
+
+        match next_user_turn_op(&mut new_op_rx) {
+            Op::UserTurn { items, .. } => assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "queued follow-up".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            ),
+            other => panic!("expected queued follow-up submission, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn thread_switch_restores_and_drains_queued_follow_up() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let session_configured = Event {
+            id: "session-configured".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        };
+        app.chat_widget
+            .apply_external_edit("queued follow-up".to_string());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let input_state = app
+            .chat_widget
+            .capture_thread_input_state()
+            .expect("expected queued follow-up state");
+
+        let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
+            make_chatwidget_manual_with_sender().await;
+        app.chat_widget = chat_widget;
+        app.chat_widget.handle_codex_event(session_configured);
+        while new_op_rx.try_recv().is_ok() {}
+
+        app.restore_input_state_after_thread_switch(Some(input_state));
 
         match next_user_turn_op(&mut new_op_rx) {
             Op::UserTurn { items, .. } => assert_eq!(
@@ -5921,10 +6149,12 @@ guardian_approval = true
         app.chat_widget
             .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        assert_matches!(
-            app_event_rx.try_recv(),
-            Ok(AppEvent::SelectAgentThread(selected_thread_id)) if selected_thread_id == thread_id
-        );
+        match app_event_rx.try_recv() {
+            Ok(AppEvent::HandleSlashCommandDraft(draft)) => {
+                assert_eq!(draft, UserMessage::from(format!("/agent {thread_id}")));
+            }
+            other => panic!("expected serialized agent slash draft, got {other:?}"),
+        }
         Ok(())
     }
 
@@ -6381,6 +6611,7 @@ guardian_approval = true
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            pending_async_queue_resume_barriers: 0,
         }
     }
 
@@ -6441,6 +6672,7 @@ guardian_approval = true
                 primary_thread_id: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
+                pending_async_queue_resume_barriers: 0,
             },
             rx,
             op_rx,
@@ -7452,6 +7684,208 @@ guardian_approval = true
             Ok(Op::Shutdown) => {}
             Ok(other) => panic!("expected Op::Shutdown, got {other:?}"),
             Err(_) => panic!("expected shutdown op to be sent"),
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_personality_selection_resumes_followup_after_app_events_drain() {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget.set_model("gpt-5.2-codex");
+        app.chat_widget
+            .set_feature_enabled(Feature::Personality, true);
+        app.chat_widget.handle_codex_event(Event {
+            id: "configured".into(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-5.2-codex".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: Some(ReasoningEffortConfig::default()),
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: None,
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-started".into(),
+            msg: EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        });
+        while app_event_rx.try_recv().is_ok() {}
+        while op_rx.try_recv().is_ok() {}
+
+        app.chat_widget
+            .handle_serialized_slash_command(UserMessage::from("/personality pragmatic"));
+        app.chat_widget
+            .set_composer_text("followup".to_string(), Vec::new(), Vec::new());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-complete".into(),
+            msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-1".to_string(),
+                last_agent_message: None,
+            }),
+        });
+
+        assert_eq!(
+            app.chat_widget.queued_user_message_texts(),
+            vec!["followup".to_string()]
+        );
+        assert!(
+            op_rx.try_recv().is_err(),
+            "queued follow-up should not submit before app events drain"
+        );
+
+        loop {
+            match app_event_rx.try_recv() {
+                Ok(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    personality: Some(Personality::Pragmatic),
+                    ..
+                })) => continue,
+                Ok(AppEvent::UpdatePersonality(Personality::Pragmatic)) => {
+                    app.on_update_personality(Personality::Pragmatic);
+                    break;
+                }
+                Ok(AppEvent::PersistPersonalitySelection {
+                    personality: Personality::Pragmatic,
+                }) => continue,
+                Ok(_) => continue,
+                Err(TryRecvError::Empty) => panic!("expected personality update events"),
+                Err(TryRecvError::Disconnected) => panic!("expected personality update events"),
+            }
+        }
+
+        app.maybe_resume_queued_inputs_after_app_events(true);
+
+        match next_user_turn_op(&mut op_rx) {
+            Op::UserTurn {
+                items,
+                personality: Some(Personality::Pragmatic),
+                ..
+            } => assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "followup".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            ),
+            other => panic!("expected Op::UserTurn with pragmatic personality, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_followup_waits_for_pending_async_resume_barrier() {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget.set_model("gpt-5.2-codex");
+        app.chat_widget
+            .set_feature_enabled(Feature::Personality, true);
+        app.chat_widget.handle_codex_event(Event {
+            id: "configured".into(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-5.2-codex".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: Some(ReasoningEffortConfig::default()),
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: None,
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-started".into(),
+            msg: EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        });
+        while app_event_rx.try_recv().is_ok() {}
+        while op_rx.try_recv().is_ok() {}
+
+        app.chat_widget
+            .handle_serialized_slash_command(UserMessage::from("/personality pragmatic"));
+        app.chat_widget
+            .set_composer_text("followup".to_string(), Vec::new(), Vec::new());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-complete".into(),
+            msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-1".to_string(),
+                last_agent_message: None,
+            }),
+        });
+
+        loop {
+            match app_event_rx.try_recv() {
+                Ok(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    personality: Some(Personality::Pragmatic),
+                    ..
+                })) => continue,
+                Ok(AppEvent::UpdatePersonality(Personality::Pragmatic)) => {
+                    app.on_update_personality(Personality::Pragmatic);
+                    break;
+                }
+                Ok(AppEvent::PersistPersonalitySelection {
+                    personality: Personality::Pragmatic,
+                }) => continue,
+                Ok(_) => continue,
+                Err(TryRecvError::Empty) => panic!("expected personality update events"),
+                Err(TryRecvError::Disconnected) => panic!("expected personality update events"),
+            }
+        }
+
+        app.pending_async_queue_resume_barriers = 1;
+        app.maybe_resume_queued_inputs_after_app_events(true);
+
+        assert_eq!(
+            app.chat_widget.queued_user_message_texts(),
+            vec!["followup".to_string()]
+        );
+        assert!(
+            op_rx.try_recv().is_err(),
+            "queued follow-up should stay queued while async replay barriers are pending"
+        );
+
+        app.pending_async_queue_resume_barriers = 0;
+        app.maybe_resume_queued_inputs_after_app_events(true);
+
+        match next_user_turn_op(&mut op_rx) {
+            Op::UserTurn {
+                items,
+                personality: Some(Personality::Pragmatic),
+                ..
+            } => assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "followup".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            ),
+            other => panic!("expected Op::UserTurn with pragmatic personality, got {other:?}"),
         }
     }
 

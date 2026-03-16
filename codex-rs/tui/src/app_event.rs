@@ -20,6 +20,7 @@ use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
+use crate::chatwidget::UserMessage;
 use crate::history_cell::HistoryCell;
 
 use codex_core::config::types::ApprovalsReviewer;
@@ -96,6 +97,12 @@ pub(crate) enum AppEvent {
 
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
+
+    /// Resume a saved session by thread id.
+    ResumeSession(ThreadId),
+
+    /// Resume a saved session using the exact picker-selected rollout target.
+    ResumeSessionTarget(crate::resume_picker::SessionTarget),
 
     /// Fork the current session into a new thread.
     ForkCurrentSession,
@@ -182,6 +189,14 @@ pub(crate) enum AppEvent {
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
 
+    /// Evaluate a serialized built-in slash-command draft. If a task is currently running, the
+    /// draft is queued and replayed later through the same path as queued composer input.
+    HandleSlashCommandDraft(UserMessage),
+
+    /// Notify the app that an interactive bottom-pane view finished, so queued replay can resume
+    /// once the UI is idle again.
+    BottomPaneViewCompleted,
+
     /// Update the active collaboration mask in the running app and widget.
     UpdateCollaborationMode(CollaborationModeMask),
 
@@ -253,6 +268,7 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWorldWritableWarningConfirmation {
         preset: Option<ApprovalPreset>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
         /// Up to 3 sample world-writable directories to display in the warning.
         sample_paths: Vec<String>,
         /// If there are more than `sample_paths`, this carries the remaining count.
@@ -265,24 +281,44 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWindowsSandboxEnablePrompt {
         preset: ApprovalPreset,
+        approvals_reviewer: ApprovalsReviewer,
     },
 
     /// Open the Windows sandbox fallback prompt after declining or failing elevation.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWindowsSandboxFallbackPrompt {
         preset: ApprovalPreset,
+        approvals_reviewer: ApprovalsReviewer,
     },
 
     /// Begin the elevated Windows sandbox setup flow.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     BeginWindowsSandboxElevatedSetup {
         preset: ApprovalPreset,
+        approvals_reviewer: ApprovalsReviewer,
+    },
+
+    /// Result of the elevated Windows sandbox setup flow.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    WindowsSandboxElevatedSetupCompleted {
+        preset: ApprovalPreset,
+        approvals_reviewer: ApprovalsReviewer,
+        setup_succeeded: bool,
     },
 
     /// Begin the non-elevated Windows sandbox setup flow.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     BeginWindowsSandboxLegacySetup {
         preset: ApprovalPreset,
+        approvals_reviewer: ApprovalsReviewer,
+    },
+
+    /// Result of the non-elevated Windows sandbox setup flow.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    WindowsSandboxLegacySetupCompleted {
+        preset: ApprovalPreset,
+        approvals_reviewer: ApprovalsReviewer,
+        error: Option<String>,
     },
 
     /// Begin a non-elevated grant of read access for an additional directory.
@@ -298,11 +334,16 @@ pub(crate) enum AppEvent {
         error: Option<String>,
     },
 
+    /// Result of the asynchronous Windows world-writable scan.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    WorldWritableScanCompleted,
+
     /// Enable the Windows sandbox feature and switch to Agent mode.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     EnableWindowsSandboxForAgentMode {
         preset: ApprovalPreset,
         mode: WindowsSandboxEnableMode,
+        approvals_reviewer: ApprovalsReviewer,
     },
 
     /// Update the Windows sandbox feature mode without changing approval presets.
@@ -360,9 +401,6 @@ pub(crate) enum AppEvent {
 
     /// Re-open the approval presets popup.
     OpenApprovalsPopup,
-
-    /// Open the skills list popup.
-    OpenSkillsList,
 
     /// Open the skills enable/disable picker.
     OpenManageSkillsPopup,

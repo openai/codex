@@ -17,9 +17,9 @@ use crate::render::Insets;
 use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
+use crate::slash_command::SlashCommand;
+use crate::slash_command_invocation::SlashCommandInvocation;
 use crate::style::user_message_style;
-
-use codex_core::features::Feature;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -30,7 +30,7 @@ use super::selection_popup_common::measure_rows_height;
 use super::selection_popup_common::render_rows;
 
 pub(crate) struct ExperimentalFeatureItem {
-    pub feature: Feature,
+    pub key: String,
     pub name: String,
     pub description: String,
     pub enabled: bool,
@@ -198,15 +198,16 @@ impl BottomPaneView for ExperimentalFeaturesView {
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
-        // Save the updates
         if !self.features.is_empty() {
-            let updates = self
-                .features
-                .iter()
-                .map(|item| (item.feature, item.enabled))
-                .collect();
-            self.app_event_tx
-                .send(AppEvent::UpdateFeatureFlags { updates });
+            let invocation = SlashCommandInvocation::with_args(
+                SlashCommand::Experimental,
+                self.features.iter().map(|item| {
+                    format!("{}={}", item.key, if item.enabled { "on" } else { "off" })
+                }),
+            );
+            self.app_event_tx.send(AppEvent::HandleSlashCommandDraft(
+                invocation.into_user_message(),
+            ));
         }
 
         self.complete = true;

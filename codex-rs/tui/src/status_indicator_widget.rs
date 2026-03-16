@@ -7,7 +7,6 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_protocol::protocol::Op;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -19,8 +18,6 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app_event::AppEvent;
-use crate::app_event_sender::AppEventSender;
 use crate::exec_cell::spinner;
 use crate::key_hint;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
@@ -53,7 +50,6 @@ pub(crate) struct StatusIndicatorWidget {
     elapsed_running: Duration,
     last_resume_at: Instant,
     is_paused: bool,
-    app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
     animations_enabled: bool,
 }
@@ -76,11 +72,7 @@ pub fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
 }
 
 impl StatusIndicatorWidget {
-    pub(crate) fn new(
-        app_event_tx: AppEventSender,
-        frame_requester: FrameRequester,
-        animations_enabled: bool,
-    ) -> Self {
+    pub(crate) fn new(frame_requester: FrameRequester, animations_enabled: bool) -> Self {
         Self {
             header: String::from("Working"),
             details: None,
@@ -91,14 +83,9 @@ impl StatusIndicatorWidget {
             last_resume_at: Instant::now(),
             is_paused: false,
 
-            app_event_tx,
             frame_requester,
             animations_enabled,
         }
-    }
-
-    pub(crate) fn interrupt(&self) {
-        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
     }
 
     /// Update the animated header label (left of the brackets).
@@ -292,13 +279,10 @@ impl Renderable for StatusIndicatorWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_event::AppEvent;
-    use crate::app_event_sender::AppEventSender;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use std::time::Duration;
     use std::time::Instant;
-    use tokio::sync::mpsc::unbounded_channel;
 
     use pretty_assertions::assert_eq;
 
@@ -318,9 +302,7 @@ mod tests {
 
     #[test]
     fn renders_with_working_header() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+        let w = StatusIndicatorWidget::new(crate::tui::FrameRequester::test_dummy(), true);
 
         // Render into a fixed-size test terminal and snapshot the backend.
         let mut terminal = Terminal::new(TestBackend::new(80, 2)).expect("terminal");
@@ -332,9 +314,7 @@ mod tests {
 
     #[test]
     fn renders_truncated() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+        let w = StatusIndicatorWidget::new(crate::tui::FrameRequester::test_dummy(), true);
 
         // Render into a fixed-size test terminal and snapshot the backend.
         let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal");
@@ -346,9 +326,7 @@ mod tests {
 
     #[test]
     fn renders_wrapped_details_panama_two_lines() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), false);
+        let mut w = StatusIndicatorWidget::new(crate::tui::FrameRequester::test_dummy(), false);
         w.update_details(
             Some("A man a plan a canal panama".to_string()),
             StatusDetailsCapitalization::CapitalizeFirst,
@@ -371,10 +349,7 @@ mod tests {
 
     #[test]
     fn timer_pauses_when_requested() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut widget =
-            StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+        let mut widget = StatusIndicatorWidget::new(crate::tui::FrameRequester::test_dummy(), true);
 
         let baseline = Instant::now();
         widget.last_resume_at = baseline;
@@ -393,9 +368,7 @@ mod tests {
 
     #[test]
     fn details_overflow_adds_ellipsis() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+        let mut w = StatusIndicatorWidget::new(crate::tui::FrameRequester::test_dummy(), true);
         w.update_details(
             Some("abcd abcd abcd abcd".to_string()),
             StatusDetailsCapitalization::CapitalizeFirst,
@@ -413,9 +386,7 @@ mod tests {
 
     #[test]
     fn details_args_can_disable_capitalization_and_limit_lines() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy(), true);
+        let mut w = StatusIndicatorWidget::new(crate::tui::FrameRequester::test_dummy(), true);
         w.update_details(
             Some("cargo test -p codex-core and then cargo test -p codex-tui".to_string()),
             StatusDetailsCapitalization::Preserve,
