@@ -2,6 +2,12 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
+    "BlockDecisionWire": {
+      "enum": [
+        "block"
+      ],
+      "type": "string"
+    },
     "HookEventNameWire": {
       "enum": [
         "SessionStart",
@@ -10,7 +16,7 @@
       ],
       "type": "string"
     },
-    "SessionStartHookSpecificOutputWire": {
+    "UserPromptSubmitHookSpecificOutputWire": {
       "additionalProperties": false,
       "properties": {
         "additionalContext": {
@@ -32,13 +38,25 @@
       "default": true,
       "type": "boolean"
     },
-    "hookSpecificOutput": {
+    "decision": {
       "allOf": [
         {
-          "$ref": "#/definitions/SessionStartHookSpecificOutputWire"
+          "$ref": "#/definitions/BlockDecisionWire"
         }
       ],
       "default": null
+    },
+    "hookSpecificOutput": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/UserPromptSubmitHookSpecificOutputWire"
+        }
+      ],
+      "default": null
+    },
+    "reason": {
+      "default": null,
+      "type": "string"
     },
     "stopReason": {
       "default": null,
@@ -53,6 +71,6 @@
       "type": "string"
     }
   },
-  "title": "session-start.command.output",
+  "title": "user-prompt-submit.command.output",
   "type": "object"
 }
