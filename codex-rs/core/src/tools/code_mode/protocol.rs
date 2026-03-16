@@ -71,7 +71,7 @@ pub(super) enum HostToNodeMessage {
     },
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(super) enum NodeToHostMessage {
     ToolCall {

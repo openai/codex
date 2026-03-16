@@ -98,7 +98,7 @@ impl CodeModeProcess {
                     | NodeToHostMessage::Terminated { .. }
                     | NodeToHostMessage::Result { .. }) => {
                         error!(
-                            "received unexpected {PUBLIC_TOOL_NAME} message in worker loop: {unexpected_message}"
+                            "received unexpected {PUBLIC_TOOL_NAME} message in worker loop: {unexpected_message:?}"
                         );
                         break;
                     }
