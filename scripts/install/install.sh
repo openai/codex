@@ -7,9 +7,9 @@ RELEASE="latest"
 BIN_DIR="${CODEX_INSTALL_DIR:-$HOME/.local/bin}"
 BIN_PATH="$BIN_DIR/codex"
 CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
-NATIVE_ROOT="$CODEX_HOME_DIR/packages/native"
-RELEASES_DIR="$NATIVE_ROOT/releases"
-CURRENT_LINK="$NATIVE_ROOT/current"
+STANDALONE_ROOT="$CODEX_HOME_DIR/packages/standalone"
+RELEASES_DIR="$STANDALONE_ROOT/releases"
+CURRENT_LINK="$STANDALONE_ROOT/current"
 
 path_action="already"
 path_profile=""
@@ -241,15 +241,24 @@ rewrite_path_block() {
   mv "$tmp_profile" "$profile"
 }
 
-read_metadata_value() {
-  metadata_path="$1"
-  key="$2"
+version_from_binary() {
+  codex_path="$1"
 
-  if [ ! -f "$metadata_path" ]; then
+  if [ ! -x "$codex_path" ]; then
     return 1
   fi
 
-  sed -n "s/^${key}[[:space:]]*=[[:space:]]*\"\([^\"]*\)\"/\1/p" "$metadata_path" | head -n 1
+  "$codex_path" --version 2>/dev/null | sed -n 's/.* \([0-9][0-9A-Za-z.+-]*\)$/\1/p' | head -n 1
+}
+
+current_installed_version() {
+  version="$(version_from_binary "$CURRENT_LINK/codex" || true)"
+  if [ -n "$version" ]; then
+    printf '%s\n' "$version"
+    return 0
+  fi
+
+  return 0
 }
 
 resolve_existing_codex() {
@@ -290,7 +299,7 @@ classify_existing_codex() {
 prompt_yes_no() {
   prompt="$1"
 
-  if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+  if ( : </dev/tty ) 2>/dev/null; then
     printf '%s [y/N] ' "$prompt" >/dev/tty
     if ! IFS= read -r answer </dev/tty; then
       return 1
@@ -371,7 +380,7 @@ handle_conflicting_install() {
   if prompt_yes_no "Uninstall the existing $manager-managed Codex now?"; then
     step "Running: $uninstall_cmd"
     if ! sh -c "$uninstall_cmd"; then
-      warn "Failed to uninstall the existing $manager-managed Codex. Continuing with the native install."
+      warn "Failed to uninstall the existing $manager-managed Codex. Continuing with the standalone install."
     fi
   else
     warn "Leaving the existing $manager-managed Codex installed. PATH order will determine which codex runs."
@@ -387,16 +396,11 @@ install_release() {
   if [ -e "$release_dir" ] || [ -L "$release_dir" ]; then
     rm -rf "$release_dir"
   fi
-  mkdir -p "$stage_release"
+  mkdir -p "$stage_release/codex-resources"
   cp "$vendor_root/codex/codex" "$stage_release/codex"
-  cp "$vendor_root/path/rg" "$stage_release/rg"
+  cp "$vendor_root/path/rg" "$stage_release/codex-resources/rg"
   chmod 0755 "$stage_release/codex"
-  chmod 0755 "$stage_release/rg"
-  cat >"$stage_release/metadata.toml" <<EOF
-install_method = "native"
-version = "$resolved_version"
-target = "$vendor_target"
-EOF
+  chmod 0755 "$stage_release/codex-resources/rg"
 
   mkdir -p "$RELEASES_DIR"
   mv "$stage_release" "$release_dir"
@@ -409,14 +413,13 @@ release_dir_is_complete() {
 
   [ -d "$release_dir" ] &&
     [ -x "$release_dir/codex" ] &&
-    [ -x "$release_dir/rg" ] &&
-    [ "$(read_metadata_value "$release_dir/metadata.toml" version || true)" = "$expected_version" ] &&
-    [ "$(read_metadata_value "$release_dir/metadata.toml" target || true)" = "$expected_target" ]
+    [ -x "$release_dir/codex-resources/rg" ] &&
+    [ "$(basename "$release_dir")" = "$expected_version-$expected_target" ]
 }
 
 update_current_link() {
   release_dir="$1"
-  tmp_link="$NATIVE_ROOT/.current.$$"
+  tmp_link="$STANDALONE_ROOT/.current.$$"
 
   rm -f "$tmp_link"
   ln -s "$release_dir" "$tmp_link"
@@ -496,7 +499,7 @@ asset="codex-npm-$npm_tag-$resolved_version.tgz"
 download_url="$(release_url_for_asset "$asset" "$resolved_version")"
 release_name="$resolved_version-$vendor_target"
 release_dir="$RELEASES_DIR/$release_name"
-current_version="$(read_metadata_value "$CURRENT_LINK/metadata.toml" version || true)"
+current_version="$(current_installed_version)"
 
 if [ -n "$current_version" ] && [ "$current_version" != "$resolved_version" ]; then
   step "Updating Codex CLI from $current_version to $resolved_version"
@@ -530,10 +533,10 @@ if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"
   mkdir -p "$extract_dir"
   tar -xzf "$archive_path" -C "$extract_dir"
 
-  step "Installing native package to $release_dir"
+  step "Installing standalone package to $release_dir"
   install_release "$release_dir" "$extract_dir/package/vendor/$vendor_target"
 fi
-mkdir -p "$NATIVE_ROOT"
+mkdir -p "$STANDALONE_ROOT"
 update_current_link "$release_dir"
 update_visible_command
 add_to_path

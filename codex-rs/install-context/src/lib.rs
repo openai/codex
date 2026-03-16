@@ -2,34 +2,28 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use serde::Deserialize;
-
-const METADATA_FILENAME: &str = "metadata.toml";
+const RELEASES_DIRNAME: &str = "releases";
+const RESOURCES_DIRNAME: &str = "codex-resources";
+const STANDALONE_PACKAGES_DIRNAME: &str = "standalone";
 static INSTALL_CONTEXT: OnceLock<InstallContext> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NativePlatform {
+pub enum StandalonePlatform {
     Unix,
     Windows,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InstallContext {
-    Native {
-        /// The native release directory that contains `codex`, `rg`, and
-        /// `metadata.toml`, for example
-        /// `~/.codex/packages/native/releases/0.111.0-x86_64-unknown-linux-musl`.
+    Standalone {
+        /// The managed standalone release directory, for example
+        /// `~/.codex/packages/standalone/releases/0.111.0-x86_64-unknown-linux-musl`.
         release_dir: PathBuf,
-        /// The installed native Codex version, for example `0.111.0`.
-        version: String,
-        /// The target triple recorded in native metadata, for example
-        /// `x86_64-unknown-linux-musl` or `aarch64-apple-darwin`.
-        target: String,
-        /// The bundled ripgrep binary for this native release, for example
-        /// `~/.codex/packages/native/releases/.../rg`.
-        rg_command: PathBuf,
-        /// The platform of the native release, either `Unix` or `Windows`.
-        platform: NativePlatform,
+        /// The bundled resource directory that sits next to the executable when
+        /// this install ships managed dependencies.
+        resources_dir: Option<PathBuf>,
+        /// The platform of the standalone release, either `Unix` or `Windows`.
+        platform: StandalonePlatform,
     },
     /// A Codex binary launched through the npm-managed `codex.js` shim.
     Npm,
@@ -51,6 +45,23 @@ impl InstallContext {
         managed_by_npm: bool,
         managed_by_bun: bool,
     ) -> Self {
+        let codex_home = codex_utils_home_dir::find_codex_home().ok();
+        Self::from_exe_with_codex_home(
+            is_macos,
+            current_exe,
+            managed_by_npm,
+            managed_by_bun,
+            codex_home.as_deref(),
+        )
+    }
+
+    fn from_exe_with_codex_home(
+        is_macos: bool,
+        current_exe: Option<&Path>,
+        managed_by_npm: bool,
+        managed_by_bun: bool,
+        codex_home: Option<&Path>,
+    ) -> Self {
         if managed_by_npm {
             return Self::Npm;
         }
@@ -60,9 +71,9 @@ impl InstallContext {
         }
 
         if let Some(exe_path) = current_exe
-            && let Some(native_context) = native_install_context(exe_path)
+            && let Some(standalone_context) = standalone_install_context(exe_path, codex_home)
         {
-            return native_context;
+            return standalone_context;
         }
 
         if is_macos
@@ -91,53 +102,68 @@ impl InstallContext {
 
     pub fn rg_command(&self) -> PathBuf {
         match self {
-            Self::Native { rg_command, .. } => rg_command.clone(),
-            Self::Npm | Self::Bun | Self::Brew | Self::Other => default_rg_command(),
+            Self::Standalone {
+                resources_dir: Some(resources_dir),
+                platform,
+                ..
+            } => {
+                let rg_name = match platform {
+                    StandalonePlatform::Unix => "rg",
+                    StandalonePlatform::Windows => "rg.exe",
+                };
+                let bundled_rg = resources_dir.join(rg_name);
+                if bundled_rg.exists() {
+                    bundled_rg
+                } else {
+                    default_rg_command()
+                }
+            }
+            Self::Standalone {
+                resources_dir: None,
+                ..
+            }
+            | Self::Npm
+            | Self::Bun
+            | Self::Brew
+            | Self::Other => default_rg_command(),
         }
     }
 }
 
-#[derive(Debug, Deserialize, Eq, PartialEq)]
-struct NativeInstallMetadata {
-    install_method: String,
-    version: String,
-    target: String,
-}
-
-fn native_install_context(exe_path: &Path) -> Option<InstallContext> {
+fn standalone_install_context(
+    exe_path: &Path,
+    codex_home: Option<&Path>,
+) -> Option<InstallContext> {
     let canonical_exe = std::fs::canonicalize(exe_path).ok()?;
     let release_dir = canonical_exe.parent()?.to_path_buf();
-    let metadata = parse_native_install_metadata(&release_dir.join(METADATA_FILENAME))?;
-    let platform = native_platform_from_target(&metadata.target);
-    let rg_name = match platform {
-        NativePlatform::Unix => "rg",
-        NativePlatform::Windows => "rg.exe",
-    };
-    let rg_command = release_dir.join(rg_name);
+    if !is_managed_release_dir(&release_dir, codex_home?) {
+        return None;
+    }
 
-    Some(InstallContext::Native {
-        platform,
+    let resources_dir = release_dir.join(RESOURCES_DIRNAME);
+    Some(InstallContext::Standalone {
         release_dir,
-        version: metadata.version,
-        target: metadata.target,
-        rg_command,
+        resources_dir: resources_dir.is_dir().then_some(resources_dir),
+        platform: standalone_platform(),
     })
 }
 
-fn parse_native_install_metadata(path: &Path) -> Option<NativeInstallMetadata> {
-    let contents = std::fs::read_to_string(path).ok()?;
-    let metadata: NativeInstallMetadata = toml::from_str(&contents).ok()?;
-    if metadata.install_method != "native" {
-        return None;
-    }
-    Some(metadata)
+fn is_managed_release_dir(release_dir: &Path, codex_home: &Path) -> bool {
+    release_dir.starts_with(releases_root(codex_home, STANDALONE_PACKAGES_DIRNAME))
 }
 
-fn native_platform_from_target(target: &str) -> NativePlatform {
-    if target.contains("-windows-") {
-        NativePlatform::Windows
+fn releases_root(codex_home: &Path, package_dirname: &str) -> PathBuf {
+    codex_home
+        .join("packages")
+        .join(package_dirname)
+        .join(RELEASES_DIRNAME)
+}
+
+fn standalone_platform() -> StandalonePlatform {
+    if cfg!(windows) {
+        StandalonePlatform::Windows
     } else {
-        NativePlatform::Unix
+        StandalonePlatform::Unix
     }
 }
 
@@ -156,98 +182,87 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn detects_native_install_from_adjacent_metadata() -> std::io::Result<()> {
-        let root = tempfile::tempdir()?;
-        let release_dir = root.path().join("1.2.3-x86_64-unknown-linux-musl");
-        fs::create_dir(&release_dir)?;
-        fs::write(
-            release_dir.join("metadata.toml"),
-            "install_method = \"native\"\nversion = \"1.2.3\"\ntarget = \"x86_64-unknown-linux-musl\"\n",
-        )?;
-        let exe_name = if cfg!(windows) { "codex.exe" } else { "codex" };
-        let rg_name = "rg";
-        let exe_path = release_dir.join(exe_name);
+    fn detects_standalone_install_from_release_layout() -> std::io::Result<()> {
+        let codex_home = tempfile::tempdir()?;
+        let release_dir = codex_home
+            .path()
+            .join("packages/standalone/releases/1.2.3-x86_64-unknown-linux-musl");
+        let resources_dir = release_dir.join(RESOURCES_DIRNAME);
+        fs::create_dir_all(&resources_dir)?;
+        let exe_path = release_dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
         fs::write(&exe_path, "")?;
-        fs::write(release_dir.join(rg_name), "")?;
+        fs::write(resources_dir.join("rg"), "")?;
         let canonical_release_dir = release_dir.canonicalize()?;
+        let canonical_resources_dir = resources_dir.canonicalize()?;
 
-        let context = InstallContext::from_exe(false, Some(&exe_path), false, false);
+        let context = InstallContext::from_exe_with_codex_home(
+            false,
+            Some(&exe_path),
+            false,
+            false,
+            Some(codex_home.path()),
+        );
         assert_eq!(
             context,
-            InstallContext::Native {
-                platform: NativePlatform::Unix,
-                release_dir: canonical_release_dir.clone(),
-                version: "1.2.3".to_string(),
-                target: "x86_64-unknown-linux-musl".to_string(),
-                rg_command: canonical_release_dir.join(rg_name),
+            InstallContext::Standalone {
+                release_dir: canonical_release_dir,
+                resources_dir: Some(canonical_resources_dir),
+                platform: StandalonePlatform::Unix,
             }
         );
         Ok(())
     }
 
     #[test]
-    fn detects_windows_native_platform_from_target() -> std::io::Result<()> {
-        let root = tempfile::tempdir()?;
-        let release_dir = root.path().join("1.2.3-x86_64-pc-windows-msvc");
-        fs::create_dir(&release_dir)?;
-        fs::write(
-            release_dir.join("metadata.toml"),
-            "install_method = \"native\"\nversion = \"1.2.3\"\ntarget = \"x86_64-pc-windows-msvc\"\n",
-        )?;
-        let exe_path = release_dir.join("codex");
-        fs::write(&exe_path, "")?;
-        fs::write(release_dir.join("rg.exe"), "")?;
-        let canonical_release_dir = release_dir.canonicalize()?;
-
-        let context = InstallContext::from_exe(false, Some(&exe_path), false, false);
-        assert_eq!(
-            context,
-            InstallContext::Native {
-                platform: NativePlatform::Windows,
-                release_dir: canonical_release_dir.clone(),
-                version: "1.2.3".to_string(),
-                target: "x86_64-pc-windows-msvc".to_string(),
-                rg_command: canonical_release_dir.join("rg.exe"),
-            }
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn native_metadata_rejects_non_native_install_method() -> std::io::Result<()> {
-        let root = tempfile::tempdir()?;
-        let release_dir = root.path().join("bad-release");
-        fs::create_dir(&release_dir)?;
-        fs::write(
-            release_dir.join("metadata.toml"),
-            "install_method = \"npm\"\nversion = \"1.2.3\"\ntarget = \"x86_64-unknown-linux-musl\"\n",
-        )?;
+    fn standalone_rg_falls_back_when_resources_are_missing() -> std::io::Result<()> {
+        let codex_home = tempfile::tempdir()?;
+        let release_dir = codex_home
+            .path()
+            .join("packages/standalone/releases/1.2.3-x86_64-unknown-linux-musl");
+        fs::create_dir_all(&release_dir)?;
         let exe_path = release_dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
         fs::write(&exe_path, "")?;
 
-        let context = InstallContext::from_exe(false, Some(&exe_path), false, false);
-        assert_eq!(context, InstallContext::Other);
+        let context = InstallContext::from_exe_with_codex_home(
+            false,
+            Some(&exe_path),
+            false,
+            false,
+            Some(codex_home.path()),
+        );
+        assert_eq!(context.rg_command(), PathBuf::from("rg"));
         Ok(())
     }
 
     #[test]
     fn npm_and_bun_take_precedence() {
-        let npm_context =
-            InstallContext::from_exe(false, Some(Path::new("/tmp/codex")), true, false);
+        let npm_context = InstallContext::from_exe_with_codex_home(
+            false,
+            Some(Path::new("/tmp/codex")),
+            true,
+            false,
+            None,
+        );
         assert_eq!(npm_context, InstallContext::Npm);
 
-        let bun_context =
-            InstallContext::from_exe(false, Some(Path::new("/tmp/codex")), false, true);
+        let bun_context = InstallContext::from_exe_with_codex_home(
+            false,
+            Some(Path::new("/tmp/codex")),
+            false,
+            true,
+            None,
+        );
         assert_eq!(bun_context, InstallContext::Bun);
     }
 
     #[test]
     fn brew_is_detected_on_macos_prefixes() {
-        let context = InstallContext::from_exe(
+        let context = InstallContext::from_exe_with_codex_home(
             true,
             Some(Path::new("/opt/homebrew/bin/codex")),
             false,
             false,
+            None,
         );
         assert_eq!(context, InstallContext::Brew);
     }

@@ -1,7 +1,7 @@
 #[cfg(any(not(debug_assertions), test))]
 use codex_install_context::InstallContext;
 #[cfg(any(not(debug_assertions), test))]
-use codex_install_context::NativePlatform;
+use codex_install_context::StandalonePlatform;
 
 /// Update action the CLI should perform after the TUI exits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,9 +13,9 @@ pub enum UpdateAction {
     /// Update via `brew upgrade codex`.
     BrewUpgrade,
     /// Update via `curl -fsSL https://chatgpt.com/codex/install.sh | sh`.
-    NativeUnix,
+    StandaloneUnix,
     /// Update via `irm https://chatgpt.com/codex/install.ps1|iex`.
-    NativeWindows,
+    StandaloneWindows,
 }
 
 impl UpdateAction {
@@ -25,9 +25,9 @@ impl UpdateAction {
             InstallContext::Npm => Some(UpdateAction::NpmGlobalLatest),
             InstallContext::Bun => Some(UpdateAction::BunGlobalLatest),
             InstallContext::Brew => Some(UpdateAction::BrewUpgrade),
-            InstallContext::Native { platform, .. } => Some(match platform {
-                NativePlatform::Unix => UpdateAction::NativeUnix,
-                NativePlatform::Windows => UpdateAction::NativeWindows,
+            InstallContext::Standalone { platform, .. } => Some(match platform {
+                StandalonePlatform::Unix => UpdateAction::StandaloneUnix,
+                StandalonePlatform::Windows => UpdateAction::StandaloneWindows,
             }),
             InstallContext::Other => None,
         }
@@ -39,11 +39,11 @@ impl UpdateAction {
             UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex"]),
             UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex"]),
             UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
-            UpdateAction::NativeUnix => (
+            UpdateAction::StandaloneUnix => (
                 "sh",
                 &["-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
             ),
-            UpdateAction::NativeWindows => (
+            UpdateAction::StandaloneWindows => (
                 "powershell",
                 &["-c", "irm https://chatgpt.com/codex/install.ps1|iex"],
             ),
@@ -90,24 +90,20 @@ mod tests {
             Some(UpdateAction::BrewUpgrade)
         );
         assert_eq!(
-            UpdateAction::from_install_context(&InstallContext::Native {
-                platform: NativePlatform::Unix,
+            UpdateAction::from_install_context(&InstallContext::Standalone {
+                platform: StandalonePlatform::Unix,
                 release_dir: native_release_dir.clone(),
-                version: "1.2.3".to_string(),
-                target: "x86_64-unknown-linux-musl".to_string(),
-                rg_command: native_release_dir.join("rg"),
+                resources_dir: Some(native_release_dir.join("codex-resources")),
             }),
-            Some(UpdateAction::NativeUnix)
+            Some(UpdateAction::StandaloneUnix)
         );
         assert_eq!(
-            UpdateAction::from_install_context(&InstallContext::Native {
-                platform: NativePlatform::Windows,
+            UpdateAction::from_install_context(&InstallContext::Standalone {
+                platform: StandalonePlatform::Windows,
                 release_dir: native_release_dir.clone(),
-                version: "1.2.3".to_string(),
-                target: "x86_64-pc-windows-msvc".to_string(),
-                rg_command: native_release_dir.join("rg.exe"),
+                resources_dir: Some(native_release_dir.join("codex-resources")),
             }),
-            Some(UpdateAction::NativeWindows)
+            Some(UpdateAction::StandaloneWindows)
         );
     }
 }

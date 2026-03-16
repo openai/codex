@@ -99,20 +99,36 @@ function Resolve-Version {
     return (Normalize-Version -RawVersion $release.tag_name)
 }
 
-function Read-MetadataValue {
+function Get-VersionFromBinary {
     param(
-        [string]$MetadataPath,
-        [string]$Key
+        [string]$CodexPath
     )
 
-    if (-not (Test-Path $MetadataPath)) {
+    if (-not (Test-Path -LiteralPath $CodexPath -PathType Leaf)) {
         return $null
     }
 
-    foreach ($line in Get-Content $MetadataPath) {
-        if ($line -match "^\s*$Key\s*=\s*""([^""]+)""") {
-            return $matches[1]
-        }
+    try {
+        $versionOutput = & $CodexPath --version 2>$null
+    } catch {
+        return $null
+    }
+
+    if ($versionOutput -match '([0-9][0-9A-Za-z.+-]*)$') {
+        return $matches[1]
+    }
+
+    return $null
+}
+
+function Get-CurrentInstalledVersion {
+    param(
+        [string]$StandaloneCurrentDir
+    )
+
+    $standaloneVersion = Get-VersionFromBinary -CodexPath (Join-Path $StandaloneCurrentDir "codex.exe")
+    if (-not [string]::IsNullOrWhiteSpace($standaloneVersion)) {
+        return $standaloneVersion
     }
 
     return $null
@@ -155,10 +171,9 @@ function Test-ReleaseIsComplete {
 
     $expectedFiles = @(
         "codex.exe",
-        "codex-command-runner.exe",
-        "codex-windows-sandbox-setup.exe",
-        "rg.exe",
-        "metadata.toml"
+        "codex-resources\codex-command-runner.exe",
+        "codex-resources\codex-windows-sandbox-setup.exe",
+        "codex-resources\rg.exe"
     )
     foreach ($name in $expectedFiles) {
         if (-not (Test-Path -LiteralPath (Join-Path $ReleaseDir $name) -PathType Leaf)) {
@@ -166,9 +181,7 @@ function Test-ReleaseIsComplete {
         }
     }
 
-    $version = Read-MetadataValue -MetadataPath (Join-Path $ReleaseDir "metadata.toml") -Key "version"
-    $target = Read-MetadataValue -MetadataPath (Join-Path $ReleaseDir "metadata.toml") -Key "target"
-    return $version -eq $ExpectedVersion -and $target -eq $ExpectedTarget
+    return (Split-Path -Leaf $ReleaseDir) -eq "$ExpectedVersion-$ExpectedTarget"
 }
 
 function Get-ExistingCodexCommand {
@@ -231,7 +244,7 @@ function Maybe-HandleConflictingInstall {
         try {
             & $uninstallCommand @uninstallArgs
         } catch {
-            Write-WarningStep "Failed to uninstall the existing $manager-managed Codex. Continuing with the native install."
+            Write-WarningStep "Failed to uninstall the existing $manager-managed Codex. Continuing with the standalone install."
         }
     } else {
         Write-WarningStep "Leaving the existing $manager-managed Codex installed. PATH order will determine which codex runs."
@@ -274,9 +287,9 @@ $codexHome = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
 } else {
     $env:CODEX_HOME
 }
-$nativeRoot = Join-Path $codexHome "packages\native"
-$releasesDir = Join-Path $nativeRoot "releases"
-$currentDir = Join-Path $nativeRoot "current"
+$standaloneRoot = Join-Path $codexHome "packages\standalone"
+$releasesDir = Join-Path $standaloneRoot "releases"
+$currentDir = Join-Path $standaloneRoot "current"
 
 if ([string]::IsNullOrWhiteSpace($env:CODEX_INSTALL_DIR)) {
     $visibleBinDir = Join-Path $env:LOCALAPPDATA "Programs\OpenAI\Codex\bin"
@@ -284,7 +297,7 @@ if ([string]::IsNullOrWhiteSpace($env:CODEX_INSTALL_DIR)) {
     $visibleBinDir = $env:CODEX_INSTALL_DIR
 }
 
-$currentVersion = Read-MetadataValue -MetadataPath (Join-Path $currentDir "metadata.toml") -Key "version"
+$currentVersion = Get-CurrentInstalledVersion -StandaloneCurrentDir $currentDir
 $resolvedVersion = Resolve-Version
 $releaseName = "$resolvedVersion-$target"
 $releaseDir = Join-Path $releasesDir $releaseName
@@ -325,28 +338,24 @@ try {
         tar -xzf $archivePath -C $extractDir
 
         $vendorRoot = Join-Path $extractDir "package/vendor/$target"
+        $resourcesDir = Join-Path $stagingDir "codex-resources"
+        New-Item -ItemType Directory -Force -Path $resourcesDir | Out-Null
         $copyMap = @{
             "codex/codex.exe" = "codex.exe"
-            "codex/codex-command-runner.exe" = "codex-command-runner.exe"
-            "codex/codex-windows-sandbox-setup.exe" = "codex-windows-sandbox-setup.exe"
-            "path/rg.exe" = "rg.exe"
+            "codex/codex-command-runner.exe" = "codex-resources\codex-command-runner.exe"
+            "codex/codex-windows-sandbox-setup.exe" = "codex-resources\codex-windows-sandbox-setup.exe"
+            "path/rg.exe" = "codex-resources\rg.exe"
         }
 
         foreach ($relativeSource in $copyMap.Keys) {
             Copy-Item -LiteralPath (Join-Path $vendorRoot $relativeSource) -Destination (Join-Path $stagingDir $copyMap[$relativeSource])
         }
 
-        @"
-install_method = "native"
-version = "$resolvedVersion"
-target = "$target"
-"@ | Set-Content -LiteralPath (Join-Path $stagingDir "metadata.toml") -NoNewline
-
         New-Item -ItemType Directory -Force -Path $releasesDir | Out-Null
         Move-Item -LiteralPath $stagingDir -Destination $releaseDir
     }
 
-    New-Item -ItemType Directory -Force -Path $nativeRoot | Out-Null
+    New-Item -ItemType Directory -Force -Path $standaloneRoot | Out-Null
     Ensure-Junction -LinkPath $currentDir -TargetPath $releaseDir
 
     $visibleParent = Split-Path -Parent $visibleBinDir
