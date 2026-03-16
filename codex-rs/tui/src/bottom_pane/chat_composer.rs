@@ -192,6 +192,7 @@ use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
+use crate::slash_command_invocation::SlashCommandInvocation;
 use crate::style::user_message_style;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
@@ -1411,12 +1412,13 @@ impl ChatComposer {
                                 return (InputResult::Command(cmd), true);
                             }
 
-                            let starts_with_cmd = first_line
-                                .trim_start()
-                                .starts_with(&format!("/{}", cmd.command()));
+                            let bare_command =
+                                SlashCommandInvocation::bare(cmd).into_prefixed_string();
+                            let starts_with_cmd =
+                                first_line.trim_start().starts_with(&bare_command);
                             if !starts_with_cmd {
                                 self.textarea
-                                    .set_text_clearing_elements(&format!("/{} ", cmd.command()));
+                                    .set_text_clearing_elements(&format!("{bare_command} "));
                             }
                             if !self.textarea.text().is_empty() {
                                 cursor_target = Some(self.textarea.text().len());
