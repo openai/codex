@@ -41,7 +41,7 @@ const GUARDIAN_MAX_TOOL_ENTRY_TOKENS: usize = 1_000;
 const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 1_000;
 const GUARDIAN_APPROVAL_RISK_THRESHOLD: u8 = 80;
 const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 40;
-const GUARDIAN_TRUNCATION_TAG: &str = "guardian_truncated";
+const TRUNCATION_TAG: &str = "truncated";
 
 /// Evidence item returned by the guardian reviewer.
 #[derive(Debug, Clone, Deserialize, Serialize)]

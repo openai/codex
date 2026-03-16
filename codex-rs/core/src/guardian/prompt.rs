@@ -16,9 +16,9 @@ use super::GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS;
 use super::GUARDIAN_MAX_TOOL_ENTRY_TOKENS;
 use super::GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS;
 use super::GUARDIAN_RECENT_ENTRY_LIMIT;
-use super::GUARDIAN_TRUNCATION_TAG;
 use super::GuardianApprovalRequest;
 use super::GuardianAssessment;
+use super::TRUNCATION_TAG;
 use super::approval_request::format_guardian_action_pretty;
 
 /// Transcript entry retained for guardian review after filtering.
@@ -300,8 +300,7 @@ pub(crate) fn guardian_truncate_text(content: &str, token_cap: usize) -> String 
     }
 
     let omitted_tokens = approx_tokens_from_byte_count(content.len().saturating_sub(max_bytes));
-    let marker =
-        format!("<{GUARDIAN_TRUNCATION_TAG} omitted_approx_tokens=\"{omitted_tokens}\" />");
+    let marker = format!("<{TRUNCATION_TAG} omitted_approx_tokens=\"{omitted_tokens}\" />");
     if max_bytes <= marker.len() {
         return marker;
     }
