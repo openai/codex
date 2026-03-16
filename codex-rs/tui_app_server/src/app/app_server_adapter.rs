@@ -307,16 +307,12 @@ fn server_notification_thread_events(
                 }),
             }],
         )),
-        ServerNotification::TurnCompleted(notification) => Some((
-            ThreadId::from_string(&notification.thread_id).ok()?,
-            vec![Event {
-                id: String::new(),
-                msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                    turn_id: notification.turn.id,
-                    last_agent_message: None,
-                }),
-            }],
-        )),
+        ServerNotification::TurnCompleted(notification) => {
+            let thread_id = ThreadId::from_string(&notification.thread_id).ok()?;
+            let mut events = Vec::new();
+            append_terminal_turn_events(&mut events, &notification.turn);
+            Some((thread_id, events))
+        }
         ServerNotification::ItemStarted(notification) => Some((
             ThreadId::from_string(&notification.thread_id).ok()?,
             vec![Event {
@@ -461,6 +457,12 @@ fn turn_snapshot_events(thread_id: ThreadId, turn: &Turn) -> Vec<Event> {
         })
     }));
 
+    append_terminal_turn_events(&mut events, turn);
+
+    events
+}
+
+fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn) {
     match turn.status {
         TurnStatus::Completed => events.push(Event {
             id: String::new(),
@@ -501,8 +503,6 @@ fn turn_snapshot_events(thread_id: ThreadId, turn: &Turn) -> Vec<Event> {
             // Preserve unfinished turns during snapshot replay without emitting completion events.
         }
     }
-
-    events
 }
 
 fn thread_item_to_core(item: ThreadItem) -> Option<TurnItem> {
@@ -593,6 +593,7 @@ mod tests {
     use super::server_notification_thread_events;
     use super::thread_snapshot_events;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
+    use codex_app_server_protocol::CodexErrorInfo;
     use codex_app_server_protocol::ItemCompletedNotification;
     use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
     use codex_app_server_protocol::ServerNotification;
@@ -601,6 +602,7 @@ mod tests {
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
+    use codex_app_server_protocol::TurnError;
     use codex_app_server_protocol::TurnStatus;
     use codex_protocol::ThreadId;
     use codex_protocol::items::AgentMessageContent;
@@ -689,6 +691,82 @@ mod tests {
         };
         assert_eq!(event.id, String::new());
         let EventMsg::TurnComplete(completed) = &event.msg else {
+            panic!("expected turn complete event");
+        };
+        assert_eq!(completed.turn_id, turn_id);
+        assert_eq!(completed.last_agent_message, None);
+    }
+
+    #[test]
+    fn bridges_interrupted_turn_completion_from_server_notifications() {
+        let thread_id = "019cee8c-b993-7e33-88c0-014d4e62612d".to_string();
+        let turn_id = "019cee8c-b9b4-7f10-a1b0-38caa876a012".to_string();
+
+        let (actual_thread_id, events) = server_notification_thread_events(
+            ServerNotification::TurnCompleted(TurnCompletedNotification {
+                thread_id: thread_id.clone(),
+                turn: Turn {
+                    id: turn_id.clone(),
+                    items: Vec::new(),
+                    status: TurnStatus::Interrupted,
+                    error: None,
+                },
+            }),
+        )
+        .expect("notification should bridge");
+
+        assert_eq!(
+            actual_thread_id,
+            ThreadId::from_string(&thread_id).expect("valid thread id")
+        );
+        let [event] = events.as_slice() else {
+            panic!("expected one bridged event");
+        };
+        let EventMsg::TurnAborted(aborted) = &event.msg else {
+            panic!("expected turn aborted event");
+        };
+        assert_eq!(aborted.turn_id.as_deref(), Some(turn_id.as_str()));
+        assert_eq!(aborted.reason, TurnAbortReason::Interrupted);
+    }
+
+    #[test]
+    fn bridges_failed_turn_completion_from_server_notifications() {
+        let thread_id = "019cee8c-b993-7e33-88c0-014d4e62612d".to_string();
+        let turn_id = "019cee8c-b9b4-7f10-a1b0-38caa876a012".to_string();
+
+        let (actual_thread_id, events) = server_notification_thread_events(
+            ServerNotification::TurnCompleted(TurnCompletedNotification {
+                thread_id: thread_id.clone(),
+                turn: Turn {
+                    id: turn_id.clone(),
+                    items: Vec::new(),
+                    status: TurnStatus::Failed,
+                    error: Some(TurnError {
+                        message: "request failed".to_string(),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                        additional_details: None,
+                    }),
+                },
+            }),
+        )
+        .expect("notification should bridge");
+
+        assert_eq!(
+            actual_thread_id,
+            ThreadId::from_string(&thread_id).expect("valid thread id")
+        );
+        let [error_event, complete_event] = events.as_slice() else {
+            panic!("expected error and completion events");
+        };
+        let EventMsg::Error(error) = &error_event.msg else {
+            panic!("expected error event");
+        };
+        assert_eq!(error.message, "request failed");
+        assert_eq!(
+            error.codex_error_info,
+            Some(codex_protocol::protocol::CodexErrorInfo::Other)
+        );
+        let EventMsg::TurnComplete(completed) = &complete_event.msg else {
             panic!("expected turn complete event");
         };
         assert_eq!(completed.turn_id, turn_id);
