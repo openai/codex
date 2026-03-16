@@ -20,7 +20,6 @@ use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
 use http::HeaderValue;
-use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -230,10 +229,6 @@ impl RealtimeWebsocketConnection {
             .await
     }
 
-    pub async fn send_response_create(&self) -> Result<(), ApiError> {
-        self.writer.send_response_create().await
-    }
-
     pub async fn close(&self) -> Result<(), ApiError> {
         self.writer.close().await
     }
@@ -302,10 +297,6 @@ impl RealtimeWebsocketWriter {
             .await
     }
 
-    pub async fn send_json_value(&self, message: Value) -> Result<(), ApiError> {
-        self.send_payload(message.to_string()).await
-    }
-
     pub async fn send_session_update(
         &self,
         instructions: String,
@@ -337,7 +328,7 @@ impl RealtimeWebsocketWriter {
         self.send_payload(payload).await
     }
 
-    async fn send_payload(&self, payload: String) -> Result<(), ApiError> {
+    pub async fn send_payload(&self, payload: String) -> Result<(), ApiError> {
         if self.is_closed.load(Ordering::SeqCst) {
             return Err(ApiError::Stream(
                 "realtime websocket connection is closed".to_string(),
