@@ -1,8 +1,8 @@
-pub(crate) mod websocket_auth;
+pub(crate) mod auth;
 
-use self::websocket_auth::WebsocketAuthPolicy;
-use self::websocket_auth::authorize_upgrade;
-use self::websocket_auth::validate_listener_startup;
+use self::auth::WebsocketAuthPolicy;
+use self::auth::authorize_upgrade;
+use self::auth::validate_listener_startup;
 use crate::error_code::OVERLOADED_ERROR_CODE;
 use crate::message_processor::ConnectionSessionState;
 use crate::outgoing_message::ConnectionId;
