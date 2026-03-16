@@ -228,17 +228,33 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
         vec![turn_one_user, turn_one_assistant]
     );
     assert_eq!(
-        reconstructed.previous_turn_settings,
+        reconstructed
+            .reference_turn_context_state
+            .previous_turn_settings(),
         Some(PreviousTurnSettings {
             model: turn_context.model_info.slug.clone(),
             realtime_active: Some(turn_context.realtime_active),
         })
     );
     assert_eq!(
-        serde_json::to_value(reconstructed.reference_context_item)
-            .expect("serialize reconstructed reference context item"),
-        serde_json::to_value(Some(first_context_item))
+        serde_json::to_value(
+            reconstructed
+                .reference_turn_context_state
+                .reference_context_item(),
+        )
+        .expect("serialize reconstructed reference context item"),
+        serde_json::to_value(Some(first_context_item.clone()))
             .expect("serialize expected reference context item")
+    );
+    assert_eq!(
+        serde_json::to_value(
+            reconstructed
+                .reference_turn_context_state
+                .latest_turn_context_item(),
+        )
+        .expect("serialize surviving turn context item"),
+        serde_json::to_value(Some(first_context_item))
+            .expect("serialize expected surviving turn context item")
     );
 }
 
@@ -310,17 +326,163 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_inc
         vec![turn_one_user, turn_one_assistant]
     );
     assert_eq!(
-        reconstructed.previous_turn_settings,
+        reconstructed
+            .reference_turn_context_state
+            .previous_turn_settings(),
         Some(PreviousTurnSettings {
             model: turn_context.model_info.slug.clone(),
             realtime_active: Some(turn_context.realtime_active),
         })
     );
     assert_eq!(
-        serde_json::to_value(reconstructed.reference_context_item)
-            .expect("serialize reconstructed reference context item"),
+        serde_json::to_value(
+            reconstructed
+                .reference_turn_context_state
+                .reference_context_item(),
+        )
+        .expect("serialize reconstructed reference context item"),
         serde_json::to_value(Some(first_context_item))
             .expect("serialize expected reference context item")
+    );
+}
+
+#[tokio::test]
+async fn reconstruct_history_rollback_backfills_surviving_turn_context_from_older_turn() {
+    let (session, turn_context) = make_session_and_context().await;
+    let first_context_item = turn_context.to_turn_context_item();
+    let first_turn_id = first_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+    let second_turn_id = "second-turn-without-context".to_string();
+    let rolled_back_turn_id = "rolled-back-turn".to_string();
+    let turn_one_user = user_message("turn 1 user");
+    let turn_one_assistant = assistant_message("turn 1 assistant");
+    let turn_two_user = user_message("turn 2 user");
+    let turn_two_assistant = assistant_message("turn 2 assistant");
+
+    let rollout_items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: first_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "turn 1 user".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::TurnContext(first_context_item.clone()),
+        RolloutItem::ResponseItem(turn_one_user.clone()),
+        RolloutItem::ResponseItem(turn_one_assistant.clone()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: first_turn_id,
+                last_agent_message: None,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: second_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "turn 2 user".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::ResponseItem(turn_two_user.clone()),
+        RolloutItem::ResponseItem(turn_two_assistant.clone()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: second_turn_id,
+                last_agent_message: None,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: rolled_back_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "turn 3 user".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::TurnContext(TurnContextItem {
+            turn_id: Some(rolled_back_turn_id.clone()),
+            model: "rolled-back-model".to_string(),
+            ..first_context_item.clone()
+        }),
+        RolloutItem::ResponseItem(user_message("turn 3 user")),
+        RolloutItem::ResponseItem(assistant_message("turn 3 assistant")),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: rolled_back_turn_id,
+                last_agent_message: None,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+            codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+        )),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(
+        reconstructed.history,
+        vec![
+            turn_one_user,
+            turn_one_assistant,
+            turn_two_user,
+            turn_two_assistant
+        ]
+    );
+    assert_eq!(
+        reconstructed
+            .reference_turn_context_state
+            .previous_turn_settings(),
+        Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(
+            reconstructed
+                .reference_turn_context_state
+                .reference_context_item(),
+        )
+        .expect("serialize reconstructed reference context item"),
+        serde_json::to_value(Some(first_context_item.clone()))
+            .expect("serialize expected reference context item")
+    );
+    assert_eq!(
+        serde_json::to_value(
+            reconstructed
+                .reference_turn_context_state
+                .latest_turn_context_item(),
+        )
+        .expect("serialize surviving turn context item"),
+        serde_json::to_value(Some(first_context_item))
+            .expect("serialize expected surviving turn context item")
     );
 }
 
@@ -416,15 +578,21 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
         vec![turn_one_user, turn_one_assistant]
     );
     assert_eq!(
-        reconstructed.previous_turn_settings,
+        reconstructed
+            .reference_turn_context_state
+            .previous_turn_settings(),
         Some(PreviousTurnSettings {
             model: turn_context.model_info.slug.clone(),
             realtime_active: Some(turn_context.realtime_active),
         })
     );
     assert_eq!(
-        serde_json::to_value(reconstructed.reference_context_item)
-            .expect("serialize reconstructed reference context item"),
+        serde_json::to_value(
+            reconstructed
+                .reference_turn_context_state
+                .reference_context_item(),
+        )
+        .expect("serialize reconstructed reference context item"),
         serde_json::to_value(Some(first_context_item))
             .expect("serialize expected reference context item")
     );
@@ -473,8 +641,18 @@ async fn reconstruct_history_rollback_clears_history_and_metadata_when_exceeding
         .await;
 
     assert_eq!(reconstructed.history, Vec::new());
-    assert_eq!(reconstructed.previous_turn_settings, None);
-    assert!(reconstructed.reference_context_item.is_none());
+    assert_eq!(
+        reconstructed
+            .reference_turn_context_state
+            .previous_turn_settings(),
+        None
+    );
+    assert!(
+        reconstructed
+            .reference_turn_context_state
+            .reference_context_item()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -685,7 +863,12 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_does_
             user_message("legacy summary"),
         ]
     );
-    assert!(reconstructed.reference_context_item.is_none());
+    assert!(
+        reconstructed
+            .reference_turn_context_state
+            .reference_context_item()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -731,7 +914,12 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_clear
         .reconstruct_history_from_rollout(&turn_context, &rollout_items)
         .await;
 
-    assert!(reconstructed.reference_context_item.is_none());
+    assert!(
+        reconstructed
+            .reference_turn_context_state
+            .reference_context_item()
+            .is_none()
+    );
 }
 
 #[tokio::test]

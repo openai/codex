@@ -6,9 +6,15 @@ async fn process_compacted_history_with_test_session(
     previous_turn_settings: Option<&PreviousTurnSettings>,
 ) -> (Vec<ResponseItem>, Vec<ResponseItem>) {
     let (session, turn_context) = crate::codex::make_session_and_context().await;
-    session
-        .set_previous_turn_settings(previous_turn_settings.cloned())
-        .await;
+    if let Some(previous_turn_settings) = previous_turn_settings {
+        let mut previous_turn_context_item = turn_context.to_turn_context_item();
+        previous_turn_context_item.model = previous_turn_settings.model.clone();
+        previous_turn_context_item.realtime_active = previous_turn_settings.realtime_active;
+        session
+            .record_regular_turn_context(previous_turn_context_item)
+            .await;
+        session.replace_history(Vec::new(), None).await;
+    }
     let initial_context = session.build_initial_context(&turn_context).await;
     let refreshed = crate::compact_remote::process_compacted_history(
         &session,
