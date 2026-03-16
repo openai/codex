@@ -180,6 +180,7 @@ fn managed_proxy_inner_command_includes_route_spec() {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let args = build_inner_seccomp_command(InnerSeccompCommandArgs {
         sandbox_policy_cwd: Path::new("/tmp"),
+        command_cwd: Some(Path::new("/tmp/link")),
         sandbox_policy: &sandbox_policy,
         file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
@@ -197,6 +198,7 @@ fn inner_command_includes_split_policy_flags() {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let args = build_inner_seccomp_command(InnerSeccompCommandArgs {
         sandbox_policy_cwd: Path::new("/tmp"),
+        command_cwd: Some(Path::new("/tmp/link")),
         sandbox_policy: &sandbox_policy,
         file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
@@ -207,6 +209,10 @@ fn inner_command_includes_split_policy_flags() {
 
     assert!(args.iter().any(|arg| arg == "--file-system-sandbox-policy"));
     assert!(args.iter().any(|arg| arg == "--network-sandbox-policy"));
+    assert!(
+        args.windows(2)
+            .any(|window| { window == ["--command-cwd", "/tmp/link"] })
+    );
 }
 
 #[test]
@@ -214,6 +220,7 @@ fn non_managed_inner_command_omits_route_spec() {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let args = build_inner_seccomp_command(InnerSeccompCommandArgs {
         sandbox_policy_cwd: Path::new("/tmp"),
+        command_cwd: Some(Path::new("/tmp/link")),
         sandbox_policy: &sandbox_policy,
         file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
@@ -231,6 +238,7 @@ fn managed_proxy_inner_command_requires_route_spec() {
         let sandbox_policy = SandboxPolicy::new_read_only_policy();
         build_inner_seccomp_command(InnerSeccompCommandArgs {
             sandbox_policy_cwd: Path::new("/tmp"),
+            command_cwd: Some(Path::new("/tmp/link")),
             sandbox_policy: &sandbox_policy,
             file_system_sandbox_policy: &FileSystemSandboxPolicy::from(&sandbox_policy),
             network_sandbox_policy: NetworkSandboxPolicy::Restricted,

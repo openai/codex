@@ -31,6 +31,15 @@ pub struct LandlockCommand {
     #[arg(long = "sandbox-policy-cwd")]
     pub sandbox_policy_cwd: PathBuf,
 
+    /// The logical working directory for the command being sandboxed.
+    ///
+    /// This can intentionally differ from `sandbox_policy_cwd` when the
+    /// command runs from a symlinked alias of the policy workspace. Keep it
+    /// explicit so bubblewrap can preserve the caller's logical cwd when that
+    /// alias would otherwise disappear inside the sandbox namespace.
+    #[arg(long = "command-cwd", hide = true)]
+    pub command_cwd: Option<PathBuf>,
+
     /// Legacy compatibility policy.
     ///
     /// Newer callers pass split filesystem/network policies as well so the
@@ -91,6 +100,7 @@ pub struct LandlockCommand {
 pub fn run_main() -> ! {
     let LandlockCommand {
         sandbox_policy_cwd,
+        command_cwd,
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
@@ -177,6 +187,7 @@ pub fn run_main() -> ! {
             };
         let inner = build_inner_seccomp_command(InnerSeccompCommandArgs {
             sandbox_policy_cwd: &sandbox_policy_cwd,
+            command_cwd: command_cwd.as_deref(),
             sandbox_policy: &sandbox_policy,
             file_system_sandbox_policy: &file_system_sandbox_policy,
             network_sandbox_policy,
@@ -186,6 +197,7 @@ pub fn run_main() -> ! {
         });
         run_bwrap_with_proc_fallback(
             &sandbox_policy_cwd,
+            command_cwd.as_deref(),
             &file_system_sandbox_policy,
             network_sandbox_policy,
             inner,
@@ -387,6 +399,7 @@ fn ensure_legacy_landlock_mode_supports_policy(
 
 fn run_bwrap_with_proc_fallback(
     sandbox_policy_cwd: &Path,
+    command_cwd: Option<&Path>,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
     inner: Vec<String>,
@@ -395,8 +408,7 @@ fn run_bwrap_with_proc_fallback(
 ) -> ! {
     let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
     let mut mount_proc = mount_proc;
-    let command_cwd = std::env::current_dir()
-        .unwrap_or_else(|err| panic!("failed to resolve command cwd for bubblewrap: {err}"));
+    let command_cwd = command_cwd.unwrap_or(sandbox_policy_cwd);
 
     if mount_proc
         && !preflight_proc_mount_support(
@@ -604,6 +616,7 @@ fn is_proc_mount_failure(stderr: &str) -> bool {
 
 struct InnerSeccompCommandArgs<'a> {
     sandbox_policy_cwd: &'a Path,
+    command_cwd: Option<&'a Path>,
     sandbox_policy: &'a SandboxPolicy,
     file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
@@ -616,6 +629,7 @@ struct InnerSeccompCommandArgs<'a> {
 fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String> {
     let InnerSeccompCommandArgs {
         sandbox_policy_cwd,
+        command_cwd,
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
@@ -644,6 +658,12 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
         current_exe.to_string_lossy().to_string(),
         "--sandbox-policy-cwd".to_string(),
         sandbox_policy_cwd.to_string_lossy().to_string(),
+    ];
+    if let Some(command_cwd) = command_cwd {
+        inner.push("--command-cwd".to_string());
+        inner.push(command_cwd.to_string_lossy().to_string());
+    }
+    inner.extend([
         "--sandbox-policy".to_string(),
         policy_json,
         "--file-system-sandbox-policy".to_string(),
@@ -651,7 +671,7 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
         "--network-sandbox-policy".to_string(),
         network_policy_json,
         "--apply-seccomp-then-exec".to_string(),
-    ];
+    ]);
     if allow_network_for_proxy {
         inner.push("--allow-network-for-proxy".to_string());
         let proxy_route_spec = proxy_route_spec

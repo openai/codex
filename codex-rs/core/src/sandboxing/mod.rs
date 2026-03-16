@@ -672,6 +672,7 @@ impl SandboxManager {
                 let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
                 let mut args = create_linux_sandbox_command_args_for_policies(
                     command.clone(),
+                    spec.cwd.as_path(),
                     &effective_policy,
                     &effective_file_system_policy,
                     effective_network_policy,
