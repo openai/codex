@@ -127,7 +127,7 @@ mod windows_impl {
 
     /// Creates a named pipe whose DACL only allows the sandbox user to connect.
     fn create_named_pipe(name: &str, access: u32, sandbox_sid: &str) -> io::Result<HANDLE> {
-        let sddl = to_wide(&format!("D:(A;;GA;;;{sandbox_sid})"));
+        let sddl = to_wide(format!("D:(A;;GA;;;{sandbox_sid})"));
         let mut sd: PSECURITY_DESCRIPTOR = ptr::null_mut();
         let ok = unsafe {
             ConvertStringSecurityDescriptorToSecurityDescriptorW(
