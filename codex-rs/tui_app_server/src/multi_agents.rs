@@ -567,6 +567,7 @@ fn status_summary_spans(status: &AgentStatus) -> Vec<Span<'static>> {
             }
             spans
         }
+        AgentStatus::Interrupted => vec![Span::from("Interrupted").magenta()],
         AgentStatus::Shutdown => vec![Span::from("Shutdown")],
         AgentStatus::NotFound => vec![Span::from("Not found").red()],
     }

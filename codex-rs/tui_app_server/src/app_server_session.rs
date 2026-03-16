@@ -1036,13 +1036,33 @@ fn app_server_thread_item_to_core(item: codex_app_server_protocol::ThreadItem) -
                     .collect(),
             }))
         }
-        codex_app_server_protocol::ThreadItem::AgentMessage { id, text, phase } => {
-            Some(TurnItem::AgentMessage(AgentMessageItem {
-                id,
-                content: vec![AgentMessageContent::Text { text }],
-                phase,
-            }))
-        }
+        codex_app_server_protocol::ThreadItem::AgentMessage {
+            id,
+            text,
+            phase,
+            memory_citation,
+        } => Some(TurnItem::AgentMessage(AgentMessageItem {
+            id,
+            content: vec![AgentMessageContent::Text { text }],
+            phase,
+            memory_citation: memory_citation.map(|citation| {
+                codex_protocol::memory_citation::MemoryCitation {
+                    entries: citation
+                        .entries
+                        .into_iter()
+                        .map(
+                            |entry| codex_protocol::memory_citation::MemoryCitationEntry {
+                                path: entry.path,
+                                line_start: entry.line_start,
+                                line_end: entry.line_end,
+                                note: entry.note,
+                            },
+                        )
+                        .collect(),
+                    rollout_ids: citation.rollout_ids,
+                }
+            }),
+        })),
         codex_app_server_protocol::ThreadItem::Plan { id, text } => {
             Some(TurnItem::Plan(PlanItem { id, text }))
         }
@@ -1237,6 +1257,7 @@ mod tests {
                             id: "assistant-1".to_string(),
                             text: "assistant reply".to_string(),
                             phase: None,
+                            memory_citation: None,
                         },
                     ],
                     status: TurnStatus::Completed,

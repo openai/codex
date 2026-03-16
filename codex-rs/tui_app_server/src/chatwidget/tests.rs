@@ -198,6 +198,7 @@ async fn resumed_initial_messages_render_history() {
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "assistant reply".to_string(),
                 phase: None,
+                memory_citation: None,
             }),
         ]),
         network_proxy: None,
@@ -246,6 +247,7 @@ async fn thread_snapshot_replay_does_not_duplicate_agent_message_history() {
                     text: "assistant reply".to_string(),
                 }],
                 phase: None,
+                memory_citation: None,
             }),
         }),
     });
@@ -254,6 +256,7 @@ async fn thread_snapshot_replay_does_not_duplicate_agent_message_history() {
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "assistant reply".to_string(),
             phase: None,
+            memory_citation: None,
         }),
     });
 
@@ -1542,6 +1545,7 @@ async fn live_agent_message_renders_during_review_mode() {
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Review progress update".to_string(),
             phase: None,
+            memory_citation: None,
         }),
     });
 
@@ -1568,6 +1572,7 @@ async fn thread_snapshot_replay_preserves_agent_message_during_review_mode() {
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Review progress update".to_string(),
             phase: None,
+            memory_citation: None,
         }),
     });
 
@@ -3501,6 +3506,7 @@ fn complete_assistant_message(
                     text: text.to_string(),
                 }],
                 phase,
+                memory_citation: None,
             }),
         }),
     });
@@ -4090,6 +4096,7 @@ async fn live_legacy_agent_message_after_item_completed_does_not_duplicate_assis
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "hello".into(),
             phase: Some(MessagePhase::FinalAnswer),
+            memory_citation: None,
         }),
     });
 
@@ -5880,6 +5887,7 @@ async fn slash_copy_is_unavailable_when_legacy_agent_message_is_not_repeated_on_
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Legacy final message".into(),
             phase: None,
+            memory_citation: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);
@@ -10721,6 +10729,7 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
             phase: None,
+            memory_citation: None,
         }),
     });
 
