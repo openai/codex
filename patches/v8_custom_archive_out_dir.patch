@@ -1,34 +1,15 @@
 # What: teach the Rust v8 crate build script to consume Bazel-provided prebuilt
-# archive and binding paths, including target-specific env vars and runfiles
-# path resolution.
+# archive and binding paths, including runfiles path resolution.
 # Scope: build.rs only; affects prebuilt artifact discovery and link setup, not
 # V8 engine source or runtime behavior.
 
 --- a/build.rs
 +++ b/build.rs
-@@ -54,6 +54,13 @@
-     println!("cargo:rerun-if-env-changed={env}");
-   }
-
-+  let target_specific_env_suffix =
-+    env::var("TARGET").unwrap().replace('-', "_").to_ascii_uppercase();
-+  println!("cargo:rerun-if-env-changed=RUSTY_V8_ARCHIVE_{target_specific_env_suffix}");
-+  println!(
-+    "cargo:rerun-if-env-changed=RUSTY_V8_SRC_BINDING_PATH_{target_specific_env_suffix}"
-+  );
-+
-   // Detect if trybuild tests are being compiled.
-   let is_trybuild = env::var_os("DENO_TRYBUILD").is_some();
-
-@@ -550,8 +557,93 @@
-   }
+@@ -550,8 +550,83 @@
+  }
  }
 
 -fn static_lib_url() -> String {
-+fn target_specific_env_var_suffix() -> String {
-+  env::var("TARGET").unwrap().replace('-', "_").to_ascii_uppercase()
-+}
-+
 +fn resolve_custom_path(path: String) -> String {
 +  let path_buf = PathBuf::from(&path);
 +  if path_buf.is_absolute() || path_buf.exists() {
@@ -93,11 +74,7 @@
 +    return Some(resolve_custom_path(custom_archive));
 +  }
 +
-+  let target_specific_archive =
-+    format!("RUSTY_V8_ARCHIVE_{}", target_specific_env_var_suffix());
-+  env::var(target_specific_archive)
-+    .ok()
-+    .map(resolve_custom_path)
++  None
 +}
 +
 +fn custom_src_binding_path() -> Option<String> {
@@ -105,9 +82,7 @@
 +    return Some(resolve_custom_path(binding));
 +  }
 +
-+  let target_specific_binding =
-+    format!("RUSTY_V8_SRC_BINDING_PATH_{}", target_specific_env_var_suffix());
-+  env::var(target_specific_binding).ok().map(resolve_custom_path)
++  None
 +}
 +
 +fn static_lib_url() -> String {
@@ -115,7 +90,7 @@
      return custom_archive;
    }
    let default_base = "https://github.com/denoland/rusty_v8/releases/download";
-@@ -578,6 +670,16 @@
+@@ -578,6 +653,16 @@
  }
 
  fn static_lib_dir() -> PathBuf {
@@ -132,7 +107,7 @@
    build_dir().join("gn_out").join("obj")
  }
 
-@@ -793,8 +895,14 @@
+@@ -793,8 +878,14 @@
 
  fn print_link_flags() {
    println!("cargo:rustc-link-lib=static=rusty_v8");
@@ -147,7 +122,7 @@
      || env::var("GN_ARGS").is_ok_and(|gn_args| {
        gn_args
          .split_whitespace()
-@@ -808,7 +916,6 @@
+@@ -808,7 +901,6 @@
          println!("cargo:rustc-link-lib=dylib={stdlib}");
        }
      } else {
@@ -155,7 +130,7 @@
        if target.contains("msvc") {
          // nothing to link to
        } else if target.contains("apple")
-@@ -843,7 +950,7 @@
+@@ -843,7 +933,7 @@
  }
 
  fn print_prebuilt_src_binding_path() {
