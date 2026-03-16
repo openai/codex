@@ -24,7 +24,7 @@ struct AppServerArgs {
     listen: AppServerTransport,
 
     #[command(flatten)]
-    websocket_auth: AppServerWebsocketAuthArgs,
+    auth: AppServerWebsocketAuthArgs,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -36,7 +36,7 @@ fn main() -> anyhow::Result<()> {
             ..Default::default()
         };
         let transport = args.listen;
-        let websocket_auth = args.websocket_auth.try_into_settings()?;
+        let auth = args.auth.try_into_settings()?;
 
         run_main_with_transport(
             arg0_paths,
@@ -44,7 +44,7 @@ fn main() -> anyhow::Result<()> {
             loader_overrides,
             /*default_analytics_enabled*/ false,
             transport,
-            websocket_auth,
+            auth,
         )
         .await?;
         Ok(())

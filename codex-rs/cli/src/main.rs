@@ -350,7 +350,7 @@ struct AppServerCommand {
     analytics_default_enabled: bool,
 
     #[command(flatten)]
-    websocket_auth: codex_app_server::AppServerWebsocketAuthArgs,
+    auth: codex_app_server::AppServerWebsocketAuthArgs,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -647,20 +647,20 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 subcommand,
                 listen,
                 analytics_default_enabled,
-                websocket_auth,
+                auth,
             } = app_server_cli;
             match subcommand {
                 None => {
                     reject_remote_mode_for_subcommand(root_remote.as_deref(), "app-server")?;
                     let transport = listen;
-                    let websocket_auth = websocket_auth.try_into_settings()?;
+                    let auth = auth.try_into_settings()?;
                     codex_app_server::run_main_with_transport(
                         arg0_paths.clone(),
                         root_config_overrides,
                         codex_core::config_loader::LoaderOverrides::default(),
                         analytics_default_enabled,
                         transport,
-                        websocket_auth,
+                        auth,
                     )
                     .await?;
                 }
@@ -1711,11 +1711,11 @@ mod tests {
             .as_ref(),
         );
         assert_eq!(
-            app_server.websocket_auth.ws_auth,
+            app_server.auth.ws_auth,
             Some(codex_app_server::WebsocketAuthCliMode::CapabilityToken)
         );
         assert_eq!(
-            app_server.websocket_auth.ws_token_file,
+            app_server.auth.ws_token_file,
             Some(PathBuf::from("/tmp/codex-token"))
         );
     }
@@ -1741,27 +1741,17 @@ mod tests {
             .as_ref(),
         );
         assert_eq!(
-            app_server.websocket_auth.ws_auth,
+            app_server.auth.ws_auth,
             Some(codex_app_server::WebsocketAuthCliMode::SignedBearerToken)
         );
         assert_eq!(
-            app_server.websocket_auth.ws_shared_secret_file,
+            app_server.auth.ws_shared_secret_file,
             Some(PathBuf::from("/tmp/codex-secret"))
         );
-        assert_eq!(
-            app_server.websocket_auth.ws_issuer.as_deref(),
-            Some("issuer")
-        );
-        assert_eq!(
-            app_server.websocket_auth.ws_audience.as_deref(),
-            Some("audience")
-        );
-        assert_eq!(app_server.websocket_auth.ws_max_clock_skew_seconds, Some(9));
-        assert!(
-            app_server
-                .websocket_auth
-                .allow_unauthenticated_non_loopback_ws
-        );
+        assert_eq!(app_server.auth.ws_issuer.as_deref(), Some("issuer"));
+        assert_eq!(app_server.auth.ws_audience.as_deref(), Some("audience"));
+        assert_eq!(app_server.auth.ws_max_clock_skew_seconds, Some(9));
+        assert!(app_server.auth.allow_unauthenticated_non_loopback_ws);
     }
 
     #[test]
