@@ -122,11 +122,8 @@ struct McpToolCallApprovalAction<'a> {
     annotations: Option<&'a GuardianMcpAnnotations>,
 }
 
-fn serialize_guardian_action(value: impl Serialize) -> Value {
-    match serde_json::to_value(value) {
-        Ok(value) => value,
-        Err(error) => panic!("guardian approval action should serialize: {error}"),
-    }
+fn serialize_guardian_action(value: impl Serialize) -> serde_json::Result<Value> {
+    serde_json::to_value(value)
 }
 
 fn truncate_guardian_action_value(value: Value) -> Value {
@@ -155,7 +152,9 @@ fn truncate_guardian_action_value(value: Value) -> Value {
     }
 }
 
-pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest) -> Value {
+pub(crate) fn guardian_approval_request_to_json(
+    action: &GuardianApprovalRequest,
+) -> serde_json::Result<Value> {
     match action {
         GuardianApprovalRequest::Shell {
             id: _,
@@ -211,13 +210,13 @@ pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest
             files,
             change_count,
             patch,
-        } => serde_json::json!({
+        } => Ok(serde_json::json!({
             "tool": "apply_patch",
             "cwd": cwd,
             "files": files,
             "change_count": change_count,
             "patch": patch,
-        }),
+        })),
         GuardianApprovalRequest::NetworkAccess {
             id: _,
             turn_id: _,
@@ -225,13 +224,13 @@ pub(crate) fn guardian_approval_request_to_json(action: &GuardianApprovalRequest
             host,
             protocol,
             port,
-        } => serde_json::json!({
+        } => Ok(serde_json::json!({
             "tool": "network_access",
             "target": target,
             "host": host,
             "protocol": protocol,
             "port": port,
-        }),
+        })),
         GuardianApprovalRequest::McpToolCall {
             id: _,
             server,
@@ -345,8 +344,10 @@ pub(crate) fn guardian_request_turn_id<'a>(
     }
 }
 
-pub(crate) fn format_guardian_action_pretty(action: &GuardianApprovalRequest) -> String {
-    let mut value = guardian_approval_request_to_json(action);
+pub(crate) fn format_guardian_action_pretty(
+    action: &GuardianApprovalRequest,
+) -> serde_json::Result<String> {
+    let mut value = guardian_approval_request_to_json(action)?;
     value = truncate_guardian_action_value(value);
-    serde_json::to_string_pretty(&value).unwrap_or_else(|_| "null".to_string())
+    serde_json::to_string_pretty(&value)
 }

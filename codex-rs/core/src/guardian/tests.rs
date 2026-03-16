@@ -236,7 +236,7 @@ fn guardian_truncate_text_keeps_prefix_suffix_and_xml_marker() {
 }
 
 #[test]
-fn format_guardian_action_pretty_truncates_large_string_fields() {
+fn format_guardian_action_pretty_truncates_large_string_fields() -> serde_json::Result<()> {
     let patch = "line\n".repeat(10_000);
     let action = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
@@ -246,14 +246,15 @@ fn format_guardian_action_pretty_truncates_large_string_fields() {
         patch: patch.clone(),
     };
 
-    let rendered = format_guardian_action_pretty(&action);
+    let rendered = format_guardian_action_pretty(&action)?;
 
     assert!(rendered.contains("\"tool\": \"apply_patch\""));
     assert!(rendered.len() < patch.len());
+    Ok(())
 }
 
 #[test]
-fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() {
+fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() -> serde_json::Result<()> {
     let action = GuardianApprovalRequest::McpToolCall {
         id: "call-1".to_string(),
         server: "mcp_server".to_string(),
@@ -274,7 +275,7 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() {
     };
 
     assert_eq!(
-        guardian_approval_request_to_json(&action),
+        guardian_approval_request_to_json(&action)?,
         serde_json::json!({
             "tool": "mcp_tool_call",
             "server": "mcp_server",
@@ -290,6 +291,7 @@ fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() {
             },
         })
     );
+    Ok(())
 }
 
 #[test]
@@ -524,7 +526,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
             ),
         },
     )
-    .await;
+    .await?;
 
     let outcome = run_guardian_subagent(
         Arc::clone(&session),
@@ -603,7 +605,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             justification: Some("Need to push the first docs fix.".to_string()),
         },
     )
-    .await;
+    .await?;
     let first_outcome = run_guardian_subagent(
         Arc::clone(&session),
         Arc::clone(&turn),
@@ -628,7 +630,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             justification: Some("Need to push the second docs fix.".to_string()),
         },
     )
-    .await;
+    .await?;
     let second_outcome = run_guardian_subagent(
         Arc::clone(&session),
         Arc::clone(&turn),

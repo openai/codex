@@ -65,10 +65,10 @@ pub(crate) async fn build_guardian_prompt_items(
     session: &Session,
     retry_reason: Option<String>,
     request: GuardianApprovalRequest,
-) -> Vec<UserInput> {
+) -> serde_json::Result<Vec<UserInput>> {
     let history = session.clone_history().await;
     let transcript_entries = collect_guardian_transcript_entries(history.raw_items());
-    let planned_action_json = format_guardian_action_pretty(&request);
+    let planned_action_json = format_guardian_action_pretty(&request)?;
 
     let (transcript_entries, omission_note) =
         render_guardian_transcript_entries(transcript_entries.as_slice());
@@ -104,7 +104,7 @@ pub(crate) async fn build_guardian_prompt_items(
     push_text(format!("{planned_action_json}\n"));
     push_text(">>> APPROVAL REQUEST END\n".to_string());
     push_text("You may use read-only tool checks to gather any additional context you need to make a high-confidence determination.\n\nYour final message must be strict JSON with this exact schema:\n{\n  \"risk_level\": \"low\" | \"medium\" | \"high\",\n  \"risk_score\": 0-100,\n  \"rationale\": string,\n  \"evidence\": [{\"message\": string, \"why\": string}]\n}\n".to_string());
-    items
+    Ok(items)
 }
 
 /// Keeps all user turns plus a bounded amount of recent assistant/tool context.

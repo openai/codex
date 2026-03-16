@@ -622,7 +622,13 @@ fn prepare_arc_request_action(
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> serde_json::Value {
     let request = build_guardian_mcp_tool_review_request("arc-monitor", invocation, metadata);
-    guardian_approval_request_to_json(&request)
+    match guardian_approval_request_to_json(&request) {
+        Ok(action) => action,
+        Err(error) => {
+            error!(error = %error, "failed to serialize guardian MCP approval request for ARC");
+            serde_json::Value::Null
+        }
+    }
 }
 
 fn session_mcp_tool_approval_key(

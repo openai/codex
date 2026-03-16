@@ -118,17 +118,21 @@ async fn run_guardian_review(
         return ReviewDecision::Abort;
     }
 
-    let terminal_action = action_summary.clone();
-    let prompt_items = build_guardian_prompt_items(session.as_ref(), retry_reason, request).await;
     let schema = guardian_output_schema();
-    let outcome = run_guardian_review_session(
-        session.clone(),
-        turn.clone(),
-        prompt_items,
-        schema,
-        external_cancel,
-    )
-    .await;
+    let terminal_action = action_summary.clone();
+    let outcome = match build_guardian_prompt_items(session.as_ref(), retry_reason, request).await {
+        Ok(prompt_items) => {
+            run_guardian_review_session(
+                session.clone(),
+                turn.clone(),
+                prompt_items,
+                schema,
+                external_cancel,
+            )
+            .await
+        }
+        Err(err) => GuardianReviewOutcome::Completed(Err(err.into())),
+    };
 
     let assessment = match outcome {
         GuardianReviewOutcome::Completed(Ok(assessment)) => assessment,
