@@ -1,4 +1,3 @@
-use codex_protocol::models::FunctionCallOutputBody;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -12,12 +11,15 @@ use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::sandboxing::effective_file_system_sandbox_policy;
+use crate::sandboxing::merge_permission_profiles;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
@@ -30,7 +32,10 @@ use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 pub struct ApplyPatchHandler;
@@ -61,8 +66,67 @@ fn to_abs_path(cwd: &Path, path: &Path) -> Option<AbsolutePathBuf> {
     AbsolutePathBuf::resolve_path_against_base(path, cwd).ok()
 }
 
+fn write_permissions_for_paths(file_paths: &[AbsolutePathBuf]) -> Option<PermissionProfile> {
+    let write_paths = file_paths
+        .iter()
+        .map(|path| {
+            path.parent()
+                .unwrap_or_else(|| path.clone())
+                .into_path_buf()
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(AbsolutePathBuf::from_absolute_path)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+
+    let permissions = (!write_paths.is_empty()).then_some(PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(write_paths),
+        }),
+        ..Default::default()
+    })?;
+
+    crate::sandboxing::normalize_additional_permissions(permissions).ok()
+}
+
+async fn effective_patch_permissions(
+    session: &Session,
+    turn: &TurnContext,
+    action: &ApplyPatchAction,
+) -> (
+    Vec<AbsolutePathBuf>,
+    crate::tools::handlers::EffectiveAdditionalPermissions,
+    codex_protocol::permissions::FileSystemSandboxPolicy,
+) {
+    let file_paths = file_paths_for_action(action);
+    let granted_permissions = merge_permission_profiles(
+        session.granted_session_permissions().await.as_ref(),
+        session.granted_turn_permissions().await.as_ref(),
+    );
+    let effective_additional_permissions = apply_granted_turn_permissions(
+        session,
+        crate::sandboxing::SandboxPermissions::UseDefault,
+        write_permissions_for_paths(&file_paths),
+    )
+    .await;
+    let file_system_sandbox_policy = effective_file_system_sandbox_policy(
+        &turn.file_system_sandbox_policy,
+        granted_permissions.as_ref(),
+    );
+
+    (
+        file_paths,
+        effective_additional_permissions,
+        file_system_sandbox_policy,
+    )
+}
+
 #[async_trait]
 impl ToolHandler for ApplyPatchHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -78,7 +142,7 @@ impl ToolHandler for ApplyPatchHandler {
         true
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -108,17 +172,17 @@ impl ToolHandler for ApplyPatchHandler {
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
         match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &cwd) {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
-                match apply_patch::apply_patch(turn.as_ref(), changes).await {
+                let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
+                    effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes).await;
+                match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
+                    .await
+                {
                     InternalApplyPatchInvocation::Output(item) => {
                         let content = item?;
-                        Ok(ToolOutput::Function {
-                            body: FunctionCallOutputBody::Text(content),
-                            success: Some(true),
-                        })
+                        Ok(FunctionToolOutput::from_text(content, Some(true)))
                     }
                     InternalApplyPatchInvocation::DelegateToExec(apply) => {
                         let changes = convert_apply_patch_to_protocol(&apply.action);
-                        let file_paths = file_paths_for_action(&apply.action);
                         let emitter =
                             ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                         let event_ctx = ToolEventCtx::new(
@@ -134,6 +198,12 @@ impl ToolHandler for ApplyPatchHandler {
                             file_paths,
                             changes,
                             exec_approval_requirement: apply.exec_approval_requirement,
+                            sandbox_permissions: effective_additional_permissions
+                                .sandbox_permissions,
+                            additional_permissions: effective_additional_permissions
+                                .additional_permissions,
+                            permissions_preapproved: effective_additional_permissions
+                                .permissions_preapproved,
                             timeout_ms: None,
                             codex_exe: turn.codex_linux_sandbox_exe.clone(),
                         };
@@ -163,10 +233,7 @@ impl ToolHandler for ApplyPatchHandler {
                             Some(&tracker),
                         );
                         let content = emitter.finish(event_ctx, out).await?;
-                        Ok(ToolOutput::Function {
-                            body: FunctionCallOutputBody::Text(content),
-                            success: Some(true),
-                        })
+                        Ok(FunctionToolOutput::from_text(content, Some(true)))
                     }
                 }
             }
@@ -200,7 +267,7 @@ pub(crate) async fn intercept_apply_patch(
     tracker: Option<&SharedTurnDiffTracker>,
     call_id: &str,
     tool_name: &str,
-) -> Result<Option<ToolOutput>, FunctionCallError> {
+) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
     match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd) {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             session
@@ -211,17 +278,17 @@ pub(crate) async fn intercept_apply_patch(
                     turn.as_ref(),
                 )
                 .await;
-            match apply_patch::apply_patch(turn.as_ref(), changes).await {
+            let (approval_keys, effective_additional_permissions, file_system_sandbox_policy) =
+                effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes).await;
+            match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
+                .await
+            {
                 InternalApplyPatchInvocation::Output(item) => {
                     let content = item?;
-                    Ok(Some(ToolOutput::Function {
-                        body: FunctionCallOutputBody::Text(content),
-                        success: Some(true),
-                    }))
+                    Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
                 }
                 InternalApplyPatchInvocation::DelegateToExec(apply) => {
                     let changes = convert_apply_patch_to_protocol(&apply.action);
-                    let approval_keys = file_paths_for_action(&apply.action);
                     let emitter = ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                     let event_ctx = ToolEventCtx::new(
                         session.as_ref(),
@@ -236,6 +303,11 @@ pub(crate) async fn intercept_apply_patch(
                         file_paths: approval_keys,
                         changes,
                         exec_approval_requirement: apply.exec_approval_requirement,
+                        sandbox_permissions: effective_additional_permissions.sandbox_permissions,
+                        additional_permissions: effective_additional_permissions
+                            .additional_permissions,
+                        permissions_preapproved: effective_additional_permissions
+                            .permissions_preapproved,
                         timeout_ms,
                         codex_exe: turn.codex_linux_sandbox_exe.clone(),
                     };
@@ -265,10 +337,7 @@ pub(crate) async fn intercept_apply_patch(
                         tracker.as_ref().copied(),
                     );
                     let content = emitter.finish(event_ctx, out).await?;
-                    Ok(Some(ToolOutput::Function {
-                        body: FunctionCallOutputBody::Text(content),
-                        success: Some(true),
-                    }))
+                    Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
                 }
             }
         }
@@ -379,44 +448,18 @@ It is important to remember:
 - You must prefix new lines with `+` even when creating a new file
 - File references can only be relative, NEVER ABSOLUTE.
 "#
-            .to_string(),
+        .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["input".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use codex_apply_patch::MaybeApplyPatchVerified;
-    use pretty_assertions::assert_eq;
-    use tempfile::TempDir;
-
-    #[test]
-    fn approval_keys_include_move_destination() {
-        let tmp = TempDir::new().expect("tmp");
-        let cwd = tmp.path();
-        std::fs::create_dir_all(cwd.join("old")).expect("create old dir");
-        std::fs::create_dir_all(cwd.join("renamed/dir")).expect("create dest dir");
-        std::fs::write(cwd.join("old/name.txt"), "old content\n").expect("write old file");
-        let patch = r#"*** Begin Patch
-*** Update File: old/name.txt
-*** Move to: renamed/dir/name.txt
-@@
--old content
-+new content
-*** End Patch"#;
-        let argv = vec!["apply_patch".to_string(), patch.to_string()];
-        let action = match codex_apply_patch::maybe_parse_apply_patch_verified(&argv, cwd) {
-            MaybeApplyPatchVerified::Body(action) => action,
-            other => panic!("expected patch body, got: {other:?}"),
-        };
-
-        let keys = file_paths_for_action(&action);
-        assert_eq!(keys.len(), 2);
-    }
-}
+#[path = "apply_patch_tests.rs"]
+mod tests;

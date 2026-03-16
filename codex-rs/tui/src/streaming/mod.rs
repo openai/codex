@@ -10,6 +10,7 @@
 //! arrival timestamp so policy code can reason about oldest queued age without peeking into text.
 
 use std::collections::VecDeque;
+use std::path::Path;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -33,10 +34,13 @@ pub(crate) struct StreamState {
 }
 
 impl StreamState {
-    /// Creates an empty stream state with an optional target wrap width.
-    pub(crate) fn new(width: Option<usize>) -> Self {
+    /// Create stream state whose markdown collector renders local file links relative to `cwd`.
+    ///
+    /// Controllers are expected to pass the session cwd here once and keep it stable for the
+    /// lifetime of the active stream.
+    pub(crate) fn new(width: Option<usize>, cwd: &Path) -> Self {
         Self {
-            collector: MarkdownStreamCollector::new(width),
+            collector: MarkdownStreamCollector::new(width, cwd),
             queued_lines: VecDeque::new(),
             has_seen_delta: false,
         }
@@ -102,10 +106,17 @@ impl StreamState {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    fn test_cwd() -> PathBuf {
+        // These tests only need a stable absolute cwd; using temp_dir() avoids baking Unix- or
+        // Windows-specific root semantics into the fixtures.
+        std::env::temp_dir()
+    }
 
     #[test]
     fn drain_n_clamps_to_available_lines() {
-        let mut state = StreamState::new(None);
+        let mut state = StreamState::new(None, &test_cwd());
         state.enqueue(vec![Line::from("one")]);
 
         let drained = state.drain_n(8);

@@ -166,6 +166,7 @@ use super::footer::footer_hint_items_width;
 use super::footer::footer_line_width;
 use super::footer::inset_footer_hint_area;
 use super::footer::max_left_width_for_right;
+use super::footer::passive_footer_status_line;
 use super::footer::render_context_right;
 use super::footer::render_footer_from_props;
 use super::footer::render_footer_hint_items;
@@ -173,6 +174,7 @@ use super::footer::render_footer_line;
 use super::footer::reset_mode_after_activity;
 use super::footer::single_line_footer_layout;
 use super::footer::toggle_shortcut_mode;
+use super::footer::uses_passive_footer_status_layout;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use super::skill_popup::MentionItem;
@@ -408,6 +410,8 @@ pub(crate) struct ChatComposer {
     windows_degraded_sandbox_active: bool,
     status_line_value: Option<Line<'static>>,
     status_line_enabled: bool,
+    // Agent label injected into the footer's contextual row when multi-agent mode is active.
+    active_agent_label: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -528,6 +532,7 @@ impl ChatComposer {
             windows_degraded_sandbox_active: false,
             status_line_value: None,
             status_line_enabled: false,
+            active_agent_label: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -3189,6 +3194,7 @@ impl ChatComposer {
             context_window_used_tokens: self.context_window_used_tokens,
             status_line_value: self.status_line_value.clone(),
             status_line_enabled: self.status_line_enabled,
+            active_agent_label: self.active_agent_label.clone(),
         }
     }
 
@@ -3579,8 +3585,8 @@ impl ChatComposer {
                     insert_text: format!("${skill_name}"),
                     search_terms,
                     path: Some(skill.path_to_skills_md.to_string_lossy().into_owned()),
-                    category_tag: (skill.scope == codex_protocol::protocol::SkillScope::Repo)
-                        .then(|| "[Repo]".to_string()),
+                    category_tag: Some("[Skill]".to_string()),
+                    sort_rank: 1,
                 });
             }
         }
@@ -3631,8 +3637,8 @@ impl ChatComposer {
                     insert_text: format!("${plugin_name}"),
                     search_terms,
                     path: Some(format!("plugin://{}", plugin.config_name)),
-                    category_tag: (!marketplace_name.is_empty())
-                        .then(|| format!("[{marketplace_name}]")),
+                    category_tag: Some("[Plugin]".to_string()),
+                    sort_rank: 0,
                 });
             }
         }
@@ -3656,17 +3662,8 @@ impl ChatComposer {
                     search_terms,
                     path: Some(format!("app://{connector_id}")),
                     category_tag: Some("[App]".to_string()),
+                    sort_rank: 1,
                 });
-            }
-        }
-
-        let mut counts: HashMap<String, usize> = HashMap::new();
-        for mention in &mentions {
-            *counts.entry(mention.insert_text.clone()).or_insert(0) += 1;
-        }
-        for mention in &mut mentions {
-            if counts.get(&mention.insert_text).copied().unwrap_or(0) <= 1 {
-                mention.category_tag = None;
             }
         }
 
@@ -3767,6 +3764,19 @@ impl ChatComposer {
             return false;
         }
         self.status_line_enabled = enabled;
+        true
+    }
+
+    /// Replaces the contextual footer label for the currently viewed agent.
+    ///
+    /// Returning `false` means the value was unchanged, so callers can skip redraw work. This
+    /// field is intentionally just cached presentation state; `ChatComposer` does not infer which
+    /// thread is active on its own.
+    pub(crate) fn set_active_agent_label(&mut self, active_agent_label: Option<String>) -> bool {
+        if self.active_agent_label == active_agent_label {
+            return false;
+        }
+        self.active_agent_label = active_agent_label;
         true
     }
 }
@@ -4202,26 +4212,19 @@ impl ChatComposer {
                 };
                 let available_width =
                     hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
-                let status_line = footer_props
-                    .status_line_value
-                    .as_ref()
-                    .map(|line| line.clone().dim());
-                let status_line_candidate = footer_props.status_line_enabled
-                    && match footer_props.mode {
-                        FooterMode::ComposerEmpty => true,
-                        FooterMode::ComposerHasDraft => !footer_props.is_task_running,
-                        FooterMode::QuitShortcutReminder
-                        | FooterMode::ShortcutOverlay
-                        | FooterMode::EscHint => false,
-                    };
-                let mut truncated_status_line = if status_line_candidate {
-                    status_line.as_ref().map(|line| {
+                let status_line_active = uses_passive_footer_status_layout(&footer_props);
+                let combined_status_line = if status_line_active {
+                    passive_footer_status_line(&footer_props).map(ratatui::prelude::Stylize::dim)
+                } else {
+                    None
+                };
+                let mut truncated_status_line = if status_line_active {
+                    combined_status_line.as_ref().map(|line| {
                         truncate_line_with_ellipsis_if_overflow(line.clone(), available_width)
                     })
                 } else {
                     None
                 };
-                let status_line_active = status_line_candidate && truncated_status_line.is_some();
                 let left_mode_indicator = if status_line_active {
                     None
                 } else {
@@ -4268,7 +4271,7 @@ impl ChatComposer {
                 if status_line_active
                     && let Some(max_left) = max_left_width_for_right(hint_rect, right_width)
                     && left_width > max_left
-                    && let Some(line) = status_line.as_ref().map(|line| {
+                    && let Some(line) = combined_status_line.as_ref().map(|line| {
                         truncate_line_with_ellipsis_if_overflow(line.clone(), max_left as usize)
                     })
                 {
@@ -5291,6 +5294,44 @@ mod tests {
     }
 
     #[test]
+    fn set_connector_mentions_skips_disabled_connectors() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_connectors_enabled(true);
+        composer.set_text_content("$".to_string(), Vec::new(), Vec::new());
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+
+        let connectors = vec![AppInfo {
+            id: "connector_1".to_string(),
+            name: "Notion".to_string(),
+            description: Some("Workspace docs".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://example.test/notion".to_string()),
+            is_accessible: true,
+            is_enabled: false,
+            plugin_display_names: Vec::new(),
+        }];
+        composer.set_connector_mentions(Some(ConnectorsSnapshot { connectors }));
+
+        assert!(
+            matches!(composer.active_popup, ActivePopup::None),
+            "disabled connectors should not appear in the mention popup"
+        );
+    }
+
+    #[test]
     fn set_plugin_mentions_refreshes_open_mention_popup() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -5340,6 +5381,61 @@ mod tests {
                     "calendar".to_string(),
                 )],
             }]));
+        });
+    }
+
+    #[test]
+    fn mention_popup_type_prefixes_snapshot() {
+        snapshot_composer_state_with_width("mention_popup_type_prefixes", 72, false, |composer| {
+            composer.set_connectors_enabled(true);
+            composer.set_text_content("$goog".to_string(), Vec::new(), Vec::new());
+            composer.set_skill_mentions(Some(vec![SkillMetadata {
+                name: "google-calendar-skill".to_string(),
+                description: "Find availability and plan event changes".to_string(),
+                short_description: None,
+                interface: Some(codex_core::skills::model::SkillInterface {
+                    display_name: Some("Google Calendar".to_string()),
+                    short_description: None,
+                    icon_small: None,
+                    icon_large: None,
+                    brand_color: None,
+                    default_prompt: None,
+                }),
+                dependencies: None,
+                policy: None,
+                permission_profile: None,
+                managed_network_override: None,
+                path_to_skills_md: PathBuf::from("/tmp/repo/google-calendar/SKILL.md"),
+                scope: codex_protocol::protocol::SkillScope::Repo,
+            }]));
+            composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+                config_name: "google-calendar@debug".to_string(),
+                display_name: "Google Calendar".to_string(),
+                description: Some(
+                    "Connect Google Calendar for scheduling, availability, and event management."
+                        .to_string(),
+                ),
+                has_skills: false,
+                mcp_server_names: vec!["google-calendar".to_string()],
+                app_connector_ids: Vec::new(),
+            }]));
+            composer.set_connector_mentions(Some(ConnectorsSnapshot {
+                connectors: vec![AppInfo {
+                    id: "google_calendar".to_string(),
+                    name: "Google Calendar".to_string(),
+                    description: Some("Look up events and availability".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
+                    install_url: Some("https://example.test/google-calendar".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                    plugin_display_names: Vec::new(),
+                }],
+            }));
         });
     }
 

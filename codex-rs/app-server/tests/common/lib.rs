@@ -1,3 +1,4 @@
+mod analytics_server;
 mod auth_fixtures;
 mod config;
 mod mcp_process;
@@ -6,6 +7,7 @@ mod models_cache;
 mod responses;
 mod rollout;
 
+pub use analytics_server::start_analytics_events_server;
 pub use auth_fixtures::ChatGptAuthFixture;
 pub use auth_fixtures::ChatGptIdTokenClaims;
 pub use auth_fixtures::encode_id_token;
@@ -29,6 +31,7 @@ pub use models_cache::write_models_cache_with_models;
 pub use responses::create_apply_patch_sse_response;
 pub use responses::create_exec_command_sse_response;
 pub use responses::create_final_assistant_message_sse_response;
+pub use responses::create_request_permissions_sse_response;
 pub use responses::create_request_user_input_sse_response;
 pub use responses::create_shell_command_sse_response;
 pub use rollout::create_fake_rollout;

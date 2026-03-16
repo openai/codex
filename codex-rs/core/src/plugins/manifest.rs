@@ -1,10 +1,13 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 use std::fs;
 use std::path::Component;
 use std::path::Path;
 
 pub(crate) const PLUGIN_MANIFEST_PATH: &str = ".codex-plugin/plugin.json";
+const MAX_DEFAULT_PROMPT_COUNT: usize = 3;
+const MAX_DEFAULT_PROMPT_LEN: usize = 128;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,7 +35,7 @@ pub struct PluginManifestPaths {
     pub apps: Option<AbsolutePathBuf>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PluginManifestInterfaceSummary {
     pub display_name: Option<String>,
     pub short_description: Option<String>,
@@ -43,7 +46,7 @@ pub struct PluginManifestInterfaceSummary {
     pub website_url: Option<String>,
     pub privacy_policy_url: Option<String>,
     pub terms_of_service_url: Option<String>,
-    pub default_prompt: Option<String>,
+    pub default_prompt: Option<Vec<String>>,
     pub brand_color: Option<String>,
     pub composer_icon: Option<AbsolutePathBuf>,
     pub logo: Option<AbsolutePathBuf>,
@@ -75,7 +78,7 @@ struct PluginManifestInterface {
     #[serde(alias = "termsOfServiceURL")]
     terms_of_service_url: Option<String>,
     #[serde(default)]
-    default_prompt: Option<String>,
+    default_prompt: Option<PluginManifestDefaultPrompt>,
     #[serde(default)]
     brand_color: Option<String>,
     #[serde(default)]
@@ -84,6 +87,21 @@ struct PluginManifestInterface {
     logo: Option<String>,
     #[serde(default)]
     screenshots: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PluginManifestDefaultPrompt {
+    String(String),
+    List(Vec<PluginManifestDefaultPromptEntry>),
+    Invalid(JsonValue),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PluginManifestDefaultPromptEntry {
+    String(String),
+    Invalid(JsonValue),
 }
 
 pub(crate) fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
@@ -128,7 +146,7 @@ pub(crate) fn plugin_manifest_interface(
         website_url: interface.website_url.clone(),
         privacy_policy_url: interface.privacy_policy_url.clone(),
         terms_of_service_url: interface.terms_of_service_url.clone(),
-        default_prompt: interface.default_prompt.clone(),
+        default_prompt: resolve_default_prompts(plugin_root, interface.default_prompt.as_ref()),
         brand_color: interface.brand_color.clone(),
         composer_icon: resolve_interface_asset_path(
             plugin_root,
@@ -190,6 +208,99 @@ fn resolve_interface_asset_path(
     resolve_manifest_path(plugin_root, field, path)
 }
 
+fn resolve_default_prompts(
+    plugin_root: &Path,
+    value: Option<&PluginManifestDefaultPrompt>,
+) -> Option<Vec<String>> {
+    match value? {
+        PluginManifestDefaultPrompt::String(prompt) => {
+            resolve_default_prompt_str(plugin_root, "interface.defaultPrompt", prompt)
+                .map(|prompt| vec![prompt])
+        }
+        PluginManifestDefaultPrompt::List(values) => {
+            let mut prompts = Vec::new();
+            for (index, item) in values.iter().enumerate() {
+                if prompts.len() >= MAX_DEFAULT_PROMPT_COUNT {
+                    warn_invalid_default_prompt(
+                        plugin_root,
+                        "interface.defaultPrompt",
+                        &format!("maximum of {MAX_DEFAULT_PROMPT_COUNT} prompts is supported"),
+                    );
+                    break;
+                }
+
+                match item {
+                    PluginManifestDefaultPromptEntry::String(prompt) => {
+                        let field = format!("interface.defaultPrompt[{index}]");
+                        if let Some(prompt) =
+                            resolve_default_prompt_str(plugin_root, &field, prompt)
+                        {
+                            prompts.push(prompt);
+                        }
+                    }
+                    PluginManifestDefaultPromptEntry::Invalid(value) => {
+                        let field = format!("interface.defaultPrompt[{index}]");
+                        warn_invalid_default_prompt(
+                            plugin_root,
+                            &field,
+                            &format!("expected a string, found {}", json_value_type(value)),
+                        );
+                    }
+                }
+            }
+
+            (!prompts.is_empty()).then_some(prompts)
+        }
+        PluginManifestDefaultPrompt::Invalid(value) => {
+            warn_invalid_default_prompt(
+                plugin_root,
+                "interface.defaultPrompt",
+                &format!(
+                    "expected a string or array of strings, found {}",
+                    json_value_type(value)
+                ),
+            );
+            None
+        }
+    }
+}
+
+fn resolve_default_prompt_str(plugin_root: &Path, field: &str, prompt: &str) -> Option<String> {
+    let prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    if prompt.is_empty() {
+        warn_invalid_default_prompt(plugin_root, field, "prompt must not be empty");
+        return None;
+    }
+    if prompt.chars().count() > MAX_DEFAULT_PROMPT_LEN {
+        warn_invalid_default_prompt(
+            plugin_root,
+            field,
+            &format!("prompt must be at most {MAX_DEFAULT_PROMPT_LEN} characters"),
+        );
+        return None;
+    }
+    Some(prompt)
+}
+
+fn warn_invalid_default_prompt(plugin_root: &Path, field: &str, message: &str) {
+    let manifest_path = plugin_root.join(PLUGIN_MANIFEST_PATH);
+    tracing::warn!(
+        path = %manifest_path.display(),
+        "ignoring {field}: {message}"
+    );
+}
+
+fn json_value_type(value: &JsonValue) -> &'static str {
+    match value {
+        JsonValue::Null => "null",
+        JsonValue::Bool(_) => "boolean",
+        JsonValue::Number(_) => "number",
+        JsonValue::String(_) => "string",
+        JsonValue::Array(_) => "array",
+        JsonValue::Object(_) => "object",
+    }
+}
+
 fn resolve_manifest_path(
     plugin_root: &Path,
     field: &'static str,
@@ -231,4 +342,113 @@ fn resolve_manifest_path(
             err
         })
         .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MAX_DEFAULT_PROMPT_LEN;
+    use super::PluginManifest;
+    use super::plugin_manifest_interface;
+    use pretty_assertions::assert_eq;
+    use std::fs;
+    use std::path::Path;
+    use tempfile::tempdir;
+
+    fn write_manifest(plugin_root: &Path, interface: &str) {
+        fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("create manifest dir");
+        fs::write(
+            plugin_root.join(".codex-plugin/plugin.json"),
+            format!(
+                r#"{{
+  "name": "demo-plugin",
+  "interface": {interface}
+}}"#
+            ),
+        )
+        .expect("write manifest");
+    }
+
+    fn load_manifest(plugin_root: &Path) -> PluginManifest {
+        let manifest_path = plugin_root.join(".codex-plugin/plugin.json");
+        let contents = fs::read_to_string(manifest_path).expect("read manifest");
+        serde_json::from_str(&contents).expect("parse manifest")
+    }
+
+    #[test]
+    fn plugin_manifest_interface_accepts_legacy_default_prompt_string() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        write_manifest(
+            &plugin_root,
+            r#"{
+    "displayName": "Demo Plugin",
+    "defaultPrompt": "  Summarize   my inbox  "
+  }"#,
+        );
+
+        let manifest = load_manifest(&plugin_root);
+        let interface =
+            plugin_manifest_interface(&manifest, &plugin_root).expect("plugin interface");
+
+        assert_eq!(
+            interface.default_prompt,
+            Some(vec!["Summarize my inbox".to_string()])
+        );
+    }
+
+    #[test]
+    fn plugin_manifest_interface_normalizes_default_prompt_array() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        let too_long = "x".repeat(MAX_DEFAULT_PROMPT_LEN + 1);
+        write_manifest(
+            &plugin_root,
+            &format!(
+                r#"{{
+    "displayName": "Demo Plugin",
+    "defaultPrompt": [
+      " Summarize my inbox ",
+      123,
+      "{too_long}",
+      "   ",
+      "Draft the reply  ",
+      "Find   my next action",
+      "Archive old mail"
+    ]
+  }}"#
+            ),
+        );
+
+        let manifest = load_manifest(&plugin_root);
+        let interface =
+            plugin_manifest_interface(&manifest, &plugin_root).expect("plugin interface");
+
+        assert_eq!(
+            interface.default_prompt,
+            Some(vec![
+                "Summarize my inbox".to_string(),
+                "Draft the reply".to_string(),
+                "Find my next action".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn plugin_manifest_interface_ignores_invalid_default_prompt_shape() {
+        let tmp = tempdir().expect("tempdir");
+        let plugin_root = tmp.path().join("demo-plugin");
+        write_manifest(
+            &plugin_root,
+            r#"{
+    "displayName": "Demo Plugin",
+    "defaultPrompt": { "text": "Summarize my inbox" }
+  }"#,
+        );
+
+        let manifest = load_manifest(&plugin_root);
+        let interface =
+            plugin_manifest_interface(&manifest, &plugin_root).expect("plugin interface");
+
+        assert_eq!(interface.default_prompt, None);
+    }
 }

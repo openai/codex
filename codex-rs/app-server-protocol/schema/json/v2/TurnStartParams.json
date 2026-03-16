@@ -5,6 +5,14 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "ApprovalsReviewer": {
+      "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
+      "enum": [
+        "user",
+        "guardian_subagent"
+      ],
+      "type": "string"
+    },
     "AskForApproval": {
       "oneOf": [
         {
@@ -19,15 +27,23 @@
         {
           "additionalProperties": false,
           "properties": {
-            "reject": {
+            "granular": {
               "properties": {
                 "mcp_elicitations": {
+                  "type": "boolean"
+                },
+                "request_permissions": {
+                  "default": false,
                   "type": "boolean"
                 },
                 "rules": {
                   "type": "boolean"
                 },
                 "sandbox_approval": {
+                  "type": "boolean"
+                },
+                "skill_approval": {
+                  "default": false,
                   "type": "boolean"
                 }
               },
@@ -40,9 +56,9 @@
             }
           },
           "required": [
-            "reject"
+            "granular"
           ],
-          "title": "RejectAskForApproval",
+          "title": "GranularAskForApproval",
           "type": "object"
         }
       ]
@@ -493,6 +509,17 @@
         }
       ],
       "description": "Override the approval policy for this turn and subsequent turns."
+    },
+    "approvalsReviewer": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ApprovalsReviewer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Override where approval requests are routed for review on this turn and subsequent turns."
     },
     "cwd": {
       "description": "Override the working directory for this turn and subsequent turns.",

@@ -14,6 +14,7 @@ use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
 use codex_chatgpt::connectors::AppInfo;
 use codex_core::connectors::connector_mention_slug;
+use codex_core::mention_syntax::TOOL_MENTION_SIGIL;
 use codex_core::skills::model::SkillDependencies;
 use codex_core::skills::model::SkillInterface;
 use codex_core::skills::model::SkillMetadata;
@@ -191,6 +192,7 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
             }),
         policy: None,
         permission_profile: None,
+        managed_network_override: None,
         path_to_skills_md: skill.path.clone(),
         scope: skill.scope,
     }
@@ -295,8 +297,6 @@ pub(crate) struct ToolMentions {
     names: HashSet<String>,
     linked_paths: HashMap<String, String>,
 }
-
-const TOOL_MENTION_SIGIL: char = '$';
 
 fn extract_tool_mentions_from_text(text: &str) -> ToolMentions {
     extract_tool_mentions_from_text_with_sigil(text, TOOL_MENTION_SIGIL)

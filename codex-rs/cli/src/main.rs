@@ -239,7 +239,7 @@ enum SandboxCommand {
     #[clap(visible_alias = "seatbelt")]
     Macos(SeatbeltCommand),
 
-    /// Run a command under Landlock+seccomp (Linux only).
+    /// Run a command under the Linux sandbox (bubblewrap by default).
     #[clap(visible_alias = "landlock")]
     Linux(LandlockCommand),
 
@@ -904,12 +904,9 @@ async fn run_debug_clear_memories_command(
     let state_path = state_db_path(config.sqlite_home.as_path());
     let mut cleared_state_db = false;
     if tokio::fs::try_exists(&state_path).await? {
-        let state_db = StateRuntime::init(
-            config.sqlite_home.clone(),
-            config.model_provider_id.clone(),
-            None,
-        )
-        .await?;
+        let state_db =
+            StateRuntime::init(config.sqlite_home.clone(), config.model_provider_id.clone())
+                .await?;
         state_db.reset_memory_data_for_fresh_start().await?;
         cleared_state_db = true;
     }
@@ -979,7 +976,12 @@ async fn run_interactive_tui(
         }
     }
 
-    codex_tui::run_main(interactive, arg0_paths).await
+    codex_tui::run_main(
+        interactive,
+        arg0_paths,
+        codex_core::config_loader::LoaderOverrides::default(),
+    )
+    .await
 }
 
 fn confirm(prompt: &str) -> std::io::Result<bool> {
@@ -1516,6 +1518,19 @@ mod tests {
                 "features.web_search_request=true".to_string(),
                 "features.unified_exec=false".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn feature_toggles_accept_legacy_linux_sandbox_flag() {
+        let toggles = FeatureToggles {
+            enable: vec!["use_linux_sandbox_bwrap".to_string()],
+            disable: Vec::new(),
+        };
+        let overrides = toggles.to_overrides().expect("valid features");
+        assert_eq!(
+            overrides,
+            vec!["features.use_linux_sandbox_bwrap=true".to_string(),]
         );
     }
 

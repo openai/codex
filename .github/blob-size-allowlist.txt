@@ -1,0 +1,8 @@
+# Paths are matched exactly, relative to the repository root.
+# Keep this list short and limited to intentional large checked-in assets.
+
+.github/codex-cli-splash.png
+MODULE.bazel.lock
+codex-rs/app-server-protocol/schema/json/codex_app_server_protocol.schemas.json
+codex-rs/app-server-protocol/schema/json/codex_app_server_protocol.v2.schemas.json
+codex-rs/tui/tests/fixtures/oss-story.jsonl

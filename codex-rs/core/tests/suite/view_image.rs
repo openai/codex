@@ -41,6 +41,10 @@ use serde_json::Value;
 use tokio::time::Duration;
 use wiremock::BodyPrintLimit;
 use wiremock::MockServer;
+#[cfg(not(debug_assertions))]
+use wiremock::ResponseTemplate;
+#[cfg(not(debug_assertions))]
+use wiremock::matchers::body_string_contains;
 
 fn image_messages(body: &Value) -> Vec<&Value> {
     body.get("input")
@@ -292,7 +296,8 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn view_image_tool_can_preserve_original_resolution_on_gpt5_3_codex() -> anyhow::Result<()> {
+async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5_3_codex()
+-> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -322,7 +327,7 @@ async fn view_image_tool_can_preserve_original_resolution_on_gpt5_3_codex() -> a
     image.save(&abs_path)?;
 
     let call_id = "view-image-original";
-    let arguments = serde_json::json!({ "path": rel_path }).to_string();
+    let arguments = serde_json::json!({ "path": rel_path, "detail": "original" }).to_string();
 
     let first_response = sse(vec![
         ev_response_created("resp-1"),
@@ -396,7 +401,191 @@ async fn view_image_tool_can_preserve_original_resolution_on_gpt5_3_codex() -> a
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn view_image_tool_keeps_legacy_behavior_below_gpt5_3_codex() -> anyhow::Result<()> {
+async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model("gpt-5.3-codex")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::ImageDetailOriginal)
+                .expect("test config should allow feature update");
+        });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let rel_path = "assets/unsupported-detail.png";
+    let abs_path = cwd.path().join(rel_path);
+    if let Some(parent) = abs_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let image = ImageBuffer::from_pixel(256, 128, Rgba([0u8, 80, 255, 255]));
+    image.save(&abs_path)?;
+
+    let call_id = "view-image-unsupported-detail";
+    let arguments = serde_json::json!({ "path": rel_path, "detail": "low" }).to_string();
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call(call_id, "view_image", &arguments),
+        ev_completed("resp-1"),
+    ]);
+    responses::mount_sse_once(&server, first_response).await;
+
+    let second_response = sse(vec![
+        ev_assistant_message("msg-1", "done"),
+        ev_completed("resp-2"),
+    ]);
+    let mock = responses::mount_sse_once(&server, second_response).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please attach the image at low detail".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            service_tier: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let req = mock.single_request();
+    let body_with_tool_output = req.body_json();
+    let output_text = req
+        .function_call_output_content_and_success(call_id)
+        .and_then(|(content, _)| content)
+        .expect("output text present");
+    assert_eq!(
+        output_text,
+        "view_image.detail only supports `original`; omit `detail` for default resized behavior, got `low`"
+    );
+
+    assert!(
+        find_image_message(&body_with_tool_output).is_none(),
+        "unsupported detail values should not produce an input_image message"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model("gpt-5.3-codex")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::ImageDetailOriginal)
+                .expect("test config should allow feature update");
+        });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let rel_path = "assets/null-detail.png";
+    let abs_path = cwd.path().join(rel_path);
+    if let Some(parent) = abs_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let original_width = 2304;
+    let original_height = 864;
+    let image = ImageBuffer::from_pixel(original_width, original_height, Rgba([0u8, 80, 255, 255]));
+    image.save(&abs_path)?;
+
+    let call_id = "view-image-null-detail";
+    let arguments = serde_json::json!({ "path": rel_path, "detail": null }).to_string();
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call(call_id, "view_image", &arguments),
+        ev_completed("resp-1"),
+    ]);
+    responses::mount_sse_once(&server, first_response).await;
+
+    let second_response = sse(vec![
+        ev_assistant_message("msg-1", "done"),
+        ev_completed("resp-2"),
+    ]);
+    let mock = responses::mount_sse_once(&server, second_response).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please attach the image with a null detail".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            service_tier: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let req = mock.single_request();
+    let function_output = req.function_call_output(call_id);
+    let output_items = function_output
+        .get("output")
+        .and_then(Value::as_array)
+        .expect("function_call_output should be a content item array");
+    assert_eq!(output_items.len(), 1);
+    assert_eq!(output_items[0].get("detail"), None);
+    let image_url = output_items[0]
+        .get("image_url")
+        .and_then(Value::as_str)
+        .expect("image_url present");
+
+    let (_, encoded) = image_url
+        .split_once(',')
+        .expect("image url contains data prefix");
+    let decoded = BASE64_STANDARD
+        .decode(encoded)
+        .expect("image data decodes from base64 for request");
+    let resized = load_from_memory(&decoded).expect("load resized image");
+    let (width, height) = resized.dimensions();
+    assert!(width <= 2048);
+    assert!(height <= 768);
+    assert!(width < original_width);
+    assert!(height < original_height);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -486,6 +675,110 @@ async fn view_image_tool_keeps_legacy_behavior_below_gpt5_3_codex() -> anyhow::R
         .expect("image url contains data prefix");
     assert_eq!(prefix, "data:image/png;base64");
 
+    let decoded = BASE64_STANDARD
+        .decode(encoded)
+        .expect("image data decodes from base64 for request");
+    let resized = load_from_memory(&decoded).expect("load resized image");
+    let (resized_width, resized_height) = resized.dimensions();
+    assert!(resized_width <= 2048);
+    assert!(resized_height <= 768);
+    assert!(resized_width < original_width);
+    assert!(resized_height < original_height);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn view_image_tool_does_not_force_original_resolution_with_capability_feature_only()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model("gpt-5.3-codex")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::ImageDetailOriginal)
+                .expect("test config should allow feature update");
+        });
+    let TestCodex {
+        codex,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let rel_path = "assets/original-example-capability-only.png";
+    let abs_path = cwd.path().join(rel_path);
+    if let Some(parent) = abs_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let original_width = 2304;
+    let original_height = 864;
+    let image = ImageBuffer::from_pixel(original_width, original_height, Rgba([0u8, 80, 255, 255]));
+    image.save(&abs_path)?;
+
+    let call_id = "view-image-capability-only";
+    let arguments = serde_json::json!({ "path": rel_path }).to_string();
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call(call_id, "view_image", &arguments),
+        ev_completed("resp-1"),
+    ]);
+    responses::mount_sse_once(&server, first_response).await;
+
+    let second_response = sse(vec![
+        ev_assistant_message("msg-1", "done"),
+        ev_completed("resp-2"),
+    ]);
+    let mock = responses::mount_sse_once(&server, second_response).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please add the screenshot".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            service_tier: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event_with_timeout(
+        &codex,
+        |event| matches!(event, EventMsg::TurnComplete(_)),
+        Duration::from_secs(10),
+    )
+    .await;
+
+    let req = mock.single_request();
+    let function_output = req.function_call_output(call_id);
+    let output_items = function_output
+        .get("output")
+        .and_then(Value::as_array)
+        .expect("function_call_output should be a content item array");
+    assert_eq!(output_items.len(), 1);
+    assert_eq!(output_items[0].get("detail"), None);
+    let image_url = output_items[0]
+        .get("image_url")
+        .and_then(Value::as_str)
+        .expect("image_url present");
+
+    let (_, encoded) = image_url
+        .split_once(',')
+        .expect("image url contains data prefix");
     let decoded = BASE64_STANDARD
         .decode(encoded)
         .expect("image data decodes from base64 for request");
@@ -857,25 +1150,11 @@ async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()>
         request.inputs_of_type("input_image").is_empty(),
         "non-image file should not produce an input_image message"
     );
-    let function_output = request.function_call_output(call_id);
-    let output_items = function_output
-        .get("output")
-        .and_then(Value::as_array)
-        .expect("function_call_output should be a content item array");
-    assert_eq!(
-        output_items.len(),
-        1,
-        "non-image placeholder should be returned as a single content item"
-    );
-    assert_eq!(
-        output_items[0].get("type").and_then(Value::as_str),
-        Some("input_text"),
-        "non-image placeholder should be returned as input_text"
-    );
-    let placeholder = output_items[0]
-        .get("text")
-        .and_then(Value::as_str)
-        .expect("placeholder text present");
+    let (placeholder, success) = request
+        .function_call_output_content_and_success(call_id)
+        .expect("function_call_output should be present");
+    assert_eq!(success, None);
+    let placeholder = placeholder.expect("placeholder text present");
 
     assert!(
         placeholder.contains("Codex could not read the local image at")
@@ -993,6 +1272,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         input_modalities: vec![InputModality::Text],
         prefer_websockets: false,
         used_fallback_model_metadata: false,
+        supports_search_tool: false,
         priority: 1,
         upgrade: None,
         base_instructions: "base instructions".to_string(),

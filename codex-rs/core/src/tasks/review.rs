@@ -13,6 +13,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::SubAgentSource;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
@@ -99,6 +100,7 @@ async fn start_review_conversation(
     {
         panic!("by construction Constrained<WebSearchMode> must always support Disabled: {err}");
     }
+    let _ = sub_agent_config.features.disable(Feature::SpawnCsv);
     let _ = sub_agent_config.features.disable(Feature::Collab);
 
     // Set explicit review rubric for the sub-agent
@@ -118,6 +120,8 @@ async fn start_review_conversation(
         session.clone_session(),
         ctx.clone(),
         cancellation_token,
+        SubAgentSource::Review,
+        None,
         None,
     )
     .await)

@@ -224,7 +224,7 @@ async fn report_agent_job_result_rejects_wrong_thread() -> Result<()> {
     let mut builder = test_codex().with_config(|config| {
         config
             .features
-            .enable(Feature::Collab)
+            .enable(Feature::SpawnCsv)
             .expect("test config should allow feature update");
         config
             .features
@@ -290,7 +290,7 @@ async fn spawn_agents_on_csv_runs_and_exports() -> Result<()> {
     let mut builder = test_codex().with_config(|config| {
         config
             .features
-            .enable(Feature::Collab)
+            .enable(Feature::SpawnCsv)
             .expect("test config should allow feature update");
         config
             .features
@@ -333,7 +333,7 @@ async fn spawn_agents_on_csv_dedupes_item_ids() -> Result<()> {
     let mut builder = test_codex().with_config(|config| {
         config
             .features
-            .enable(Feature::Collab)
+            .enable(Feature::SpawnCsv)
             .expect("test config should allow feature update");
         config
             .features
@@ -391,7 +391,7 @@ async fn spawn_agents_on_csv_stop_halts_future_items() -> Result<()> {
     let mut builder = test_codex().with_config(|config| {
         config
             .features
-            .enable(Feature::Collab)
+            .enable(Feature::SpawnCsv)
             .expect("test config should allow feature update");
         config
             .features

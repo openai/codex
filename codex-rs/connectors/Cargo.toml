@@ -1,0 +1,18 @@
+[package]
+name = "codex-connectors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+urlencoding = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

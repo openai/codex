@@ -31,7 +31,9 @@ pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
+        | ResponseItem::ToolSearchCall { .. }
         | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::ToolSearchOutput { .. }
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. }
@@ -49,7 +51,9 @@ pub(crate) fn should_persist_response_item_for_memories(item: &ResponseItem) -> 
         ResponseItem::Message { role, .. } => role != "developer",
         ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
+        | ResponseItem::ToolSearchCall { .. }
         | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::ToolSearchOutput { .. }
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. } => true,
@@ -113,6 +117,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
             }
         }
         EventMsg::Error(_)
+        | EventMsg::GuardianAssessment(_)
         | EventMsg::WebSearchEnd(_)
         | EventMsg::ExecCommandEnd(_)
         | EventMsg::PatchApplyEnd(_)
@@ -144,6 +149,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::TerminalInteraction(_)
         | EventMsg::ExecCommandOutputDelta(_)
         | EventMsg::ExecApprovalRequest(_)
+        | EventMsg::RequestPermissions(_)
         | EventMsg::RequestUserInput(_)
         | EventMsg::ElicitationRequest(_)
         | EventMsg::ApplyPatchApprovalRequest(_)
@@ -164,6 +170,8 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::ShutdownComplete
         | EventMsg::DeprecationNotice(_)
         | EventMsg::ItemStarted(_)
+        | EventMsg::HookStarted(_)
+        | EventMsg::HookCompleted(_)
         | EventMsg::AgentMessageContentDelta(_)
         | EventMsg::PlanDelta(_)
         | EventMsg::ReasoningContentDelta(_)

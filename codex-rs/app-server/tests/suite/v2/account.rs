@@ -83,6 +83,9 @@ sandbox_mode = "danger-full-access"
 
 model_provider = "mock_provider"
 
+[features]
+shell_snapshot = false
+
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{base_url}"

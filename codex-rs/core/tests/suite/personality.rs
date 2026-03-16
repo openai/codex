@@ -340,6 +340,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -442,6 +443,7 @@ async fn user_turn_personality_same_value_does_not_add_update_message() -> anyho
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -557,6 +559,7 @@ async fn user_turn_personality_skips_if_feature_disabled() -> anyhow::Result<()>
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -658,6 +661,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         input_modalities: default_input_modalities(),
         prefer_websockets: false,
         used_fallback_model_metadata: false,
+        supports_search_tool: false,
     };
 
     let _models_mock = mount_models_once(
@@ -773,6 +777,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         input_modalities: default_input_modalities(),
         prefer_websockets: false,
         used_fallback_model_metadata: false,
+        supports_search_tool: false,
     };
 
     let _models_mock = mount_models_once(
@@ -827,6 +832,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
@@ -867,7 +873,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
     let developer_texts = request.message_input_texts("developer");
     let personality_text = developer_texts
         .iter()
-        .find(|text| text.contains("<personality_spec>"))
+        .find(|text| text.contains(remote_friendly_message))
         .expect("expected personality update message in developer input");
 
     assert!(

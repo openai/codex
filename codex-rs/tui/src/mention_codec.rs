@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 
+use codex_core::mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
+use codex_core::mention_syntax::TOOL_MENTION_SIGIL;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LinkedMention {
     pub(crate) mention: String,
     pub(crate) path: String,
 }
-
-const TOOL_MENTION_SIGIL: char = '$';
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DecodedHistoryText {
@@ -77,10 +78,7 @@ pub(crate) fn decode_history_mentions(text: &str) -> DecodedHistoryText {
 
     while index < bytes.len() {
         if bytes[index] == b'['
-            && let Some((name, path, end_index)) =
-                parse_linked_tool_mention(text, bytes, index, TOOL_MENTION_SIGIL)
-            && !is_common_env_var(name)
-            && is_tool_path(path)
+            && let Some((name, path, end_index)) = parse_history_linked_mention(text, bytes, index)
         {
             out.push(TOOL_MENTION_SIGIL);
             out.push_str(name);
@@ -103,6 +101,31 @@ pub(crate) fn decode_history_mentions(text: &str) -> DecodedHistoryText {
         text: out,
         mentions,
     }
+}
+
+fn parse_history_linked_mention<'a>(
+    text: &'a str,
+    text_bytes: &[u8],
+    start: usize,
+) -> Option<(&'a str, &'a str, usize)> {
+    // TUI writes `$name`, but may read plugin `[@name](plugin://...)` links from other clients.
+    if let Some(mention @ (name, path, _)) =
+        parse_linked_tool_mention(text, text_bytes, start, TOOL_MENTION_SIGIL)
+        && !is_common_env_var(name)
+        && is_tool_path(path)
+    {
+        return Some(mention);
+    }
+
+    if let Some(mention @ (name, path, _)) =
+        parse_linked_tool_mention(text, text_bytes, start, PLUGIN_TEXT_MENTION_SIGIL)
+        && !is_common_env_var(name)
+        && path.starts_with("plugin://")
+    {
+        return Some(mention);
+    }
+
+    None
 }
 
 fn parse_linked_tool_mention<'a>(
@@ -223,6 +246,35 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn decode_history_mentions_restores_plugin_links_with_at_sigil() {
+        let decoded = decode_history_mentions(
+            "Use [@sample](plugin://sample@test) and [$figma](app://figma-1).",
+        );
+        assert_eq!(decoded.text, "Use $sample and $figma.");
+        assert_eq!(
+            decoded.mentions,
+            vec![
+                LinkedMention {
+                    mention: "sample".to_string(),
+                    path: "plugin://sample@test".to_string(),
+                },
+                LinkedMention {
+                    mention: "figma".to_string(),
+                    path: "app://figma-1".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn decode_history_mentions_ignores_at_sigil_for_non_plugin_paths() {
+        let decoded = decode_history_mentions("Use [@figma](app://figma-1).");
+
+        assert_eq!(decoded.text, "Use [@figma](app://figma-1).");
+        assert_eq!(decoded.mentions, Vec::<LinkedMention>::new());
     }
 
     #[test]

@@ -2,6 +2,8 @@ use crate::CodexAuth;
 use crate::api_bridge::map_api_error;
 use crate::auth::read_openai_api_key_from_env;
 use crate::codex::Session;
+use crate::config::RealtimeWsMode;
+use crate::config::RealtimeWsVersion;
 use crate::default_client::default_headers;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -12,7 +14,9 @@ use async_channel::TrySendError;
 use codex_api::Provider as ApiProvider;
 use codex_api::RealtimeAudioFrame;
 use codex_api::RealtimeEvent;
+use codex_api::RealtimeEventParser;
 use codex_api::RealtimeSessionConfig;
+use codex_api::RealtimeSessionMode;
 use codex_api::RealtimeWebsocketClient;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketEvents;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketWriter;
@@ -114,9 +118,7 @@ impl RealtimeConversationManager {
         &self,
         api_provider: ApiProvider,
         extra_headers: Option<HeaderMap>,
-        prompt: String,
-        model: Option<String>,
-        session_id: Option<String>,
+        session_config: RealtimeSessionConfig,
     ) -> CodexResult<(Receiver<RealtimeEvent>, Arc<AtomicBool>)> {
         let previous_state = {
             let mut guard = self.state.lock().await;
@@ -128,11 +130,6 @@ impl RealtimeConversationManager {
             let _ = state.task.await;
         }
 
-        let session_config = RealtimeSessionConfig {
-            instructions: prompt,
-            model,
-            session_id,
-        };
         let client = RealtimeWebsocketClient::new(api_provider);
         let connection = client
             .connect(
@@ -298,22 +295,30 @@ pub(crate) async fn handle_start(
         format!("{prompt}\n\n{startup_context}")
     };
     let model = config.experimental_realtime_ws_model.clone();
-
+    let event_parser = match config.realtime.version {
+        RealtimeWsVersion::V1 => RealtimeEventParser::V1,
+        RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
+    };
+    let session_mode = match config.realtime.session_type {
+        RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
+        RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
+    };
     let requested_session_id = params
         .session_id
         .or_else(|| Some(sess.conversation_id.to_string()));
+    let session_config = RealtimeSessionConfig {
+        instructions: prompt,
+        model,
+        session_id: requested_session_id.clone(),
+        event_parser,
+        session_mode,
+    };
     let extra_headers =
         realtime_request_headers(requested_session_id.as_deref(), realtime_api_key.as_str())?;
     info!("starting realtime conversation");
     let (events_rx, realtime_active) = match sess
         .conversation
-        .start(
-            api_provider,
-            extra_headers,
-            prompt,
-            model,
-            requested_session_id.clone(),
-        )
+        .start(api_provider, extra_headers, session_config)
         .await
     {
         Ok(events_rx) => events_rx,
@@ -394,15 +399,17 @@ pub(crate) async fn handle_audio(
 }
 
 fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Option<String> {
-    let messages = handoff
-        .messages
+    let active_transcript = handoff
+        .active_transcript
         .iter()
-        .map(|message| format!("{}: {}", message.role, message.text))
+        .map(|entry| format!("{}: {}", entry.role, entry.text))
         .collect::<Vec<_>>()
         .join("\n");
-    (!messages.is_empty()).then_some(messages).or_else(|| {
-        (!handoff.input_transcript.is_empty()).then(|| handoff.input_transcript.clone())
-    })
+    (!active_transcript.is_empty())
+        .then_some(active_transcript)
+        .or_else(|| {
+            (!handoff.input_transcript.is_empty()).then(|| handoff.input_transcript.clone())
+        })
 }
 
 fn realtime_api_key(
@@ -598,119 +605,5 @@ async fn send_conversation_error(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::HandoffOutput;
-    use super::RealtimeHandoffState;
-    use super::realtime_text_from_handoff_request;
-    use async_channel::bounded;
-    use codex_protocol::protocol::RealtimeHandoffMessage;
-    use codex_protocol::protocol::RealtimeHandoffRequested;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn extracts_text_from_handoff_request_messages() {
-        let handoff = RealtimeHandoffRequested {
-            handoff_id: "handoff_1".to_string(),
-            item_id: "item_1".to_string(),
-            input_transcript: "ignored".to_string(),
-            messages: vec![
-                RealtimeHandoffMessage {
-                    role: "user".to_string(),
-                    text: "hello".to_string(),
-                },
-                RealtimeHandoffMessage {
-                    role: "assistant".to_string(),
-                    text: "hi there".to_string(),
-                },
-            ],
-        };
-        assert_eq!(
-            realtime_text_from_handoff_request(&handoff),
-            Some("user: hello\nassistant: hi there".to_string())
-        );
-    }
-
-    #[test]
-    fn extracts_text_from_handoff_request_input_transcript_if_messages_missing() {
-        let handoff = RealtimeHandoffRequested {
-            handoff_id: "handoff_1".to_string(),
-            item_id: "item_1".to_string(),
-            input_transcript: "ignored".to_string(),
-            messages: vec![],
-        };
-        assert_eq!(
-            realtime_text_from_handoff_request(&handoff),
-            Some("ignored".to_string())
-        );
-    }
-
-    #[test]
-    fn ignores_empty_handoff_request_input_transcript() {
-        let handoff = RealtimeHandoffRequested {
-            handoff_id: "handoff_1".to_string(),
-            item_id: "item_1".to_string(),
-            input_transcript: String::new(),
-            messages: vec![],
-        };
-        assert_eq!(realtime_text_from_handoff_request(&handoff), None);
-    }
-
-    #[tokio::test]
-    async fn clears_active_handoff_explicitly() {
-        let (tx, _rx) = bounded(1);
-        let state = RealtimeHandoffState::new(tx);
-
-        *state.active_handoff.lock().await = Some("handoff_1".to_string());
-        assert_eq!(
-            state.active_handoff.lock().await.clone(),
-            Some("handoff_1".to_string())
-        );
-
-        *state.active_handoff.lock().await = None;
-        assert_eq!(state.active_handoff.lock().await.clone(), None);
-    }
-
-    #[tokio::test]
-    async fn sends_multiple_handoff_outputs_until_cleared() {
-        let (tx, rx) = bounded(4);
-        let state = RealtimeHandoffState::new(tx);
-
-        state
-            .send_output("ignored".to_string())
-            .await
-            .expect("send");
-        assert!(rx.is_empty());
-
-        *state.active_handoff.lock().await = Some("handoff_1".to_string());
-        state.send_output("result".to_string()).await.expect("send");
-        state
-            .send_output("result 2".to_string())
-            .await
-            .expect("send");
-
-        let output_1 = rx.recv().await.expect("recv");
-        assert_eq!(
-            output_1,
-            HandoffOutput {
-                handoff_id: "handoff_1".to_string(),
-                output_text: "result".to_string(),
-            }
-        );
-
-        let output_2 = rx.recv().await.expect("recv");
-        assert_eq!(
-            output_2,
-            HandoffOutput {
-                handoff_id: "handoff_1".to_string(),
-                output_text: "result 2".to_string(),
-            }
-        );
-
-        *state.active_handoff.lock().await = None;
-        state
-            .send_output("ignored after clear".to_string())
-            .await
-            .expect("send");
-        assert!(rx.is_empty());
-    }
-}
+#[path = "realtime_conversation_tests.rs"]
+mod tests;

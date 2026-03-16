@@ -21,6 +21,11 @@ const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const OAUTH_DISCOVERY_HEADER: &str = "MCP-Protocol-Version";
 const OAUTH_DISCOVERY_VERSION: &str = "2024-11-05";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamableHttpOAuthDiscovery {
+    pub scopes_supported: Option<Vec<String>>,
+}
+
 /// Determine the authentication status for a streamable HTTP MCP server.
 pub async fn determine_streamable_http_auth_status(
     server_name: &str,
@@ -43,9 +48,9 @@ pub async fn determine_streamable_http_auth_status(
         return Ok(McpAuthStatus::OAuth);
     }
 
-    match supports_oauth_login_with_headers(url, &default_headers).await {
-        Ok(true) => Ok(McpAuthStatus::NotLoggedIn),
-        Ok(false) => Ok(McpAuthStatus::Unsupported),
+    match discover_streamable_http_oauth_with_headers(url, &default_headers).await {
+        Ok(Some(_)) => Ok(McpAuthStatus::NotLoggedIn),
+        Ok(None) => Ok(McpAuthStatus::Unsupported),
         Err(error) => {
             debug!(
                 "failed to detect OAuth support for MCP server `{server_name}` at {url}: {error:?}"
@@ -57,10 +62,24 @@ pub async fn determine_streamable_http_auth_status(
 
 /// Attempt to determine whether a streamable HTTP MCP server advertises OAuth login.
 pub async fn supports_oauth_login(url: &str) -> Result<bool> {
-    supports_oauth_login_with_headers(url, &HeaderMap::new()).await
+    Ok(discover_streamable_http_oauth(url, None, None)
+        .await?
+        .is_some())
 }
 
-async fn supports_oauth_login_with_headers(url: &str, default_headers: &HeaderMap) -> Result<bool> {
+pub async fn discover_streamable_http_oauth(
+    url: &str,
+    http_headers: Option<HashMap<String, String>>,
+    env_http_headers: Option<HashMap<String, String>>,
+) -> Result<Option<StreamableHttpOAuthDiscovery>> {
+    let default_headers = build_default_headers(http_headers, env_http_headers)?;
+    discover_streamable_http_oauth_with_headers(url, &default_headers).await
+}
+
+async fn discover_streamable_http_oauth_with_headers(
+    url: &str,
+    default_headers: &HeaderMap,
+) -> Result<Option<StreamableHttpOAuthDiscovery>> {
     let base_url = Url::parse(url)?;
 
     // Use no_proxy to avoid a bug in the system-configuration crate that
@@ -99,7 +118,9 @@ async fn supports_oauth_login_with_headers(url: &str, default_headers: &HeaderMa
         };
 
         if metadata.authorization_endpoint.is_some() && metadata.token_endpoint.is_some() {
-            return Ok(true);
+            return Ok(Some(StreamableHttpOAuthDiscovery {
+                scopes_supported: normalize_scopes(metadata.scopes_supported),
+            }));
         }
     }
 
@@ -107,7 +128,7 @@ async fn supports_oauth_login_with_headers(url: &str, default_headers: &HeaderMa
         debug!("OAuth discovery requests failed for {url}: {err:?}");
     }
 
-    Ok(false)
+    Ok(None)
 }
 
 #[derive(Debug, Deserialize)]
@@ -116,6 +137,30 @@ struct OAuthDiscoveryMetadata {
     authorization_endpoint: Option<String>,
     #[serde(default)]
     token_endpoint: Option<String>,
+    #[serde(default)]
+    scopes_supported: Option<Vec<String>>,
+}
+
+fn normalize_scopes(scopes_supported: Option<Vec<String>>) -> Option<Vec<String>> {
+    let scopes_supported = scopes_supported?;
+
+    let mut normalized = Vec::new();
+    for scope in scopes_supported {
+        let scope = scope.trim();
+        if scope.is_empty() {
+            continue;
+        }
+        let scope = scope.to_string();
+        if !normalized.contains(&scope) {
+            normalized.push(scope);
+        }
+    }
+
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
 }
 
 /// Implements RFC 8414 section 3.1 for discovering well-known oauth endpoints.
@@ -147,10 +192,50 @@ fn discovery_paths(base_path: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::Json;
+    use axum::Router;
+    use axum::routing::get;
     use pretty_assertions::assert_eq;
     use serial_test::serial;
     use std::collections::HashMap;
     use std::ffi::OsString;
+    use tokio::task::JoinHandle;
+
+    struct TestServer {
+        url: String,
+        handle: JoinHandle<()>,
+    }
+
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            self.handle.abort();
+        }
+    }
+
+    async fn spawn_oauth_discovery_server(metadata: serde_json::Value) -> TestServer {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("listener should have address");
+        let app = Router::new().route(
+            "/.well-known/oauth-authorization-server/mcp",
+            get({
+                let metadata = metadata.clone();
+                move || {
+                    let metadata = metadata.clone();
+                    async move { Json(metadata) }
+                }
+            }),
+        );
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("server should run");
+        });
+
+        TestServer {
+            url: format!("http://{address}/mcp"),
+            handle,
+        }
+    }
 
     struct EnvVarGuard {
         key: String,
@@ -222,5 +307,57 @@ mod tests {
         .expect("status should compute");
 
         assert_eq!(status, McpAuthStatus::BearerToken);
+    }
+
+    #[tokio::test]
+    async fn discover_streamable_http_oauth_returns_normalized_scopes() {
+        let server = spawn_oauth_discovery_server(serde_json::json!({
+            "authorization_endpoint": "https://example.com/authorize",
+            "token_endpoint": "https://example.com/token",
+            "scopes_supported": ["profile", " email ", "profile", "", "   "],
+        }))
+        .await;
+
+        let discovery = discover_streamable_http_oauth(&server.url, None, None)
+            .await
+            .expect("discovery should succeed")
+            .expect("oauth support should be detected");
+
+        assert_eq!(
+            discovery.scopes_supported,
+            Some(vec!["profile".to_string(), "email".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_streamable_http_oauth_ignores_empty_scopes() {
+        let server = spawn_oauth_discovery_server(serde_json::json!({
+            "authorization_endpoint": "https://example.com/authorize",
+            "token_endpoint": "https://example.com/token",
+            "scopes_supported": ["", "   "],
+        }))
+        .await;
+
+        let discovery = discover_streamable_http_oauth(&server.url, None, None)
+            .await
+            .expect("discovery should succeed")
+            .expect("oauth support should be detected");
+
+        assert_eq!(discovery.scopes_supported, None);
+    }
+
+    #[tokio::test]
+    async fn supports_oauth_login_does_not_require_scopes_supported() {
+        let server = spawn_oauth_discovery_server(serde_json::json!({
+            "authorization_endpoint": "https://example.com/authorize",
+            "token_endpoint": "https://example.com/token",
+        }))
+        .await;
+
+        let supported = supports_oauth_login(&server.url)
+            .await
+            .expect("support check should succeed");
+
+        assert!(supported);
     }
 }

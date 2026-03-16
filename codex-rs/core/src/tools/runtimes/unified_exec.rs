@@ -9,6 +9,9 @@ use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecExpiration;
 use crate::features::Feature;
+use crate::guardian::GuardianApprovalRequest;
+use crate::guardian::review_approval_request;
+use crate::guardian::routes_approval_to_guardian;
 use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
@@ -29,7 +32,7 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
-use crate::tools::spec::UnifiedExecBackendConfig;
+use crate::tools::spec::UnifiedExecShellMode;
 use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
@@ -51,6 +54,8 @@ pub struct UnifiedExecRequest {
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
+    #[cfg(unix)]
+    pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
 }
@@ -66,12 +71,15 @@ pub struct UnifiedExecApprovalKey {
 
 pub struct UnifiedExecRuntime<'a> {
     manager: &'a UnifiedExecProcessManager,
-    backend: UnifiedExecBackendConfig,
+    shell_mode: UnifiedExecShellMode,
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
-    pub fn new(manager: &'a UnifiedExecProcessManager, backend: UnifiedExecBackendConfig) -> Self {
-        Self { manager, backend }
+    pub fn new(manager: &'a UnifiedExecProcessManager, shell_mode: UnifiedExecShellMode) -> Self {
+        Self {
+            manager,
+            shell_mode,
+        }
     }
 }
 
@@ -109,11 +117,26 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let call_id = ctx.call_id.to_string();
         let command = req.command.clone();
         let cwd = req.cwd.clone();
-        let reason = ctx
-            .retry_reason
-            .clone()
-            .or_else(|| req.justification.clone());
+        let retry_reason = ctx.retry_reason.clone();
+        let reason = retry_reason.clone().or_else(|| req.justification.clone());
         Box::pin(async move {
+            if routes_approval_to_guardian(turn) {
+                return review_approval_request(
+                    session,
+                    turn,
+                    GuardianApprovalRequest::ExecCommand {
+                        id: call_id,
+                        command,
+                        cwd,
+                        sandbox_permissions: req.sandbox_permissions,
+                        additional_permissions: req.additional_permissions.clone(),
+                        justification: req.justification.clone(),
+                        tty: req.tty,
+                    },
+                    retry_reason,
+                )
+                .await;
+            }
             with_cached_approval(&session.services, "unified_exec", keys, || async move {
                 let available_decisions = None;
                 session
@@ -129,6 +152,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                             .proposed_execpolicy_amendment()
                             .cloned(),
                         req.additional_permissions.clone(),
+                        None,
                         available_decisions,
                     )
                     .await
@@ -188,7 +212,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         if let Some(network) = req.network.as_ref() {
             network.apply_to_env(&mut env);
         }
-        if self.backend == UnifiedExecBackendConfig::ZshFork {
+        if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
             let spec = build_command_spec(
                 &command,
                 &req.cwd,
@@ -202,7 +226,15 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             let exec_env = attempt
                 .env_for(spec, req.network.as_ref())
                 .map_err(|err| ToolError::Codex(err.into()))?;
-            match zsh_fork_backend::maybe_prepare_unified_exec(req, attempt, ctx, exec_env).await? {
+            match zsh_fork_backend::maybe_prepare_unified_exec(
+                req,
+                attempt,
+                ctx,
+                exec_env,
+                zsh_fork_config,
+            )
+            .await?
+            {
                 Some(prepared) => {
                     return self
                         .manager

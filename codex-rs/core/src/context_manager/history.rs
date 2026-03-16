@@ -344,9 +344,6 @@ impl ContextManager {
         // all outputs must have a corresponding function/tool call
         normalize::remove_orphan_outputs(&mut self.items);
 
-        //rewrite image_gen_calls to messages to support stateless input
-        normalize::rewrite_image_generation_calls_for_stateless_input(&mut self.items);
-
         // strip images when model does not support them
         normalize::strip_images_when_unsupported(input_modalities, &mut self.items);
     }
@@ -376,6 +373,8 @@ impl ContextManager {
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::FunctionCall { .. }
+            | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::ToolSearchOutput { .. }
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::CustomToolCall { .. }
@@ -413,6 +412,8 @@ fn is_api_message(message: &ResponseItem) -> bool {
         ResponseItem::Message { role, .. } => role.as_str() != "system",
         ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::FunctionCall { .. }
+        | ResponseItem::ToolSearchCall { .. }
+        | ResponseItem::ToolSearchOutput { .. }
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::LocalShellCall { .. }
@@ -605,12 +606,14 @@ fn is_model_generated_item(item: &ResponseItem) -> bool {
         ResponseItem::Message { role, .. } => role == "assistant",
         ResponseItem::Reasoning { .. }
         | ResponseItem::FunctionCall { .. }
+        | ResponseItem::ToolSearchCall { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::Compaction { .. } => true,
         ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::ToolSearchOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::GhostSnapshot { .. }
         | ResponseItem::Other => false,
@@ -620,7 +623,9 @@ fn is_model_generated_item(item: &ResponseItem) -> bool {
 pub(crate) fn is_codex_generated_item(item: &ResponseItem) -> bool {
     matches!(
         item,
-        ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. }
+        ResponseItem::FunctionCallOutput { .. }
+            | ResponseItem::ToolSearchOutput { .. }
+            | ResponseItem::CustomToolCallOutput { .. }
     ) || matches!(item, ResponseItem::Message { role, .. } if role == "developer")
 }
 

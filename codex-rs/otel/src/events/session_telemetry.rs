@@ -24,9 +24,8 @@ use crate::metrics::names::WEBSOCKET_EVENT_DURATION_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_COUNT_METRIC;
 use crate::metrics::names::WEBSOCKET_REQUEST_DURATION_METRIC;
 use crate::metrics::runtime_metrics::RuntimeMetricsSummary;
+use crate::metrics::tags::SessionMetricTagValues;
 use crate::metrics::timer::Timer;
-use crate::metrics::validation::validate_tag_key;
-use crate::metrics::validation::validate_tag_value;
 use crate::provider::OtelProvider;
 use crate::sanitize_metric_tag_value;
 use codex_api::ApiError;
@@ -228,40 +227,15 @@ impl SessionTelemetry {
         if !self.metrics_use_metadata_tags {
             return Ok(Vec::new());
         }
-        let mut tags = Vec::with_capacity(7);
-        Self::push_metadata_tag(&mut tags, "auth_mode", self.metadata.auth_mode.as_deref())?;
-        Self::push_metadata_tag(
-            &mut tags,
-            "session_source",
-            Some(self.metadata.session_source.as_str()),
-        )?;
-        Self::push_metadata_tag(
-            &mut tags,
-            "originator",
-            Some(self.metadata.originator.as_str()),
-        )?;
-        Self::push_metadata_tag(
-            &mut tags,
-            "service_name",
-            self.metadata.service_name.as_deref(),
-        )?;
-        Self::push_metadata_tag(&mut tags, "model", Some(self.metadata.model.as_str()))?;
-        Self::push_metadata_tag(&mut tags, "app.version", Some(self.metadata.app_version))?;
-        Ok(tags)
-    }
-
-    fn push_metadata_tag<'a>(
-        tags: &mut Vec<(&'a str, &'a str)>,
-        key: &'static str,
-        value: Option<&'a str>,
-    ) -> MetricsResult<()> {
-        let Some(value) = value else {
-            return Ok(());
-        };
-        validate_tag_key(key)?;
-        validate_tag_value(value)?;
-        tags.push((key, value));
-        Ok(())
+        SessionMetricTagValues {
+            auth_mode: self.metadata.auth_mode.as_deref(),
+            session_source: self.metadata.session_source.as_str(),
+            originator: self.metadata.originator.as_str(),
+            service_name: self.metadata.service_name.as_deref(),
+            model: self.metadata.model.as_str(),
+            app_version: self.metadata.app_version,
+        }
+        .into_tags()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -366,17 +340,43 @@ impl SessionTelemetry {
             Ok(response) => (Some(response.status().as_u16()), None),
             Err(error) => (error.status().map(|s| s.as_u16()), Some(error.to_string())),
         };
-        self.record_api_request(attempt, status, error.as_deref(), duration);
+        self.record_api_request(
+            attempt,
+            status,
+            error.as_deref(),
+            duration,
+            false,
+            None,
+            false,
+            None,
+            None,
+            "unknown",
+            None,
+            None,
+            None,
+            None,
+        );
 
         response
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_api_request(
         &self,
         attempt: u64,
         status: Option<u16>,
         error: Option<&str>,
         duration: Duration,
+        auth_header_attached: bool,
+        auth_header_name: Option<&str>,
+        retry_after_unauthorized: bool,
+        recovery_mode: Option<&str>,
+        recovery_phase: Option<&str>,
+        endpoint: &str,
+        request_id: Option<&str>,
+        cf_ray: Option<&str>,
+        auth_error: Option<&str>,
+        auth_error_code: Option<&str>,
     ) {
         let success = status.is_some_and(|code| (200..=299).contains(&code)) && error.is_none();
         let success_str = if success { "true" } else { "false" };
@@ -401,13 +401,76 @@ impl SessionTelemetry {
                 http.response.status_code = status,
                 error.message = error,
                 attempt = attempt,
+                auth.header_attached = auth_header_attached,
+                auth.header_name = auth_header_name,
+                auth.retry_after_unauthorized = retry_after_unauthorized,
+                auth.recovery_mode = recovery_mode,
+                auth.recovery_phase = recovery_phase,
+                endpoint = endpoint,
+                auth.request_id = request_id,
+                auth.cf_ray = cf_ray,
+                auth.error = auth_error,
+                auth.error_code = auth_error_code,
             },
             log: {},
             trace: {},
         );
     }
 
-    pub fn record_websocket_request(&self, duration: Duration, error: Option<&str>) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_websocket_connect(
+        &self,
+        duration: Duration,
+        status: Option<u16>,
+        error: Option<&str>,
+        auth_header_attached: bool,
+        auth_header_name: Option<&str>,
+        retry_after_unauthorized: bool,
+        recovery_mode: Option<&str>,
+        recovery_phase: Option<&str>,
+        endpoint: &str,
+        connection_reused: bool,
+        request_id: Option<&str>,
+        cf_ray: Option<&str>,
+        auth_error: Option<&str>,
+        auth_error_code: Option<&str>,
+    ) {
+        let success = error.is_none()
+            && status
+                .map(|code| (200..=299).contains(&code))
+                .unwrap_or(true);
+        let success_str = if success { "true" } else { "false" };
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.websocket_connect",
+                duration_ms = %duration.as_millis(),
+                http.response.status_code = status,
+                success = success_str,
+                error.message = error,
+                auth.header_attached = auth_header_attached,
+                auth.header_name = auth_header_name,
+                auth.retry_after_unauthorized = retry_after_unauthorized,
+                auth.recovery_mode = recovery_mode,
+                auth.recovery_phase = recovery_phase,
+                endpoint = endpoint,
+                auth.connection_reused = connection_reused,
+                auth.request_id = request_id,
+                auth.cf_ray = cf_ray,
+                auth.error = auth_error,
+                auth.error_code = auth_error_code,
+            },
+            log: {},
+            trace: {},
+        );
+    }
+
+    pub fn record_websocket_request(
+        &self,
+        duration: Duration,
+        error: Option<&str>,
+        connection_reused: bool,
+    ) {
         let success_str = if error.is_none() { "true" } else { "false" };
         self.counter(
             WEBSOCKET_REQUEST_COUNT_METRIC,
@@ -426,6 +489,39 @@ impl SessionTelemetry {
                 duration_ms = %duration.as_millis(),
                 success = success_str,
                 error.message = error,
+                auth.connection_reused = connection_reused,
+            },
+            log: {},
+            trace: {},
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_auth_recovery(
+        &self,
+        mode: &str,
+        step: &str,
+        outcome: &str,
+        request_id: Option<&str>,
+        cf_ray: Option<&str>,
+        auth_error: Option<&str>,
+        auth_error_code: Option<&str>,
+        recovery_reason: Option<&str>,
+        auth_state_changed: Option<bool>,
+    ) {
+        log_and_trace_event!(
+            self,
+            common: {
+                event.name = "codex.auth_recovery",
+                auth.mode = mode,
+                auth.step = step,
+                auth.outcome = outcome,
+                auth.request_id = request_id,
+                auth.cf_ray = cf_ray,
+                auth.error = auth_error,
+                auth.error_code = auth_error_code,
+                auth.recovery_reason = recovery_reason,
+                auth.state_changed = auth_state_changed,
             },
             log: {},
             trace: {},
@@ -924,7 +1020,9 @@ impl SessionTelemetry {
             ResponseItem::Reasoning { .. } => "reasoning".into(),
             ResponseItem::LocalShellCall { .. } => "local_shell_call".into(),
             ResponseItem::FunctionCall { .. } => "function_call".into(),
+            ResponseItem::ToolSearchCall { .. } => "tool_search_call".into(),
             ResponseItem::FunctionCallOutput { .. } => "function_call_output".into(),
+            ResponseItem::ToolSearchOutput { .. } => "tool_search_output".into(),
             ResponseItem::CustomToolCall { .. } => "custom_tool_call".into(),
             ResponseItem::CustomToolCallOutput { .. } => "custom_tool_call_output".into(),
             ResponseItem::WebSearchCall { .. } => "web_search_call".into(),

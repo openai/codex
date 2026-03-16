@@ -8,7 +8,6 @@ use crate::state::NetworkProxyState;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
-use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::net::TcpListener as StdTcpListener;
@@ -390,6 +389,10 @@ impl NetworkProxy {
         self.socks_addr
     }
 
+    pub async fn current_cfg(&self) -> Result<config::NetworkProxyConfig> {
+        self.state.current_cfg().await
+    }
+
     pub async fn add_allowed_domain(&self, host: &str) -> Result<()> {
         self.state.add_allowed_domain(host).await
     }
@@ -428,8 +431,6 @@ impl NetworkProxy {
             warn!("network.enabled is false; skipping proxy listeners");
             return Ok(NetworkProxyHandle::noop());
         }
-
-        ensure_rustls_crypto_provider();
 
         if !unix_socket_permissions_supported() {
             warn!(

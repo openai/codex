@@ -4,6 +4,10 @@ use std::path::Path;
 use pretty_assertions::assert_eq;
 
 use crate::combine_output_receivers;
+#[cfg(unix)]
+use crate::pipe::spawn_process_no_stdin_with_inherited_fds;
+#[cfg(unix)]
+use crate::pty::spawn_process_with_inherited_fds;
 use crate::spawn_pipe_process;
 use crate::spawn_pipe_process_no_stdin;
 use crate::spawn_pty_process;
@@ -56,7 +60,13 @@ fn echo_sleep_command(marker: &str) -> String {
 }
 
 fn split_stdout_stderr_command() -> String {
-    "printf 'split-out\\n'; printf 'split-err\\n' >&2".to_string()
+    if cfg!(windows) {
+        // Keep this in cmd.exe syntax so the test does not depend on a runner-local
+        // PowerShell/Python setup just to produce deterministic split output.
+        "(echo split-out)&(>&2 echo split-err)".to_string()
+    } else {
+        "printf 'split-out\\n'; printf 'split-err\\n' >&2".to_string()
+    }
 }
 
 async fn collect_split_output(mut output_rx: tokio::sync::mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
@@ -129,7 +139,79 @@ async fn collect_output_until_exit(
     }
 }
 
+#[cfg(unix)]
+async fn wait_for_output_contains(
+    output_rx: &mut tokio::sync::broadcast::Receiver<Vec<u8>>,
+    needle: &str,
+    timeout_ms: u64,
+) -> anyhow::Result<Vec<u8>> {
+    let mut collected = Vec::new();
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
+
+    while tokio::time::Instant::now() < deadline {
+        let now = tokio::time::Instant::now();
+        let remaining = deadline.saturating_duration_since(now);
+        match tokio::time::timeout(remaining, output_rx.recv()).await {
+            Ok(Ok(chunk)) => {
+                collected.extend_from_slice(&chunk);
+                if String::from_utf8_lossy(&collected).contains(needle) {
+                    return Ok(collected);
+                }
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                anyhow::bail!(
+                    "PTY output closed while waiting for {needle:?}: {:?}",
+                    String::from_utf8_lossy(&collected)
+                );
+            }
+            Err(_) => break,
+        }
+    }
+
+    anyhow::bail!(
+        "timed out waiting for {needle:?} in PTY output: {:?}",
+        String::from_utf8_lossy(&collected)
+    );
+}
+
 async fn wait_for_python_repl_ready(
+    output_rx: &mut tokio::sync::broadcast::Receiver<Vec<u8>>,
+    timeout_ms: u64,
+    ready_marker: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let mut collected = Vec::new();
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
+
+    while tokio::time::Instant::now() < deadline {
+        let now = tokio::time::Instant::now();
+        let remaining = deadline.saturating_duration_since(now);
+        match tokio::time::timeout(remaining, output_rx.recv()).await {
+            Ok(Ok(chunk)) => {
+                collected.extend_from_slice(&chunk);
+                if String::from_utf8_lossy(&collected).contains(ready_marker) {
+                    return Ok(collected);
+                }
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                anyhow::bail!(
+                    "PTY output closed while waiting for Python REPL readiness: {:?}",
+                    String::from_utf8_lossy(&collected)
+                );
+            }
+            Err(_) => break,
+        }
+    }
+
+    anyhow::bail!(
+        "timed out waiting for Python REPL readiness marker {ready_marker:?} in PTY: {:?}",
+        String::from_utf8_lossy(&collected)
+    );
+}
+
+#[cfg(unix)]
+async fn wait_for_python_repl_ready_via_probe(
     writer: &tokio::sync::mpsc::Sender<Vec<u8>>,
     output_rx: &mut tokio::sync::broadcast::Receiver<Vec<u8>>,
     timeout_ms: u64,
@@ -219,16 +301,26 @@ async fn wait_for_marker_pid(
         collected.extend_from_slice(&chunk);
 
         let text = String::from_utf8_lossy(&collected);
-        if let Some(marker_idx) = text.find(marker) {
-            let suffix = &text[marker_idx + marker.len()..];
-            let digits: String = suffix
+        let mut offset = 0;
+        while let Some(pos) = text[offset..].find(marker) {
+            let marker_start = offset + pos;
+            let suffix = &text[marker_start + marker.len()..];
+            let digits_len = suffix
                 .chars()
-                .skip_while(|ch| !ch.is_ascii_digit())
                 .take_while(char::is_ascii_digit)
-                .collect();
-            if !digits.is_empty() {
-                return Ok(digits.parse()?);
+                .map(char::len_utf8)
+                .sum::<usize>();
+            if digits_len == 0 {
+                offset = marker_start + marker.len();
+                continue;
             }
+
+            let pid_str = &suffix[..digits_len];
+            let trailing = &suffix[digits_len..];
+            if trailing.is_empty() {
+                break;
+            }
+            return Ok(pid_str.parse()?);
         }
     }
 }
@@ -254,10 +346,17 @@ async fn pty_python_repl_emits_output_and_exits() -> anyhow::Result<()> {
         return Ok(());
     };
 
+    let ready_marker = "__codex_pty_ready__";
+    let args = vec![
+        "-i".to_string(),
+        "-q".to_string(),
+        "-c".to_string(),
+        format!("print('{ready_marker}')"),
+    ];
     let env_map: HashMap<String, String> = std::env::vars().collect();
     let spawned = spawn_pty_process(
         &python,
-        &[],
+        &args,
         Path::new("."),
         &env_map,
         &None,
@@ -269,7 +368,7 @@ async fn pty_python_repl_emits_output_and_exits() -> anyhow::Result<()> {
     let newline = if cfg!(windows) { "\r\n" } else { "\n" };
     let startup_timeout_ms = if cfg!(windows) { 10_000 } else { 5_000 };
     let mut output =
-        wait_for_python_repl_ready(&writer, &mut output_rx, startup_timeout_ms, newline).await?;
+        wait_for_python_repl_ready(&mut output_rx, startup_timeout_ms, ready_marker).await?;
     writer
         .send(format!("print('hello from pty'){newline}").into_bytes())
         .await?;
@@ -291,21 +390,42 @@ async fn pty_python_repl_emits_output_and_exits() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipe_process_round_trips_stdin() -> anyhow::Result<()> {
-    let Some(python) = find_python() else {
-        eprintln!("python not found; skipping pipe_process_round_trips_stdin");
-        return Ok(());
+    let (program, args) = if cfg!(windows) {
+        let cmd = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+        (
+            cmd,
+            vec![
+                "/Q".to_string(),
+                "/V:ON".to_string(),
+                "/D".to_string(),
+                "/C".to_string(),
+                "set /p line= & echo(!line!".to_string(),
+            ],
+        )
+    } else {
+        let Some(python) = find_python() else {
+            eprintln!("python not found; skipping pipe_process_round_trips_stdin");
+            return Ok(());
+        };
+        (
+            python,
+            vec![
+                "-u".to_string(),
+                "-c".to_string(),
+                "import sys; print(sys.stdin.readline().strip());".to_string(),
+            ],
+        )
     };
-
-    let args = vec![
-        "-u".to_string(),
-        "-c".to_string(),
-        "import sys; print(sys.stdin.readline().strip());".to_string(),
-    ];
     let env_map: HashMap<String, String> = std::env::vars().collect();
-    let spawned = spawn_pipe_process(&python, &args, Path::new("."), &env_map, &None).await?;
+    let spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None).await?;
     let (session, output_rx, exit_rx) = combine_spawned_output(spawned);
     let writer = session.writer_sender();
-    writer.send(b"roundtrip\n".to_vec()).await?;
+    let newline = if cfg!(windows) { "\r\n" } else { "\n" };
+    writer
+        .send(format!("roundtrip{newline}").into_bytes())
+        .await?;
+    drop(writer);
+    session.close_stdin();
 
     let (output, code) = collect_output_until_exit(output_rx, exit_rx, 5_000).await;
     let text = String::from_utf8_lossy(&output);
@@ -427,21 +547,7 @@ async fn pipe_drains_stderr_without_stdout_activity() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipe_process_can_expose_split_stdout_and_stderr() -> anyhow::Result<()> {
     let env_map: HashMap<String, String> = std::env::vars().collect();
-    let (program, args) = if cfg!(windows) {
-        let Some(python) = find_python() else {
-            eprintln!("python not found; skipping pipe_process_can_expose_split_stdout_and_stderr");
-            return Ok(());
-        };
-        (
-            python,
-            vec![
-                "-c".to_string(),
-                "import sys; sys.stdout.buffer.write(b'split-out\\n'); sys.stdout.buffer.flush(); sys.stderr.buffer.write(b'split-err\\n'); sys.stderr.buffer.flush()".to_string(),
-            ],
-        )
-    } else {
-        shell_command(&split_stdout_stderr_command())
-    };
+    let (program, args) = shell_command(&split_stdout_stderr_command());
     let spawned =
         spawn_pipe_process_no_stdin(&program, &args, Path::new("."), &env_map, &None).await?;
     let SpawnedProcess {
@@ -451,21 +557,34 @@ async fn pipe_process_can_expose_split_stdout_and_stderr() -> anyhow::Result<()>
         exit_rx,
     } = spawned;
 
+    let timeout_ms = if cfg!(windows) { 10_000 } else { 2_000 };
+    let timeout = tokio::time::Duration::from_millis(timeout_ms);
     let stdout_task = tokio::spawn(async move { collect_split_output(stdout_rx).await });
     let stderr_task = tokio::spawn(async move { collect_split_output(stderr_rx).await });
-    let code = tokio::time::timeout(tokio::time::Duration::from_secs(2), exit_rx)
+    let code = tokio::time::timeout(timeout, exit_rx)
         .await
         .map_err(|_| anyhow::anyhow!("timed out waiting for split process exit"))?
         .unwrap_or(-1);
-    let stdout = tokio::time::timeout(tokio::time::Duration::from_secs(2), stdout_task)
+    let stdout = tokio::time::timeout(timeout, stdout_task)
         .await
         .map_err(|_| anyhow::anyhow!("timed out waiting to drain split stdout"))??;
-    let stderr = tokio::time::timeout(tokio::time::Duration::from_secs(2), stderr_task)
+    let stderr = tokio::time::timeout(timeout, stderr_task)
         .await
         .map_err(|_| anyhow::anyhow!("timed out waiting to drain split stderr"))??;
 
-    assert_eq!(stdout, b"split-out\n".to_vec());
-    assert_eq!(stderr, b"split-err\n".to_vec());
+    let expected_stdout = if cfg!(windows) {
+        b"split-out\r\n".to_vec()
+    } else {
+        b"split-out\n".to_vec()
+    };
+    let expected_stderr = if cfg!(windows) {
+        b"split-err\r\n".to_vec()
+    } else {
+        b"split-err\n".to_vec()
+    };
+
+    assert_eq!(stdout, expected_stdout);
+    assert_eq!(stderr, expected_stderr);
     assert_eq!(code, 0);
 
     Ok(())
@@ -549,6 +668,279 @@ async fn pty_terminate_kills_background_children_in_same_process_group() -> anyh
         exited,
         "background child pid {bg_pid} survived PTY terminate()"
     );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pty_spawn_can_preserve_inherited_fds() -> anyhow::Result<()> {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    use std::os::fd::FromRawFd;
+
+    let mut fds = [0; 2];
+    let result = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+
+    let mut read_end = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+    let write_end = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+
+    let mut env_map: HashMap<String, String> = std::env::vars().collect();
+    env_map.insert(
+        "PRESERVED_FD".to_string(),
+        write_end.as_raw_fd().to_string(),
+    );
+
+    let script = "printf __preserved__ >\"/dev/fd/$PRESERVED_FD\"";
+    let spawned = spawn_process_with_inherited_fds(
+        "/bin/sh",
+        &["-c".to_string(), script.to_string()],
+        Path::new("."),
+        &env_map,
+        &None,
+        TerminalSize::default(),
+        &[write_end.as_raw_fd()],
+    )
+    .await?;
+
+    drop(write_end);
+
+    let (_session, output_rx, exit_rx) = combine_spawned_output(spawned);
+    let (_, code) = collect_output_until_exit(output_rx, exit_rx, 2_000).await;
+    assert_eq!(code, 0, "expected preserved-fd PTY child to exit cleanly");
+
+    let mut pipe_output = String::new();
+    read_end.read_to_string(&mut pipe_output)?;
+    assert_eq!(pipe_output, "__preserved__");
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pty_preserving_inherited_fds_keeps_python_repl_running() -> anyhow::Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::fd::FromRawFd;
+
+    let Some(python) = find_python() else {
+        eprintln!(
+            "python not found; skipping pty_preserving_inherited_fds_keeps_python_repl_running"
+        );
+        return Ok(());
+    };
+
+    let mut fds = [0; 2];
+    let result = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+
+    let read_end = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+    let preserved_fd = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+
+    let mut env_map: HashMap<String, String> = std::env::vars().collect();
+    env_map.insert(
+        "PRESERVED_FD".to_string(),
+        preserved_fd.as_raw_fd().to_string(),
+    );
+
+    let spawned = spawn_process_with_inherited_fds(
+        &python,
+        &[],
+        Path::new("."),
+        &env_map,
+        &None,
+        TerminalSize::default(),
+        &[preserved_fd.as_raw_fd()],
+    )
+    .await?;
+    drop(read_end);
+    drop(preserved_fd);
+
+    let (session, mut output_rx, exit_rx) = combine_spawned_output(spawned);
+    let writer = session.writer_sender();
+    let newline = "\n";
+    let mut output =
+        wait_for_python_repl_ready_via_probe(&writer, &mut output_rx, 5_000, newline).await?;
+    let marker = "__codex_preserved_py_pid:";
+    writer
+        .send(format!("import os; print('{marker}' + str(os.getpid())){newline}").into_bytes())
+        .await?;
+
+    let python_pid = match wait_for_marker_pid(&mut output_rx, marker, 2_000).await {
+        Ok(pid) => pid,
+        Err(err) => {
+            session.terminate();
+            return Err(err);
+        }
+    };
+    assert!(
+        process_exists(python_pid)?,
+        "expected python pid {python_pid} to stay alive after prompt output"
+    );
+
+    writer.send(format!("exit(){newline}").into_bytes()).await?;
+    let (remaining_output, code) = collect_output_until_exit(output_rx, exit_rx, 5_000).await;
+    output.extend_from_slice(&remaining_output);
+
+    assert_eq!(code, 0, "expected python to exit cleanly");
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pty_spawn_with_inherited_fds_reports_exec_failures() -> anyhow::Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::fd::FromRawFd;
+
+    let mut fds = [0; 2];
+    let result = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+
+    let read_end = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+    let write_end = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let spawn_result = spawn_process_with_inherited_fds(
+        "/definitely/missing/command",
+        &[],
+        Path::new("."),
+        &env_map,
+        &None,
+        TerminalSize::default(),
+        &[write_end.as_raw_fd()],
+    )
+    .await;
+
+    drop(read_end);
+    drop(write_end);
+
+    let err = match spawn_result {
+        Ok(spawned) => {
+            spawned.session.terminate();
+            anyhow::bail!("missing executable unexpectedly spawned");
+        }
+        Err(err) => err,
+    };
+    let err_text = err.to_string();
+    assert!(
+        err_text.contains("No such file")
+            || err_text.contains("not found")
+            || err_text.contains("os error 2"),
+        "expected spawn error for missing executable, got: {err_text}",
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pty_spawn_with_inherited_fds_supports_resize() -> anyhow::Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::fd::FromRawFd;
+
+    let mut fds = [0; 2];
+    let result = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+
+    let read_end = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+    let write_end = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let script =
+        "stty -echo; printf 'start:%s\\n' \"$(stty size)\"; IFS= read _line; printf 'after:%s\\n' \"$(stty size)\"";
+    let spawned = spawn_process_with_inherited_fds(
+        "/bin/sh",
+        &["-c".to_string(), script.to_string()],
+        Path::new("."),
+        &env_map,
+        &None,
+        TerminalSize {
+            rows: 31,
+            cols: 101,
+        },
+        &[write_end.as_raw_fd()],
+    )
+    .await?;
+
+    let (session, mut output_rx, exit_rx) = combine_spawned_output(spawned);
+    let writer = session.writer_sender();
+    let mut output = wait_for_output_contains(&mut output_rx, "start:31 101\r\n", 5_000).await?;
+
+    session.resize(TerminalSize {
+        rows: 45,
+        cols: 132,
+    })?;
+    writer.send(b"go\n".to_vec()).await?;
+    session.close_stdin();
+
+    let (remaining_output, code) = collect_output_until_exit(output_rx, exit_rx, 5_000).await;
+    output.extend_from_slice(&remaining_output);
+    let text = String::from_utf8_lossy(&output);
+    let normalized = text.replace("\r\n", "\n");
+
+    assert!(
+        normalized.contains("after:45 132\n"),
+        "expected resized PTY dimensions in output: {text:?}"
+    );
+    assert_eq!(code, 0, "expected shell to exit cleanly after resize");
+
+    drop(read_end);
+    drop(write_end);
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipe_spawn_no_stdin_can_preserve_inherited_fds() -> anyhow::Result<()> {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    use std::os::fd::FromRawFd;
+
+    let mut fds = [0; 2];
+    let result = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+
+    let mut read_end = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+    let write_end = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+
+    let mut env_map: HashMap<String, String> = std::env::vars().collect();
+    env_map.insert(
+        "PRESERVED_FD".to_string(),
+        write_end.as_raw_fd().to_string(),
+    );
+
+    let script = "printf __pipe_preserved__ >\"/dev/fd/$PRESERVED_FD\"";
+    let spawned = spawn_process_no_stdin_with_inherited_fds(
+        "/bin/sh",
+        &["-c".to_string(), script.to_string()],
+        Path::new("."),
+        &env_map,
+        &None,
+        &[write_end.as_raw_fd()],
+    )
+    .await?;
+
+    drop(write_end);
+
+    let (_session, output_rx, exit_rx) = combine_spawned_output(spawned);
+    let (_, code) = collect_output_until_exit(output_rx, exit_rx, 2_000).await;
+    assert_eq!(code, 0, "expected preserved-fd pipe child to exit cleanly");
+
+    let mut pipe_output = String::new();
+    read_end.read_to_string(&mut pipe_output)?;
+    assert_eq!(pipe_output, "__pipe_preserved__");
 
     Ok(())
 }

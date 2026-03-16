@@ -827,6 +827,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b52af3cb4058c895d37317bb27508dccc8e5f2d39454016b297bf4a400597b8"
 dependencies = [
  "axum-core",
+ "base64 0.22.1",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -845,8 +846,10 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_urlencoded",
+ "sha1",
  "sync_wrapper",
  "tokio",
+ "tokio-tungstenite",
  "tower",
  "tower-layer",
  "tower-service",
@@ -1439,8 +1442,11 @@ dependencies = [
  "codex-utils-pty",
  "core_test_support",
  "futures",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "owo-colors",
  "pretty_assertions",
+ "reqwest",
  "rmcp",
  "serde",
  "serde_json",
@@ -1453,9 +1459,29 @@ dependencies = [
  "tokio-util",
  "toml 0.9.11+spec-1.1.0",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
+ "walkdir",
  "wiremock",
+]
+
+[[package]]
+name = "codex-app-server-client"
+version = "0.0.0"
+dependencies = [
+ "codex-app-server",
+ "codex-app-server-protocol",
+ "codex-arg0",
+ "codex-core",
+ "codex-feedback",
+ "codex-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
 ]
 
 [[package]]
@@ -1571,6 +1597,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-backend-openapi-models",
+ "codex-client",
  "codex-core",
  "codex-protocol",
  "pretty_assertions",
@@ -1594,6 +1621,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "codex-connectors",
  "codex-core",
  "codex-git",
  "codex-utils-cargo-bin",
@@ -1603,7 +1631,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
- "urlencoding",
 ]
 
 [[package]]
@@ -1658,15 +1685,22 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "codex-utils-cargo-bin",
+ "codex-utils-rustls-provider",
  "eventsource-stream",
  "futures",
  "http 1.4.0",
  "opentelemetry",
  "opentelemetry_sdk",
+ "pretty_assertions",
  "rand 0.9.2",
  "reqwest",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -1707,6 +1741,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "codex-client",
  "codex-cloud-tasks-client",
  "codex-core",
  "codex-login",
@@ -1766,6 +1801,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-connectors"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-app-server-protocol",
+ "pretty_assertions",
+ "serde",
+ "tokio",
+ "urlencoding",
+]
+
+[[package]]
 name = "codex-core"
 version = "0.0.0"
 dependencies = [
@@ -1789,6 +1836,7 @@ dependencies = [
  "codex-async-utils",
  "codex-client",
  "codex-config",
+ "codex-connectors",
  "codex-execpolicy",
  "codex-file-search",
  "codex-git",
@@ -1899,10 +1947,13 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
+ "codex-app-server-client",
+ "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-arg0",
  "codex-cloud-requirements",
  "codex-core",
+ "codex-feedback",
  "codex-otel",
  "codex-protocol",
  "codex-utils-absolute-path",
@@ -2030,9 +2081,12 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "codex-config",
  "codex-protocol",
  "futures",
  "pretty_assertions",
+ "regex",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "tempfile",
@@ -2089,6 +2143,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "codex-app-server-protocol",
+ "codex-client",
  "codex-core",
  "core_test_support",
  "pretty_assertions",
@@ -2291,6 +2346,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "axum",
+ "codex-client",
  "codex-keyring-store",
  "codex-protocol",
  "codex-utils-cargo-bin",
@@ -2395,7 +2451,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "codex-otel",
  "codex-protocol",
  "dirs",
  "log",
@@ -2415,7 +2470,6 @@ name = "codex-stdio-to-uds"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "assert_cmd",
  "codex-utils-cargo-bin",
  "pretty_assertions",
  "tempfile",
@@ -2442,11 +2496,13 @@ dependencies = [
  "chrono",
  "clap",
  "codex-ansi-escape",
+ "codex-app-server-client",
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-backend-client",
  "codex-chatgpt",
  "codex-cli",
+ "codex-client",
  "codex-cloud-requirements",
  "codex-core",
  "codex-feedback",

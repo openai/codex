@@ -4,6 +4,7 @@ use crate::render::line_utils::prefix_lines;
 use crate::style::proposed_plan_style;
 use ratatui::prelude::Stylize;
 use ratatui::text::Line;
+use std::path::Path;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -18,9 +19,13 @@ pub(crate) struct StreamController {
 }
 
 impl StreamController {
-    pub(crate) fn new(width: Option<usize>) -> Self {
+    /// Create a controller whose markdown renderer shortens local file links relative to `cwd`.
+    ///
+    /// The controller snapshots the path into stream state so later commit ticks and finalization
+    /// render against the same session cwd that was active when streaming started.
+    pub(crate) fn new(width: Option<usize>, cwd: &Path) -> Self {
         Self {
-            state: StreamState::new(width),
+            state: StreamState::new(width, cwd),
             finishing_after_drain: false,
             header_emitted: false,
         }
@@ -115,9 +120,14 @@ pub(crate) struct PlanStreamController {
 }
 
 impl PlanStreamController {
-    pub(crate) fn new(width: Option<usize>) -> Self {
+    /// Create a plan-stream controller whose markdown renderer shortens local file links relative
+    /// to `cwd`.
+    ///
+    /// The controller snapshots the path into stream state so later commit ticks and finalization
+    /// render against the same session cwd that was active when streaming started.
+    pub(crate) fn new(width: Option<usize>, cwd: &Path) -> Self {
         Self {
-            state: StreamState::new(width),
+            state: StreamState::new(width, cwd),
             header_emitted: false,
             top_padding_emitted: false,
         }
@@ -232,6 +242,13 @@ impl PlanStreamController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn test_cwd() -> PathBuf {
+        // These tests only need a stable absolute cwd; using temp_dir() avoids baking Unix- or
+        // Windows-specific root semantics into the fixtures.
+        std::env::temp_dir()
+    }
 
     fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
         lines
@@ -248,7 +265,7 @@ mod tests {
 
     #[tokio::test]
     async fn controller_loose_vs_tight_with_commit_ticks_matches_full() {
-        let mut ctrl = StreamController::new(None);
+        let mut ctrl = StreamController::new(None, &test_cwd());
         let mut lines = Vec::new();
 
         // Exact deltas from the session log (section: Loose vs. tight list items)
@@ -346,7 +363,8 @@ mod tests {
         // Full render of the same source
         let source: String = deltas.iter().copied().collect();
         let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
-        crate::markdown::append_markdown(&source, None, &mut rendered);
+        let test_cwd = test_cwd();
+        crate::markdown::append_markdown(&source, None, Some(test_cwd.as_path()), &mut rendered);
         let rendered_strs = lines_to_plain_strings(&rendered);
 
         assert_eq!(streamed, rendered_strs);

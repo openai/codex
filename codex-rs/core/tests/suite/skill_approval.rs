@@ -7,8 +7,9 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::ExecApprovalRequestSkillMetadata;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RejectConfig;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
@@ -242,6 +243,14 @@ permissions:
             ..Default::default()
         })
     );
+    assert_eq!(
+        approval.skill_metadata,
+        Some(ExecApprovalRequestSkillMetadata {
+            path_to_skills_md: test
+                .codex_home_path()
+                .join("skills/mbolin-test-skill/agents/openai.yaml"),
+        })
+    );
 
     test.codex
         .submit(Op::ExecApproval {
@@ -276,10 +285,12 @@ async fn shell_zsh_fork_skill_script_reject_policy_with_sandbox_approval_false_s
         return Ok(());
     };
 
-    let approval_policy = AskForApproval::Reject(RejectConfig {
-        sandbox_approval: false,
+    let approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: true,
         rules: true,
-        mcp_elicitations: false,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: true,
     });
     let server = start_mock_server().await;
     let tool_call_id = "zsh-fork-skill-reject-false";
@@ -360,18 +371,22 @@ permissions:
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_zsh_fork_skill_script_reject_policy_with_sandbox_approval_true_skips_prompt()
+async fn shell_zsh_fork_skill_script_reject_policy_with_sandbox_approval_true_still_prompts()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let Some(runtime) = zsh_fork_runtime("zsh-fork reject true skill prompt test")? else {
+    let Some(runtime) =
+        zsh_fork_runtime("zsh-fork reject sandbox approval true skill prompt test")?
+    else {
         return Ok(());
     };
 
-    let approval_policy = AskForApproval::Reject(RejectConfig {
-        sandbox_approval: true,
-        rules: false,
-        mcp_elicitations: false,
+    let approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: false,
+        rules: true,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: true,
     });
     let server = start_mock_server().await;
     let tool_call_id = "zsh-fork-skill-reject-true";
@@ -411,10 +426,104 @@ permissions:
     )
     .await?;
 
+    let maybe_approval = wait_for_exec_approval_request(&test).await;
+    let approval = match maybe_approval {
+        Some(approval) => approval,
+        None => {
+            let call_output = mocks
+                .completion
+                .single_request()
+                .function_call_output(tool_call_id);
+            panic!(
+                "expected exec approval request before completion; function_call_output={call_output:?}"
+            );
+        }
+    };
+    assert_eq!(approval.call_id, tool_call_id);
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Denied,
+        })
+        .await?;
+
+    wait_for_turn_complete(&test).await;
+
+    let call_output = mocks
+        .completion
+        .single_request()
+        .function_call_output(tool_call_id);
+    let output = call_output["output"].as_str().unwrap_or_default();
+    assert!(
+        output.contains("Execution denied: User denied execution"),
+        "expected rejection marker in function_call_output: {output:?}"
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_zsh_fork_skill_script_reject_policy_with_skill_approval_true_skips_prompt()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("zsh-fork reject skill approval true skill prompt test")?
+    else {
+        return Ok(());
+    };
+
+    let approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: true,
+        rules: true,
+        skill_approval: false,
+        request_permissions: true,
+        mcp_elicitations: true,
+    });
+    let server = start_mock_server().await;
+    let tool_call_id = "zsh-fork-skill-reject-skill-approval-true";
+    let test = build_zsh_fork_test(
+        &server,
+        runtime,
+        approval_policy,
+        SandboxPolicy::new_workspace_write_policy(),
+        |home| {
+            write_skill_with_shell_script(home, "mbolin-test-skill", "hello-mbolin.sh").unwrap();
+            write_skill_metadata(
+                home,
+                "mbolin-test-skill",
+                r#"
+permissions:
+  file_system:
+    write:
+      - "./output"
+"#,
+            )
+            .unwrap();
+        },
+    )
+    .await?;
+
+    let (_, command) = skill_script_command(&test, "hello-mbolin.sh")?;
+    let arguments = shell_command_arguments(&command)?;
+    let mocks =
+        mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
+            .await;
+
+    submit_turn_with_policies(
+        &test,
+        "use $mbolin-test-skill",
+        approval_policy,
+        SandboxPolicy::new_workspace_write_policy(),
+    )
+    .await?;
+
     let approval = wait_for_exec_approval_request(&test).await;
     assert!(
         approval.is_none(),
-        "expected reject sandbox approval policy to skip exec approval"
+        "expected reject skill approval policy to skip exec approval"
     );
 
     wait_for_turn_complete(&test).await;

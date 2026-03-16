@@ -84,10 +84,63 @@ pub enum NetworkPolicyRuleAction {
     Deny,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardianRiskLevel {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardianAssessmentStatus {
+    InProgress,
+    Approved,
+    Denied,
+    Aborted,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct NetworkPolicyAmendment {
     pub host: String,
     pub action: NetworkPolicyRuleAction,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub struct ExecApprovalRequestSkillMetadata {
+    pub path_to_skills_md: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct GuardianAssessmentEvent {
+    /// Stable identifier for this guardian review lifecycle.
+    pub id: String,
+    /// Turn ID that this assessment belongs to.
+    /// Uses `#[serde(default)]` for backwards compatibility.
+    #[serde(default)]
+    pub turn_id: String,
+    pub status: GuardianAssessmentStatus,
+    /// Numeric risk score from 0-100. Omitted while the assessment is in progress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub risk_score: Option<u8>,
+    /// Coarse risk label paired with `risk_score`. Omitted while in progress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub risk_level: Option<GuardianRiskLevel>,
+    /// Human-readable explanation of the final assessment. Omitted while in progress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub rationale: Option<String>,
+    /// Canonical action payload that was reviewed. Included when available so
+    /// clients can render pending or resolved review state alongside the
+    /// reviewed request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub action: Option<JsonValue>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -128,6 +181,10 @@ pub struct ExecApprovalRequestEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub additional_permissions: Option<PermissionProfile>,
+    /// Optional skill metadata when the approval was triggered by a skill script.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub skill_metadata: Option<ExecApprovalRequestSkillMetadata>,
     /// Ordered list of decisions the client may present for this prompt.
     ///
     /// When absent, clients should derive the legacy default set from the

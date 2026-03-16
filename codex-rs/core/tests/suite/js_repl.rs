@@ -660,6 +660,34 @@ async fn js_repl_does_not_expose_process_global() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn js_repl_exposes_codex_path_helpers() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mock = run_js_repl_turn(
+        &server,
+        "check codex path helpers",
+        &[(
+            "call-1",
+            "console.log(`cwd:${typeof codex.cwd}:${codex.cwd.length > 0}`); console.log(`home:${codex.homeDir === null || typeof codex.homeDir === \"string\"}`);",
+        )],
+    )
+    .await?;
+
+    let req = mock.single_request();
+    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "js_repl call failed unexpectedly: {output}"
+    );
+    assert!(output.contains("cwd:string:true"));
+    assert!(output.contains("home:true"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn js_repl_blocks_sensitive_builtin_imports() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

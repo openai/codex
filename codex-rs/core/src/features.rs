@@ -5,6 +5,8 @@
 //! booleans through multiple types, call sites consult a single `Features`
 //! container attached to `Config`.
 
+use crate::auth::AuthManager;
+use crate::auth::CodexAuth;
 use crate::config::Config;
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
@@ -62,6 +64,9 @@ impl Stage {
 
     pub fn experimental_announcement(self) -> Option<&'static str> {
         match self {
+            Stage::Experimental {
+                announcement: "", ..
+            } => None,
             Stage::Experimental { announcement, .. } => Some(announcement),
             _ => None,
         }
@@ -80,6 +85,10 @@ pub enum Feature {
     // Experimental
     /// Enable JavaScript REPL tools backed by a persistent Node kernel.
     JsRepl,
+    /// Enable a minimal JavaScript mode backed by Node's built-in vm runtime.
+    CodeMode,
+    /// Restrict model-visible tools to code mode entrypoints (`exec`, `exec_wait`).
+    CodeModeOnly,
     /// Only expose js_repl tools directly to the model.
     JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
@@ -88,8 +97,12 @@ pub enum Feature {
     ShellZshFork,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
-    /// Allow requesting additional filesystem permissions while staying sandboxed.
-    RequestPermissions,
+    /// Allow exec tools to request additional permissions while staying sandboxed.
+    ExecPermissionApprovals,
+    /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
+    CodexHooks,
+    /// Expose the built-in request_permissions tool.
+    RequestPermissionsTool,
     /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
     /// Allow the model to request web searches that fetch cached content.
@@ -97,8 +110,12 @@ pub enum Feature {
     WebSearchCached,
     /// Legacy search-tool feature flag kept for backward compatibility.
     SearchTool,
-    /// Use the bubblewrap-based Linux sandbox pipeline.
+    /// Removed legacy Linux bubblewrap opt-in flag retained as a no-op so old
+    /// wrappers and config can still parse it.
     UseLinuxSandboxBwrap,
+    /// Use the legacy Landlock Linux sandbox fallback instead of the default
+    /// bubblewrap pipeline.
+    UseLegacyLandlock,
     /// Allow the model to request approval and propose exec rules.
     RequestRule,
     /// Enable Windows sandbox (restricted token) on Windows.
@@ -119,7 +136,7 @@ pub enum Feature {
     MemoryTool,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
-    /// Allow `detail: "original"` image outputs on supported models.
+    /// Allow the model to request `detail: "original"` image outputs on supported models.
     ImageDetailOriginal,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
@@ -127,14 +144,16 @@ pub enum Feature {
     EnableRequestCompression,
     /// Enable collab tools.
     Collab,
+    /// Enable CSV-backed agent job tools.
+    SpawnCsv,
     /// Enable apps.
     Apps,
+    /// Enable discoverable tool suggestions for apps.
+    ToolSuggest,
     /// Enable plugins.
     Plugins,
     /// Allow the model to invoke the built-in image generation tool.
     ImageGeneration,
-    /// Route apps MCP calls through the configured gateway.
-    AppsMcpGateway,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
@@ -144,6 +163,8 @@ pub enum Feature {
     Steer,
     /// Allow request_user_input in Default collaboration mode.
     DefaultModeRequestUserInput,
+    /// Enable automatic review for approval prompts.
+    GuardianApproval,
     /// Enable collaboration modes (Plan, Default).
     /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
     CollaborationModes,
@@ -244,6 +265,31 @@ impl Features {
 
     pub fn enabled(&self, f: Feature) -> bool {
         self.enabled.contains(&f)
+    }
+
+    pub async fn apps_enabled(&self, auth_manager: Option<&AuthManager>) -> bool {
+        if !self.enabled(Feature::Apps) {
+            return false;
+        }
+
+        let auth = match auth_manager {
+            Some(auth_manager) => auth_manager.auth().await,
+            None => None,
+        };
+        self.apps_enabled_for_auth(auth.as_ref())
+    }
+
+    pub fn apps_enabled_cached(&self, auth_manager: Option<&AuthManager>) -> bool {
+        let auth = auth_manager.and_then(AuthManager::auth_cached);
+        self.apps_enabled_for_auth(auth.as_ref())
+    }
+
+    pub(crate) fn apps_enabled_for_auth(&self, auth: Option<&CodexAuth>) -> bool {
+        self.enabled(Feature::Apps) && auth.is_some_and(CodexAuth::is_chatgpt_auth)
+    }
+
+    pub fn use_legacy_landlock(&self) -> bool {
+        self.enabled(Feature::UseLegacyLandlock)
     }
 
     pub fn enable(&mut self, f: Feature) -> &mut Self {
@@ -380,6 +426,12 @@ impl Features {
     }
 
     pub(crate) fn normalize_dependencies(&mut self) {
+        if self.enabled(Feature::SpawnCsv) && !self.enabled(Feature::Collab) {
+            self.enable(Feature::Collab);
+        }
+        if self.enabled(Feature::CodeModeOnly) && !self.enabled(Feature::CodeMode) {
+            self.enable(Feature::CodeMode);
+        }
         if self.enabled(Feature::JsReplToolsOnly) && !self.enabled(Feature::JsRepl) {
             tracing::warn!("js_repl_tools_only requires js_repl; disabling js_repl_tools_only");
             self.disable(Feature::JsReplToolsOnly);
@@ -406,7 +458,12 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
             (summary, Some(web_search_details().to_string()))
         }
         _ => {
-            let summary = format!("`{alias}` is deprecated. Use `[features].{canonical}` instead.");
+            let label = if alias.contains('.') || alias.starts_with('[') {
+                alias.to_string()
+            } else {
+                format!("[features].{alias}")
+            };
+            let summary = format!("`{label}` is deprecated. Use `[features].{canonical}` instead.");
             let details = if alias == canonical {
                 None
             } else {
@@ -504,6 +561,18 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::CodeMode,
+        key: "code_mode",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CodeModeOnly,
+        key: "code_mode_only",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::JsReplToolsOnly,
         key: "js_repl_tools_only",
         stage: Stage::UnderDevelopment,
@@ -571,22 +640,33 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::RequestPermissions,
-        key: "request_permissions",
+        id: Feature::ExecPermissionApprovals,
+        key: "exec_permission_approvals",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CodexHooks,
+        key: "codex_hooks",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RequestPermissionsTool,
+        key: "request_permissions_tool",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::UseLinuxSandboxBwrap,
         key: "use_linux_sandbox_bwrap",
-        #[cfg(target_os = "linux")]
-        stage: Stage::Experimental {
-            name: "Bubblewrap sandbox",
-            menu_description: "Try the new linux sandbox based on bubblewrap.",
-            announcement: "NEW: Linux bubblewrap sandbox offers stronger filesystem and network controls than Landlock alone, including keeping .git and .codex read-only inside writable workspaces. Enable it in /experimental and restart Codex to try it.",
-        },
-        #[cfg(not(target_os = "linux"))]
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::UseLegacyLandlock,
+        key: "use_legacy_landlock",
+        stage: Stage::Stable,
         default_enabled: false,
     },
     FeatureSpec {
@@ -634,11 +714,13 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Collab,
         key: "multi_agent",
-        stage: Stage::Experimental {
-            name: "Multi-agents",
-            menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
-            announcement: "NEW: Multi-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
-        },
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::SpawnCsv,
+        key: "enable_fanout",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -652,6 +734,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::ToolSuggest,
+        key: "tool_suggest",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Plugins,
         key: "plugins",
         stage: Stage::UnderDevelopment,
@@ -660,12 +748,6 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ImageGeneration,
         key: "image_generation",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::AppsMcpGateway,
-        key: "apps_mcp_gateway",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -691,6 +773,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::DefaultModeRequestUserInput,
         key: "default_mode_request_user_input",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::GuardianApproval,
+        key: "guardian_approval",
+        stage: Stage::Experimental {
+            name: "Guardian Approvals",
+            menu_description: "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to a carefully-prompted security reviewer subagent rather than blocking the agent on your input. This can consume significantly more tokens because it runs a subagent on every approval request.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -819,84 +911,5 @@ pub fn maybe_push_unstable_features_warning(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn under_development_features_are_disabled_by_default() {
-        for spec in FEATURES {
-            if matches!(spec.stage, Stage::UnderDevelopment) {
-                assert_eq!(
-                    spec.default_enabled, false,
-                    "feature `{}` is under development and must be disabled by default",
-                    spec.key
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn default_enabled_features_are_stable() {
-        for spec in FEATURES {
-            if spec.default_enabled {
-                assert!(
-                    matches!(spec.stage, Stage::Stable | Stage::Removed),
-                    "feature `{}` is enabled by default but is not stable/removed ({:?})",
-                    spec.key,
-                    spec.stage
-                );
-            }
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn use_linux_sandbox_bwrap_is_experimental_on_linux() {
-        assert!(matches!(
-            Feature::UseLinuxSandboxBwrap.stage(),
-            Stage::Experimental { .. }
-        ));
-        assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn use_linux_sandbox_bwrap_is_under_development_off_linux() {
-        assert_eq!(
-            Feature::UseLinuxSandboxBwrap.stage(),
-            Stage::UnderDevelopment
-        );
-        assert_eq!(Feature::UseLinuxSandboxBwrap.default_enabled(), false);
-    }
-
-    #[test]
-    fn js_repl_is_experimental_and_user_toggleable() {
-        let spec = Feature::JsRepl.info();
-        let stage = spec.stage;
-        let expected_node_version = include_str!("../../node-version.txt").trim_end();
-
-        assert!(matches!(stage, Stage::Experimental { .. }));
-        assert_eq!(stage.experimental_menu_name(), Some("JavaScript REPL"));
-        assert_eq!(
-            stage.experimental_menu_description().map(str::to_owned),
-            Some(format!(
-                "Enable a persistent Node-backed JavaScript REPL for interactive website debugging and other inline JavaScript execution capabilities. Requires Node >= v{expected_node_version} installed."
-            ))
-        );
-        assert_eq!(Feature::JsRepl.default_enabled(), false);
-    }
-
-    #[test]
-    fn image_generation_is_under_development() {
-        assert_eq!(Feature::ImageGeneration.stage(), Stage::UnderDevelopment);
-        assert_eq!(Feature::ImageGeneration.default_enabled(), false);
-    }
-
-    #[test]
-    fn collab_is_legacy_alias_for_multi_agent() {
-        assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
-        assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
-    }
-}
+#[path = "features_tests.rs"]
+mod tests;
