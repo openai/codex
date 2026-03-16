@@ -1,5 +1,7 @@
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::audio_device::preferred_input_config;
+use crate::audio_device::select_configured_input_device_and_config;
 use base64::Engine;
 use codex_client::build_reqwest_client_with_custom_ca;
 use codex_core::auth::AuthCredentialsStoreMode;
@@ -89,7 +91,7 @@ impl VoiceCapture {
         tx: AppEventSender,
         playback_queued_samples: Arc<AtomicUsize>,
     ) -> Result<Self, String> {
-        let (device, config) = select_realtime_input_device_and_config(config)?;
+        let (device, config) = select_configured_input_device_and_config(config)?;
 
         let sample_rate = config.sample_rate().0;
         let channels = config.channels();
@@ -283,14 +285,8 @@ fn select_default_input_device_and_config()
     let device = host
         .default_input_device()
         .ok_or_else(|| "no input audio device available".to_string())?;
-    let config = crate::audio_device::preferred_input_config(&device)?;
+    let config = preferred_input_config(&device)?;
     Ok((device, config))
-}
-
-fn select_realtime_input_device_and_config(
-    config: &Config,
-) -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
-    crate::audio_device::select_configured_input_device_and_config(config)
 }
 
 fn build_input_stream(
@@ -668,7 +664,9 @@ fn fill_output_i16(
             };
         }
         if consumed > 0 {
-            consume_output_samples(queued_samples, consumed);
+            let _ = queued_samples.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |queued| {
+                Some(queued.saturating_sub(consumed))
+            });
         }
         return;
     }
@@ -692,7 +690,9 @@ fn fill_output_f32(
             *sample = (v as f32) / (i16::MAX as f32);
         }
         if consumed > 0 {
-            consume_output_samples(queued_samples, consumed);
+            let _ = queued_samples.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |queued| {
+                Some(queued.saturating_sub(consumed))
+            });
         }
         return;
     }
@@ -716,17 +716,13 @@ fn fill_output_u16(
             *sample = (v as i32 + 32768).clamp(0, u16::MAX as i32) as u16;
         }
         if consumed > 0 {
-            consume_output_samples(queued_samples, consumed);
+            let _ = queued_samples.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |queued| {
+                Some(queued.saturating_sub(consumed))
+            });
         }
         return;
     }
     output.fill(32768);
-}
-
-fn consume_output_samples(queued_samples: &Arc<AtomicUsize>, consumed: usize) {
-    let _ = queued_samples.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |queued| {
-        Some(queued.saturating_sub(consumed))
-    });
 }
 
 fn should_send_realtime_input(

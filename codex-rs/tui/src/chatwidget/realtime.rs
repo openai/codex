@@ -196,16 +196,15 @@ impl ChatWidget {
         None
     }
 
-    fn realtime_footer_hint_items() -> Vec<(String, String)> {
-        vec![("/realtime".to_string(), "stop live voice".to_string())]
-    }
-
     pub(super) fn start_realtime_conversation(&mut self) {
         self.realtime_conversation.phase = RealtimeConversationPhase::Starting;
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
         self.realtime_conversation.warned_audio_only_submission = false;
-        self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
+        self.set_footer_hint_override(Some(vec![(
+            "/realtime".to_string(),
+            "stop live voice".to_string(),
+        )]));
         self.submit_op(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: REALTIME_CONVERSATION_PROMPT.to_string(),
             session_id: None,
@@ -255,7 +254,10 @@ impl ChatWidget {
         self.realtime_conversation.phase = RealtimeConversationPhase::Active;
         self.realtime_conversation.session_id = ev.session_id;
         self.realtime_conversation.warned_audio_only_submission = false;
-        self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
+        self.set_footer_hint_override(Some(vec![(
+            "/realtime".to_string(),
+            "stop live voice".to_string(),
+        )]));
         self.start_realtime_local_audio();
         self.request_redraw();
     }
@@ -268,11 +270,16 @@ impl ChatWidget {
             RealtimeEvent::SessionUpdated { session_id, .. } => {
                 self.realtime_conversation.session_id = Some(session_id);
             }
-            RealtimeEvent::InputAudioSpeechStarted(_) => self.interrupt_realtime_audio_playback(),
+            RealtimeEvent::InputAudioSpeechStarted(_) | RealtimeEvent::ResponseCancelled(_) =>
+            {
+                #[cfg(not(target_os = "linux"))]
+                if let Some(player) = &self.realtime_conversation.audio_player {
+                    player.clear();
+                }
+            }
             RealtimeEvent::InputTranscriptDelta(_) => {}
             RealtimeEvent::OutputTranscriptDelta(_) => {}
             RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
-            RealtimeEvent::ResponseCancelled(_) => self.interrupt_realtime_audio_playback(),
             RealtimeEvent::ConversationItemAdded(_item) => {}
             RealtimeEvent::ConversationItemDone { .. } => {}
             RealtimeEvent::HandoffRequested(_) => {}
@@ -314,16 +321,6 @@ impl ChatWidget {
             let _ = frame;
         }
     }
-
-    #[cfg(not(target_os = "linux"))]
-    fn interrupt_realtime_audio_playback(&mut self) {
-        if let Some(player) = &self.realtime_conversation.audio_player {
-            player.clear();
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn interrupt_realtime_audio_playback(&mut self) {}
 
     #[cfg(not(target_os = "linux"))]
     fn start_realtime_local_audio(&mut self) {
