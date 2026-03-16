@@ -3349,7 +3349,7 @@ impl CodexMessageProcessor {
             approval_policy,
             approvals_reviewer,
             sandbox,
-            config: request_overrides,
+            config: mut request_overrides,
             base_instructions,
             developer_instructions,
             personality,
@@ -3375,7 +3375,7 @@ impl CodexMessageProcessor {
         };
 
         let history_cwd = thread_history.session_cwd();
-        let typesafe_overrides = self.build_thread_config_overrides(
+        let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
             service_tier,
@@ -3387,6 +3387,30 @@ impl CodexMessageProcessor {
             developer_instructions,
             personality,
         );
+        let should_use_persisted_model = typesafe_overrides.model.is_none();
+        let should_use_persisted_reasoning_effort = !request_overrides
+            .as_ref()
+            .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"));
+        if (should_use_persisted_model || should_use_persisted_reasoning_effort)
+            && let codex_protocol::protocol::InitialHistory::Resumed(resumed_history) =
+                &thread_history
+            && let Some(state_db_ctx) = get_state_db(&self.config).await
+            && let Ok(Some(metadata)) = state_db_ctx
+                .get_thread(resumed_history.conversation_id)
+                .await
+        {
+            if should_use_persisted_model && let Some(model) = metadata.model {
+                typesafe_overrides.model = Some(model);
+            }
+            if should_use_persisted_reasoning_effort
+                && let Some(reasoning_effort) = metadata.reasoning_effort
+            {
+                request_overrides.get_or_insert_with(HashMap::new).insert(
+                    "model_reasoning_effort".to_string(),
+                    serde_json::Value::String(reasoning_effort.to_string()),
+                );
+            }
+        }
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let cloud_requirements = self.current_cloud_requirements();
