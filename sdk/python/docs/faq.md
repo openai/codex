@@ -8,8 +8,8 @@
 
 ## `run()` vs `stream()`
 
-- `Turn.run()` / `AsyncTurn.run()` is the easiest path. It consumes events until completion and returns the canonical generated app-server `Turn` model.
-- `Turn.stream()` / `AsyncTurn.stream()` yields raw notifications (`Notification`) so you can react event-by-event.
+- `TurnHandle.run()` / `AsyncTurnHandle.run()` is the easiest path. It consumes events until completion and returns the canonical generated app-server `Turn` model.
+- `TurnHandle.stream()` / `AsyncTurnHandle.stream()` yields raw notifications (`Notification`) so you can react event-by-event.
 
 Choose `run()` for most apps. Choose `stream()` for progress UIs, custom timeout logic, or custom parsing.
 

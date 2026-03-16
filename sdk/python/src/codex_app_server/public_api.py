@@ -490,7 +490,7 @@ class Thread:
         sandbox_policy: SandboxPolicy | None = None,
         service_tier: ServiceTier | None = None,
         summary: ReasoningSummary | None = None,
-    ) -> Turn:
+    ) -> TurnHandle:
         wire_input = _to_wire_input(input)
         params = TurnStartParams(
             thread_id=self.id,
@@ -506,7 +506,7 @@ class Thread:
             summary=summary,
         )
         turn = self._client.turn_start(self.id, wire_input, params=params)
-        return Turn(self._client, self.id, turn.turn.id)
+        return TurnHandle(self._client, self.id, turn.turn.id)
     # END GENERATED: Thread.flat_methods
 
     def read(self, *, include_turns: bool = False) -> ThreadReadResponse:
@@ -538,7 +538,7 @@ class AsyncThread:
         sandbox_policy: SandboxPolicy | None = None,
         service_tier: ServiceTier | None = None,
         summary: ReasoningSummary | None = None,
-    ) -> AsyncTurn:
+    ) -> AsyncTurnHandle:
         await self._codex._ensure_initialized()
         wire_input = _to_wire_input(input)
         params = TurnStartParams(
@@ -559,7 +559,7 @@ class AsyncThread:
             wire_input,
             params=params,
         )
-        return AsyncTurn(self._codex, self.id, turn.turn.id)
+        return AsyncTurnHandle(self._codex, self.id, turn.turn.id)
     # END GENERATED: AsyncThread.flat_methods
 
     async def read(self, *, include_turns: bool = False) -> ThreadReadResponse:
@@ -576,7 +576,7 @@ class AsyncThread:
 
 
 @dataclass(slots=True)
-class Turn:
+class TurnHandle:
     _client: AppServerClient
     thread_id: str
     id: str
@@ -620,7 +620,7 @@ class Turn:
 
 
 @dataclass(slots=True)
-class AsyncTurn:
+class AsyncTurnHandle:
     _codex: AsyncCodex
     thread_id: str
     id: str

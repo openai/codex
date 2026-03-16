@@ -2,7 +2,7 @@
 
 Public surface of `codex_app_server` for app-server v2.
 
-This SDK surface is experimental. The current implementation intentionally allows only one active `Turn.stream()` or `Turn.run()` consumer per client instance at a time.
+This SDK surface is experimental. The current implementation intentionally allows only one active `TurnHandle.stream()` or `TurnHandle.run()` consumer per client instance at a time.
 
 ## Package Entry
 
@@ -12,8 +12,8 @@ from codex_app_server import (
     AsyncCodex,
     Thread,
     AsyncThread,
-    Turn,
-    AsyncTurn,
+    TurnHandle,
+    AsyncTurnHandle,
     InitializeResponse,
     Input,
     InputItem,
@@ -87,21 +87,21 @@ async with AsyncCodex() as codex:
 
 ### Thread
 
-- `turn(input: Input, *, approval_policy=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, summary=None) -> Turn`
+- `turn(input: Input, *, approval_policy=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, summary=None) -> TurnHandle`
 - `read(*, include_turns: bool = False) -> ThreadReadResponse`
 - `set_name(name: str) -> ThreadSetNameResponse`
 - `compact() -> ThreadCompactStartResponse`
 
 ### AsyncThread
 
-- `turn(input: Input, *, approval_policy=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, summary=None) -> Awaitable[AsyncTurn]`
+- `turn(input: Input, *, approval_policy=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, summary=None) -> Awaitable[AsyncTurnHandle]`
 - `read(*, include_turns: bool = False) -> Awaitable[ThreadReadResponse]`
 - `set_name(name: str) -> Awaitable[ThreadSetNameResponse]`
 - `compact() -> Awaitable[ThreadCompactStartResponse]`
 
-## Turn / AsyncTurn
+## TurnHandle / AsyncTurnHandle
 
-### Turn
+### TurnHandle
 
 - `steer(input: Input) -> TurnSteerResponse`
 - `interrupt() -> TurnInterruptResponse`
@@ -113,7 +113,7 @@ Behavior notes:
 - `stream()` and `run()` are exclusive per client instance in the current experimental build
 - starting a second turn consumer on the same `Codex` instance raises `RuntimeError`
 
-### AsyncTurn
+### AsyncTurnHandle
 
 - `steer(input: Input) -> Awaitable[TurnSteerResponse]`
 - `interrupt() -> Awaitable[TurnInterruptResponse]`

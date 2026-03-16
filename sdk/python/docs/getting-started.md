@@ -42,7 +42,7 @@ What happened:
 - `Codex()` started and initialized `codex app-server`.
 - `thread_start(...)` created a thread.
 - `turn(...).run()` consumed events until `turn/completed` and returned the canonical generated app-server `Turn` model.
-- one client can have only one active `Turn.stream()` / `Turn.run()` consumer at a time in the current experimental build
+- one client can have only one active `TurnHandle.stream()` / `TurnHandle.run()` consumer at a time in the current experimental build
 
 ## 3) Continue the same thread (multi-turn)
 

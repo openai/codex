@@ -40,7 +40,7 @@ from .models import InitializeResponse
 from .public_api import (
     AsyncCodex,
     AsyncThread,
-    AsyncTurn,
+    AsyncTurnHandle,
     Codex,
     ImageInput,
     Input,
@@ -50,7 +50,7 @@ from .public_api import (
     SkillInput,
     TextInput,
     Thread,
-    Turn,
+    TurnHandle,
 )
 from .retry import retry_on_overload
 
@@ -65,8 +65,8 @@ __all__ = [
     "AsyncCodex",
     "Thread",
     "AsyncThread",
-    "Turn",
-    "AsyncTurn",
+    "TurnHandle",
+    "AsyncTurnHandle",
     "InitializeResponse",
     "Input",
     "InputItem",

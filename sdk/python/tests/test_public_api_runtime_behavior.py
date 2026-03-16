@@ -14,7 +14,12 @@ from codex_app_server.generated.v2_all import (
     TurnStatus,
 )
 from codex_app_server.models import InitializeResponse, Notification
-from codex_app_server.public_api import AsyncCodex, AsyncTurn, Codex, Turn
+from codex_app_server.public_api import (
+    AsyncCodex,
+    AsyncTurnHandle,
+    Codex,
+    TurnHandle,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -162,10 +167,10 @@ def test_turn_stream_rejects_second_active_consumer() -> None:
     )
     client.next_notification = notifications.popleft  # type: ignore[method-assign]
 
-    first_stream = Turn(client, "thread-1", "turn-1").stream()
+    first_stream = TurnHandle(client, "thread-1", "turn-1").stream()
     assert next(first_stream).method == "item/agentMessage/delta"
 
-    second_stream = Turn(client, "thread-1", "turn-2").stream()
+    second_stream = TurnHandle(client, "thread-1", "turn-2").stream()
     with pytest.raises(RuntimeError, match="Concurrent turn consumers are not yet supported"):
         next(second_stream)
 
@@ -192,10 +197,10 @@ def test_async_turn_stream_rejects_second_active_consumer() -> None:
         codex._ensure_initialized = fake_ensure_initialized  # type: ignore[method-assign]
         codex._client.next_notification = fake_next_notification  # type: ignore[method-assign]
 
-        first_stream = AsyncTurn(codex, "thread-1", "turn-1").stream()
+        first_stream = AsyncTurnHandle(codex, "thread-1", "turn-1").stream()
         assert (await anext(first_stream)).method == "item/agentMessage/delta"
 
-        second_stream = AsyncTurn(codex, "thread-1", "turn-2").stream()
+        second_stream = AsyncTurnHandle(codex, "thread-1", "turn-2").stream()
         with pytest.raises(RuntimeError, match="Concurrent turn consumers are not yet supported"):
             await anext(second_stream)
 
@@ -213,7 +218,7 @@ def test_turn_run_returns_completed_turn_payload() -> None:
     )
     client.next_notification = notifications.popleft  # type: ignore[method-assign]
 
-    result = Turn(client, "thread-1", "turn-1").run()
+    result = TurnHandle(client, "thread-1", "turn-1").run()
 
     assert result.id == "turn-1"
     assert result.status == TurnStatus.completed
