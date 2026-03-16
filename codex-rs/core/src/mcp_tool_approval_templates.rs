@@ -142,8 +142,8 @@ fn render_tool_params(
     tool_params: &Map<String, Value>,
     template_params: &[ConsequentialToolTemplateParam],
 ) -> Option<(Option<Value>, Vec<RenderedMcpToolApprovalParam>)> {
-    let mut relabeled = Map::new();
     let mut display_params = Vec::new();
+    let mut display_names = HashSet::new();
     let mut handled_names = HashSet::new();
 
     for template_param in template_params {
@@ -154,7 +154,7 @@ fn render_tool_params(
         let Some(value) = tool_params.get(&template_param.name) else {
             continue;
         };
-        if relabeled.insert(label.to_string(), value.clone()).is_some() {
+        if !display_names.insert(label.to_string()) {
             return None;
         }
         display_params.push(RenderedMcpToolApprovalParam {
@@ -174,7 +174,7 @@ fn render_tool_params(
         if handled_names.contains(name.as_str()) {
             continue;
         }
-        if relabeled.insert(name.clone(), value.clone()).is_some() {
+        if !display_names.insert(name.clone()) {
             return None;
         }
         display_params.push(RenderedMcpToolApprovalParam {
@@ -183,7 +183,7 @@ fn render_tool_params(
         });
     }
 
-    Some((Some(Value::Object(relabeled)), display_params))
+    Some((Some(Value::Object(tool_params.clone())), display_params))
 }
 
 #[cfg(test)]
@@ -231,8 +231,8 @@ mod tests {
                 question: "Allow Calendar to create an event?".to_string(),
                 elicitation_message: "Allow Calendar to create an event?".to_string(),
                 tool_params: Some(json!({
-                    "Calendar": "primary",
-                    "Title": "Roadmap review",
+                    "title": "Roadmap review",
+                    "calendar_id": "primary",
                     "timezone": "UTC",
                 })),
                 tool_params_display: vec![
