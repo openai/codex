@@ -7490,7 +7490,10 @@ guardian_approval = true
                         local_images: Vec::new(),
                         text_elements: Vec::new(),
                     }),
-                    EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+                    EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+                        num_turns: 1,
+                        rolled_back_to_turn_context: None,
+                    }),
                     EventMsg::UserMessage(UserMessageEvent {
                         message: "third prompt".to_string(),
                         images: None,
@@ -7580,7 +7583,10 @@ guardian_approval = true
         // Simulate a live rollback arriving before queued replay inserts are drained.
         app.handle_codex_event_now(Event {
             id: "live-rollback".to_string(),
-            msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+            msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+                num_turns: 1,
+                rolled_back_to_turn_context: None,
+            }),
         });
 
         let mut saw_rollback = false;

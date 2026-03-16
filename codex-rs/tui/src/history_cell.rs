@@ -30,6 +30,7 @@ use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
 use crate::tooltips;
+use crate::turn_context::TurnContextSnapshot;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
@@ -203,6 +204,7 @@ pub(crate) struct UserHistoryCell {
     #[allow(dead_code)]
     pub local_image_paths: Vec<PathBuf>,
     pub remote_image_urls: Vec<String>,
+    pub turn_context: Option<TurnContextSnapshot>,
 }
 
 /// Build logical lines for a user message with styled text elements.
@@ -1208,12 +1210,14 @@ pub(crate) fn new_user_prompt(
     text_elements: Vec<TextElement>,
     local_image_paths: Vec<PathBuf>,
     remote_image_urls: Vec<String>,
+    turn_context: Option<TurnContextSnapshot>,
 ) -> UserHistoryCell {
     UserHistoryCell {
         message,
         text_elements,
         local_image_paths,
         remote_image_urls,
+        turn_context,
     }
 }
 
@@ -3841,6 +3845,7 @@ mod tests {
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: Vec::new(),
+            turn_context: None,
         };
 
         // Small width to force wrapping more clearly. Effective wrap width is width-2 due to the ▌ prefix and trailing space.
@@ -3858,6 +3863,7 @@ mod tests {
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: vec!["https://example.com/example.png".to_string()],
+            turn_context: None,
         };
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
@@ -3874,6 +3880,7 @@ mod tests {
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: vec!["data:image/png;base64,aGVsbG8=".to_string()],
+            turn_context: None,
         };
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
@@ -3892,6 +3899,7 @@ mod tests {
                 "https://example.com/one.png".to_string(),
                 "https://example.com/two.png".to_string(),
             ],
+            turn_context: None,
         };
 
         let rendered = render_lines(&cell.display_lines(80)).join("\n");
@@ -3911,6 +3919,7 @@ mod tests {
                 "https://example.com/one.png".to_string(),
                 "https://example.com/two.png".to_string(),
             ],
+            turn_context: None,
         };
 
         let width = 80;
@@ -3930,6 +3939,7 @@ mod tests {
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: vec!["https://example.com/one.png".to_string()],
+            turn_context: None,
         };
 
         let rendered = render_lines(&cell.display_lines(80));
@@ -3953,6 +3963,7 @@ mod tests {
             )],
             local_image_paths: Vec::new(),
             remote_image_urls: vec!["https://example.com/one.png".to_string()],
+            turn_context: None,
         };
 
         let rendered = render_lines(&cell.display_lines(80));
@@ -3973,6 +3984,7 @@ mod tests {
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: Vec::new(),
+            turn_context: None,
         });
 
         let width: u16 = 52;

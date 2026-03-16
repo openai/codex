@@ -1491,7 +1491,10 @@ mod tests {
                 message: "A2".into(),
                 phase: None,
             }),
-            EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+            EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+                num_turns: 1,
+                rolled_back_to_turn_context: None,
+            }),
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Third".into(),
                 images: None,
@@ -1574,7 +1577,10 @@ mod tests {
                 message: "A2".into(),
                 phase: None,
             }),
-            EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 99 }),
+            EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+                num_turns: 99,
+                rolled_back_to_turn_context: None,
+            }),
         ];
 
         let items = events
