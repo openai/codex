@@ -497,7 +497,9 @@ fn turn_snapshot_events(thread_id: ThreadId, turn: &Turn) -> Vec<Event> {
                 }),
             });
         }
-        TurnStatus::InProgress => {}
+        TurnStatus::InProgress => {
+            // Preserve unfinished turns during snapshot replay without emitting completion events.
+        }
     }
 
     events

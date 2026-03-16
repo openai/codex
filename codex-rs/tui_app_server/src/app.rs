@@ -2133,6 +2133,14 @@ impl App {
             msg: EventMsg::SessionConfigured(session_configured.clone()),
         };
         let history_events = thread_snapshot_events(&started.thread);
+        let replay_snapshot = {
+            let mut replay_store = ThreadEventStore::new(history_events.len().saturating_add(1));
+            replay_store.push_event(session_event.clone());
+            for event in &history_events {
+                replay_store.push_event(event.clone());
+            }
+            replay_store.snapshot()
+        };
 
         self.primary_thread_id = Some(thread_id);
         self.primary_session_configured = Some(session_configured);
@@ -2142,17 +2150,16 @@ impl App {
             let channel = self.ensure_thread_channel(thread_id);
             Arc::clone(&channel.store)
         };
-        let snapshot = {
+        {
             let mut store = store.lock().await;
             store.push_event(session_event);
             for event in history_events {
                 store.push_event(event);
             }
-            store.snapshot()
-        };
+        }
 
         self.activate_thread_channel(thread_id).await;
-        self.replay_thread_snapshot(snapshot, false);
+        self.replay_thread_snapshot(replay_snapshot, false);
         Ok(())
     }
 
@@ -6804,6 +6811,96 @@ guardian_approval = true
 
         assert_eq!(user_messages, vec!["hello from remote".to_string()]);
         assert_eq!(agent_messages, vec!["• restored response".to_string()]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restore_started_app_server_thread_replays_history_beyond_store_capacity() -> Result<()>
+    {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let turn_count = THREAD_EVENT_CHANNEL_CAPACITY + 5;
+
+        let turns = (0..turn_count)
+            .map(|index| Turn {
+                id: format!("turn-{index}"),
+                items: vec![ThreadItem::UserMessage {
+                    id: format!("user-{index}"),
+                    content: vec![codex_app_server_protocol::UserInput::Text {
+                        text: format!("message {index}"),
+                        text_elements: Vec::new(),
+                    }],
+                }],
+                status: TurnStatus::Completed,
+                error: None,
+            })
+            .collect();
+
+        app.restore_started_app_server_thread(AppServerStartedThread {
+            thread: Thread {
+                id: thread_id.to_string(),
+                preview: "hello".to_string(),
+                ephemeral: false,
+                model_provider: "test-provider".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: ThreadStatus::Idle,
+                path: None,
+                cwd: PathBuf::from("/tmp/project"),
+                cli_version: "test".to_string(),
+                source: SessionSource::Cli.into(),
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("restored".to_string()),
+                turns,
+            },
+            session_configured: SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: Some("restored".to_string()),
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            },
+        })
+        .await?;
+
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let cell: Arc<dyn HistoryCell> = cell.into();
+                app.transcript_cells.push(cell);
+            }
+        }
+
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+
+        assert_eq!(user_messages.len(), turn_count);
+        assert_eq!(user_messages.first().map(String::as_str), Some("message 0"));
+        let last_message = format!("message {}", turn_count - 1);
+        assert_eq!(
+            user_messages.last().map(String::as_str),
+            Some(last_message.as_str())
+        );
 
         Ok(())
     }
