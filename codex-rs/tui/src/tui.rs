@@ -65,6 +65,13 @@ fn is_tmux_terminal(terminal_info: &codex_core::terminal::TerminalInfo) -> bool 
     matches!(terminal_info.multiplexer, Some(Multiplexer::Tmux { .. }))
 }
 
+pub(crate) fn animations_enabled_for_terminal(
+    animations_enabled: bool,
+    terminal_info: &codex_core::terminal::TerminalInfo,
+) -> bool {
+    animations_enabled && !is_tmux_terminal(terminal_info)
+}
+
 fn min_frame_interval_for_terminal(terminal_info: &codex_core::terminal::TerminalInfo) -> Duration {
     if is_tmux_terminal(terminal_info) {
         Duration::ZERO
@@ -601,9 +608,25 @@ mod tests {
         };
 
         assert_eq!(min_frame_interval_for_terminal(&info), Duration::ZERO);
+        assert_eq!(animations_enabled_for_terminal(true, &info), false);
+        assert_eq!(animations_enabled_for_terminal(false, &info), false);
         assert_eq!(
             scroll_region_mode_for_terminal(&info),
             ScrollRegionMode::Disabled
         );
+    }
+
+    #[test]
+    fn non_tmux_preserves_animation_setting() {
+        let info = TerminalInfo {
+            name: TerminalName::Unknown,
+            term_program: None,
+            version: None,
+            term: None,
+            multiplexer: None,
+        };
+
+        assert_eq!(animations_enabled_for_terminal(true, &info), true);
+        assert_eq!(animations_enabled_for_terminal(false, &info), false);
     }
 }

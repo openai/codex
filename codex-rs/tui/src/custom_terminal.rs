@@ -42,6 +42,7 @@ use ratatui::layout::Rect;
 use ratatui::layout::Size;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
+use ratatui::style::Style;
 use ratatui::widgets::WidgetRef;
 use unicode_width::UnicodeWidthStr;
 
@@ -483,6 +484,25 @@ where
             .visible_history_rows
             .saturating_add(inserted_rows)
             .min(self.viewport_area.top());
+    }
+
+    /// Force the next draw to repaint the full viewport after out-of-band terminal mutations.
+    pub(crate) fn invalidate_viewport_cache(&mut self) {
+        let area = self.viewport_area;
+        let buffer = self.previous_buffer_mut();
+        buffer.reset();
+        if area.is_empty() {
+            return;
+        }
+        // Fill with visible placeholders so diffing redraws every cell in the viewport on
+        // the next frame instead of treating unchanged whitespace as already up to date.
+        let fill = "X".repeat(area.width as usize);
+        if fill.is_empty() {
+            return;
+        }
+        for row in 0..area.height {
+            buffer.set_string(area.x, area.y + row, &fill, Style::default());
+        }
     }
 
     /// Clears the inactive buffer and swaps it with the current buffer

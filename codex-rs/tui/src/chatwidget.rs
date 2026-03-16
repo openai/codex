@@ -3256,6 +3256,9 @@ impl ChatWidget {
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
         config.model = model.clone();
+        let terminal_info = terminal_info();
+        config.animations =
+            crate::tui::animations_enabled_for_terminal(config.animations, &terminal_info);
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
@@ -3286,7 +3289,7 @@ impl ChatWidget {
 
         let current_cwd = Some(config.cwd.clone());
         let queued_message_edit_binding =
-            queued_message_edit_binding_for_terminal(terminal_info().name);
+            queued_message_edit_binding_for_terminal(terminal_info.name);
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -3447,6 +3450,9 @@ impl ChatWidget {
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
         config.model = model.clone();
+        let terminal_info = terminal_info();
+        config.animations =
+            crate::tui::animations_enabled_for_terminal(config.animations, &terminal_info);
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
@@ -3476,7 +3482,7 @@ impl ChatWidget {
         let current_cwd = Some(config.cwd.clone());
 
         let queued_message_edit_binding =
-            queued_message_edit_binding_for_terminal(terminal_info().name);
+            queued_message_edit_binding_for_terminal(terminal_info.name);
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -3627,6 +3633,10 @@ impl ChatWidget {
             session_telemetry,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
+        let mut config = config;
+        let terminal_info = terminal_info();
+        config.animations =
+            crate::tui::animations_enabled_for_terminal(config.animations, &terminal_info);
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
@@ -3658,7 +3668,7 @@ impl ChatWidget {
         };
 
         let queued_message_edit_binding =
-            queued_message_edit_binding_for_terminal(terminal_info().name);
+            queued_message_edit_binding_for_terminal(terminal_info.name);
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),

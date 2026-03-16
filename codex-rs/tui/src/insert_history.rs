@@ -106,11 +106,27 @@ where
         queue!(writer, MoveTo(0, area.top()))?;
         queue!(writer, Clear(ClearType::FromCursorDown))?;
 
-        // Append history lines at the bottom without using scroll regions.
-        queue!(writer, MoveTo(0, screen_size.height.saturating_sub(1)))?;
-        for line in wrapped {
-            queue!(writer, Print("\r\n"))?;
-            let physical_rows = line.width().max(1).div_ceil(wrap_width);
+        let mut visible = Vec::new();
+        let mut visible_rows = 0u16;
+        for line in wrapped.into_iter().rev() {
+            let physical_rows =
+                u16::try_from(line.width().max(1).div_ceil(wrap_width)).unwrap_or(u16::MAX);
+            if visible_rows.saturating_add(physical_rows) > area.top() {
+                break;
+            }
+            visible_rows = visible_rows.saturating_add(physical_rows);
+            visible.push((line, physical_rows));
+        }
+        visible.reverse();
+
+        if visible_rows > 0 {
+            queue!(writer, MoveTo(0, 0))?;
+            queue!(writer, DeleteLines(visible_rows))?;
+        }
+
+        let mut row = area.top().saturating_sub(visible_rows);
+        for (line, physical_rows) in visible {
+            queue!(writer, MoveTo(0, row))?;
             if physical_rows > 1 {
                 queue!(writer, SavePosition)?;
                 for _ in 1..physical_rows {
@@ -142,11 +158,13 @@ where
                 })
                 .collect();
             write_spans(writer, merged_spans.iter())?;
+            row = row.saturating_add(physical_rows);
         }
 
         queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
         terminal.set_viewport_area(area);
         terminal.note_history_rows_inserted(wrapped_lines);
+        terminal.invalidate_viewport_cache();
         return Ok(());
     }
 
@@ -293,6 +311,25 @@ impl Command for ResetScrollRegion {
     #[cfg(windows)]
     fn is_ansi_code_supported(&self) -> bool {
         // TODO(nornagon): is this supported on Windows?
+        true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeleteLines(pub u16);
+
+impl Command for DeleteLines {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        write!(f, "\x1b[{}M", self.0)
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        panic!("tried to execute DeleteLines command using WinAPI, use ANSI instead");
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
         true
     }
 }
@@ -478,6 +515,108 @@ mod tests {
 
         let output = String::from_utf8_lossy(term.backend().output());
         assert_eq!(contains_scroll_region_sequence(&output), true);
+    }
+
+    #[test]
+    fn tmux_mode_redraws_unchanged_viewport_after_history_insert() {
+        use ratatui::style::Style;
+
+        let width: u16 = 20;
+        let height: u16 = 8;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(0, height - 2, width, 2);
+        term.set_viewport_area(viewport);
+
+        let render_ui = |frame: &mut crate::custom_terminal::Frame<'_>| {
+            let area = frame.area();
+            frame
+                .buffer_mut()
+                .set_string(area.x, area.y, "status: ready", Style::default());
+            frame
+                .buffer_mut()
+                .set_string(area.x, area.y + 1, "prompt> hello", Style::default());
+        };
+
+        term.draw(render_ui).expect("initial draw");
+
+        insert_history_lines_with_mode(
+            &mut term,
+            vec![Line::from("assistant reply")],
+            ScrollRegionMode::Disabled,
+        )
+        .expect("insert history");
+
+        term.draw(render_ui).expect("redraw after history");
+        insta::assert_snapshot!(
+            "tmux_mode_redraws_unchanged_viewport_after_history_insert",
+            term.backend()
+        );
+
+        let rendered = term.backend().vt100().screen().contents();
+        assert!(
+            rendered.contains("status: ready"),
+            "expected viewport status line to be redrawn after tmux history insert:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("prompt> hello"),
+            "expected viewport prompt line to be redrawn after tmux history insert:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn tmux_mode_keeps_inserted_history_visible_above_viewport() {
+        use ratatui::style::Style;
+
+        let width: u16 = 24;
+        let height: u16 = 8;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(0, height - 2, width, 2);
+        term.set_viewport_area(viewport);
+
+        let render_ui = |frame: &mut crate::custom_terminal::Frame<'_>| {
+            let area = frame.area();
+            frame
+                .buffer_mut()
+                .set_string(area.x, area.y, "status: ready", Style::default());
+            frame
+                .buffer_mut()
+                .set_string(area.x, area.y + 1, "prompt> hello", Style::default());
+        };
+
+        term.draw(render_ui).expect("initial draw");
+
+        insert_history_lines_with_mode(
+            &mut term,
+            vec![Line::from("user> hi"), Line::from("assistant> hello")],
+            ScrollRegionMode::Disabled,
+        )
+        .expect("insert history");
+
+        term.draw(render_ui).expect("redraw after history");
+        insta::assert_snapshot!(
+            "tmux_mode_keeps_inserted_history_visible_above_viewport",
+            term.backend()
+        );
+
+        let rendered = term.backend().vt100().screen().contents();
+        assert!(
+            rendered.contains("user> hi"),
+            "expected inserted user history to stay visible in tmux mode:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("assistant> hello"),
+            "expected inserted agent history to stay visible in tmux mode:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("status: ready"),
+            "expected viewport status line to stay visible after tmux history insert:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("prompt> hello"),
+            "expected viewport prompt line to stay visible after tmux history insert:\n{rendered}"
+        );
     }
 
     #[test]
