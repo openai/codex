@@ -1,7 +1,7 @@
 # What: make upstream V8 sources build cleanly in this hermetic toolchain setup.
-# Scope: minimal source-level portability fixes only, such as libexecinfo guards
-# and warning annotations; no dependency include-path rewrites or intentional V8
-# feature changes.
+# Scope: minimal source-level portability fixes only, such as libexecinfo guards,
+# weak glibc symbol handling, and warning annotations; no dependency
+# include-path rewrites or intentional V8 feature changes.
 
 diff --git a/orig/v8-14.6.202.11/src/base/debug/stack_trace_posix.cc b/mod/v8-14.6.202.11/src/base/debug/stack_trace_posix.cc
 index 6176ed4..a02043d 100644
@@ -23,6 +23,45 @@ index 6176ed4..a02043d 100644
  // Demangles C++ symbols in the given text. Example:
  //
  // "out/Debug/base_unittests(_ZN10StackTraceC1Ev+0x20) [0x817778c]"
+
+diff --git a/orig/v8-14.6.202.11/src/base/platform/platform-posix.cc b/mod/v8-14.6.202.11/src/base/platform/platform-posix.cc
+index 4c7d878..0e45eb3 100644
+--- a/orig/v8-14.6.202.11/src/base/platform/platform-posix.cc
++++ b/mod/v8-14.6.202.11/src/base/platform/platform-posix.cc
+@@ -95,7 +95,7 @@
+ #endif
+
+ #if defined(V8_LIBC_GLIBC)
+-extern "C" void* __libc_stack_end;
++extern "C" void* __libc_stack_end V8_WEAK;
+ #endif
+
+ namespace v8 {
+@@ -1461,10 +1461,13 @@
+     // pthread_getattr_np can fail for the main thread.
+     // For the main thread we prefer using __libc_stack_end (if it exists) since
+     // it generally provides a tighter limit for CSS.
+-    return __libc_stack_end;
++    if (__libc_stack_end != nullptr) {
++      return __libc_stack_end;
++    }
+ #else
+     return nullptr;
+ #endif  // !defined(V8_LIBC_GLIBC)
++    return nullptr;
+   }
+   void* base;
+   size_t size;
+@@ -1476,7 +1479,8 @@
+   // __libc_stack_end is process global and thus is only valid for
+   // the main thread. Check whether this is the main thread by checking
+   // __libc_stack_end is within the thread's stack.
+-  if ((base <= __libc_stack_end) && (__libc_stack_end <= stack_start)) {
++  if (__libc_stack_end != nullptr &&
++      (base <= __libc_stack_end) && (__libc_stack_end <= stack_start)) {
+     DCHECK(MainThreadIsCurrentThread());
+     return __libc_stack_end;
+   }
 
 diff --git a/orig/v8-14.6.202.11/src/libplatform/default-thread-isolated-allocator.cc b/mod/v8-14.6.202.11/src/libplatform/default-thread-isolated-allocator.cc
 index bda0e43..b44f1d9 100644
