@@ -99,7 +99,7 @@ jobs:
 
       - if: ${{ matrix.install_musl }}
         name: Install Zig
-        uses: mlugg/setup-zig@v2
+        uses: mlugg/setup-zig@3a27cba13dd9b83cb045d5eb2d29970d6e8c4972 # v2
         with:
           version: 0.14.0
 
