@@ -13,7 +13,7 @@ from codex_app_server import (
     Codex,
     TextInput,
     ThreadTokenUsageUpdatedNotification,
-    TurnCompletedNotificationPayload,
+    TurnCompletedNotification,
 )
 
 print("Codex mini CLI. Type /exit to quit.")
@@ -72,7 +72,7 @@ with Codex(config=runtime_config()) as codex:
             if isinstance(payload, ThreadTokenUsageUpdatedNotification):
                 usage = payload.token_usage
                 continue
-            if isinstance(payload, TurnCompletedNotificationPayload):
+            if isinstance(payload, TurnCompletedNotification):
                 status = payload.turn.status
                 error = payload.turn.error
 

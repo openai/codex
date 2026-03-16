@@ -10,12 +10,11 @@ import codex_app_server.public_api as public_api_module
 from codex_app_server.client import AppServerClient
 from codex_app_server.generated.v2_all import (
     AgentMessageDeltaNotification,
-    RawResponseItemCompletedNotification,
-    ThreadTokenUsageUpdatedNotification,
+    TurnCompletedNotification,
+    TurnStatus,
 )
 from codex_app_server.models import InitializeResponse, Notification
 from codex_app_server.public_api import AsyncCodex, AsyncTurn, Codex, Turn
-from codex_app_server.public_types import TurnStatus
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,60 +38,6 @@ def _delta_notification(
     )
 
 
-def _raw_response_notification(
-    *,
-    thread_id: str = "thread-1",
-    turn_id: str = "turn-1",
-    text: str = "raw-text",
-) -> Notification:
-    return Notification(
-        method="rawResponseItem/completed",
-        payload=RawResponseItemCompletedNotification.model_validate(
-            {
-                "item": {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": text}],
-                },
-                "threadId": thread_id,
-                "turnId": turn_id,
-            }
-        ),
-    )
-
-
-def _usage_notification(
-    *,
-    thread_id: str = "thread-1",
-    turn_id: str = "turn-1",
-) -> Notification:
-    return Notification(
-        method="thread/tokenUsage/updated",
-        payload=ThreadTokenUsageUpdatedNotification.model_validate(
-            {
-                "threadId": thread_id,
-                "turnId": turn_id,
-                "tokenUsage": {
-                    "last": {
-                        "cachedInputTokens": 0,
-                        "inputTokens": 1,
-                        "outputTokens": 2,
-                        "reasoningOutputTokens": 0,
-                        "totalTokens": 3,
-                    },
-                    "total": {
-                        "cachedInputTokens": 0,
-                        "inputTokens": 1,
-                        "outputTokens": 2,
-                        "reasoningOutputTokens": 0,
-                        "totalTokens": 3,
-                    },
-                },
-            }
-        ),
-    )
-
-
 def _completed_notification(
     *,
     thread_id: str = "thread-1",
@@ -101,7 +46,7 @@ def _completed_notification(
 ) -> Notification:
     return Notification(
         method="turn/completed",
-        payload=public_api_module.TurnCompletedNotificationPayload.model_validate(
+        payload=TurnCompletedNotification.model_validate(
             {
                 "threadId": thread_id,
                 "turn": {
@@ -259,12 +204,10 @@ def test_async_turn_stream_rejects_second_active_consumer() -> None:
     asyncio.run(scenario())
 
 
-def test_turn_run_falls_back_to_completed_raw_response_text() -> None:
+def test_turn_run_returns_completed_turn_payload() -> None:
     client = AppServerClient()
     notifications: deque[Notification] = deque(
         [
-            _raw_response_notification(text="hello from raw response"),
-            _usage_notification(),
             _completed_notification(),
         ]
     )
@@ -272,8 +215,9 @@ def test_turn_run_falls_back_to_completed_raw_response_text() -> None:
 
     result = Turn(client, "thread-1", "turn-1").run()
 
+    assert result.id == "turn-1"
     assert result.status == TurnStatus.completed
-    assert result.text == "hello from raw response"
+    assert result.items == []
 
 
 def test_retry_examples_compare_status_with_enum() -> None:

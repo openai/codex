@@ -15,7 +15,7 @@ from codex_app_server import (
     AsyncCodex,
     TextInput,
     ThreadTokenUsageUpdatedNotification,
-    TurnCompletedNotificationPayload,
+    TurnCompletedNotification,
 )
 
 
@@ -75,7 +75,7 @@ async def main() -> None:
                 if isinstance(payload, ThreadTokenUsageUpdatedNotification):
                     usage = payload.token_usage
                     continue
-                if isinstance(payload, TurnCompletedNotificationPayload):
+                if isinstance(payload, TurnCompletedNotification):
                     status = payload.turn.status
                     error = payload.turn.error
 

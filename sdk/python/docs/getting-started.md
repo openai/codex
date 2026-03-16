@@ -25,22 +25,23 @@ Requirements:
 from codex_app_server import Codex, TextInput
 
 with Codex() as codex:
-    print("Server:", codex.metadata.server_name, codex.metadata.server_version)
+    server = codex.metadata.serverInfo
+    print("Server:", None if server is None else server.name, None if server is None else server.version)
 
-    thread = codex.thread_start(model="gpt-5", config={"model_reasoning_effort": "high"})
-    result = thread.turn(TextInput("Say hello in one sentence.")).run()
+    thread = codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
+    completed_turn = thread.turn(TextInput("Say hello in one sentence.")).run()
 
-    print("Thread:", result.thread_id)
-    print("Turn:", result.turn_id)
-    print("Status:", result.status)
-    print("Text:", result.text)
+    print("Thread:", thread.id)
+    print("Turn:", completed_turn.id)
+    print("Status:", completed_turn.status)
+    print("Items:", len(completed_turn.items or []))
 ```
 
 What happened:
 
 - `Codex()` started and initialized `codex app-server`.
 - `thread_start(...)` created a thread.
-- `turn(...).run()` consumed events until `turn/completed` and returned a `TurnResult`.
+- `turn(...).run()` consumed events until `turn/completed` and returned the canonical generated app-server `Turn` model.
 - one client can have only one active `Turn.stream()` / `Turn.run()` consumer at a time in the current experimental build
 
 ## 3) Continue the same thread (multi-turn)
@@ -49,13 +50,13 @@ What happened:
 from codex_app_server import Codex, TextInput
 
 with Codex() as codex:
-    thread = codex.thread_start(model="gpt-5", config={"model_reasoning_effort": "high"})
+    thread = codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
 
     first = thread.turn(TextInput("Summarize Rust ownership in 2 bullets.")).run()
     second = thread.turn(TextInput("Now explain it to a Python developer.")).run()
 
-    print("first:", first.text)
-    print("second:", second.text)
+    print("first:", first.id, first.status)
+    print("second:", second.id, second.status)
 ```
 
 ## 4) Async parity
@@ -67,10 +68,10 @@ from codex_app_server import AsyncCodex, TextInput
 
 async def main() -> None:
     async with AsyncCodex() as codex:
-        thread = await codex.thread_start(model="gpt-5", config={"model_reasoning_effort": "high"})
+        thread = await codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
         turn = await thread.turn(TextInput("Continue where we left off."))
-        result = await turn.run()
-        print(result.text)
+        completed_turn = await turn.run()
+        print(completed_turn.id, completed_turn.status)
 
 
 asyncio.run(main())
@@ -85,11 +86,19 @@ THREAD_ID = "thr_123"  # replace with a real id
 
 with Codex() as codex:
     thread = codex.thread_resume(THREAD_ID)
-    result = thread.turn(TextInput("Continue where we left off.")).run()
-    print(result.text)
+    completed_turn = thread.turn(TextInput("Continue where we left off.")).run()
+    print(completed_turn.id, completed_turn.status)
 ```
 
-## 6) Next stops
+## 6) Generated models
+
+The convenience wrappers live at the package root, but the canonical app-server models live under:
+
+```python
+from codex_app_server.generated.v2_all import Turn, TurnStatus, ThreadReadResponse
+```
+
+## 7) Next stops
 
 - API surface and signatures: `docs/api-reference.md`
 - Common decisions/pitfalls: `docs/faq.md`

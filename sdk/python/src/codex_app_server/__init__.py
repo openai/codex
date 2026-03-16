@@ -14,29 +14,7 @@ from .errors import (
     TransportClosedError,
     is_retryable_error,
 )
-from .generated.v2_types import (
-    ThreadItem,
-    ThreadTokenUsageUpdatedNotification,
-    TurnCompletedNotificationPayload,
-)
-from .public_api import (
-    AsyncCodex,
-    AsyncThread,
-    AsyncTurn,
-    Codex,
-    ImageInput,
-    InitializeResult,
-    Input,
-    InputItem,
-    LocalImageInput,
-    MentionInput,
-    SkillInput,
-    TextInput,
-    Thread,
-    Turn,
-    TurnResult,
-)
-from .public_types import (
+from .generated.v2_all import (
     AskForApproval,
     Personality,
     PlanType,
@@ -45,15 +23,34 @@ from .public_types import (
     SandboxMode,
     SandboxPolicy,
     ServiceTier,
+    ThreadItem,
     ThreadForkParams,
     ThreadListParams,
     ThreadResumeParams,
     ThreadSortKey,
     ThreadSourceKind,
     ThreadStartParams,
+    ThreadTokenUsageUpdatedNotification,
+    TurnCompletedNotification,
     TurnStartParams,
     TurnStatus,
     TurnSteerParams,
+)
+from .models import InitializeResponse
+from .public_api import (
+    AsyncCodex,
+    AsyncThread,
+    AsyncTurn,
+    Codex,
+    ImageInput,
+    Input,
+    InputItem,
+    LocalImageInput,
+    MentionInput,
+    SkillInput,
+    TextInput,
+    Thread,
+    Turn,
 )
 from .retry import retry_on_overload
 
@@ -70,8 +67,7 @@ __all__ = [
     "AsyncThread",
     "Turn",
     "AsyncTurn",
-    "TurnResult",
-    "InitializeResult",
+    "InitializeResponse",
     "Input",
     "InputItem",
     "TextInput",
@@ -81,7 +77,7 @@ __all__ = [
     "MentionInput",
     "ThreadItem",
     "ThreadTokenUsageUpdatedNotification",
-    "TurnCompletedNotificationPayload",
+    "TurnCompletedNotification",
     "AskForApproval",
     "Personality",
     "PlanType",

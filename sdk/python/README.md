@@ -23,8 +23,9 @@ from codex_app_server import Codex, TextInput
 
 with Codex() as codex:
     thread = codex.thread_start(model="gpt-5")
-    result = thread.turn(TextInput("Say hello in one sentence.")).run()
-    print(result.text)
+    completed_turn = thread.turn(TextInput("Say hello in one sentence.")).run()
+    print(completed_turn.status)
+    print(completed_turn.id)
 ```
 
 ## Docs map

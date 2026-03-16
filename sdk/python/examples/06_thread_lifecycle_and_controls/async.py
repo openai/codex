@@ -37,7 +37,7 @@ async def main() -> None:
                 config={"model_reasoning_effort": "high"},
             )
             resumed_result = await (await resumed.turn(TextInput("Continue in one short sentence."))).run()
-            resumed_info = f"{resumed_result.turn_id} {resumed_result.status}"
+            resumed_info = f"{resumed_result.id} {resumed_result.status}"
         except Exception as exc:
             resumed_info = f"skipped({type(exc).__name__})"
 
@@ -45,7 +45,7 @@ async def main() -> None:
         try:
             forked = await codex.thread_fork(unarchived.id, model="gpt-5.4")
             forked_result = await (await forked.turn(TextInput("Take a different angle in one short sentence."))).run()
-            forked_info = f"{forked_result.turn_id} {forked_result.status}"
+            forked_info = f"{forked_result.id} {forked_result.status}"
         except Exception as exc:
             forked_info = f"skipped({type(exc).__name__})"
 
@@ -56,8 +56,8 @@ async def main() -> None:
             compact_info = f"skipped({type(exc).__name__})"
 
         print("Lifecycle OK:", thread.id)
-        print("first:", first.turn_id, first.status)
-        print("second:", second.turn_id, second.status)
+        print("first:", first.id, first.status)
+        print("second:", second.id, second.status)
         print("read.turns:", len(reading.thread.turns or []))
         print("list.active:", len(listing_active.data))
         print("list.archived:", len(listing_archived.data))

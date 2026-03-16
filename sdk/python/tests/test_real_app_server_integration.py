@@ -182,10 +182,11 @@ def test_real_initialize_and_model_list(runtime_env: PreparedRuntimeEnv) -> None
 
             with Codex() as codex:
                 models = codex.models(include_hidden=True)
+                server = codex.metadata.serverInfo
                 print(json.dumps({
-                    "user_agent": codex.metadata.user_agent,
-                    "server_name": codex.metadata.server_name,
-                    "server_version": codex.metadata.server_version,
+                    "user_agent": codex.metadata.userAgent,
+                    "server_name": None if server is None else server.name,
+                    "server_version": None if server is None else server.version,
                     "model_count": len(models.data),
                 }))
             """
@@ -193,8 +194,10 @@ def test_real_initialize_and_model_list(runtime_env: PreparedRuntimeEnv) -> None
     )
 
     assert isinstance(data["user_agent"], str) and data["user_agent"].strip()
-    assert isinstance(data["server_name"], str) and data["server_name"].strip()
-    assert isinstance(data["server_version"], str) and data["server_version"].strip()
+    if data["server_name"] is not None:
+        assert isinstance(data["server_name"], str) and data["server_name"].strip()
+    if data["server_version"] is not None:
+        assert isinstance(data["server_version"], str) and data["server_version"].strip()
     assert isinstance(data["model_count"], int)
 
 
@@ -212,13 +215,17 @@ def test_real_thread_and_turn_start_smoke(runtime_env: PreparedRuntimeEnv) -> No
                     config={"model_reasoning_effort": "high"},
                 )
                 result = thread.turn(TextInput("hello")).run()
+                persisted = thread.read(include_turns=True)
+                persisted_turn = next(
+                    (turn for turn in persisted.thread.turns or [] if turn.id == result.id),
+                    None,
+                )
                 print(json.dumps({
-                    "thread_id": result.thread_id,
-                    "turn_id": result.turn_id,
-                    "items_count": len(result.items),
-                    "has_usage": result.usage is not None,
-                    "usage_thread_id": None if result.usage is None else result.usage.thread_id,
-                    "usage_turn_id": None if result.usage is None else result.usage.turn_id,
+                    "thread_id": thread.id,
+                    "turn_id": result.id,
+                    "status": result.status.value,
+                    "items_count": len(result.items or []),
+                    "persisted_items_count": 0 if persisted_turn is None else len(persisted_turn.items or []),
                 }))
             """
         ),
@@ -226,10 +233,9 @@ def test_real_thread_and_turn_start_smoke(runtime_env: PreparedRuntimeEnv) -> No
 
     assert isinstance(data["thread_id"], str) and data["thread_id"].strip()
     assert isinstance(data["turn_id"], str) and data["turn_id"].strip()
+    assert data["status"] == "completed"
     assert isinstance(data["items_count"], int)
-    assert data["has_usage"] is True
-    assert data["usage_thread_id"] == data["thread_id"]
-    assert data["usage_turn_id"] == data["turn_id"]
+    assert isinstance(data["persisted_items_count"], int)
 
 
 def test_real_async_thread_turn_usage_and_ids_smoke(
@@ -250,13 +256,17 @@ def test_real_async_thread_turn_usage_and_ids_smoke(
                         config={"model_reasoning_effort": "high"},
                     )
                     result = await (await thread.turn(TextInput("say ok"))).run()
+                    persisted = await thread.read(include_turns=True)
+                    persisted_turn = next(
+                        (turn for turn in persisted.thread.turns or [] if turn.id == result.id),
+                        None,
+                    )
                     print(json.dumps({
-                        "thread_id": result.thread_id,
-                        "turn_id": result.turn_id,
-                        "items_count": len(result.items),
-                        "has_usage": result.usage is not None,
-                        "usage_thread_id": None if result.usage is None else result.usage.thread_id,
-                        "usage_turn_id": None if result.usage is None else result.usage.turn_id,
+                        "thread_id": thread.id,
+                        "turn_id": result.id,
+                        "status": result.status.value,
+                        "items_count": len(result.items or []),
+                        "persisted_items_count": 0 if persisted_turn is None else len(persisted_turn.items or []),
                     }))
 
             asyncio.run(main())
@@ -266,10 +276,9 @@ def test_real_async_thread_turn_usage_and_ids_smoke(
 
     assert isinstance(data["thread_id"], str) and data["thread_id"].strip()
     assert isinstance(data["turn_id"], str) and data["turn_id"].strip()
+    assert data["status"] == "completed"
     assert isinstance(data["items_count"], int)
-    assert data["has_usage"] is True
-    assert data["usage_thread_id"] == data["thread_id"]
-    assert data["usage_turn_id"] == data["turn_id"]
+    assert isinstance(data["persisted_items_count"], int)
 
 
 def test_notebook_bootstrap_resolves_sdk_and_runtime_from_unrelated_cwd(
@@ -386,10 +395,10 @@ def test_real_examples_run_and_assert(
 
     if folder == "01_quickstart_constructor":
         assert "Status:" in out and "Text:" in out
-        assert "Server: None None" not in out
+        assert "Server: unknown" not in out
     elif folder == "02_turn_run":
         assert "thread_id:" in out and "turn_id:" in out and "status:" in out
-        assert "usage: None" not in out
+        assert "persisted.items.count:" in out
     elif folder == "03_turn_stream_events":
         assert "turn/completed" in out
     elif folder == "04_models_and_metadata":
@@ -409,7 +418,6 @@ def test_real_examples_run_and_assert(
     elif folder == "11_cli_mini_app":
         assert "Thread:" in out
     elif folder == "12_turn_params_kitchen_sink":
-        assert "Status:" in out and "Usage:" in out
+        assert "Status:" in out and "Items:" in out
     elif folder == "13_model_select_and_turn_params":
-        assert "selected.model:" in out and "agent.message.params:" in out and "usage.params:" in out
-        assert "usage.params: None" not in out
+        assert "selected.model:" in out and "agent.message.params:" in out and "items.params:" in out

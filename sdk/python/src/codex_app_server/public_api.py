@@ -7,52 +7,33 @@ from typing import AsyncIterator, Iterator
 from .async_client import AsyncAppServerClient
 from .client import AppServerClient, AppServerConfig
 from .generated.v2_all import (
-    AgentMessageDeltaNotification,
-    RawResponseItemCompletedNotification,
-    ThreadArchiveResponse,
-    ThreadSetNameResponse,
-    TurnError,
-    TurnInterruptResponse,
-)
-from .generated.v2_types import (
-    ModelListResponse,
-    ThreadCompactStartResponse,
-    ThreadItem,
-    ThreadListResponse,
-    ThreadReadResponse,
-    ThreadTokenUsageUpdatedNotification,
-    TurnCompletedNotificationPayload,
-    TurnSteerResponse,
-)
-from .models import InitializeResponse, JsonObject, Notification
-from .public_types import (
     AskForApproval,
+    ModelListResponse,
     Personality,
     ReasoningEffort,
     ReasoningSummary,
     SandboxMode,
     SandboxPolicy,
     ServiceTier,
+    ThreadArchiveResponse,
+    ThreadCompactStartResponse,
     ThreadForkParams,
+    ThreadItem,
     ThreadListParams,
+    ThreadListResponse,
+    ThreadReadResponse,
     ThreadResumeParams,
+    ThreadSetNameResponse,
     ThreadSortKey,
     ThreadSourceKind,
     ThreadStartParams,
+    Turn as AppServerTurn,
+    TurnCompletedNotification,
+    TurnInterruptResponse,
     TurnStartParams,
-    TurnStatus,
+    TurnSteerResponse,
 )
-
-
-@dataclass(slots=True)
-class TurnResult:
-    thread_id: str
-    turn_id: str
-    status: TurnStatus
-    error: TurnError | None
-    text: str
-    items: list[ThreadItem]
-    usage: ThreadTokenUsageUpdatedNotification | None = None
+from .models import InitializeResponse, JsonObject, Notification
 
 
 @dataclass(slots=True)
@@ -84,13 +65,6 @@ class MentionInput:
 
 InputItem = TextInput | ImageInput | LocalImageInput | SkillInput | MentionInput
 Input = list[InputItem] | InputItem
-
-
-@dataclass(slots=True)
-class InitializeResult:
-    server_name: str
-    server_version: str
-    user_agent: str
 
 
 def _to_wire_item(item: InputItem) -> JsonObject:
@@ -126,55 +100,6 @@ def _split_user_agent(user_agent: str) -> tuple[str | None, str | None]:
     return raw, None
 
 
-def _enum_value(value: object) -> object:
-    return getattr(value, "value", value)
-
-
-def _assistant_output_text_chunks(
-    notification: RawResponseItemCompletedNotification,
-) -> list[str]:
-    item = notification.item.root
-    if _enum_value(getattr(item, "type", None)) != "message":
-        return []
-    if getattr(item, "role", None) != "assistant":
-        return []
-
-    chunks: list[str] = []
-    for content in getattr(item, "content", []) or []:
-        content_item = getattr(content, "root", content)
-        if _enum_value(getattr(content_item, "type", None)) != "output_text":
-            continue
-        text = getattr(content_item, "text", None)
-        if isinstance(text, str) and text:
-            chunks.append(text)
-    return chunks
-
-
-def _build_turn_result(
-    completed: TurnCompletedNotificationPayload | None,
-    usage: ThreadTokenUsageUpdatedNotification | None,
-    delta_chunks: list[str],
-    raw_text_chunks: list[str],
-) -> TurnResult:
-    if completed is None:
-        raise RuntimeError("turn completed event not received")
-    if completed.turn.status == TurnStatus.completed and usage is None:
-        raise RuntimeError(
-            "thread/tokenUsage/updated notification not received for completed turn"
-        )
-
-    text = "".join(delta_chunks) if delta_chunks else "".join(raw_text_chunks)
-    return TurnResult(
-        thread_id=completed.thread_id,
-        turn_id=completed.turn.id,
-        status=completed.turn.status,
-        error=completed.turn.error,
-        text=text,
-        items=list(completed.turn.items or []),
-        usage=usage,
-    )
-
-
 class Codex:
     """Minimal typed SDK surface for app-server v2."""
 
@@ -182,7 +107,7 @@ class Codex:
         self._client = AppServerClient(config=config)
         try:
             self._client.start()
-            self._init = self._parse_initialize(self._client.initialize())
+            self._init = self._validate_initialize(self._client.initialize())
         except Exception:
             self._client.close()
             raise
@@ -194,7 +119,7 @@ class Codex:
         self.close()
 
     @staticmethod
-    def _parse_initialize(payload: InitializeResponse) -> InitializeResult:
+    def _validate_initialize(payload: InitializeResponse) -> InitializeResponse:
         user_agent = (payload.userAgent or "").strip()
         server = payload.serverInfo
 
@@ -220,14 +145,10 @@ class Codex:
                 f"(user_agent={user_agent!r}, server_name={normalized_server_name!r}, server_version={normalized_server_version!r})"
             )
 
-        return InitializeResult(
-            server_name=normalized_server_name,
-            server_version=normalized_server_version,
-            user_agent=user_agent,
-        )
+        return payload
 
     @property
-    def metadata(self) -> InitializeResult:
+    def metadata(self) -> InitializeResponse:
         return self._init
 
     def close(self) -> None:
@@ -370,7 +291,7 @@ class AsyncCodex:
 
     def __init__(self, config: AppServerConfig | None = None) -> None:
         self._client = AsyncAppServerClient(config=config)
-        self._init: InitializeResult | None = None
+        self._init: InitializeResponse | None = None
         self._initialized = False
         self._init_lock = asyncio.Lock()
 
@@ -390,7 +311,7 @@ class AsyncCodex:
             try:
                 await self._client.start()
                 payload = await self._client.initialize()
-                self._init = Codex._parse_initialize(payload)
+                self._init = Codex._validate_initialize(payload)
                 self._initialized = True
             except Exception:
                 await self._client.close()
@@ -399,7 +320,7 @@ class AsyncCodex:
                 raise
 
     @property
-    def metadata(self) -> InitializeResult:
+    def metadata(self) -> InitializeResponse:
         if self._init is None:
             raise RuntimeError(
                 "AsyncCodex is not initialized yet. Use `async with AsyncCodex()` or call an async API first."
@@ -675,50 +596,27 @@ class Turn:
                 yield event
                 if (
                     event.method == "turn/completed"
-                    and isinstance(event.payload, TurnCompletedNotificationPayload)
+                    and isinstance(event.payload, TurnCompletedNotification)
                     and event.payload.turn.id == self.id
                 ):
                     break
         finally:
             self._client.release_turn_consumer(self.id)
 
-    def run(self) -> TurnResult:
-        completed: TurnCompletedNotificationPayload | None = None
-        usage: ThreadTokenUsageUpdatedNotification | None = None
-        delta_chunks: list[str] = []
-        raw_text_chunks: list[str] = []
-
+    def run(self) -> AppServerTurn:
+        completed: TurnCompletedNotification | None = None
         stream = self.stream()
         try:
             for event in stream:
                 payload = event.payload
-                if (
-                    isinstance(payload, AgentMessageDeltaNotification)
-                    and payload.turn_id == self.id
-                ):
-                    delta_chunks.append(payload.delta)
-                    continue
-                if (
-                    isinstance(payload, RawResponseItemCompletedNotification)
-                    and payload.turn_id == self.id
-                ):
-                    raw_text_chunks.extend(_assistant_output_text_chunks(payload))
-                    continue
-                if (
-                    isinstance(payload, ThreadTokenUsageUpdatedNotification)
-                    and payload.turn_id == self.id
-                ):
-                    usage = payload
-                    continue
-                if (
-                    isinstance(payload, TurnCompletedNotificationPayload)
-                    and payload.turn.id == self.id
-                ):
+                if isinstance(payload, TurnCompletedNotification) and payload.turn.id == self.id:
                     completed = payload
         finally:
             stream.close()
 
-        return _build_turn_result(completed, usage, delta_chunks, raw_text_chunks)
+        if completed is None:
+            raise RuntimeError("turn completed event not received")
+        return completed.turn
 
 
 @dataclass(slots=True)
@@ -749,47 +647,24 @@ class AsyncTurn:
                 yield event
                 if (
                     event.method == "turn/completed"
-                    and isinstance(event.payload, TurnCompletedNotificationPayload)
+                    and isinstance(event.payload, TurnCompletedNotification)
                     and event.payload.turn.id == self.id
                 ):
                     break
         finally:
             self._codex._client.release_turn_consumer(self.id)
 
-    async def run(self) -> TurnResult:
-        completed: TurnCompletedNotificationPayload | None = None
-        usage: ThreadTokenUsageUpdatedNotification | None = None
-        delta_chunks: list[str] = []
-        raw_text_chunks: list[str] = []
-
+    async def run(self) -> AppServerTurn:
+        completed: TurnCompletedNotification | None = None
         stream = self.stream()
         try:
             async for event in stream:
                 payload = event.payload
-                if (
-                    isinstance(payload, AgentMessageDeltaNotification)
-                    and payload.turn_id == self.id
-                ):
-                    delta_chunks.append(payload.delta)
-                    continue
-                if (
-                    isinstance(payload, RawResponseItemCompletedNotification)
-                    and payload.turn_id == self.id
-                ):
-                    raw_text_chunks.extend(_assistant_output_text_chunks(payload))
-                    continue
-                if (
-                    isinstance(payload, ThreadTokenUsageUpdatedNotification)
-                    and payload.turn_id == self.id
-                ):
-                    usage = payload
-                    continue
-                if (
-                    isinstance(payload, TurnCompletedNotificationPayload)
-                    and payload.turn.id == self.id
-                ):
+                if isinstance(payload, TurnCompletedNotification) and payload.turn.id == self.id:
                     completed = payload
         finally:
             await stream.aclose()
 
-        return _build_turn_result(completed, usage, delta_chunks, raw_text_chunks)
+        if completed is None:
+            raise RuntimeError("turn completed event not received")
+        return completed.turn

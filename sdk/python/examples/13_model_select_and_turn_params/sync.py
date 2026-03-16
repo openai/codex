@@ -5,7 +5,7 @@ _EXAMPLES_ROOT = Path(__file__).resolve().parents[1]
 if str(_EXAMPLES_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXAMPLES_ROOT))
 
-from _bootstrap import ensure_local_sdk_src, runtime_config
+from _bootstrap import assistant_text_from_turn, ensure_local_sdk_src, find_turn_by_id, runtime_config
 
 ensure_local_sdk_src()
 
@@ -92,9 +92,11 @@ with Codex(config=runtime_config()) as codex:
         model=selected_model.model,
         effort=selected_effort,
     ).run()
+    persisted = thread.read(include_turns=True)
+    first_turn = find_turn_by_id(persisted.thread.turns, first.id)
 
-    print("agent.message:", first.text)
-    print("usage:", first.usage)
+    print("agent.message:", assistant_text_from_turn(first_turn))
+    print("items:", 0 if first_turn is None else len(first_turn.items or []))
 
     second = thread.turn(
         TextInput("Return JSON for a safe feature-flag rollout plan."),
@@ -107,6 +109,8 @@ with Codex(config=runtime_config()) as codex:
         sandbox_policy=SANDBOX_POLICY,
         summary=ReasoningSummary.model_validate("concise"),
     ).run()
+    persisted = thread.read(include_turns=True)
+    second_turn = find_turn_by_id(persisted.thread.turns, second.id)
 
-    print("agent.message.params:", second.text)
-    print("usage.params:", second.usage)
+    print("agent.message.params:", assistant_text_from_turn(second_turn))
+    print("items.params:", 0 if second_turn is None else len(second_turn.items or []))

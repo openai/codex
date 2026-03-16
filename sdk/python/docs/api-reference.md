@@ -14,8 +14,7 @@ from codex_app_server import (
     AsyncThread,
     Turn,
     AsyncTurn,
-    TurnResult,
-    InitializeResult,
+    InitializeResponse,
     Input,
     InputItem,
     TextInput,
@@ -23,13 +22,14 @@ from codex_app_server import (
     LocalImageInput,
     SkillInput,
     MentionInput,
-    ThreadItem,
     TurnStatus,
 )
+from codex_app_server.generated.v2_all import ThreadItem
 ```
 
 - Version: `codex_app_server.__version__`
 - Requires Python >= 3.10
+- Canonical generated app-server models live in `codex_app_server.generated.v2_all`
 
 ## Codex (sync)
 
@@ -39,7 +39,7 @@ Codex(config: AppServerConfig | None = None)
 
 Properties/methods:
 
-- `metadata -> InitializeResult`
+- `metadata -> InitializeResponse`
 - `close() -> None`
 - `thread_start(*, approval_policy=None, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, personality=None, sandbox=None) -> Thread`
 - `thread_list(*, archived=None, cursor=None, cwd=None, limit=None, model_providers=None, sort_key=None, source_kinds=None) -> ThreadListResponse`
@@ -64,12 +64,12 @@ AsyncCodex(config: AppServerConfig | None = None)
 
 Properties/methods:
 
-- `metadata -> InitializeResult`
+- `metadata -> InitializeResponse`
 - `close() -> Awaitable[None]`
 - `thread_start(*, approval_policy=None, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, personality=None, sandbox=None) -> Awaitable[AsyncThread]`
 - `thread_list(*, archived=None, cursor=None, cwd=None, limit=None, model_providers=None, sort_key=None, source_kinds=None) -> Awaitable[ThreadListResponse]`
 - `thread_resume(thread_id: str, *, approval_policy=None, base_instructions=None, config=None, cwd=None, developer_instructions=None, model=None, model_provider=None, personality=None, sandbox=None) -> Awaitable[AsyncThread]`
-- `thread_fork(thread_id: str, *, approval_policy=None, base_instructions=None, config=None, cwd=None, developer_instructions=None, model=None, model_provider=None, sandbox=None) -> Awaitable[AsyncThread]`
+- `thread_fork(thread_id: str, *, approval_policy=None, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, sandbox=None) -> Awaitable[AsyncThread]`
 - `thread_archive(thread_id: str) -> Awaitable[ThreadArchiveResponse]`
 - `thread_unarchive(thread_id: str) -> Awaitable[AsyncThread]`
 - `models(*, include_hidden: bool = False) -> Awaitable[ModelListResponse]`
@@ -106,7 +106,7 @@ async with AsyncCodex() as codex:
 - `steer(input: Input) -> TurnSteerResponse`
 - `interrupt() -> TurnInterruptResponse`
 - `stream() -> Iterator[Notification]`
-- `run() -> TurnResult`
+- `run() -> codex_app_server.generated.v2_all.Turn`
 
 Behavior notes:
 
@@ -118,26 +118,12 @@ Behavior notes:
 - `steer(input: Input) -> Awaitable[TurnSteerResponse]`
 - `interrupt() -> Awaitable[TurnInterruptResponse]`
 - `stream() -> AsyncIterator[Notification]`
-- `run() -> Awaitable[TurnResult]`
+- `run() -> Awaitable[codex_app_server.generated.v2_all.Turn]`
 
 Behavior notes:
 
 - `stream()` and `run()` are exclusive per client instance in the current experimental build
 - starting a second turn consumer on the same `AsyncCodex` instance raises `RuntimeError`
-
-## TurnResult
-
-```python
-@dataclass
-class TurnResult:
-    thread_id: str
-    turn_id: str
-    status: TurnStatus
-    error: TurnError | None
-    text: str
-    items: list[ThreadItem]
-    usage: ThreadTokenUsageUpdatedNotification | None
-```
 
 ## Inputs
 
@@ -150,6 +136,20 @@ class TurnResult:
 
 InputItem = TextInput | ImageInput | LocalImageInput | SkillInput | MentionInput
 Input = list[InputItem] | InputItem
+```
+
+## Generated Models
+
+The SDK wrappers return and accept canonical generated app-server models wherever possible:
+
+```python
+from codex_app_server.generated.v2_all import (
+    AskForApproval,
+    ThreadReadResponse,
+    Turn,
+    TurnStartParams,
+    TurnStatus,
+)
 ```
 
 ## Retry + errors
@@ -174,7 +174,7 @@ from codex_app_server import (
 from codex_app_server import Codex, TextInput
 
 with Codex() as codex:
-    thread = codex.thread_start(model="gpt-5", config={"model_reasoning_effort": "high"})
-    result = thread.turn(TextInput("Say hello in one sentence.")).run()
-    print(result.text)
+    thread = codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
+    completed_turn = thread.turn(TextInput("Say hello in one sentence.")).run()
+    print(completed_turn.id, completed_turn.status)
 ```

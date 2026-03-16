@@ -5,7 +5,12 @@ _EXAMPLES_ROOT = Path(__file__).resolve().parents[1]
 if str(_EXAMPLES_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXAMPLES_ROOT))
 
-from _bootstrap import ensure_local_sdk_src, runtime_config
+from _bootstrap import (
+    assistant_text_from_turn,
+    ensure_local_sdk_src,
+    find_turn_by_id,
+    runtime_config,
+)
 
 ensure_local_sdk_src()
 
@@ -35,6 +40,8 @@ with Codex(config=runtime_config()) as codex:
         print(f"JSON-RPC error {exc.code}: {exc.message}")
         print("Text:")
     else:
+        persisted = thread.read(include_turns=True)
+        persisted_turn = find_turn_by_id(persisted.thread.turns, result.id)
         if result.status == TurnStatus.failed:
             print("Turn failed:", result.error)
-        print("Text:", result.text)
+        print("Text:", assistant_text_from_turn(persisted_turn))
