@@ -40,18 +40,23 @@ pub(super) fn session_update_session(instructions: String) -> SessionUpdateSessi
     SessionUpdateSession {
         kind: REALTIME_V1_SESSION_TYPE.to_string(),
         instructions: Some(instructions),
+        output_modalities: None,
         audio: SessionAudio {
             input: SessionAudioInput {
                 format: SessionAudioFormat {
                     kind: REALTIME_AUDIO_FORMAT.to_string(),
                     rate: REALTIME_AUDIO_SAMPLE_RATE,
                 },
+                noise_reduction: None,
+                turn_detection: None,
             },
             output: Some(SessionAudioOutput {
+                format: None,
                 voice: SessionAudioVoice::Fathom,
             }),
         },
         tools: None,
+        tool_choice: None,
     }
 }
 

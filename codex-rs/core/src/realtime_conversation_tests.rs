@@ -57,7 +57,7 @@ fn ignores_empty_handoff_request_input_transcript() {
 #[tokio::test]
 async fn clears_active_handoff_explicitly() {
     let (tx, _rx) = bounded(1);
-    let state = RealtimeHandoffState::new(tx);
+    let state = RealtimeHandoffState::new(tx, false);
 
     *state.active_handoff.lock().await = Some("handoff_1".to_string());
     assert_eq!(
@@ -72,7 +72,7 @@ async fn clears_active_handoff_explicitly() {
 #[tokio::test]
 async fn sends_multiple_handoff_outputs_until_cleared() {
     let (tx, rx) = bounded(4);
-    let state = RealtimeHandoffState::new(tx);
+    let state = RealtimeHandoffState::new(tx, false);
 
     state
         .send_output("ignored".to_string())
@@ -90,7 +90,7 @@ async fn sends_multiple_handoff_outputs_until_cleared() {
     let output_1 = rx.recv().await.expect("recv");
     assert_eq!(
         output_1,
-        HandoffOutput {
+        HandoffOutput::ImmediateAppend {
             handoff_id: "handoff_1".to_string(),
             output_text: "result".to_string(),
         }
@@ -99,7 +99,7 @@ async fn sends_multiple_handoff_outputs_until_cleared() {
     let output_2 = rx.recv().await.expect("recv");
     assert_eq!(
         output_2,
-        HandoffOutput {
+        HandoffOutput::ImmediateAppend {
             handoff_id: "handoff_1".to_string(),
             output_text: "result 2".to_string(),
         }

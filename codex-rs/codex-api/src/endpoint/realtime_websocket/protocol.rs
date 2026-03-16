@@ -39,6 +39,14 @@ pub(super) enum RealtimeOutboundMessage {
         handoff_id: String,
         output_text: String,
     },
+    #[serde(rename = "response.create")]
+    ResponseCreate,
+    #[serde(rename = "conversation.item.truncate")]
+    ConversationItemTruncate {
+        item_id: String,
+        content_index: u32,
+        audio_end_ms: u32,
+    },
     #[serde(rename = "session.update")]
     SessionUpdate { session: SessionUpdateSession },
     #[serde(rename = "conversation.item.create")]
@@ -51,9 +59,13 @@ pub(super) struct SessionUpdateSession {
     pub(super) kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) output_modalities: Option<Vec<String>>,
     pub(super) audio: SessionAudio,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) tools: Option<Vec<SessionFunctionTool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) tool_choice: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -66,6 +78,10 @@ pub(super) struct SessionAudio {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionAudioInput {
     pub(super) format: SessionAudioFormat,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) noise_reduction: Option<SessionNoiseReduction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) turn_detection: Option<SessionTurnDetection>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -77,6 +93,8 @@ pub(super) struct SessionAudioFormat {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionAudioOutput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) format: Option<SessionAudioOutputFormat>,
     pub(super) voice: SessionAudioVoice,
 }
 
@@ -84,8 +102,29 @@ pub(super) struct SessionAudioOutput {
 pub(super) enum SessionAudioVoice {
     #[serde(rename = "fathom")]
     Fathom,
-    #[serde(rename = "alloy")]
-    Alloy,
+    #[serde(rename = "marin")]
+    Marin,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct SessionNoiseReduction {
+    #[serde(rename = "type")]
+    pub(super) kind: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct SessionTurnDetection {
+    #[serde(rename = "type")]
+    pub(super) kind: String,
+    pub(super) interrupt_response: bool,
+    pub(super) create_response: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct SessionAudioOutputFormat {
+    #[serde(rename = "type")]
+    pub(super) kind: String,
+    pub(super) rate: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]

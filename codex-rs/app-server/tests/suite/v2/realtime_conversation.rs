@@ -135,6 +135,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
                 sample_rate: 24_000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
+                item_id: None,
             },
         })
         .await?;
