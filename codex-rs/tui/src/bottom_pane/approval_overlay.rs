@@ -800,6 +800,12 @@ pub(crate) fn format_additional_permissions_rule(
             }
             MacOsAutomationPermission::None => {}
         }
+        if !macos.macos_mach_services.is_empty() {
+            parts.push(format!(
+                "macOS mach services {}",
+                macos.macos_mach_services.join(", ")
+            ));
+        }
         if macos.macos_accessibility {
             parts.push("macOS accessibility".to_string());
         }
@@ -1423,6 +1429,7 @@ mod tests {
                         "com.apple.Calendar".to_string(),
                         "com.apple.Notes".to_string(),
                     ]),
+                    macos_mach_services: vec!["com.vendor.helper".to_string()],
                     macos_launch_services: false,
                     macos_accessibility: true,
                     macos_calendar: true,

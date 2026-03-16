@@ -689,6 +689,7 @@ permissions:
                 macos_automation: MacOsAutomationPermission::BundleIds(vec![
                     "com.apple.Notes".to_string(),
                 ]),
+                macos_mach_services: Vec::new(),
                 macos_launch_services: true,
                 macos_accessibility: true,
                 macos_calendar: true,
@@ -718,6 +719,7 @@ permissions:
             macos: Some(MacOsSeatbeltProfileExtensions {
                 macos_preferences: MacOsPreferencesPermission::ReadOnly,
                 macos_automation: MacOsAutomationPermission::None,
+                macos_mach_services: Vec::new(),
                 macos_launch_services: false,
                 macos_accessibility: false,
                 macos_calendar: false,
@@ -795,6 +797,7 @@ permissions:
                 macos_automation: MacOsAutomationPermission::BundleIds(vec![
                     "com.apple.Notes".to_string()
                 ],),
+                macos_mach_services: Vec::new(),
                 macos_launch_services: true,
                 macos_accessibility: true,
                 macos_calendar: true,
@@ -844,6 +847,7 @@ permissions:
                 macos_automation: MacOsAutomationPermission::BundleIds(vec![
                     "com.apple.Notes".to_string()
                 ],),
+                macos_mach_services: Vec::new(),
                 macos_launch_services: true,
                 macos_accessibility: true,
                 macos_calendar: true,

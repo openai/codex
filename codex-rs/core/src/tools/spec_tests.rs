@@ -2399,7 +2399,7 @@ fn shell_tool_with_request_permission_includes_additional_permissions() {
         panic!("expected sandbox_permissions description");
     };
     assert!(description.contains("with_additional_permissions"));
-    assert!(description.contains("filesystem or network permissions"));
+    assert!(description.contains("macOS permissions"));
 
     let Some(JsonSchema::Object {
         properties: additional_properties,
@@ -2410,7 +2410,25 @@ fn shell_tool_with_request_permission_includes_additional_permissions() {
     };
     assert!(additional_properties.contains_key("network"));
     assert!(additional_properties.contains_key("file_system"));
-    assert!(!additional_properties.contains_key("macos"));
+    assert!(additional_properties.contains_key("macos"));
+
+    let Some(JsonSchema::Object {
+        properties: macos_properties,
+        additional_properties,
+        ..
+    }) = additional_properties.get("macos")
+    else {
+        panic!("expected macos object");
+    };
+    assert_eq!(additional_properties, &Some(false.into()));
+    assert!(macos_properties.contains_key("preferences"));
+    assert!(macos_properties.contains_key("automations"));
+    assert!(macos_properties.contains_key("mach_services"));
+    assert!(macos_properties.contains_key("launch_services"));
+    assert!(macos_properties.contains_key("accessibility"));
+    assert!(macos_properties.contains_key("calendar"));
+    assert!(macos_properties.contains_key("reminders"));
+    assert!(macos_properties.contains_key("contacts"));
 }
 
 #[test]

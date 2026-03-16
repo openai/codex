@@ -35,6 +35,8 @@ Seatbelt also supports macOS permission-profile extensions layered on top of
   enables Apple Events send only to listed bundle IDs.
 - `macos_launch_services = true`:
   enables LaunchServices lookups and open/launch operations.
+- `macos_mach_services = ["com.vendor.helper", ...]`:
+  enables `mach-lookup` for listed global Mach service names.
 - `macos_accessibility = true`:
   enables `com.apple.axserver` mach lookup.
 - `macos_calendar = true`:

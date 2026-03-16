@@ -347,6 +347,7 @@ fn shell_request_escalation_execution_is_explicit() {
     let network_sandbox_policy = NetworkSandboxPolicy::Restricted;
     let macos_seatbelt_profile_extensions = MacOsSeatbeltProfileExtensions {
         macos_preferences: MacOsPreferencesPermission::ReadWrite,
+        macos_mach_services: vec!["com.apple.logd".to_string()],
         ..Default::default()
     };
 

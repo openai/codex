@@ -45,6 +45,12 @@
         "launchServices": {
           "type": "boolean"
         },
+        "machServices": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "preferences": {
           "$ref": "#/definitions/MacOsPreferencesPermission"
         },
@@ -58,6 +64,7 @@
         "calendar",
         "contacts",
         "launchServices",
+        "machServices",
         "preferences",
         "reminders"
       ],

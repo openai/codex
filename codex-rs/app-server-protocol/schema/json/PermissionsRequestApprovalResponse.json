@@ -79,6 +79,15 @@
             "null"
           ]
         },
+        "machServices": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "preferences": {
           "anyOf": [
             {

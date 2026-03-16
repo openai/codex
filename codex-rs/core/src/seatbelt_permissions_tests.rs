@@ -65,6 +65,22 @@ fn automation_bundle_ids_are_normalized_and_scoped() {
 }
 
 #[test]
+fn mach_services_emit_mach_lookup_clauses() {
+    let policy = build_seatbelt_extensions(&MacOsSeatbeltProfileExtensions {
+        macos_mach_services: vec![
+            " com.vendor.helper ".to_string(),
+            "com.apple.logd".to_string(),
+            "bad service".to_string(),
+            "com.apple.logd".to_string(),
+        ],
+        ..Default::default()
+    });
+    assert!(policy.policy.contains("com.vendor.helper"));
+    assert!(policy.policy.contains("com.apple.logd"));
+    assert!(!policy.policy.contains("bad service"));
+}
+
+#[test]
 fn launch_services_emit_launch_clauses() {
     let policy = build_seatbelt_extensions(&MacOsSeatbeltProfileExtensions {
         macos_launch_services: true,
