@@ -17,6 +17,9 @@ Choose `run()` for most apps. Choose `stream()` for progress UIs, custom timeout
 
 - `Codex` is the sync public API.
 - `AsyncCodex` is an async replica of the same public API shape.
+- Prefer `async with AsyncCodex()` for async code. It is the standard path for
+  explicit startup/shutdown, and `AsyncCodex` initializes lazily on context
+  entry or first awaited API use.
 
 If your app is not already async, stay with `Codex`.
 

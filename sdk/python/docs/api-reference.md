@@ -62,6 +62,16 @@ with Codex() as codex:
 AsyncCodex(config: AppServerConfig | None = None)
 ```
 
+Preferred usage:
+
+```python
+async with AsyncCodex() as codex:
+    ...
+```
+
+`AsyncCodex` initializes lazily. Context entry is the standard path because it
+ensures startup and shutdown are paired explicitly.
+
 Properties/methods:
 
 - `metadata -> InitializeResponse`

@@ -200,6 +200,9 @@ def test_initialize_metadata_parses_user_agent_shape() -> None:
     parsed = Codex._validate_initialize(payload)
     assert parsed is payload
     assert parsed.userAgent == "codex-cli/1.2.3"
+    assert parsed.serverInfo is not None
+    assert parsed.serverInfo.name == "codex-cli"
+    assert parsed.serverInfo.version == "1.2.3"
 
 
 def test_initialize_metadata_requires_non_empty_information() -> None:

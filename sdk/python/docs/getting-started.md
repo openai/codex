@@ -61,6 +61,9 @@ with Codex() as codex:
 
 ## 4) Async parity
 
+Use `async with AsyncCodex()` as the normal async entrypoint. `AsyncCodex`
+initializes lazily, and context entry makes startup/shutdown explicit.
+
 ```python
 import asyncio
 from codex_app_server import AsyncCodex, TextInput

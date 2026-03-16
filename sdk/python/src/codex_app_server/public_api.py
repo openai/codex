@@ -33,7 +33,7 @@ from .generated.v2_all import (
     TurnStartParams,
     TurnSteerResponse,
 )
-from .models import InitializeResponse, JsonObject, Notification
+from .models import InitializeResponse, JsonObject, Notification, ServerInfo
 
 
 @dataclass(slots=True)
@@ -144,6 +144,15 @@ class Codex:
                 "initialize response missing required metadata "
                 f"(user_agent={user_agent!r}, server_name={normalized_server_name!r}, server_version={normalized_server_version!r})"
             )
+
+        if server is None:
+            payload.serverInfo = ServerInfo(
+                name=normalized_server_name,
+                version=normalized_server_version,
+            )
+        else:
+            server.name = normalized_server_name
+            server.version = normalized_server_version
 
         return payload
 
@@ -287,7 +296,12 @@ class Codex:
 
 
 class AsyncCodex:
-    """Async mirror of :class:`Codex` with matching method shapes."""
+    """Async mirror of :class:`Codex`.
+
+    Prefer ``async with AsyncCodex()`` so initialization and shutdown are
+    explicit and paired. The async client initializes lazily on context entry
+    or first awaited API use.
+    """
 
     def __init__(self, config: AppServerConfig | None = None) -> None:
         self._client = AsyncAppServerClient(config=config)
@@ -323,7 +337,8 @@ class AsyncCodex:
     def metadata(self) -> InitializeResponse:
         if self._init is None:
             raise RuntimeError(
-                "AsyncCodex is not initialized yet. Use `async with AsyncCodex()` or call an async API first."
+                "AsyncCodex is not initialized yet. Prefer `async with AsyncCodex()`; "
+                "initialization also happens on first awaited API use."
             )
         return self._init
 
