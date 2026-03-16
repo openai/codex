@@ -8,6 +8,7 @@ use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 
+use super::common;
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
@@ -76,11 +77,11 @@ pub(crate) async fn run(
     )) {
         Ok(input_json) => input_json,
         Err(error) => {
-            return serialization_failure_outcome(
+            return serialization_failure_outcome(common::serialization_failure_hook_events(
                 matched,
                 Some(request.turn_id),
                 format!("failed to serialize user prompt submit hook input: {error}"),
-            );
+            ));
         }
     };
 
@@ -107,7 +108,7 @@ pub(crate) async fn run(
         hook_events: results.into_iter().map(|result| result.completed).collect(),
         should_stop,
         stop_reason,
-        additional_context: join_text_chunks(additional_contexts),
+        additional_context: common::join_text_chunks(additional_contexts),
     }
 }
 
@@ -148,7 +149,10 @@ fn parse_completed(
                             kind: HookOutputEntryKind::Context,
                             text: additional_context.clone(),
                         });
-                        if parsed.universal.continue_processing {
+                        if parsed.universal.continue_processing
+                            && !parsed.should_block
+                            && parsed.invalid_block_reason.is_none()
+                        {
                             additional_context_for_model = Some(additional_context);
                         }
                     }
@@ -161,6 +165,22 @@ fn parse_completed(
                             entries.push(HookOutputEntry {
                                 kind: HookOutputEntryKind::Stop,
                                 text: stop_reason_text,
+                            });
+                        }
+                    } else if let Some(invalid_block_reason) = parsed.invalid_block_reason {
+                        status = HookRunStatus::Failed;
+                        entries.push(HookOutputEntry {
+                            kind: HookOutputEntryKind::Error,
+                            text: invalid_block_reason,
+                        });
+                    } else if parsed.should_block {
+                        status = HookRunStatus::Blocked;
+                        should_stop = true;
+                        stop_reason = parsed.reason.clone();
+                        if let Some(reason) = parsed.reason {
+                            entries.push(HookOutputEntry {
+                                kind: HookOutputEntryKind::Feedback,
+                                text: reason,
                             });
                         }
                     }
@@ -177,6 +197,23 @@ fn parse_completed(
                         text: additional_context.clone(),
                     });
                     additional_context_for_model = Some(additional_context);
+                }
+            }
+            Some(2) => {
+                if let Some(reason) = common::trimmed_non_empty(&run_result.stderr) {
+                    status = HookRunStatus::Blocked;
+                    should_stop = true;
+                    stop_reason = Some(reason.clone());
+                    entries.push(HookOutputEntry {
+                        kind: HookOutputEntryKind::Feedback,
+                        text: reason,
+                    });
+                } else {
+                    status = HookRunStatus::Failed;
+                    entries.push(HookOutputEntry {
+                        kind: HookOutputEntryKind::Error,
+                        text: "UserPromptSubmit hook exited with code 2 but did not write a blocking reason to stderr".to_string(),
+                    });
                 }
             }
             Some(exit_code) => {
@@ -211,37 +248,7 @@ fn parse_completed(
     }
 }
 
-fn join_text_chunks(chunks: Vec<String>) -> Option<String> {
-    if chunks.is_empty() {
-        None
-    } else {
-        Some(chunks.join("\n\n"))
-    }
-}
-
-fn serialization_failure_outcome(
-    handlers: Vec<ConfiguredHandler>,
-    turn_id: Option<String>,
-    error_message: String,
-) -> UserPromptSubmitOutcome {
-    let hook_events = handlers
-        .into_iter()
-        .map(|handler| {
-            let mut run = dispatcher::running_summary(&handler);
-            run.status = HookRunStatus::Failed;
-            run.completed_at = Some(run.started_at);
-            run.duration_ms = Some(0);
-            run.entries = vec![HookOutputEntry {
-                kind: HookOutputEntryKind::Error,
-                text: error_message.clone(),
-            }];
-            HookCompletedEvent {
-                turn_id: turn_id.clone(),
-                run,
-            }
-        })
-        .collect();
-
+fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> UserPromptSubmitOutcome {
     UserPromptSubmitOutcome {
         hook_events,
         should_stop: false,
@@ -264,32 +271,6 @@ mod tests {
     use super::parse_completed;
     use crate::engine::ConfiguredHandler;
     use crate::engine::command_runner::CommandRunResult;
-
-    #[test]
-    fn plain_stdout_becomes_model_context() {
-        let parsed = parse_completed(
-            &handler(),
-            run_result(Some(0), "hello from hook\n", ""),
-            Some("turn-1".to_string()),
-        );
-
-        assert_eq!(
-            parsed.data,
-            UserPromptSubmitHandlerData {
-                should_stop: false,
-                stop_reason: None,
-                additional_context_for_model: Some("hello from hook".to_string()),
-            }
-        );
-        assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
-        assert_eq!(
-            parsed.completed.run.entries,
-            vec![HookOutputEntry {
-                kind: HookOutputEntryKind::Context,
-                text: "hello from hook".to_string(),
-            }]
-        );
-    }
 
     #[test]
     fn continue_false_keeps_context_out_of_model_input() {
@@ -315,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_block_decision_stops_processing() {
+    fn claude_block_decision_blocks_processing() {
         let parsed = parse_completed(
             &handler(),
             run_result(
@@ -334,7 +315,7 @@ mod tests {
                 additional_context_for_model: None,
             }
         );
-        assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
         assert_eq!(
             parsed.completed.run.entries,
             vec![
@@ -343,7 +324,7 @@ mod tests {
                     text: "do not inject".to_string(),
                 },
                 HookOutputEntry {
-                    kind: HookOutputEntryKind::Stop,
+                    kind: HookOutputEntryKind::Feedback,
                     text: "slow down".to_string(),
                 },
             ]
@@ -351,12 +332,12 @@ mod tests {
     }
 
     #[test]
-    fn malformed_json_surfaces_error() {
+    fn claude_block_decision_requires_reason() {
         let parsed = parse_completed(
             &handler(),
             run_result(
                 Some(0),
-                r#"{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit""#,
+                r#"{"decision":"block","hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"do not inject"}}"#,
                 "",
             ),
             Some("turn-1".to_string()),
@@ -373,9 +354,43 @@ mod tests {
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
         assert_eq!(
             parsed.completed.run.entries,
+            vec![
+                HookOutputEntry {
+                    kind: HookOutputEntryKind::Context,
+                    text: "do not inject".to_string(),
+                },
+                HookOutputEntry {
+                    kind: HookOutputEntryKind::Error,
+                    text:
+                        "UserPromptSubmit hook returned decision:block without a non-empty reason"
+                            .to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn exit_code_two_blocks_processing() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(Some(2), "", "blocked by policy\n"),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            UserPromptSubmitHandlerData {
+                should_stop: true,
+                stop_reason: Some("blocked by policy".to_string()),
+                additional_context_for_model: None,
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
+        assert_eq!(
+            parsed.completed.run.entries,
             vec![HookOutputEntry {
-                kind: HookOutputEntryKind::Error,
-                text: "hook returned invalid user prompt submit JSON output".to_string(),
+                kind: HookOutputEntryKind::Feedback,
+                text: "blocked by policy".to_string(),
             }]
         );
     }

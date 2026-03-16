@@ -15,6 +15,9 @@ pub(crate) struct SessionStartOutput {
 #[derive(Debug, Clone)]
 pub(crate) struct UserPromptSubmitOutput {
     pub universal: UniversalOutput,
+    pub should_block: bool,
+    pub reason: Option<String>,
+    pub invalid_block_reason: Option<String>,
     pub additional_context: Option<String>,
 }
 
@@ -45,16 +48,24 @@ pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
 
 pub(crate) fn parse_user_prompt_submit(stdout: &str) -> Option<UserPromptSubmitOutput> {
     let wire: UserPromptSubmitCommandOutputWire = parse_json(stdout)?;
-    let mut universal = UniversalOutput::from(wire.universal);
-    if matches!(wire.decision, Some(BlockDecisionWire::Block)) {
-        universal.continue_processing = false;
-        universal.stop_reason = wire.reason.or(universal.stop_reason);
-    }
+    let should_block = matches!(wire.decision, Some(BlockDecisionWire::Block));
+    let invalid_block_reason = if should_block
+        && match wire.reason.as_deref() {
+            Some(reason) => reason.trim().is_empty(),
+            None => true,
+        } {
+        Some(invalid_block_message("UserPromptSubmit"))
+    } else {
+        None
+    };
     let additional_context = wire
         .hook_specific_output
         .and_then(|output| output.additional_context);
     Some(UserPromptSubmitOutput {
-        universal,
+        universal: UniversalOutput::from(wire.universal),
+        should_block: should_block && invalid_block_reason.is_none(),
+        reason: wire.reason,
+        invalid_block_reason,
         additional_context,
     })
 }
@@ -67,7 +78,7 @@ pub(crate) fn parse_stop(stdout: &str) -> Option<StopOutput> {
             Some(reason) => reason.trim().is_empty(),
             None => true,
         } {
-        Some(invalid_block_message())
+        Some(invalid_block_message("Stop"))
     } else {
         None
     };
@@ -105,6 +116,6 @@ where
     serde_json::from_value(value).ok()
 }
 
-fn invalid_block_message() -> String {
-    "Stop hook returned decision:block without a non-empty reason".to_string()
+fn invalid_block_message(event_name: &str) -> String {
+    format!("{event_name} hook returned decision:block without a non-empty reason")
 }

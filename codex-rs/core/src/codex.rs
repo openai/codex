@@ -205,6 +205,7 @@ use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::git_info::get_git_repo_root;
 use crate::guardian::GuardianReviewSessionManager;
+use crate::hook_runtime::record_additional_context;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_user_prompt_submit_hooks;
 use crate::instructions::UserInstructions;
@@ -5640,6 +5641,19 @@ pub(crate) async fn run_turn(
             invocation_type: Some(InvocationType::Explicit),
         })
         .collect::<Vec<_>>();
+
+    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
+    let response_item: ResponseItem = initial_input_for_turn.clone().into();
+    let mut last_agent_message: Option<String> = None;
+    if run_pending_session_start_hooks(&sess, &turn_context).await {
+        return last_agent_message;
+    }
+    let user_prompt_submit_outcome =
+        run_user_prompt_submit_hooks(&sess, &turn_context, UserMessageItem::new(&input).message())
+            .await;
+    if user_prompt_submit_outcome.should_stop {
+        return last_agent_message;
+    }
     sess.services
         .analytics_events_client
         .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
@@ -5650,19 +5664,10 @@ pub(crate) async fn run_turn(
     }
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
-
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-    let response_item: ResponseItem = initial_input_for_turn.clone().into();
-    let mut last_agent_message: Option<String> = None;
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
         .await;
-    if run_pending_session_start_hooks(&sess, &turn_context).await {
-        return last_agent_message;
-    }
-    if run_user_prompt_submit_hooks(&sess, &turn_context, UserMessageItem::new(&input).message())
-        .await
-    {
-        return last_agent_message;
+    if let Some(additional_context) = user_prompt_submit_outcome.additional_context {
+        record_additional_context(&sess, &turn_context, additional_context).await;
     }
     // Track the previous-turn baseline from the regular user-turn path only so
     // standalone tasks (compact/shell/review/undo) cannot suppress future
@@ -5715,17 +5720,22 @@ pub(crate) async fn run_turn(
             for response_item in pending_response_items {
                 if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
                     // todo(aibrahim): move pending input to be UserInput only to keep TextElements. context: https://github.com/openai/codex/pull/10656#discussion_r2765522480
+                    let user_prompt_submit_outcome =
+                        run_user_prompt_submit_hooks(&sess, &turn_context, user_message.message())
+                            .await;
+                    if user_prompt_submit_outcome.should_stop {
+                        should_stop_for_user_prompt_submit = true;
+                        break;
+                    }
                     sess.record_user_prompt_and_emit_turn_item(
                         turn_context.as_ref(),
                         &user_message.content,
                         response_item,
                     )
                     .await;
-                    if run_user_prompt_submit_hooks(&sess, &turn_context, user_message.message())
-                        .await
+                    if let Some(additional_context) = user_prompt_submit_outcome.additional_context
                     {
-                        should_stop_for_user_prompt_submit = true;
-                        break;
+                        record_additional_context(&sess, &turn_context, additional_context).await;
                     }
                 } else {
                     sess.record_conversation_items(

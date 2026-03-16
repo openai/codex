@@ -8,6 +8,7 @@ use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 
+use super::common;
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
@@ -92,11 +93,11 @@ pub(crate) async fn run(
     )) {
         Ok(input_json) => input_json,
         Err(error) => {
-            return serialization_failure_outcome(
+            return serialization_failure_outcome(common::serialization_failure_hook_events(
                 matched,
                 Some(request.turn_id),
                 format!("failed to serialize stop hook input: {error}"),
-            );
+            ));
         }
     };
 
@@ -172,7 +173,9 @@ fn parse_completed(
                             text: invalid_block_reason,
                         });
                     } else if parsed.should_block {
-                        if let Some(reason) = parsed.reason.as_deref().and_then(trimmed_non_empty) {
+                        if let Some(reason) =
+                            parsed.reason.as_deref().and_then(common::trimmed_non_empty)
+                        {
                             status = HookRunStatus::Blocked;
                             should_block = true;
                             block_reason = Some(reason.clone());
@@ -200,7 +203,7 @@ fn parse_completed(
                 }
             }
             Some(2) => {
-                if let Some(reason) = trimmed_non_empty(&run_result.stderr) {
+                if let Some(reason) = common::trimmed_non_empty(&run_result.stderr) {
                     status = HookRunStatus::Blocked;
                     should_block = true;
                     block_reason = Some(reason.clone());
@@ -261,16 +264,22 @@ fn aggregate_results<'a>(
     let stop_reason = results.iter().find_map(|result| result.stop_reason.clone());
     let should_block = !should_stop && results.iter().any(|result| result.should_block);
     let block_reason = if should_block {
-        join_block_text(results.iter().copied(), |result| {
-            result.block_reason.as_deref()
-        })
+        common::join_text_chunks(
+            results
+                .iter()
+                .filter_map(|result| result.block_reason.clone())
+                .collect(),
+        )
     } else {
         None
     };
     let continuation_prompt = if should_block {
-        join_block_text(results.iter().copied(), |result| {
-            result.continuation_prompt.as_deref()
-        })
+        common::join_text_chunks(
+            results
+                .iter()
+                .filter_map(|result| result.continuation_prompt.clone())
+                .collect(),
+        )
     } else {
         None
     };
@@ -284,52 +293,7 @@ fn aggregate_results<'a>(
     }
 }
 
-fn join_block_text<'a>(
-    results: impl IntoIterator<Item = &'a StopHandlerData>,
-    select: impl Fn(&'a StopHandlerData) -> Option<&'a str>,
-) -> Option<String> {
-    let parts = results
-        .into_iter()
-        .filter_map(select)
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    if parts.is_empty() {
-        return None;
-    }
-    Some(parts.join("\n\n"))
-}
-
-fn trimmed_non_empty(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    if !trimmed.is_empty() {
-        return Some(trimmed.to_string());
-    }
-    None
-}
-
-fn serialization_failure_outcome(
-    handlers: Vec<ConfiguredHandler>,
-    turn_id: Option<String>,
-    error_message: String,
-) -> StopOutcome {
-    let hook_events = handlers
-        .into_iter()
-        .map(|handler| {
-            let mut run = dispatcher::running_summary(&handler);
-            run.status = HookRunStatus::Failed;
-            run.completed_at = Some(run.started_at);
-            run.duration_ms = Some(0);
-            run.entries = vec![HookOutputEntry {
-                kind: HookOutputEntryKind::Error,
-                text: error_message.clone(),
-            }];
-            HookCompletedEvent {
-                turn_id: turn_id.clone(),
-                run,
-            }
-        })
-        .collect();
-
+fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> StopOutcome {
     StopOutcome {
         hook_events,
         should_stop: false,

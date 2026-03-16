@@ -14,10 +14,14 @@ use codex_protocol::protocol::HookRunSummary;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 
+pub(crate) struct HookRuntimeOutcome {
+    pub should_stop: bool,
+    pub additional_context: Option<String>,
+}
+
 struct ContextInjectingHookOutcome {
     hook_events: Vec<HookCompletedEvent>,
-    should_stop: bool,
-    additional_context: Option<String>,
+    outcome: HookRuntimeOutcome,
 }
 
 impl From<SessionStartOutcome> for ContextInjectingHookOutcome {
@@ -30,8 +34,10 @@ impl From<SessionStartOutcome> for ContextInjectingHookOutcome {
         } = value;
         Self {
             hook_events,
-            should_stop,
-            additional_context,
+            outcome: HookRuntimeOutcome {
+                should_stop,
+                additional_context,
+            },
         }
     }
 }
@@ -46,8 +52,10 @@ impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome {
         } = value;
         Self {
             hook_events,
-            should_stop,
-            additional_context,
+            outcome: HookRuntimeOutcome {
+                should_stop,
+                additional_context,
+            },
         }
     }
 }
@@ -77,13 +85,15 @@ pub(crate) async fn run_pending_session_start_hooks(
             .run_session_start(request, Some(turn_context.sub_id.clone())),
     )
     .await
+    .record_additional_context(sess, turn_context)
+    .await
 }
 
 pub(crate) async fn run_user_prompt_submit_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     prompt: String,
-) -> bool {
+) -> HookRuntimeOutcome {
     let request = UserPromptSubmitRequest {
         session_id: sess.conversation_id,
         turn_id: turn_context.sub_id.clone(),
@@ -108,7 +118,7 @@ async fn run_context_injecting_hook<Fut, Outcome>(
     turn_context: &Arc<TurnContext>,
     preview_runs: Vec<HookRunSummary>,
     outcome_future: Fut,
-) -> bool
+) -> HookRuntimeOutcome
 where
     Fut: Future<Output = Outcome>,
     Outcome: Into<ContextInjectingHookOutcome>,
@@ -117,14 +127,38 @@ where
 
     let outcome = outcome_future.await.into();
     emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
-
-    if let Some(additional_context) = outcome.additional_context {
-        let developer_message: ResponseItem = DeveloperInstructions::new(additional_context).into();
-        sess.record_conversation_items(turn_context, std::slice::from_ref(&developer_message))
-            .await;
+    HookRuntimeOutcome {
+        should_stop: outcome.outcome.should_stop,
+        additional_context: if outcome.outcome.should_stop {
+            None
+        } else {
+            outcome.outcome.additional_context
+        },
     }
+}
 
-    outcome.should_stop
+impl HookRuntimeOutcome {
+    async fn record_additional_context(
+        self,
+        sess: &Arc<Session>,
+        turn_context: &Arc<TurnContext>,
+    ) -> bool {
+        if let Some(additional_context) = self.additional_context {
+            record_additional_context(sess, turn_context, additional_context).await;
+        }
+
+        self.should_stop
+    }
+}
+
+pub(crate) async fn record_additional_context(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    additional_context: String,
+) {
+    let developer_message: ResponseItem = DeveloperInstructions::new(additional_context).into();
+    sess.record_conversation_items(turn_context, std::slice::from_ref(&developer_message))
+        .await;
 }
 
 async fn emit_hook_started_events(

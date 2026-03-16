@@ -8,6 +8,7 @@ use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 
+use super::common;
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
@@ -99,11 +100,11 @@ pub(crate) async fn run(
     )) {
         Ok(input_json) => input_json,
         Err(error) => {
-            return serialization_failure_outcome(
+            return serialization_failure_outcome(common::serialization_failure_hook_events(
                 matched,
                 turn_id,
                 format!("failed to serialize session start hook input: {error}"),
-            );
+            ));
         }
     };
 
@@ -130,7 +131,7 @@ pub(crate) async fn run(
         hook_events: results.into_iter().map(|result| result.completed).collect(),
         should_stop,
         stop_reason,
-        additional_context: join_text_chunks(additional_contexts),
+        additional_context: common::join_text_chunks(additional_contexts),
     }
 }
 
@@ -234,37 +235,7 @@ fn parse_completed(
     }
 }
 
-fn join_text_chunks(chunks: Vec<String>) -> Option<String> {
-    if chunks.is_empty() {
-        None
-    } else {
-        Some(chunks.join("\n\n"))
-    }
-}
-
-fn serialization_failure_outcome(
-    handlers: Vec<ConfiguredHandler>,
-    turn_id: Option<String>,
-    error_message: String,
-) -> SessionStartOutcome {
-    let hook_events = handlers
-        .into_iter()
-        .map(|handler| {
-            let mut run = dispatcher::running_summary(&handler);
-            run.status = HookRunStatus::Failed;
-            run.completed_at = Some(run.started_at);
-            run.duration_ms = Some(0);
-            run.entries = vec![HookOutputEntry {
-                kind: HookOutputEntryKind::Error,
-                text: error_message.clone(),
-            }];
-            HookCompletedEvent {
-                turn_id: turn_id.clone(),
-                run,
-            }
-        })
-        .collect();
-
+fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> SessionStartOutcome {
     SessionStartOutcome {
         hook_events,
         should_stop: false,
