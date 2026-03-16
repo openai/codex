@@ -3,11 +3,7 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
-V8_COPTS = select({
-    "@v8//bazel/config:is_windows": ["/std:c++20"],
-    "@v8//bazel/config:is_gcc": ["-std=gnu++2a"],
-    "//conditions:default": ["-std=c++20"],
-})
+V8_COPTS = ["-std=c++20"]
 
 V8_STATIC_LIBRARY_FEATURES = [
     "-symbol_check",
