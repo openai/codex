@@ -428,6 +428,7 @@ fn send_realtime_audio_chunk(
                 sample_rate: MODEL_AUDIO_SAMPLE_RATE,
                 num_channels: MODEL_AUDIO_CHANNELS,
                 samples_per_channel: Some(samples_per_channel),
+                item_id: None,
             },
         },
     )));

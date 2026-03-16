@@ -264,9 +264,11 @@ impl ChatWidget {
             RealtimeEvent::SessionUpdated { session_id, .. } => {
                 self.realtime_conversation.session_id = Some(session_id);
             }
+            RealtimeEvent::InputAudioSpeechStarted(_) => {}
             RealtimeEvent::InputTranscriptDelta(_) => {}
             RealtimeEvent::OutputTranscriptDelta(_) => {}
             RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
+            RealtimeEvent::ResponseCancelled(_) => {}
             RealtimeEvent::ConversationItemAdded(_item) => {}
             RealtimeEvent::ConversationItemDone { .. } => {}
             RealtimeEvent::HandoffRequested(_) => {}
