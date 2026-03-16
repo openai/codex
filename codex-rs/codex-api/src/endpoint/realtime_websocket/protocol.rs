@@ -50,7 +50,7 @@ pub(super) enum RealtimeOutboundMessage {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionUpdateSession {
     #[serde(rename = "type")]
-    pub(super) kind: String,
+    pub(super) r#type: SessionType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -60,6 +60,14 @@ pub(super) struct SessionUpdateSession {
     pub(super) tools: Option<Vec<SessionFunctionTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) tool_choice: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum SessionType {
+    Quicksilver,
+    Realtime,
+    Transcription,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,8 +89,14 @@ pub(super) struct SessionAudioInput {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionAudioFormat {
     #[serde(rename = "type")]
-    pub(super) kind: String,
+    pub(super) r#type: AudioFormatType,
     pub(super) rate: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub(super) enum AudioFormatType {
+    #[serde(rename = "audio/pcm")]
+    AudioPcm,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,30 +117,55 @@ pub(super) enum SessionAudioVoice {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionNoiseReduction {
     #[serde(rename = "type")]
-    pub(super) kind: String,
+    pub(super) r#type: NoiseReductionType,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum NoiseReductionType {
+    NearField,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionTurnDetection {
     #[serde(rename = "type")]
-    pub(super) kind: String,
+    pub(super) r#type: TurnDetectionType,
     pub(super) interrupt_response: bool,
     pub(super) create_response: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum TurnDetectionType {
+    ServerVad,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionAudioOutputFormat {
     #[serde(rename = "type")]
-    pub(super) kind: String,
+    pub(super) r#type: AudioFormatType,
     pub(super) rate: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ConversationMessageItem {
     #[serde(rename = "type")]
-    pub(super) kind: String,
-    pub(super) role: String,
+    pub(super) r#type: ConversationItemType,
+    pub(super) role: ConversationRole,
     pub(super) content: Vec<ConversationItemContent>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ConversationItemType {
+    Message,
+    FunctionCallOutput,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ConversationRole {
+    User,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -139,7 +178,7 @@ pub(super) enum ConversationItemPayload {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ConversationFunctionCallOutputItem {
     #[serde(rename = "type")]
-    pub(super) kind: String,
+    pub(super) r#type: ConversationItemType,
     pub(super) call_id: String,
     pub(super) output: String,
 }
@@ -147,17 +186,30 @@ pub(super) struct ConversationFunctionCallOutputItem {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ConversationItemContent {
     #[serde(rename = "type")]
-    pub(super) kind: String,
+    pub(super) r#type: ConversationContentType,
     pub(super) text: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ConversationContentType {
+    Text,
+    InputText,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionFunctionTool {
     #[serde(rename = "type")]
-    pub(super) kind: String,
+    pub(super) r#type: SessionToolType,
     pub(super) name: String,
     pub(super) description: String,
     pub(super) parameters: Value,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum SessionToolType {
+    Function,
 }
 
 pub(super) fn parse_realtime_event(

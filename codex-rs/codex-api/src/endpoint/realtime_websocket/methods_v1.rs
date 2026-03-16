@@ -1,25 +1,27 @@
-use crate::endpoint::realtime_websocket::methods_common::REALTIME_AUDIO_FORMAT;
 use crate::endpoint::realtime_websocket::methods_common::REALTIME_AUDIO_SAMPLE_RATE;
+use crate::endpoint::realtime_websocket::protocol::AudioFormatType;
+use crate::endpoint::realtime_websocket::protocol::ConversationContentType;
 use crate::endpoint::realtime_websocket::protocol::ConversationItemContent;
 use crate::endpoint::realtime_websocket::protocol::ConversationItemPayload;
+use crate::endpoint::realtime_websocket::protocol::ConversationItemType;
 use crate::endpoint::realtime_websocket::protocol::ConversationMessageItem;
+use crate::endpoint::realtime_websocket::protocol::ConversationRole;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::SessionAudio;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioFormat;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioInput;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioOutput;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioVoice;
+use crate::endpoint::realtime_websocket::protocol::SessionType;
 use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
-
-const REALTIME_V1_SESSION_TYPE: &str = "quicksilver";
 
 pub(super) fn conversation_item_create_message(text: String) -> RealtimeOutboundMessage {
     RealtimeOutboundMessage::ConversationItemCreate {
         item: ConversationItemPayload::Message(ConversationMessageItem {
-            kind: "message".to_string(),
-            role: "user".to_string(),
+            r#type: ConversationItemType::Message,
+            role: ConversationRole::User,
             content: vec![ConversationItemContent {
-                kind: "text".to_string(),
+                r#type: ConversationContentType::Text,
                 text,
             }],
         }),
@@ -38,13 +40,13 @@ pub(super) fn conversation_handoff_append_message(
 
 pub(super) fn session_update_session(instructions: String) -> SessionUpdateSession {
     SessionUpdateSession {
-        kind: REALTIME_V1_SESSION_TYPE.to_string(),
+        r#type: SessionType::Quicksilver,
         instructions: Some(instructions),
         output_modalities: None,
         audio: SessionAudio {
             input: SessionAudioInput {
                 format: SessionAudioFormat {
-                    kind: REALTIME_AUDIO_FORMAT.to_string(),
+                    r#type: AudioFormatType::AudioPcm,
                     rate: REALTIME_AUDIO_SAMPLE_RATE,
                 },
                 noise_reduction: None,
