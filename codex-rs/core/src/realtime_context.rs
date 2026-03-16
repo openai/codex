@@ -58,7 +58,7 @@ pub(crate) async fn build_realtime_startup_context(
     let current_thread_section = build_current_thread_section(history.raw_items());
     let recent_threads = load_recent_threads(sess).await;
     let recent_work_section = build_recent_work_section(&cwd, &recent_threads);
-    let workspace_section = build_workspace_section(&cwd);
+    let workspace_section = build_workspace_section_with_user_root(&cwd, home_dir());
 
     if current_thread_section.is_none()
         && recent_work_section.is_none()
@@ -270,10 +270,6 @@ fn build_current_thread_section(items: &[ResponseItem]) -> Option<String> {
     Some(lines.join("\n"))
 }
 
-fn build_workspace_section(cwd: &Path) -> Option<String> {
-    build_workspace_section_with_user_root(cwd, home_dir())
-}
-
 fn build_workspace_section_with_user_root(
     cwd: &Path,
     user_root: Option<PathBuf>,
@@ -300,12 +296,12 @@ fn build_workspace_section_with_user_root(
 
     let mut lines = vec![
         format!("Current working directory: {}", cwd.display()),
-        format!("Working directory name: {}", display_name(cwd)),
+        format!("Working directory name: {}", file_name_string(cwd)),
     ];
 
     if let Some(git_root) = &git_root {
         lines.push(format!("Git root: {}", git_root.display()));
-        lines.push(format!("Git project: {}", display_name(git_root)));
+        lines.push(format!("Git project: {}", file_name_string(git_root)));
     }
     if let Some(user_root) = &user_root {
         lines.push(format!("User root: {}", user_root.display()));
@@ -477,13 +473,6 @@ fn format_thread_group(
     }
 
     (lines.len() > 5).then(|| lines.join("\n"))
-}
-
-fn display_name(path: &Path) -> String {
-    path.file_name()
-        .and_then(OsStr::to_str)
-        .map(str::to_owned)
-        .unwrap_or_else(|| path.display().to_string())
 }
 
 fn file_name_string(path: &Path) -> String {
