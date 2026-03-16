@@ -1440,6 +1440,7 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-json-to-toml",
  "codex-utils-pty",
+ "constant_time_eq",
  "core_test_support",
  "futures",
  "hmac",

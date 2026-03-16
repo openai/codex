@@ -7,19 +7,23 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use clap::Args;
 use clap::ValueEnum;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use constant_time_eq::constant_time_eq_32;
 use hmac::Hmac;
 use hmac::Mac;
 use serde::Deserialize;
+use sha2::Digest;
 use sha2::Sha256;
 use std::io;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::path::PathBuf;
 use time::OffsetDateTime;
 
 type HmacSha256 = Hmac<Sha256>;
 
 const DEFAULT_MAX_CLOCK_SKEW_SECONDS: u64 = 30;
+const MIN_SIGNED_BEARER_SECRET_BYTES: usize = 32;
 const SIGNED_TOKEN_PREFIX: &str = "codexv1";
 const INVALID_AUTHORIZATION_HEADER_MESSAGE: &str = "invalid authorization header";
 const INVALID_WEBSOCKET_AUTH_CONFIGURATION_MESSAGE: &str = "invalid websocket auth configuration";
@@ -91,13 +95,13 @@ pub(crate) struct WebsocketAuthPolicy {
 #[derive(Clone, Debug)]
 pub(crate) enum WebsocketAuthMode {
     CapabilityToken {
-        token: String,
+        token_sha256: [u8; 32],
     },
     SignedBearerToken {
         shared_secret: Vec<u8>,
         issuer: Option<String>,
         audience: Option<String>,
-        max_clock_skew_seconds: u64,
+        max_clock_skew_seconds: i64,
     },
 }
 
@@ -200,8 +204,9 @@ pub(crate) fn policy_from_settings(
 ) -> io::Result<WebsocketAuthPolicy> {
     let mode = match settings.config.as_ref() {
         Some(AppServerWebsocketAuthConfig::CapabilityToken { token_file }) => {
+            let token = read_trimmed_secret(token_file.as_ref())?;
             Some(WebsocketAuthMode::CapabilityToken {
-                token: read_trimmed_secret(token_file.as_ref())?,
+                token_sha256: sha256_digest(token.as_bytes()),
             })
         }
         Some(AppServerWebsocketAuthConfig::SignedBearerToken {
@@ -209,12 +214,22 @@ pub(crate) fn policy_from_settings(
             issuer,
             audience,
             max_clock_skew_seconds,
-        }) => Some(WebsocketAuthMode::SignedBearerToken {
-            shared_secret: read_trimmed_secret(shared_secret_file.as_ref())?.into_bytes(),
-            issuer: issuer.clone(),
-            audience: audience.clone(),
-            max_clock_skew_seconds: *max_clock_skew_seconds,
-        }),
+        }) => {
+            let shared_secret = read_trimmed_secret(shared_secret_file.as_ref())?.into_bytes();
+            validate_signed_bearer_secret(shared_secret_file.as_ref(), &shared_secret)?;
+            let max_clock_skew_seconds = i64::try_from(*max_clock_skew_seconds).map_err(|_| {
+                io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "websocket auth clock skew must fit in a signed 64-bit integer",
+                )
+            })?;
+            Some(WebsocketAuthMode::SignedBearerToken {
+                shared_secret,
+                issuer: issuer.clone(),
+                audience: audience.clone(),
+                max_clock_skew_seconds,
+            })
+        }
         None => None,
     };
 
@@ -251,10 +266,9 @@ pub(crate) fn authorize_upgrade(
 
     let token = bearer_token_from_headers(headers)?;
     match mode {
-        WebsocketAuthMode::CapabilityToken { token: expected } => {
-            let actual = token.as_bytes();
-            let expected = expected.as_bytes();
-            if constant_time_eq(expected, actual) {
+        WebsocketAuthMode::CapabilityToken { token_sha256 } => {
+            let actual_sha256 = sha256_digest(token.as_bytes());
+            if constant_time_eq_32(token_sha256, &actual_sha256) {
                 Ok(())
             } else {
                 Err(unauthorized("invalid websocket bearer token"))
@@ -280,7 +294,7 @@ fn verify_signed_bearer_token(
     shared_secret: &[u8],
     issuer: Option<&str>,
     audience: Option<&str>,
-    max_clock_skew_seconds: u64,
+    max_clock_skew_seconds: i64,
 ) -> Result<(), WebsocketAuthError> {
     let mut parts = token.split('.');
     let Some(prefix) = parts.next() else {
@@ -321,8 +335,6 @@ fn verify_signed_bearer_token(
         .map_err(|_| unauthorized(MALFORMED_SIGNED_WEBSOCKET_BEARER_TOKEN_MESSAGE))?;
 
     let now = OffsetDateTime::now_utc().unix_timestamp();
-    let max_clock_skew_seconds = i64::try_from(max_clock_skew_seconds)
-        .map_err(|_| unauthorized(INVALID_WEBSOCKET_AUTH_CONFIGURATION_MESSAGE))?;
     if now > claims.exp.saturating_add(max_clock_skew_seconds) {
         return Err(unauthorized("expired signed websocket bearer token"));
     }
@@ -368,6 +380,19 @@ fn bearer_token_from_headers(headers: &HeaderMap) -> Result<&str, WebsocketAuthE
     Ok(token)
 }
 
+fn validate_signed_bearer_secret(path: &Path, shared_secret: &[u8]) -> io::Result<()> {
+    if shared_secret.len() < MIN_SIGNED_BEARER_SECRET_BYTES {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "signed websocket bearer secret {} must be at least {MIN_SIGNED_BEARER_SECRET_BYTES} bytes",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn read_trimmed_secret(path: &std::path::Path) -> io::Result<String> {
     let raw = std::fs::read_to_string(path).map_err(|err| {
         io::Error::new(
@@ -392,12 +417,10 @@ fn absolute_path_arg(flag_name: &str, path: PathBuf) -> anyhow::Result<AbsoluteP
     AbsolutePathBuf::try_from(path).with_context(|| format!("{flag_name} must be an absolute path"))
 }
 
-fn constant_time_eq(expected: &[u8], actual: &[u8]) -> bool {
-    let mut diff = expected.len() ^ actual.len();
-    for (&left, &right) in expected.iter().zip(actual.iter()) {
-        diff |= usize::from(left ^ right);
-    }
-    diff == 0
+fn sha256_digest(input: &[u8]) -> [u8; 32] {
+    let mut digest = [0u8; 32];
+    digest.copy_from_slice(&Sha256::digest(input));
+    digest
 }
 
 fn unauthorized(message: &'static str) -> WebsocketAuthError {
@@ -487,7 +510,7 @@ mod tests {
 
     #[test]
     fn signed_bearer_token_verification_rejects_tampering() {
-        let shared_secret = b"test-secret";
+        let shared_secret = b"0123456789abcdef0123456789abcdef";
         let token = signed_token(
             shared_secret,
             json!({
@@ -502,7 +525,7 @@ mod tests {
 
     #[test]
     fn signed_bearer_token_verification_accepts_valid_token() {
-        let shared_secret = b"test-secret";
+        let shared_secret = b"0123456789abcdef0123456789abcdef";
         let token = signed_token(
             shared_secret,
             json!({
@@ -513,5 +536,16 @@ mod tests {
         );
         verify_signed_bearer_token(&token, shared_secret, Some("issuer"), Some("audience"), 30)
             .expect("valid signed token should verify");
+    }
+
+    #[test]
+    fn validate_signed_bearer_secret_rejects_short_secret() {
+        let err = validate_signed_bearer_secret(Path::new("/tmp/secret"), b"too-short")
+            .expect_err("short shared secret should be rejected");
+        assert_eq!(err.kind(), ErrorKind::InvalidInput);
+        assert!(
+            err.to_string().contains("must be at least 32 bytes"),
+            "unexpected error: {err}"
+        );
     }
 }

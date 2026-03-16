@@ -49,6 +49,7 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+constant_time_eq = { workspace = true }
 futures = { workspace = true }
 hmac = { workspace = true }
 owo-colors = { workspace = true, features = ["supports-colors"] }
