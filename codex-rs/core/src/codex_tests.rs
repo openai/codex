@@ -118,6 +118,39 @@ fn user_message(text: &str) -> ResponseItem {
     }
 }
 
+fn turn_context_item_with_previous_turn_settings(
+    turn_context: &TurnContext,
+    previous_turn_settings: PreviousTurnSettings,
+) -> TurnContextItem {
+    let mut turn_context_item = turn_context.to_turn_context_item();
+    turn_context_item.model = previous_turn_settings.model;
+    turn_context_item.realtime_active = previous_turn_settings.realtime_active;
+    turn_context_item
+}
+
+async fn seed_previous_turn_settings(
+    session: &Session,
+    turn_context: &TurnContext,
+    previous_turn_settings: PreviousTurnSettings,
+) {
+    session
+        .record_regular_turn_context(turn_context_item_with_previous_turn_settings(
+            turn_context,
+            previous_turn_settings,
+        ))
+        .await;
+}
+
+async fn seed_previous_turn_settings_without_reference(
+    session: &Session,
+    turn_context: &TurnContext,
+    previous_turn_settings: PreviousTurnSettings,
+) {
+    seed_previous_turn_settings(session, turn_context, previous_turn_settings).await;
+    let mut state = session.state.lock().await;
+    state.set_reference_context_item(None);
+}
+
 fn assistant_message(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -1090,11 +1123,6 @@ async fn thread_rollback_drops_last_turn_from_history() {
         .map(RolloutItem::ResponseItem)
         .collect();
     sess.persist_rollout_items(&rollout_items).await;
-    sess.set_previous_turn_settings(Some(PreviousTurnSettings {
-        model: "stale-model".to_string(),
-        realtime_active: Some(tc.realtime_active),
-    }))
-    .await;
     {
         let mut state = sess.state.lock().await;
         state.set_reference_context_item(Some(tc.to_turn_context_item()));
@@ -1251,11 +1279,6 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
         vec![assistant_message("stale history")],
         Some(first_context_item.clone()),
     )
-    .await;
-    sess.set_previous_turn_settings(Some(PreviousTurnSettings {
-        model: "stale-model".to_string(),
-        realtime_active: None,
-    }))
     .await;
 
     handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
@@ -3328,7 +3351,7 @@ async fn record_model_warning_appends_user_message() {
 #[tokio::test]
 async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_tasks() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    sess.set_previous_turn_settings(None).await;
+    sess.reset_reference_turn_context_state().await;
     let input = vec![UserInput::Text {
         text: "hello".to_string(),
         text_elements: Vec::new(),
@@ -3512,9 +3535,7 @@ async fn build_settings_update_items_uses_previous_turn_settings_for_realtime_en
         .await;
     current_context.realtime_active = false;
 
-    session
-        .set_previous_turn_settings(Some(previous_turn_settings))
-        .await;
+    seed_previous_turn_settings(&session, &previous_context, previous_turn_settings).await;
     let update_items = session
         .build_settings_update_items(Some(&previous_context_item), &current_context)
         .await;
@@ -3675,8 +3696,7 @@ async fn build_initial_context_uses_previous_turn_settings_for_realtime_end() {
         realtime_active: Some(true),
     };
 
-    session
-        .set_previous_turn_settings(Some(previous_turn_settings))
+    seed_previous_turn_settings_without_reference(&session, &turn_context, previous_turn_settings)
         .await;
     let initial_context = session.build_initial_context(&turn_context).await;
     let developer_texts = developer_input_texts(&initial_context);
@@ -3697,8 +3717,7 @@ async fn build_initial_context_restates_realtime_start_when_reference_context_is
         realtime_active: Some(true),
     };
 
-    session
-        .set_previous_turn_settings(Some(previous_turn_settings))
+    seed_previous_turn_settings_without_reference(&session, &turn_context, previous_turn_settings)
         .await;
     let initial_context = session.build_initial_context(&turn_context).await;
     let developer_texts = developer_input_texts(&initial_context);
@@ -3853,8 +3872,7 @@ async fn build_initial_context_prepends_model_switch_message() {
         realtime_active: None,
     };
 
-    session
-        .set_previous_turn_settings(Some(previous_turn_settings))
+    seed_previous_turn_settings_without_reference(&session, &turn_context, previous_turn_settings)
         .await;
     let initial_context = session.build_initial_context(&turn_context).await;
 
@@ -3917,12 +3935,15 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         state.set_reference_context_item(None);
     }
 
-    session
-        .set_previous_turn_settings(Some(PreviousTurnSettings {
+    seed_previous_turn_settings_without_reference(
+        &session,
+        &previous_context,
+        PreviousTurnSettings {
             model: previous_context.model_info.slug.clone(),
             realtime_active: Some(previous_context.realtime_active),
-        }))
-        .await;
+        },
+    )
+    .await;
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
         .await;

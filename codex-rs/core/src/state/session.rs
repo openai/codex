@@ -9,6 +9,7 @@ use tokio::task::JoinHandle;
 use crate::codex::PreviousTurnSettings;
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
+use crate::context_manager::ReferenceTurnContextState;
 use crate::error::Result as CodexResult;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
@@ -26,10 +27,6 @@ pub(crate) struct SessionState {
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
-    /// Settings used by the latest regular user turn, used for turn-to-turn
-    /// model/realtime handling on subsequent regular turns (including full-context
-    /// reinjection after resume or `/compact`).
-    previous_turn_settings: Option<PreviousTurnSettings>,
     /// Startup regular task pre-created during session initialization.
     pub(crate) startup_regular_task: Option<JoinHandle<CodexResult<RegularTask>>>,
     pub(crate) active_connector_selection: HashSet<String>,
@@ -48,7 +45,6 @@ impl SessionState {
             server_reasoning_included: false,
             dependency_env: HashMap::new(),
             mcp_dependency_prompted: HashSet::new(),
-            previous_turn_settings: None,
             startup_regular_task: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
@@ -66,13 +62,7 @@ impl SessionState {
     }
 
     pub(crate) fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
-        self.previous_turn_settings.clone()
-    }
-    pub(crate) fn set_previous_turn_settings(
-        &mut self,
-        previous_turn_settings: Option<PreviousTurnSettings>,
-    ) {
-        self.previous_turn_settings = previous_turn_settings;
+        self.history.previous_turn_settings()
     }
 
     pub(crate) fn clone_history(&self) -> ContextManager {
@@ -89,8 +79,26 @@ impl SessionState {
             .set_reference_context_item(reference_context_item);
     }
 
+    pub(crate) fn replace_history_with_reference_turn_context_state(
+        &mut self,
+        items: Vec<ResponseItem>,
+        reference_turn_context_state: ReferenceTurnContextState,
+    ) {
+        self.history.replace(items);
+        self.history
+            .set_reference_turn_context_state(reference_turn_context_state);
+    }
+
+    pub(crate) fn reset_reference_turn_context_state(&mut self) {
+        self.history.reset_reference_turn_context_state();
+    }
+
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         self.history.set_token_info(info);
+    }
+
+    pub(crate) fn record_regular_turn_context(&mut self, turn_context_item: TurnContextItem) {
+        self.history.record_regular_turn_context(turn_context_item);
     }
 
     pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
