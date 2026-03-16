@@ -20,9 +20,8 @@ use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
 use http::HeaderValue;
-use serde::Serialize;
+use serde_json::Value;
 use std::collections::HashMap;
-use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -35,7 +34,6 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::trace;
@@ -74,7 +72,6 @@ impl WsStream {
                         };
                         match command {
                             WsCommand::Send { message, tx_result } => {
-                                debug!("realtime websocket sending message");
                                 let result = inner.send(message).await;
                                 let should_break = result.is_err();
                                 if let Err(err) = &result {
@@ -305,6 +302,10 @@ impl RealtimeWebsocketWriter {
             .await
     }
 
+    pub async fn send_json_value(&self, message: Value) -> Result<(), ApiError> {
+        self.send_payload(message.to_string()).await
+    }
+
     pub async fn send_session_update(
         &self,
         instructions: String,
@@ -312,14 +313,6 @@ impl RealtimeWebsocketWriter {
     ) -> Result<(), ApiError> {
         let session_mode = normalized_session_mode(self.event_parser, session_mode);
         let session = session_update_session(self.event_parser, instructions, session_mode);
-        debug!(
-            event_parser = ?self.event_parser,
-            session_mode = ?session_mode,
-            instructions_len = session.instructions.as_ref().map(String::len).unwrap_or_default(),
-            has_output_audio = session.audio.output.is_some(),
-            has_tools = session.tools.is_some(),
-            "realtime websocket prepared session.update"
-        );
         self.send_json(&RealtimeOutboundMessage::SessionUpdate { session })
             .await
     }
@@ -338,14 +331,13 @@ impl RealtimeWebsocketWriter {
         Ok(())
     }
 
-    pub async fn send_json<T>(&self, message: &T) -> Result<(), ApiError>
-    where
-        T: Serialize + Debug,
-    {
-        let payload = serde_json::to_string(&message)
+    async fn send_json(&self, message: &RealtimeOutboundMessage) -> Result<(), ApiError> {
+        let payload = serde_json::to_string(message)
             .map_err(|err| ApiError::Stream(format!("failed to encode realtime request: {err}")))?;
-        debug!(?message, "realtime websocket request");
+        self.send_payload(payload).await
+    }
 
+    async fn send_payload(&self, payload: String) -> Result<(), ApiError> {
         if self.is_closed.load(Ordering::SeqCst) {
             return Err(ApiError::Stream(
                 "realtime websocket connection is closed".to_string(),
@@ -387,10 +379,8 @@ impl RealtimeWebsocketEvents {
                 Message::Text(text) => {
                     if let Some(mut event) = parse_realtime_event(&text, self.event_parser) {
                         self.update_active_transcript(&mut event).await;
-                        debug!(?event, "realtime websocket parsed event");
                         return Ok(Some(event));
                     }
-                    debug!("realtime websocket ignored unsupported text frame");
                 }
                 Message::Close(frame) => {
                     self.is_closed.store(true, Ordering::SeqCst);
@@ -422,13 +412,6 @@ impl RealtimeWebsocketEvents {
                 append_transcript_delta(&mut active_transcript.entries, "assistant", delta);
             }
             RealtimeEvent::HandoffRequested(handoff) => {
-                debug!(
-                    handoff_id = handoff.handoff_id,
-                    item_id = handoff.item_id,
-                    input_len = handoff.input_transcript.len(),
-                    transcript_entries = active_transcript.entries.len(),
-                    "realtime websocket parsed codex function call"
-                );
                 handoff.active_transcript = std::mem::take(&mut active_transcript.entries);
             }
             RealtimeEvent::SessionUpdated { .. }
@@ -516,14 +499,6 @@ impl RealtimeWebsocketClient {
 
         let (stream, rx_message) = WsStream::new(stream);
         let connection = RealtimeWebsocketConnection::new(stream, rx_message, config.event_parser);
-        debug!(
-            event_parser = ?config.event_parser,
-            session_mode = ?config.session_mode,
-            model = config.model.as_deref().unwrap_or("<provider-default>"),
-            session_id = config.session_id.as_deref().unwrap_or("<none>"),
-            instructions_len = config.instructions.len(),
-            "realtime websocket sending session.update"
-        );
         connection
             .writer
             .send_session_update(config.instructions, config.session_mode)

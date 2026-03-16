@@ -43,7 +43,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -449,7 +448,6 @@ pub(crate) async fn handle_start(
                 _ => None,
             };
             if let Some(text) = maybe_routed_text {
-                debug!(text = %text, "[realtime-text] realtime conversation text output");
                 let sess_for_routed_text = Arc::clone(&sess_clone);
                 sess_for_routed_text.route_realtime_text_input(text).await;
             }
@@ -555,8 +553,6 @@ pub(crate) async fn handle_text(
     sub_id: String,
     params: ConversationTextParams,
 ) {
-    debug!(text = %params.text, "[realtime-text] appending realtime conversation text input");
-
     if let Err(err) = sess.conversation.text_in(params.text).await {
         error!("failed to append realtime text: {err}");
         send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
@@ -720,7 +716,7 @@ fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
                                             .as_deref()
                                             .is_none_or(|item_id| item_id == output_audio_state.item_id)
                                         && let Err(err) = writer
-                                            .send_json(&json!({
+                                            .send_json_value(json!({
                                                 "type": "conversation.item.truncate",
                                                 "item_id": output_audio_state.item_id,
                                                 "content_index": 0,
