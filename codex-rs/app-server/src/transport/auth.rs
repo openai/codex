@@ -2,6 +2,7 @@ use anyhow::Context;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
+use axum::http::header::ORIGIN;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use clap::Args;
@@ -29,6 +30,7 @@ const INVALID_AUTHORIZATION_HEADER_MESSAGE: &str = "invalid authorization header
 const INVALID_WEBSOCKET_AUTH_CONFIGURATION_MESSAGE: &str = "invalid websocket auth configuration";
 const MALFORMED_SIGNED_WEBSOCKET_BEARER_TOKEN_MESSAGE: &str =
     "malformed signed websocket bearer token";
+const BROWSER_ORIGIN_REQUIRES_AUTH_MESSAGE: &str = "browser-origin websocket requests require auth";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Args)]
 pub struct AppServerWebsocketAuthArgs {
@@ -261,6 +263,9 @@ pub(crate) fn authorize_upgrade(
     policy: &WebsocketAuthPolicy,
 ) -> Result<(), WebsocketAuthError> {
     let Some(mode) = policy.mode.as_ref() else {
+        if headers.contains_key(ORIGIN) {
+            return Err(forbidden(BROWSER_ORIGIN_REQUIRES_AUTH_MESSAGE));
+        }
         return Ok(());
     };
 
@@ -426,6 +431,13 @@ fn sha256_digest(input: &[u8]) -> [u8; 32] {
 fn unauthorized(message: &'static str) -> WebsocketAuthError {
     WebsocketAuthError {
         status_code: StatusCode::UNAUTHORIZED,
+        message,
+    }
+}
+
+fn forbidden(message: &'static str) -> WebsocketAuthError {
+    WebsocketAuthError {
+        status_code: StatusCode::FORBIDDEN,
         message,
     }
 }
