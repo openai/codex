@@ -13,8 +13,6 @@ workspace = true
 
 [dependencies]
 codex-utils-home-dir = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-toml = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

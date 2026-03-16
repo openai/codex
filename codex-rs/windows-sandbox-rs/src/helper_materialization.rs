@@ -296,11 +296,12 @@ fn destination_is_fresh(source: &Path, destination: &Path) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::source_path_for_exe;
-    use super::destination_is_fresh;
-    use super::helper_bin_dir;
     use super::copy_from_source_if_needed;
     use super::CopyOutcome;
+    use super::destination_is_fresh;
+    use super::helper_bin_dir;
+    use super::RESOURCES_DIRNAME;
+    use super::source_path_for_exe;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;

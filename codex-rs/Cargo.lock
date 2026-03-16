@@ -2204,9 +2204,7 @@ version = "0.0.0"
 dependencies = [
  "codex-utils-home-dir",
  "pretty_assertions",
- "serde",
  "tempfile",
- "toml 0.9.11+spec-1.1.0",
 ]
 
 [[package]]
