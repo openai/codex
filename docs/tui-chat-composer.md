@@ -115,8 +115,8 @@ the input starts with `!` (shell command).
 5. Clears pending pastes on success and suppresses submission if the final text is empty and there
    are no attachments.
 
-The same preparation path is reused for slash commands with arguments (for example `/plan` and
-`/review`) so pasted content and text elements are preserved when extracting args.
+The same preparation path is reused for slash commands with arguments (for example `/model`,
+`/plan`, and `/review`) so pasted content and text elements are preserved when extracting args.
 
 The composer also treats the textarea kill buffer as separate editing state from the visible draft.
 After submit or slash-command dispatch clears the textarea, the most recent `Ctrl+K` payload is
