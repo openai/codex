@@ -2137,9 +2137,11 @@ fn tool_suggest_description_lists_discoverable_tools() {
     assert!(
         description.contains("skills; MCP servers: sample-docs; app connectors: connector_sample")
     );
-    assert!(description.contains("If `tool_search` is available, you've used it"));
     assert!(description.contains(
-        "active `tools` list or other discovery mechanisms already available in this session"
+        "You've already tried to find a matching available tool for the user's request"
+    ));
+    assert!(description.contains(
+        "This includes `tool_search` (if available) and other means."
     ));
     assert!(description.contains("DO NOT explore or recommend tools that are not on this list."));
     assert!(!description.contains("tool_search fails to find a good match"));
