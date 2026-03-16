@@ -80,6 +80,7 @@ use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
 use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -1116,6 +1117,33 @@ impl From<AdditionalNetworkPermissions> for CoreNetworkPermissions {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct RequestPermissionProfile {
+    pub network: Option<AdditionalNetworkPermissions>,
+    pub file_system: Option<AdditionalFileSystemPermissions>,
+}
+
+impl From<CoreRequestPermissionProfile> for RequestPermissionProfile {
+    fn from(value: CoreRequestPermissionProfile) -> Self {
+        Self {
+            network: value.network.map(AdditionalNetworkPermissions::from),
+            file_system: value.file_system.map(AdditionalFileSystemPermissions::from),
+        }
+    }
+}
+
+impl From<RequestPermissionProfile> for CoreRequestPermissionProfile {
+    fn from(value: RequestPermissionProfile) -> Self {
+        Self {
+            network: value.network.map(CoreNetworkPermissions::from),
+            file_system: value.file_system.map(CoreFileSystemPermissions::from),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AdditionalPermissionProfile {
     pub network: Option<AdditionalNetworkPermissions>,
@@ -1146,51 +1174,6 @@ impl From<AdditionalPermissionProfile> for CorePermissionProfile {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct GrantedMacOsPermissions {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub preferences: Option<CoreMacOsPreferencesPermission>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub automations: Option<CoreMacOsAutomationPermission>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub launch_services: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub accessibility: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub calendar: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub reminders: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub contacts: Option<CoreMacOsContactsPermission>,
-}
-
-impl From<GrantedMacOsPermissions> for CoreMacOsSeatbeltProfileExtensions {
-    fn from(value: GrantedMacOsPermissions) -> Self {
-        Self {
-            macos_preferences: value
-                .preferences
-                .unwrap_or(CoreMacOsPreferencesPermission::None),
-            macos_automation: value
-                .automations
-                .unwrap_or(CoreMacOsAutomationPermission::None),
-            macos_launch_services: value.launch_services.unwrap_or(false),
-            macos_accessibility: value.accessibility.unwrap_or(false),
-            macos_calendar: value.calendar.unwrap_or(false),
-            macos_reminders: value.reminders.unwrap_or(false),
-            macos_contacts: value.contacts.unwrap_or(CoreMacOsContactsPermission::None),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
 pub struct GrantedPermissionProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -1198,32 +1181,14 @@ pub struct GrantedPermissionProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub file_system: Option<AdditionalFileSystemPermissions>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub macos: Option<GrantedMacOsPermissions>,
 }
 
 impl From<GrantedPermissionProfile> for CorePermissionProfile {
     fn from(value: GrantedPermissionProfile) -> Self {
-        let macos = value.macos.and_then(|macos| {
-            if macos.preferences.is_none()
-                && macos.automations.is_none()
-                && macos.launch_services.is_none()
-                && macos.accessibility.is_none()
-                && macos.calendar.is_none()
-                && macos.reminders.is_none()
-                && macos.contacts.is_none()
-            {
-                None
-            } else {
-                Some(CoreMacOsSeatbeltProfileExtensions::from(macos))
-            }
-        });
-
         Self {
             network: value.network.map(CoreNetworkPermissions::from),
             file_system: value.file_system.map(CoreFileSystemPermissions::from),
-            macos,
+            macos: None,
         }
     }
 }
@@ -4542,6 +4507,7 @@ pub enum CollabAgentToolCallStatus {
 pub enum CollabAgentStatus {
     PendingInit,
     Running,
+    Interrupted,
     Completed,
     Errored,
     Shutdown,
@@ -4565,6 +4531,10 @@ impl From<CoreAgentStatus> for CollabAgentState {
             },
             CoreAgentStatus::Running => Self {
                 status: CollabAgentStatus::Running,
+                message: None,
+            },
+            CoreAgentStatus::Interrupted => Self {
+                status: CollabAgentStatus::Interrupted,
                 message: None,
             },
             CoreAgentStatus::Completed(message) => Self {
@@ -5607,7 +5577,7 @@ pub struct PermissionsRequestApprovalParams {
     pub turn_id: String,
     pub item_id: String,
     pub reason: Option<String>,
-    pub permissions: AdditionalPermissionProfile,
+    pub permissions: RequestPermissionProfile,
 }
 
 v2_enum_from_core!(
@@ -5887,6 +5857,17 @@ mod tests {
     }
 
     #[test]
+    fn collab_agent_state_maps_interrupted_status() {
+        assert_eq!(
+            CollabAgentState::from(CoreAgentStatus::Interrupted),
+            CollabAgentState {
+                status: CollabAgentStatus::Interrupted,
+                message: None,
+            }
+        );
+    }
+
+    #[test]
     fn command_execution_request_approval_rejects_relative_additional_permission_paths() {
         let err = serde_json::from_value::<CommandExecutionRequestApprovalParams>(json!({
             "threadId": "thr_123",
@@ -6034,192 +6015,164 @@ mod tests {
     }
 
     #[test]
-    fn permissions_request_approval_response_accepts_partial_macos_grants() {
-        let cases = vec![
-            (json!({}), Some(GrantedMacOsPermissions::default()), None),
-            (
-                json!({
-                    "preferences": "read_only",
-                }),
-                Some(GrantedMacOsPermissions {
-                    preferences: Some(CoreMacOsPreferencesPermission::ReadOnly),
-                    ..Default::default()
-                }),
-                Some(CoreMacOsSeatbeltProfileExtensions {
-                    macos_preferences: CoreMacOsPreferencesPermission::ReadOnly,
-                    macos_automation: CoreMacOsAutomationPermission::None,
-                    macos_launch_services: false,
-                    macos_accessibility: false,
-                    macos_calendar: false,
-                    macos_reminders: false,
-                    macos_contacts: CoreMacOsContactsPermission::None,
-                }),
-            ),
-            (
-                json!({
-                    "automations": {
-                        "bundle_ids": ["com.apple.Notes"],
-                    },
-                }),
-                Some(GrantedMacOsPermissions {
-                    automations: Some(CoreMacOsAutomationPermission::BundleIds(vec![
-                        "com.apple.Notes".to_string(),
-                    ])),
-                    ..Default::default()
-                }),
-                Some(CoreMacOsSeatbeltProfileExtensions {
-                    macos_preferences: CoreMacOsPreferencesPermission::None,
-                    macos_automation: CoreMacOsAutomationPermission::BundleIds(vec![
-                        "com.apple.Notes".to_string(),
-                    ]),
-                    macos_launch_services: false,
-                    macos_accessibility: false,
-                    macos_calendar: false,
-                    macos_reminders: false,
-                    macos_contacts: CoreMacOsContactsPermission::None,
-                }),
-            ),
-            (
-                json!({
-                    "launchServices": true,
-                }),
-                Some(GrantedMacOsPermissions {
-                    launch_services: Some(true),
-                    ..Default::default()
-                }),
-                Some(CoreMacOsSeatbeltProfileExtensions {
-                    macos_preferences: CoreMacOsPreferencesPermission::None,
-                    macos_automation: CoreMacOsAutomationPermission::None,
-                    macos_launch_services: true,
-                    macos_accessibility: false,
-                    macos_calendar: false,
-                    macos_reminders: false,
-                    macos_contacts: CoreMacOsContactsPermission::None,
-                }),
-            ),
-            (
-                json!({
-                    "accessibility": true,
-                }),
-                Some(GrantedMacOsPermissions {
-                    accessibility: Some(true),
-                    ..Default::default()
-                }),
-                Some(CoreMacOsSeatbeltProfileExtensions {
-                    macos_preferences: CoreMacOsPreferencesPermission::None,
-                    macos_automation: CoreMacOsAutomationPermission::None,
-                    macos_launch_services: false,
-                    macos_accessibility: true,
-                    macos_calendar: false,
-                    macos_reminders: false,
-                    macos_contacts: CoreMacOsContactsPermission::None,
-                }),
-            ),
-            (
-                json!({
-                    "calendar": true,
-                }),
-                Some(GrantedMacOsPermissions {
-                    calendar: Some(true),
-                    ..Default::default()
-                }),
-                Some(CoreMacOsSeatbeltProfileExtensions {
-                    macos_preferences: CoreMacOsPreferencesPermission::None,
-                    macos_automation: CoreMacOsAutomationPermission::None,
-                    macos_launch_services: false,
-                    macos_accessibility: false,
-                    macos_calendar: true,
-                    macos_reminders: false,
-                    macos_contacts: CoreMacOsContactsPermission::None,
-                }),
-            ),
-            (
-                json!({
-                    "reminders": true,
-                }),
-                Some(GrantedMacOsPermissions {
-                    reminders: Some(true),
-                    ..Default::default()
-                }),
-                Some(CoreMacOsSeatbeltProfileExtensions {
-                    macos_preferences: CoreMacOsPreferencesPermission::None,
-                    macos_automation: CoreMacOsAutomationPermission::None,
-                    macos_launch_services: false,
-                    macos_accessibility: false,
-                    macos_calendar: false,
-                    macos_reminders: true,
-                    macos_contacts: CoreMacOsContactsPermission::None,
-                }),
-            ),
-            (
-                json!({
-                    "contacts": "read_only",
-                }),
-                Some(GrantedMacOsPermissions {
-                    contacts: Some(CoreMacOsContactsPermission::ReadOnly),
-                    ..Default::default()
-                }),
-                Some(CoreMacOsSeatbeltProfileExtensions {
-                    macos_preferences: CoreMacOsPreferencesPermission::None,
-                    macos_automation: CoreMacOsAutomationPermission::None,
-                    macos_launch_services: false,
-                    macos_accessibility: false,
-                    macos_calendar: false,
-                    macos_reminders: false,
-                    macos_contacts: CoreMacOsContactsPermission::ReadOnly,
-                }),
-            ),
-        ];
-
-        for (macos_json, expected_granted_macos, expected_core_macos) in cases {
-            let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(json!({
-                "permissions": {
-                    "macos": macos_json,
+    fn permissions_request_approval_uses_request_permission_profile() {
+        let read_only_path = if cfg!(windows) {
+            r"C:\tmp\read-only"
+        } else {
+            "/tmp/read-only"
+        };
+        let read_write_path = if cfg!(windows) {
+            r"C:\tmp\read-write"
+        } else {
+            "/tmp/read-write"
+        };
+        let params = serde_json::from_value::<PermissionsRequestApprovalParams>(json!({
+            "threadId": "thr_123",
+            "turnId": "turn_123",
+            "itemId": "call_123",
+            "reason": "Select a workspace root",
+            "permissions": {
+                "network": {
+                    "enabled": true,
                 },
-            }))
-            .expect("partial macos permissions response should deserialize");
+                "fileSystem": {
+                    "read": [read_only_path],
+                    "write": [read_write_path],
+                },
+            },
+        }))
+        .expect("permissions request should deserialize");
 
-            assert_eq!(
-                response.permissions,
-                GrantedPermissionProfile {
-                    macos: expected_granted_macos,
-                    ..Default::default()
-                }
-            );
+        assert_eq!(
+            params.permissions,
+            RequestPermissionProfile {
+                network: Some(AdditionalNetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(AdditionalFileSystemPermissions {
+                    read: Some(vec![
+                        AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
+                            .expect("path must be absolute"),
+                    ]),
+                    write: Some(vec![
+                        AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
+                            .expect("path must be absolute"),
+                    ]),
+                }),
+            }
+        );
 
-            assert_eq!(
-                CorePermissionProfile::from(response.permissions),
-                CorePermissionProfile {
-                    macos: expected_core_macos,
-                    ..Default::default()
-                }
-            );
-        }
+        assert_eq!(
+            CoreRequestPermissionProfile::from(params.permissions),
+            CoreRequestPermissionProfile {
+                network: Some(CoreNetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(CoreFileSystemPermissions {
+                    read: Some(vec![
+                        AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
+                            .expect("path must be absolute"),
+                    ]),
+                    write: Some(vec![
+                        AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
+                            .expect("path must be absolute"),
+                    ]),
+                }),
+            }
+        );
     }
 
     #[test]
-    fn permissions_request_approval_response_omits_ungranted_macos_keys_when_serialized() {
-        let response = PermissionsRequestApprovalResponse {
-            permissions: GrantedPermissionProfile {
-                macos: Some(GrantedMacOsPermissions {
-                    accessibility: Some(true),
-                    ..Default::default()
-                }),
-                ..Default::default()
+    fn permissions_request_approval_rejects_macos_permissions() {
+        let err = serde_json::from_value::<PermissionsRequestApprovalParams>(json!({
+            "threadId": "thr_123",
+            "turnId": "turn_123",
+            "itemId": "call_123",
+            "reason": "Select a workspace root",
+            "permissions": {
+                "network": null,
+                "fileSystem": null,
+                "macos": {
+                    "preferences": "read_only",
+                    "automations": "none",
+                    "launchServices": false,
+                    "accessibility": false,
+                    "calendar": false,
+                    "reminders": false,
+                    "contacts": "none",
+                },
             },
-            scope: PermissionGrantScope::Turn,
+        }))
+        .expect_err("permissions request should reject macos permissions");
+
+        assert!(
+            err.to_string().contains("unknown field `macos`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn permissions_request_approval_response_uses_granted_permission_profile_without_macos() {
+        let read_only_path = if cfg!(windows) {
+            r"C:\tmp\read-only"
+        } else {
+            "/tmp/read-only"
         };
+        let read_write_path = if cfg!(windows) {
+            r"C:\tmp\read-write"
+        } else {
+            "/tmp/read-write"
+        };
+        let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(json!({
+            "permissions": {
+                "network": {
+                    "enabled": true,
+                },
+                "fileSystem": {
+                    "read": [read_only_path],
+                    "write": [read_write_path],
+                },
+            },
+        }))
+        .expect("permissions response should deserialize");
 
         assert_eq!(
-            serde_json::to_value(response).expect("response should serialize"),
-            json!({
-                "permissions": {
-                    "macos": {
-                        "accessibility": true,
-                    },
-                },
-                "scope": "turn",
-            })
+            response.permissions,
+            GrantedPermissionProfile {
+                network: Some(AdditionalNetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(AdditionalFileSystemPermissions {
+                    read: Some(vec![
+                        AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
+                            .expect("path must be absolute"),
+                    ]),
+                    write: Some(vec![
+                        AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
+                            .expect("path must be absolute"),
+                    ]),
+                }),
+            }
+        );
+
+        assert_eq!(
+            CorePermissionProfile::from(response.permissions),
+            CorePermissionProfile {
+                network: Some(CoreNetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(CoreFileSystemPermissions {
+                    read: Some(vec![
+                        AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
+                            .expect("path must be absolute"),
+                    ]),
+                    write: Some(vec![
+                        AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
+                            .expect("path must be absolute"),
+                    ]),
+                }),
+                macos: None,
+            }
         );
     }
 

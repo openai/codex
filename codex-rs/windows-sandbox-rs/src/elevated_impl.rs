@@ -17,6 +17,8 @@ mod windows_impl {
     use crate::policy::SandboxPolicy;
     use crate::token::convert_string_sid_to_sid;
     use crate::winutil::quote_windows_arg;
+    use crate::winutil::resolve_sid;
+    use crate::winutil::string_from_sid_bytes;
     use crate::winutil::to_wide;
     use anyhow::Result;
     use rand::rngs::SmallRng;
@@ -123,10 +125,9 @@ mod windows_impl {
         format!(r"\\.\pipe\codex-runner-{:x}-{}", rng.gen::<u128>(), suffix)
     }
 
-    /// Creates a named pipe with permissive ACLs so the sandbox user can connect.
-    fn create_named_pipe(name: &str, access: u32) -> io::Result<HANDLE> {
-        // Allow sandbox users to connect by granting Everyone full access on the pipe.
-        let sddl = to_wide("D:(A;;GA;;;WD)");
+    /// Creates a named pipe whose DACL only allows the sandbox user to connect.
+    fn create_named_pipe(name: &str, access: u32, sandbox_sid: &str) -> io::Result<HANDLE> {
+        let sddl = to_wide(format!("D:(A;;GA;;;{sandbox_sid})"));
         let mut sd: PSECURITY_DESCRIPTOR = ptr::null_mut();
         let ok = unsafe {
             ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -228,6 +229,11 @@ mod windows_impl {
         log_start(&command, logs_base_dir);
         let sandbox_creds =
             require_logon_sandbox_creds(&policy, sandbox_policy_cwd, cwd, &env_map, codex_home)?;
+        let sandbox_sid = resolve_sid(&sandbox_creds.username).map_err(|err: anyhow::Error| {
+            io::Error::new(io::ErrorKind::PermissionDenied, err.to_string())
+        })?;
+        let sandbox_sid = string_from_sid_bytes(&sandbox_sid)
+            .map_err(|err| io::Error::new(io::ErrorKind::PermissionDenied, err))?;
         // Build capability SID for ACL grants.
         if matches!(
             &policy,
@@ -272,14 +278,17 @@ mod windows_impl {
         let h_stdin_pipe = create_named_pipe(
             &stdin_name,
             PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            &sandbox_sid,
         )?;
         let h_stdout_pipe = create_named_pipe(
             &stdout_name,
             PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            &sandbox_sid,
         )?;
         let h_stderr_pipe = create_named_pipe(
             &stderr_name,
             PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            &sandbox_sid,
         )?;
 
         // Launch runner as sandbox user via CreateProcessWithLogonW.

@@ -1,0 +1,8 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: combined
+---
+• Waited for background terminal · just fix
+
+↳ Interacted with background terminal · just fix
+  └ ls

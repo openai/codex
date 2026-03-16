@@ -469,7 +469,7 @@ pub fn connector_display_label(connector: &AppInfo) -> String {
 }
 
 pub fn connector_mention_slug(connector: &AppInfo) -> String {
-    sanitize_name(&connector_display_label(connector))
+    sanitize_slug(&connector_display_label(connector))
 }
 
 pub(crate) fn accessible_connectors_from_mcp_tools(
@@ -918,11 +918,15 @@ fn normalize_connector_value(value: Option<&str>) -> Option<String> {
 }
 
 pub fn connector_install_url(name: &str, connector_id: &str) -> String {
-    let slug = sanitize_name(name);
+    let slug = sanitize_slug(name);
     format!("https://chatgpt.com/apps/{slug}/{connector_id}")
 }
 
 pub fn sanitize_name(name: &str) -> String {
+    sanitize_slug(name).replace("-", "_")
+}
+
+fn sanitize_slug(name: &str) -> String {
     let mut normalized = String::with_capacity(name.len());
     for character in name.chars() {
         if character.is_ascii_alphanumeric() {

@@ -130,6 +130,10 @@ impl Drop for PsuedoCon {
 }
 
 impl PsuedoCon {
+    pub fn raw_handle(&self) -> HPCON {
+        self.con
+    }
+
     pub fn new(size: COORD, input: FileDescriptor, output: FileDescriptor) -> Result<Self, Error> {
         let mut con: HPCON = INVALID_HANDLE_VALUE;
         let result = unsafe {

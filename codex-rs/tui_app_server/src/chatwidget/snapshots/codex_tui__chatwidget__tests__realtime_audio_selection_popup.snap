@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Settings
+  Configure settings for Codex.
+
+› 1. Microphone  Current: System default
+  2. Speaker     Current: System default
+
+  Press enter to confirm or esc to go back

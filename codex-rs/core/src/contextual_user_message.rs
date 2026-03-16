@@ -103,6 +103,21 @@ pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
         .any(|definition| definition.matches_text(text))
 }
 
+/// Returns whether a contextual user fragment should be omitted from memory
+/// stage-1 inputs.
+///
+/// We exclude injected `AGENTS.md` instructions and skill payloads because
+/// they are prompt scaffolding rather than conversation content, so they do
+/// not improve the resulting memory. We keep environment context and
+/// subagent notifications because they can carry useful execution context or
+/// subtask outcomes that should remain visible to memory generation.
+pub(crate) fn is_memory_excluded_contextual_user_fragment(content_item: &ContentItem) -> bool {
+    let ContentItem::InputText { text } = content_item else {
+        return false;
+    };
+    AGENTS_MD_FRAGMENT.matches_text(text) || SKILL_FRAGMENT.matches_text(text)
+}
+
 #[cfg(test)]
 #[path = "contextual_user_message_tests.rs"]
 mod tests;

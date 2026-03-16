@@ -1,0 +1,13 @@
+---
+source: tui/src/resume_picker.rs
+expression: snapshot
+---
+Resume a previous session  Sort: Created at
+Type to search
+  Created at  Updated at  Branch  CWD  Conversation
+No sessions yet
+
+
+
+
+enter to resume     esc to start new     ctrl + c to quit     tab to toggle sort
