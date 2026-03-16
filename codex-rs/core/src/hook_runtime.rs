@@ -16,7 +16,7 @@ use crate::codex::TurnContext;
 
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
-    pub additional_context: Option<String>,
+    pub additional_contexts: Vec<String>,
 }
 
 struct ContextInjectingHookOutcome {
@@ -30,13 +30,13 @@ impl From<SessionStartOutcome> for ContextInjectingHookOutcome {
             hook_events,
             should_stop,
             stop_reason: _,
-            additional_context,
+            additional_contexts,
         } = value;
         Self {
             hook_events,
             outcome: HookRuntimeOutcome {
                 should_stop,
-                additional_context,
+                additional_contexts,
             },
         }
     }
@@ -48,13 +48,13 @@ impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome {
             hook_events,
             should_stop,
             stop_reason: _,
-            additional_context,
+            additional_contexts,
         } = value;
         Self {
             hook_events,
             outcome: HookRuntimeOutcome {
                 should_stop,
-                additional_context,
+                additional_contexts,
             },
         }
     }
@@ -85,7 +85,7 @@ pub(crate) async fn run_pending_session_start_hooks(
             .run_session_start(request, Some(turn_context.sub_id.clone())),
     )
     .await
-    .record_additional_context(sess, turn_context)
+    .record_additional_contexts(sess, turn_context)
     .await
 }
 
@@ -127,38 +127,40 @@ where
 
     let outcome = outcome_future.await.into();
     emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
-    HookRuntimeOutcome {
-        should_stop: outcome.outcome.should_stop,
-        additional_context: if outcome.outcome.should_stop {
-            None
-        } else {
-            outcome.outcome.additional_context
-        },
-    }
+    outcome.outcome
 }
 
 impl HookRuntimeOutcome {
-    async fn record_additional_context(
+    async fn record_additional_contexts(
         self,
         sess: &Arc<Session>,
         turn_context: &Arc<TurnContext>,
     ) -> bool {
-        if let Some(additional_context) = self.additional_context {
-            record_additional_context(sess, turn_context, additional_context).await;
-        }
+        record_additional_contexts(sess, turn_context, self.additional_contexts).await;
 
         self.should_stop
     }
 }
 
-pub(crate) async fn record_additional_context(
+pub(crate) async fn record_additional_contexts(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    additional_context: String,
+    additional_contexts: Vec<String>,
 ) {
-    let developer_message: ResponseItem = DeveloperInstructions::new(additional_context).into();
-    sess.record_conversation_items(turn_context, std::slice::from_ref(&developer_message))
+    let developer_messages = additional_context_messages(additional_contexts);
+    if developer_messages.is_empty() {
+        return;
+    }
+
+    sess.record_conversation_items(turn_context, developer_messages.as_slice())
         .await;
+}
+
+fn additional_context_messages(additional_contexts: Vec<String>) -> Vec<ResponseItem> {
+    additional_contexts
+        .into_iter()
+        .map(|additional_context| DeveloperInstructions::new(additional_context).into())
+        .collect()
 }
 
 async fn emit_hook_started_events(
@@ -198,4 +200,46 @@ fn hook_permission_mode(turn_context: &TurnContext) -> String {
         | AskForApproval::Granular(_) => "default",
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use codex_protocol::models::ContentItem;
+    use pretty_assertions::assert_eq;
+
+    use super::additional_context_messages;
+
+    #[test]
+    fn additional_context_messages_stay_separate_and_ordered() {
+        let messages = additional_context_messages(vec![
+            "first tide note".to_string(),
+            "second tide note".to_string(),
+        ]);
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| match message {
+                    codex_protocol::models::ResponseItem::Message { role, content, .. } => {
+                        let text = content
+                            .iter()
+                            .map(|item| match item {
+                                ContentItem::InputText { text } => text.as_str(),
+                                ContentItem::InputImage { .. } | ContentItem::OutputText { .. } => {
+                                    panic!("expected input text content, got {item:?}")
+                                }
+                            })
+                            .collect::<String>();
+                        (role.as_str(), text)
+                    }
+                    other => panic!("expected developer message, got {other:?}"),
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("developer", "first tide note".to_string()),
+                ("developer", "second tide note".to_string()),
+            ],
+        );
+    }
 }

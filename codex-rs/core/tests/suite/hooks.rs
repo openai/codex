@@ -21,6 +21,7 @@ use pretty_assertions::assert_eq;
 
 const FIRST_CONTINUATION_PROMPT: &str = "Retry with exactly the phrase meow meow meow.";
 const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
+const BLOCKED_PROMPT_CONTEXT: &str = "Remember the blocked lighthouse note.";
 
 fn write_stop_hook(home: &Path, block_prompts: &[&str]) -> Result<()> {
     let script_path = home.join("stop_hook.py");
@@ -65,6 +66,50 @@ else:
     });
 
     fs::write(&script_path, script).context("write stop hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+fn write_user_prompt_submit_hook(
+    home: &Path,
+    blocked_prompt: &str,
+    additional_context: &str,
+) -> Result<()> {
+    let script_path = home.join("user_prompt_submit_hook.py");
+    let blocked_prompt_json =
+        serde_json::to_string(blocked_prompt).context("serialize blocked prompt for test")?;
+    let additional_context_json = serde_json::to_string(additional_context)
+        .context("serialize user prompt submit additional context for test")?;
+    let script = format!(
+        r#"import json
+import sys
+
+payload = json.load(sys.stdin)
+
+if payload.get("prompt") == {blocked_prompt_json}:
+    print(json.dumps({{
+        "decision": "block",
+        "reason": "blocked by hook",
+        "hookSpecificOutput": {{
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": {additional_context_json}
+        }}
+    }}))
+"#,
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "UserPromptSubmit": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "statusMessage": "running user prompt submit hook",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&script_path, script).context("write user prompt submit hook script")?;
     fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
     Ok(())
 }
@@ -265,6 +310,65 @@ async fn resumed_thread_keeps_stop_continuation_prompt_in_history() -> Result<()
             .message_input_texts("developer")
             .contains(&FIRST_CONTINUATION_PROMPT.to_string()),
         "resumed request should keep the persisted continuation prompt in history",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "second prompt handled"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_user_prompt_submit_hook(home, "blocked first prompt", BLOCKED_PROMPT_CONTEXT)
+            {
+                panic!("failed to write user prompt submit hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("blocked first prompt").await?;
+    test.submit_turn("second prompt").await?;
+
+    let request = response.single_request();
+    assert!(
+        request
+            .message_input_texts("developer")
+            .contains(&BLOCKED_PROMPT_CONTEXT.to_string()),
+        "second request should include developer context persisted from the blocked prompt",
+    );
+    assert!(
+        request
+            .message_input_texts("user")
+            .iter()
+            .all(|text| !text.contains("blocked first prompt")),
+        "blocked prompt should not be sent to the model",
+    );
+    assert!(
+        request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text.contains("second prompt")),
+        "second request should include the accepted prompt",
     );
 
     Ok(())

@@ -46,14 +46,14 @@ pub struct SessionStartOutcome {
     pub hook_events: Vec<HookCompletedEvent>,
     pub should_stop: bool,
     pub stop_reason: Option<String>,
-    pub additional_context: Option<String>,
+    pub additional_contexts: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 struct SessionStartHandlerData {
     should_stop: bool,
     stop_reason: Option<String>,
-    additional_context_for_model: Option<String>,
+    additional_contexts_for_model: Vec<String>,
 }
 
 pub(crate) fn preview(
@@ -86,7 +86,7 @@ pub(crate) async fn run(
             hook_events: Vec::new(),
             should_stop: false,
             stop_reason: None,
-            additional_context: None,
+            additional_contexts: Vec::new(),
         };
     }
 
@@ -122,16 +122,17 @@ pub(crate) async fn run(
     let stop_reason = results
         .iter()
         .find_map(|result| result.data.stop_reason.clone());
-    let additional_contexts = results
-        .iter()
-        .filter_map(|result| result.data.additional_context_for_model.clone())
-        .collect::<Vec<_>>();
+    let additional_contexts = common::flatten_additional_contexts(
+        results
+            .iter()
+            .map(|result| result.data.additional_contexts_for_model.as_slice()),
+    );
 
     SessionStartOutcome {
         hook_events: results.into_iter().map(|result| result.completed).collect(),
         should_stop,
         stop_reason,
-        additional_context: common::join_text_chunks(additional_contexts),
+        additional_contexts,
     }
 }
 
@@ -144,7 +145,7 @@ fn parse_completed(
     let mut status = HookRunStatus::Completed;
     let mut should_stop = false;
     let mut stop_reason = None;
-    let mut additional_context_for_model = None;
+    let mut additional_contexts_for_model = Vec::new();
 
     match run_result.error.as_deref() {
         Some(error) => {
@@ -167,13 +168,11 @@ fn parse_completed(
                         });
                     }
                     if let Some(additional_context) = parsed.additional_context {
-                        entries.push(HookOutputEntry {
-                            kind: HookOutputEntryKind::Context,
-                            text: additional_context.clone(),
-                        });
-                        if parsed.universal.continue_processing {
-                            additional_context_for_model = Some(additional_context);
-                        }
+                        common::append_additional_context(
+                            &mut entries,
+                            &mut additional_contexts_for_model,
+                            additional_context,
+                        );
                     }
                     let _ = parsed.universal.suppress_output;
                     if !parsed.universal.continue_processing {
@@ -196,11 +195,11 @@ fn parse_completed(
                     });
                 } else {
                     let additional_context = trimmed_stdout.to_string();
-                    entries.push(HookOutputEntry {
-                        kind: HookOutputEntryKind::Context,
-                        text: additional_context.clone(),
-                    });
-                    additional_context_for_model = Some(additional_context);
+                    common::append_additional_context(
+                        &mut entries,
+                        &mut additional_contexts_for_model,
+                        additional_context,
+                    );
                 }
             }
             Some(exit_code) => {
@@ -230,7 +229,7 @@ fn parse_completed(
         data: SessionStartHandlerData {
             should_stop,
             stop_reason,
-            additional_context_for_model,
+            additional_contexts_for_model,
         },
     }
 }
@@ -240,7 +239,7 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> Sessio
         hook_events,
         should_stop: false,
         stop_reason: None,
-        additional_context: None,
+        additional_contexts: Vec::new(),
     }
 }
 
@@ -272,7 +271,7 @@ mod tests {
             SessionStartHandlerData {
                 should_stop: false,
                 stop_reason: None,
-                additional_context_for_model: Some("hello from hook".to_string()),
+                additional_contexts_for_model: vec!["hello from hook".to_string()],
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
@@ -286,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn continue_false_keeps_context_out_of_model_input() {
+    fn continue_false_preserves_context_for_later_turns() {
         let parsed = parse_completed(
             &handler(),
             run_result(
@@ -302,10 +301,23 @@ mod tests {
             SessionStartHandlerData {
                 should_stop: true,
                 stop_reason: Some("pause".to_string()),
-                additional_context_for_model: None,
+                additional_contexts_for_model: vec!["do not inject".to_string()],
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![
+                HookOutputEntry {
+                    kind: HookOutputEntryKind::Context,
+                    text: "do not inject".to_string(),
+                },
+                HookOutputEntry {
+                    kind: HookOutputEntryKind::Stop,
+                    text: "pause".to_string(),
+                },
+            ]
+        );
     }
 
     #[test]
@@ -325,7 +337,7 @@ mod tests {
             SessionStartHandlerData {
                 should_stop: false,
                 stop_reason: None,
-                additional_context_for_model: None,
+                additional_contexts_for_model: Vec::new(),
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);

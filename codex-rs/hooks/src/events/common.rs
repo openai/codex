@@ -23,6 +23,27 @@ pub(crate) fn trimmed_non_empty(text: &str) -> Option<String> {
     }
 }
 
+pub(crate) fn append_additional_context(
+    entries: &mut Vec<HookOutputEntry>,
+    additional_contexts_for_model: &mut Vec<String>,
+    additional_context: String,
+) {
+    entries.push(HookOutputEntry {
+        kind: HookOutputEntryKind::Context,
+        text: additional_context.clone(),
+    });
+    additional_contexts_for_model.push(additional_context);
+}
+
+pub(crate) fn flatten_additional_contexts<'a>(
+    additional_contexts: impl IntoIterator<Item = &'a [String]>,
+) -> Vec<String> {
+    additional_contexts
+        .into_iter()
+        .flat_map(|chunk| chunk.iter().cloned())
+        .collect()
+}
+
 pub(crate) fn serialization_failure_hook_events(
     handlers: Vec<ConfiguredHandler>,
     turn_id: Option<String>,

@@ -205,7 +205,7 @@ use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::git_info::get_git_repo_root;
 use crate::guardian::GuardianReviewSessionManager;
-use crate::hook_runtime::record_additional_context;
+use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_user_prompt_submit_hooks;
 use crate::instructions::UserInstructions;
@@ -5652,8 +5652,15 @@ pub(crate) async fn run_turn(
         run_user_prompt_submit_hooks(&sess, &turn_context, UserMessageItem::new(&input).message())
             .await;
     if user_prompt_submit_outcome.should_stop {
+        record_additional_contexts(
+            &sess,
+            &turn_context,
+            user_prompt_submit_outcome.additional_contexts,
+        )
+        .await;
         return last_agent_message;
     }
+    let additional_contexts = user_prompt_submit_outcome.additional_contexts;
     sess.services
         .analytics_events_client
         .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
@@ -5666,9 +5673,7 @@ pub(crate) async fn run_turn(
         .await;
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
         .await;
-    if let Some(additional_context) = user_prompt_submit_outcome.additional_context {
-        record_additional_context(&sess, &turn_context, additional_context).await;
-    }
+    record_additional_contexts(&sess, &turn_context, additional_contexts).await;
     // Track the previous-turn baseline from the regular user-turn path only so
     // standalone tasks (compact/shell/review/undo) cannot suppress future
     // model/realtime injections.
@@ -5724,19 +5729,23 @@ pub(crate) async fn run_turn(
                         run_user_prompt_submit_hooks(&sess, &turn_context, user_message.message())
                             .await;
                     if user_prompt_submit_outcome.should_stop {
+                        record_additional_contexts(
+                            &sess,
+                            &turn_context,
+                            user_prompt_submit_outcome.additional_contexts,
+                        )
+                        .await;
                         should_stop_for_user_prompt_submit = true;
                         break;
                     }
+                    let additional_contexts = user_prompt_submit_outcome.additional_contexts;
                     sess.record_user_prompt_and_emit_turn_item(
                         turn_context.as_ref(),
                         &user_message.content,
                         response_item,
                     )
                     .await;
-                    if let Some(additional_context) = user_prompt_submit_outcome.additional_context
-                    {
-                        record_additional_context(&sess, &turn_context, additional_context).await;
-                    }
+                    record_additional_contexts(&sess, &turn_context, additional_contexts).await;
                 } else {
                     sess.record_conversation_items(
                         &turn_context,
