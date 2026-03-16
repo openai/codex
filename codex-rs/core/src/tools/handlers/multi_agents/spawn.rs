@@ -120,6 +120,7 @@ impl ToolHandler for Handler {
                     prompt,
                     model: args.model.clone().unwrap_or_default(),
                     reasoning_effort: args.reasoning_effort.unwrap_or_default(),
+                    spawn_mode: AgentSpawnMode::Spawn,
                     status,
                 }
                 .into(),
