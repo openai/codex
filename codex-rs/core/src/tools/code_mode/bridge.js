@@ -29,6 +29,7 @@ Object.defineProperty(globalThis, '__codexContentItems', {
   defineGlobal('ALL_TOOLS', __codexRuntime.ALL_TOOLS);
   defineGlobal('image', __codexRuntime.image);
   defineGlobal('load', __codexRuntime.load);
+  defineGlobal('notify', __codexRuntime.notify);
   defineGlobal('store', __codexRuntime.store);
   defineGlobal('text', __codexRuntime.text);
   defineGlobal('tools', __codexRuntime.tools);

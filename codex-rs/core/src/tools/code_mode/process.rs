@@ -13,6 +13,7 @@ use tracing::warn;
 
 use super::CODE_MODE_RUNNER_SOURCE;
 use super::PUBLIC_TOOL_NAME;
+use super::protocol::CodeModeNotify;
 use super::protocol::CodeModeToolCall;
 use super::protocol::HostToNodeMessage;
 use super::protocol::NodeToHostMessage;
@@ -24,6 +25,7 @@ pub(super) struct CodeModeProcess {
     pub(super) stdout_task: JoinHandle<()>,
     pub(super) response_waiters: Arc<Mutex<HashMap<String, oneshot::Sender<NodeToHostMessage>>>>,
     pub(super) tool_call_rx: Arc<Mutex<mpsc::UnboundedReceiver<CodeModeToolCall>>>,
+    pub(super) notify_rx: Arc<Mutex<mpsc::UnboundedReceiver<CodeModeNotify>>>,
 }
 
 impl CodeModeProcess {
@@ -93,6 +95,7 @@ pub(super) async fn spawn_code_mode_process(
         oneshot::Sender<NodeToHostMessage>,
     >::new()));
     let (tool_call_tx, tool_call_rx) = mpsc::unbounded_channel();
+    let (notify_tx, notify_rx) = mpsc::unbounded_channel();
 
     tokio::spawn(async move {
         let mut reader = BufReader::new(stderr);
@@ -138,9 +141,13 @@ pub(super) async fn spawn_code_mode_process(
                     NodeToHostMessage::ToolCall { tool_call } => {
                         let _ = tool_call_tx.send(tool_call);
                     }
+                    NodeToHostMessage::Notify { notify } => {
+                        let _ = notify_tx.send(notify);
+                    }
                     message => {
-                        let request_id = message_request_id(&message).to_string();
-                        if let Some(waiter) = response_waiters.lock().await.remove(&request_id) {
+                        if let Some(request_id) = message_request_id(&message)
+                            && let Some(waiter) = response_waiters.lock().await.remove(request_id)
+                        {
                             let _ = waiter.send(message);
                         }
                     }
@@ -156,6 +163,7 @@ pub(super) async fn spawn_code_mode_process(
         stdout_task,
         response_waiters,
         tool_call_rx: Arc::new(Mutex::new(tool_call_rx)),
+        notify_rx: Arc::new(Mutex::new(notify_rx)),
     })
 }
 

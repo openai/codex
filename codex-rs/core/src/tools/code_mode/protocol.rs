@@ -36,6 +36,12 @@ pub(super) struct CodeModeToolCall {
     pub(super) input: Option<JsonValue>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub(super) struct CodeModeNotify {
+    pub(super) cell_id: String,
+    pub(super) text: String,
+}
+
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(super) enum HostToNodeMessage {
@@ -80,6 +86,10 @@ pub(super) enum NodeToHostMessage {
         request_id: String,
         content_items: Vec<JsonValue>,
     },
+    Notify {
+        #[serde(flatten)]
+        notify: CodeModeNotify,
+    },
     Result {
         request_id: String,
         content_items: Vec<JsonValue>,
@@ -105,15 +115,50 @@ pub(super) fn build_source(
         .replace("__CODE_MODE_USER_CODE_PLACEHOLDER__", user_code))
 }
 
-pub(super) fn message_request_id(message: &NodeToHostMessage) -> &str {
+pub(super) fn message_request_id(message: &NodeToHostMessage) -> Option<&str> {
     match message {
-        NodeToHostMessage::ToolCall { tool_call } => &tool_call.request_id,
+        NodeToHostMessage::ToolCall { .. } => None,
         NodeToHostMessage::Yielded { request_id, .. }
         | NodeToHostMessage::Terminated { request_id, .. }
-        | NodeToHostMessage::Result { request_id, .. } => request_id,
+        | NodeToHostMessage::Result { request_id, .. } => Some(request_id),
+        NodeToHostMessage::Notify { .. } => None,
     }
 }
 
 pub(super) fn unexpected_tool_call_error() -> String {
     format!("{PUBLIC_TOOL_NAME} received an unexpected tool call response")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::CodeModeNotify;
+    use super::NodeToHostMessage;
+    use super::message_request_id;
+
+    #[test]
+    fn message_request_id_absent_for_notify() {
+        let message = NodeToHostMessage::Notify {
+            notify: CodeModeNotify {
+                cell_id: "1".to_string(),
+                text: "hello".to_string(),
+            },
+        };
+
+        assert_eq!(None, message_request_id(&message));
+    }
+
+    #[test]
+    fn message_request_id_present_for_result() {
+        let message = NodeToHostMessage::Result {
+            request_id: "req-1".to_string(),
+            content_items: Vec::new(),
+            stored_values: HashMap::new(),
+            error_text: None,
+            max_output_tokens_per_exec_call: None,
+        };
+
+        assert_eq!(Some("req-1"), message_request_id(&message));
+    }
 }

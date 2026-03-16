@@ -257,10 +257,22 @@ function codeModeWorkerMain() {
     const yieldControl = () => {
       parentPort.postMessage({ type: 'yield' });
     };
+    const notify = (value) => {
+      const text = serializeOutputText(value);
+      if (text.trim().length === 0) {
+        throw new TypeError('notify expects non-empty text');
+      }
+      parentPort.postMessage({
+        type: 'notify',
+        text,
+      });
+      return text;
+    };
 
     return Object.freeze({
       image,
       load,
+      notify,
       output_image: image,
       output_text: text,
       store,
@@ -271,10 +283,11 @@ function codeModeWorkerMain() {
 
   function createCodeModeModule(context, helpers) {
     return new SyntheticModule(
-      ['image', 'load', 'output_text', 'output_image', 'store', 'text', 'yield_control'],
+      ['image', 'load', 'notify', 'output_text', 'output_image', 'store', 'text', 'yield_control'],
       function initCodeModeModule() {
         this.setExport('image', helpers.image);
         this.setExport('load', helpers.load);
+        this.setExport('notify', helpers.notify);
         this.setExport('output_text', helpers.output_text);
         this.setExport('output_image', helpers.output_image);
         this.setExport('store', helpers.store);
@@ -290,6 +303,7 @@ function codeModeWorkerMain() {
       ALL_TOOLS: createAllToolsMetadata(enabledTools),
       image: helpers.image,
       load: helpers.load,
+      notify: helpers.notify,
       store: helpers.store,
       text: helpers.text,
       tools: createGlobalToolsNamespace(callTool, enabledTools),
@@ -663,6 +677,18 @@ async function handleWorkerMessage(protocol, sessions, session, message) {
 
   if (message.type === 'yield') {
     void sendYielded(protocol, session);
+    return;
+  }
+
+  if (message.type === 'notify') {
+    if (typeof message.text !== 'string' || message.text.trim().length === 0) {
+      throw new TypeError('notify requires non-empty text');
+    }
+    await protocol.send({
+      type: 'notify',
+      cell_id: session.id,
+      text: message.text,
+    });
     return;
   }
 

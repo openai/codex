@@ -1517,6 +1517,36 @@ text({ json: true });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_notify_injects_context_message_into_active_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec notify helper",
+        r#"
+notify("code_mode_notify_marker");
+text("done");
+"#,
+        false,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    assert!(
+        req.has_message_with_input_texts("developer", |texts| {
+            texts
+                .iter()
+                .any(|text| text.contains("code_mode_notify_marker"))
+        }),
+        "expected notify marker in developer message input: {:?}",
+        req.message_input_text_groups("developer")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_surfaces_text_stringify_errors() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1880,6 +1910,7 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "isFinite",
         "isNaN",
         "load",
+        "notify",
         "parseFloat",
         "parseInt",
         "store",
