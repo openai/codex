@@ -130,18 +130,18 @@ enum ThreadInteractiveRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct SmartApprovalsMode {
+struct GuardianApprovalsMode {
     approval_policy: AskForApproval,
     approvals_reviewer: ApprovalsReviewer,
     sandbox_policy: SandboxPolicy,
 }
 
-/// Enabling the Smart Approvals experiment in the TUI should also switch the
-/// current `/approvals` settings to the matching Smart Approvals mode. Users
+/// Enabling the Guardian Approvals experiment in the TUI should also switch the
+/// current `/approvals` settings to the matching Guardian Approvals mode. Users
 /// can still change `/approvals` afterward; this just assumes that opting into
 /// the experiment means they want guardian review enabled immediately.
-fn smart_approvals_mode() -> SmartApprovalsMode {
-    SmartApprovalsMode {
+fn guardian_approvals_mode() -> GuardianApprovalsMode {
+    GuardianApprovalsMode {
         approval_policy: AskForApproval::OnRequest,
         approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
         sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
@@ -930,7 +930,7 @@ impl App {
             return;
         }
 
-        let smart_approvals_mode = smart_approvals_mode();
+        let guardian_approvals_preset = guardian_approvals_mode();
         let mut next_config = self.config.clone();
         let active_profile = self.active_profile.clone();
         let scoped_segments = |key: &str| {
@@ -950,7 +950,7 @@ impl App {
         let mut approvals_reviewer_override = None;
         let mut sandbox_policy_override = None;
         let mut feature_updates_to_apply = Vec::with_capacity(updates.len());
-        // Smart Approvals owns `approvals_reviewer`, but disabling the feature
+        // Guardian Approvals owns `approvals_reviewer`, but disabling the feature
         // from inside a profile should not silently clear a value configured at
         // the root scope.
         let (root_approvals_reviewer_blocks_profile_disable, profile_approvals_reviewer_configured) = {
@@ -983,7 +983,7 @@ impl App {
                 && root_approvals_reviewer_blocks_profile_disable
             {
                 self.chat_widget.add_error_message(
-                        "Cannot disable Smart Approvals in this profile because `approvals_reviewer` is configured outside the active profile.".to_string(),
+                        "Cannot disable Guardian Approvals in this profile because `approvals_reviewer` is configured outside the active profile.".to_string(),
                     );
                 continue;
             }
@@ -1006,13 +1006,17 @@ impl App {
                     // Persist the reviewer setting so future sessions keep the
                     // experiment's matching `/approvals` mode until the user
                     // changes it explicitly.
-                    feature_config.approvals_reviewer = smart_approvals_mode.approvals_reviewer;
+                    feature_config.approvals_reviewer =
+                        guardian_approvals_preset.approvals_reviewer;
                     feature_edits.push(ConfigEdit::SetPath {
                         segments: scoped_segments("approvals_reviewer"),
-                        value: smart_approvals_mode.approvals_reviewer.to_string().into(),
+                        value: guardian_approvals_preset
+                            .approvals_reviewer
+                            .to_string()
+                            .into(),
                     });
-                    if previous_approvals_reviewer != smart_approvals_mode.approvals_reviewer {
-                        permissions_history_label = Some("Smart Approvals");
+                    if previous_approvals_reviewer != guardian_approvals_preset.approvals_reviewer {
+                        permissions_history_label = Some("Guardian Approvals");
                     }
                 } else if !effective_enabled {
                     if profile_approvals_reviewer_configured || self.active_profile.is_none() {
@@ -1029,22 +1033,22 @@ impl App {
             }
             if feature == Feature::GuardianApproval && effective_enabled {
                 // The feature flag alone is not enough for the live session.
-                // We also align approval policy + sandbox to the Smart
-                // Approvals preset so enabling the experiment immediately makes
-                // guardian review observable in the current thread.
+                // We also align approval policy + sandbox to the Guardian
+                // Approvals preset so enabling the experiment immediately
+                // makes guardian review observable in the current thread.
                 if !self.try_set_approval_policy_on_config(
                     &mut feature_config,
-                    smart_approvals_mode.approval_policy,
-                    "Failed to enable Smart Approvals",
-                    "failed to set smart approvals approval policy on staged config",
+                    guardian_approvals_preset.approval_policy,
+                    "Failed to enable Guardian Approvals",
+                    "failed to set guardian approvals approval policy on staged config",
                 ) {
                     continue;
                 }
                 if !self.try_set_sandbox_policy_on_config(
                     &mut feature_config,
-                    smart_approvals_mode.sandbox_policy.clone(),
-                    "Failed to enable Smart Approvals",
-                    "failed to set smart approvals sandbox policy on staged config",
+                    guardian_approvals_preset.sandbox_policy.clone(),
+                    "Failed to enable Guardian Approvals",
+                    "failed to set guardian approvals sandbox policy on staged config",
                 ) {
                     continue;
                 }
@@ -1058,8 +1062,8 @@ impl App {
                         value: "workspace-write".into(),
                     },
                 ]);
-                approval_policy_override = Some(smart_approvals_mode.approval_policy);
-                sandbox_policy_override = Some(smart_approvals_mode.sandbox_policy.clone());
+                approval_policy_override = Some(guardian_approvals_preset.approval_policy);
+                sandbox_policy_override = Some(guardian_approvals_preset.sandbox_policy.clone());
             }
             next_config = feature_config;
             feature_updates_to_apply.push((feature, effective_enabled));
@@ -1097,10 +1101,10 @@ impl App {
         {
             tracing::error!(
                 error = %err,
-                "failed to set smart approvals sandbox policy on chat config"
+                "failed to set guardian approvals sandbox policy on chat config"
             );
             self.chat_widget
-                .add_error_message(format!("Failed to enable Smart Approvals: {err}"));
+                .add_error_message(format!("Failed to enable Guardian Approvals: {err}"));
         }
 
         if approval_policy_override.is_some()
@@ -5612,11 +5616,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_feature_flags_enabling_guardian_selects_smart_approvals() -> Result<()> {
+    async fn update_feature_flags_enabling_guardian_selects_guardian_approvals() -> Result<()> {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
-        let smart_approvals = smart_approvals_mode();
+        let guardian_approvals = guardian_approvals_mode();
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
             .await;
@@ -5630,11 +5634,11 @@ mod tests {
         );
         assert_eq!(
             app.config.approvals_reviewer,
-            smart_approvals.approvals_reviewer
+            guardian_approvals.approvals_reviewer
         );
         assert_eq!(
             app.config.permissions.approval_policy.value(),
-            smart_approvals.approval_policy
+            guardian_approvals.approval_policy
         );
         assert_eq!(
             app.chat_widget
@@ -5642,7 +5646,7 @@ mod tests {
                 .permissions
                 .approval_policy
                 .value(),
-            smart_approvals.approval_policy
+            guardian_approvals.approval_policy
         );
         assert_eq!(
             app.chat_widget
@@ -5650,11 +5654,11 @@ mod tests {
                 .permissions
                 .sandbox_policy
                 .get(),
-            &smart_approvals.sandbox_policy
+            &guardian_approvals.sandbox_policy
         );
         assert_eq!(
             app.chat_widget.config_ref().approvals_reviewer,
-            smart_approvals.approvals_reviewer
+            guardian_approvals.approvals_reviewer
         );
         assert_eq!(app.runtime_approval_policy_override, None);
         assert_eq!(app.runtime_sandbox_policy_override, None);
@@ -5662,9 +5666,9 @@ mod tests {
             op_rx.try_recv(),
             Ok(Op::OverrideTurnContext {
                 cwd: None,
-                approval_policy: Some(smart_approvals.approval_policy),
-                approvals_reviewer: Some(smart_approvals.approvals_reviewer),
-                sandbox_policy: Some(smart_approvals.sandbox_policy.clone()),
+                approval_policy: Some(guardian_approvals.approval_policy),
+                approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
+                sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
                 windows_sandbox_level: None,
                 model: None,
                 effort: None,
@@ -5684,10 +5688,10 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("Permissions updated to Smart Approvals"));
+        assert!(rendered.contains("Permissions updated to Guardian Approvals"));
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-        assert!(config.contains("smart_approvals = true"));
+        assert!(config.contains("guardian_approval = true"));
         assert!(config.contains("approvals_reviewer = \"guardian_subagent\""));
         assert!(config.contains("approval_policy = \"on-request\""));
         assert!(config.contains("sandbox_mode = \"workspace-write\""));
@@ -5701,7 +5705,7 @@ mod tests {
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
-        let config_toml = "approvals_reviewer = \"guardian_subagent\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nsmart_approvals = true\n";
+        let config_toml = "approvals_reviewer = \"guardian_subagent\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
         app.config.config_layer_stack = app
@@ -5778,7 +5782,7 @@ mod tests {
         assert!(rendered.contains("Permissions updated to Default"));
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-        assert!(!config.contains("smart_approvals = true"));
+        assert!(!config.contains("guardian_approval = true"));
         assert!(!config.contains("approvals_reviewer ="));
         assert!(config.contains("approval_policy = \"on-request\""));
         assert!(config.contains("sandbox_mode = \"workspace-write\""));
@@ -5791,7 +5795,7 @@ mod tests {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
-        let smart_approvals = smart_approvals_mode();
+        let guardian_approvals = guardian_approvals_mode();
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
         let config_toml = "approvals_reviewer = \"user\"\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
@@ -5810,15 +5814,15 @@ mod tests {
         assert!(app.config.features.enabled(Feature::GuardianApproval));
         assert_eq!(
             app.config.approvals_reviewer,
-            smart_approvals.approvals_reviewer
+            guardian_approvals.approvals_reviewer
         );
         assert_eq!(
             app.chat_widget.config_ref().approvals_reviewer,
-            smart_approvals.approvals_reviewer
+            guardian_approvals.approvals_reviewer
         );
         assert_eq!(
             app.config.permissions.approval_policy.value(),
-            smart_approvals.approval_policy
+            guardian_approvals.approval_policy
         );
         assert_eq!(
             app.chat_widget
@@ -5826,15 +5830,15 @@ mod tests {
                 .permissions
                 .sandbox_policy
                 .get(),
-            &smart_approvals.sandbox_policy
+            &guardian_approvals.sandbox_policy
         );
         assert_eq!(
             op_rx.try_recv(),
             Ok(Op::OverrideTurnContext {
                 cwd: None,
-                approval_policy: Some(smart_approvals.approval_policy),
-                approvals_reviewer: Some(smart_approvals.approvals_reviewer),
-                sandbox_policy: Some(smart_approvals.sandbox_policy.clone()),
+                approval_policy: Some(guardian_approvals.approval_policy),
+                approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
+                sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
                 windows_sandbox_level: None,
                 model: None,
                 effort: None,
@@ -5847,7 +5851,7 @@ mod tests {
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
         assert!(config.contains("approvals_reviewer = \"guardian_subagent\""));
-        assert!(config.contains("smart_approvals = true"));
+        assert!(config.contains("guardian_approval = true"));
         assert!(config.contains("approval_policy = \"on-request\""));
         assert!(config.contains("sandbox_mode = \"workspace-write\""));
         Ok(())
@@ -5860,7 +5864,7 @@ mod tests {
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
-        let config_toml = "approvals_reviewer = \"user\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nsmart_approvals = true\n";
+        let config_toml = "approvals_reviewer = \"user\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
         app.config.config_layer_stack = app
@@ -5907,7 +5911,7 @@ mod tests {
         );
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-        assert!(!config.contains("smart_approvals = true"));
+        assert!(!config.contains("guardian_approval = true"));
         assert!(!config.contains("approvals_reviewer ="));
         Ok(())
     }
@@ -5918,7 +5922,7 @@ mod tests {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
-        let smart_approvals = smart_approvals_mode();
+        let guardian_approvals = guardian_approvals_mode();
         app.active_profile = Some("guardian".to_string());
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
         let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"user\"\n";
@@ -5938,19 +5942,19 @@ mod tests {
         assert!(app.config.features.enabled(Feature::GuardianApproval));
         assert_eq!(
             app.config.approvals_reviewer,
-            smart_approvals.approvals_reviewer
+            guardian_approvals.approvals_reviewer
         );
         assert_eq!(
             app.chat_widget.config_ref().approvals_reviewer,
-            smart_approvals.approvals_reviewer
+            guardian_approvals.approvals_reviewer
         );
         assert_eq!(
             op_rx.try_recv(),
             Ok(Op::OverrideTurnContext {
                 cwd: None,
-                approval_policy: Some(smart_approvals.approval_policy),
-                approvals_reviewer: Some(smart_approvals.approvals_reviewer),
-                sandbox_policy: Some(smart_approvals.sandbox_policy.clone()),
+                approval_policy: Some(guardian_approvals.approval_policy),
+                approvals_reviewer: Some(guardian_approvals.approvals_reviewer),
+                sandbox_policy: Some(guardian_approvals.sandbox_policy.clone()),
                 windows_sandbox_level: None,
                 model: None,
                 effort: None,
@@ -5999,7 +6003,7 @@ approvals_reviewer = "user"
 approvals_reviewer = "guardian_subagent"
 
 [profiles.guardian.features]
-smart_approvals = true
+guardian_approval = true
 "#;
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
@@ -6060,7 +6064,7 @@ smart_approvals = true
         assert!(rendered.contains("Permissions updated to Default"));
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-        assert!(!config.contains("smart_approvals = true"));
+        assert!(!config.contains("guardian_approval = true"));
         assert!(!config.contains("guardian_subagent"));
         assert_eq!(
             toml::from_str::<TomlValue>(&config)?
@@ -6079,7 +6083,7 @@ smart_approvals = true
         app.config.codex_home = codex_home.path().to_path_buf();
         app.active_profile = Some("guardian".to_string());
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
-        let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"guardian_subagent\"\n\n[features]\nsmart_approvals = true\n";
+        let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"guardian_subagent\"\n\n[features]\nguardian_approval = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
         app.config.config_layer_stack = app
@@ -6130,7 +6134,7 @@ smart_approvals = true
         );
 
         let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-        assert!(config.contains("smart_approvals = true"));
+        assert!(config.contains("guardian_approval = true"));
         assert_eq!(
             toml::from_str::<TomlValue>(&config)?
                 .as_table()
