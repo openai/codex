@@ -37,6 +37,111 @@ macro_rules! feedback_tags {
     };
 }
 
+pub(crate) struct FeedbackRequestTags<'a> {
+    pub endpoint: &'a str,
+    pub auth_header_attached: bool,
+    pub auth_header_name: Option<&'a str>,
+    pub auth_mode: Option<&'a str>,
+    pub auth_retry_after_unauthorized: Option<bool>,
+    pub auth_recovery_mode: Option<&'a str>,
+    pub auth_recovery_phase: Option<&'a str>,
+    pub auth_connection_reused: Option<bool>,
+    pub auth_request_id: Option<&'a str>,
+    pub auth_cf_ray: Option<&'a str>,
+    pub auth_error: Option<&'a str>,
+    pub auth_error_code: Option<&'a str>,
+    pub auth_recovery_followup_success: Option<bool>,
+    pub auth_recovery_followup_status: Option<u16>,
+}
+
+struct Auth401FeedbackSnapshot<'a> {
+    request_id: &'a str,
+    cf_ray: &'a str,
+    error: &'a str,
+    error_code: &'a str,
+}
+
+impl<'a> Auth401FeedbackSnapshot<'a> {
+    fn from_optional_fields(
+        request_id: Option<&'a str>,
+        cf_ray: Option<&'a str>,
+        error: Option<&'a str>,
+        error_code: Option<&'a str>,
+    ) -> Self {
+        Self {
+            request_id: request_id.unwrap_or(""),
+            cf_ray: cf_ray.unwrap_or(""),
+            error: error.unwrap_or(""),
+            error_code: error_code.unwrap_or(""),
+        }
+    }
+}
+
+pub(crate) fn emit_feedback_request_tags(tags: &FeedbackRequestTags<'_>) {
+    let auth_header_name = tags.auth_header_name.unwrap_or("");
+    let auth_mode = tags.auth_mode.unwrap_or("");
+    let auth_retry_after_unauthorized = tags
+        .auth_retry_after_unauthorized
+        .map_or_else(String::new, |value| value.to_string());
+    let auth_recovery_mode = tags.auth_recovery_mode.unwrap_or("");
+    let auth_recovery_phase = tags.auth_recovery_phase.unwrap_or("");
+    let auth_connection_reused = tags
+        .auth_connection_reused
+        .map_or_else(String::new, |value| value.to_string());
+    let auth_request_id = tags.auth_request_id.unwrap_or("");
+    let auth_cf_ray = tags.auth_cf_ray.unwrap_or("");
+    let auth_error = tags.auth_error.unwrap_or("");
+    let auth_error_code = tags.auth_error_code.unwrap_or("");
+    let auth_recovery_followup_success = tags
+        .auth_recovery_followup_success
+        .map_or_else(String::new, |value| value.to_string());
+    let auth_recovery_followup_status = tags
+        .auth_recovery_followup_status
+        .map_or_else(String::new, |value| value.to_string());
+    feedback_tags!(
+        endpoint = tags.endpoint,
+        auth_header_attached = tags.auth_header_attached,
+        auth_header_name = auth_header_name,
+        auth_mode = auth_mode,
+        auth_retry_after_unauthorized = auth_retry_after_unauthorized,
+        auth_recovery_mode = auth_recovery_mode,
+        auth_recovery_phase = auth_recovery_phase,
+        auth_connection_reused = auth_connection_reused,
+        auth_request_id = auth_request_id,
+        auth_cf_ray = auth_cf_ray,
+        auth_error = auth_error,
+        auth_error_code = auth_error_code,
+        auth_recovery_followup_success = auth_recovery_followup_success,
+        auth_recovery_followup_status = auth_recovery_followup_status
+    );
+}
+
+pub(crate) fn emit_feedback_auth_recovery_tags(
+    auth_recovery_mode: &str,
+    auth_recovery_phase: &str,
+    auth_recovery_outcome: &str,
+    auth_request_id: Option<&str>,
+    auth_cf_ray: Option<&str>,
+    auth_error: Option<&str>,
+    auth_error_code: Option<&str>,
+) {
+    let auth_401 = Auth401FeedbackSnapshot::from_optional_fields(
+        auth_request_id,
+        auth_cf_ray,
+        auth_error,
+        auth_error_code,
+    );
+    feedback_tags!(
+        auth_recovery_mode = auth_recovery_mode,
+        auth_recovery_phase = auth_recovery_phase,
+        auth_recovery_outcome = auth_recovery_outcome,
+        auth_401_request_id = auth_401.request_id,
+        auth_401_cf_ray = auth_401.cf_ray,
+        auth_401_error = auth_401.error,
+        auth_401_error_code = auth_401.error_code
+    );
+}
+
 pub fn backoff(attempt: u64) -> Duration {
     let exp = BACKOFF_FACTOR.powi(attempt.saturating_sub(1) as i32);
     let base = (INITIAL_DELAY_MS as f64 * exp) as u64;

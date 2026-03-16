@@ -1,4 +1,7 @@
+use super::AuthRequestTelemetryContext;
 use super::ModelClient;
+use super::PendingUnauthorizedRetry;
+use super::UnauthorizedRecoveryExecution;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelInfo;
@@ -93,4 +96,23 @@ async fn summarize_memories_returns_empty_for_empty_input() {
         .await
         .expect("empty summarize request should succeed");
     assert_eq!(output.len(), 0);
+}
+
+#[test]
+fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
+    let auth_context = AuthRequestTelemetryContext::new(
+        Some(crate::auth::AuthMode::Chatgpt),
+        &crate::api_bridge::CoreAuthProvider::for_test(Some("access-token"), Some("workspace-123")),
+        PendingUnauthorizedRetry::from_recovery(UnauthorizedRecoveryExecution {
+            mode: "managed",
+            phase: "refresh_token",
+        }),
+    );
+
+    assert_eq!(auth_context.auth_mode, Some("Chatgpt"));
+    assert!(auth_context.auth_header_attached);
+    assert_eq!(auth_context.auth_header_name, Some("authorization"));
+    assert!(auth_context.retry_after_unauthorized);
+    assert_eq!(auth_context.recovery_mode, Some("managed"));
+    assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
 }

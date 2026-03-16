@@ -1,0 +1,19 @@
+---
+source: tui/src/bottom_pane/mcp_server_elicitation.rs
+expression: "render_snapshot(&overlay, Rect::new(0, 0, 120, 16))"
+---
+                                                                                                                        
+  Field 1/1                                                                                                             
+  Allow Calendar to create an event                                                                                     
+                                                                                                                        
+  Calendar: primary                                                                                                     
+  Title: Roadmap review                                                                                                 
+  Notes: This is a deliberately long note that should truncate bef...                                                   
+                                                                                                                        
+  › 1. Allow   Run the tool and continue.                                                                               
+    2. Cancel  Cancel this tool call                                                                                    
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+  enter to submit | esc to cancel

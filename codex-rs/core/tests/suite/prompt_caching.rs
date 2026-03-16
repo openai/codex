@@ -177,6 +177,11 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "apply_patch",
         "web_search",
         "view_image",
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
     ]);
     let body0 = req1.single_request().body_json();
 
@@ -423,6 +428,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
+            approvals_reviewer: None,
             sandbox_policy: Some(new_policy.clone()),
             windows_sandbox_level: None,
             model: None,
@@ -505,6 +511,7 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: Some("gpt-5.1-codex".to_string()),

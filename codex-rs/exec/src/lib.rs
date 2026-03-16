@@ -339,6 +339,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         config_profile,
         // Default to never ask for approvals in headless mode. Feature flags can override.
         approval_policy: Some(AskForApproval::Never),
+        approvals_reviewer: None,
         sandbox_mode,
         cwd: resolved_cwd,
         model_provider: model_provider.clone(),
@@ -687,6 +688,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         input: items.into_iter().map(Into::into).collect(),
                         cwd: Some(default_cwd),
                         approval_policy: Some(default_approval_policy.into()),
+                        approvals_reviewer: None,
                         sandbox_policy: Some(default_sandbox_policy.clone().into()),
                         model: None,
                         service_tier: None,
@@ -914,6 +916,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
+        approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
@@ -929,6 +932,7 @@ fn thread_resume_params_from_config(config: &Config, path: Option<PathBuf>) -> T
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
+        approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get()),
         config: config_request_overrides_from_config(config),
         ..ThreadResumeParams::default()
@@ -940,6 +944,12 @@ fn config_request_overrides_from_config(config: &Config) -> Option<HashMap<Strin
         .active_profile
         .as_ref()
         .map(|profile| HashMap::from([("profile".to_string(), Value::String(profile.clone()))]))
+}
+
+fn approvals_reviewer_override_from_config(
+    config: &Config,
+) -> Option<codex_app_server_protocol::ApprovalsReviewer> {
+    Some(config.approvals_reviewer.into())
 }
 
 async fn send_request_with_response<T>(
@@ -970,6 +980,7 @@ fn session_configured_from_thread_start_response(
         response.model_provider.clone(),
         response.service_tier,
         response.approval_policy.to_core(),
+        response.approvals_reviewer.to_core(),
         response.sandbox.to_core(),
         response.cwd.clone(),
         response.reasoning_effort,
@@ -987,6 +998,7 @@ fn session_configured_from_thread_resume_response(
         response.model_provider.clone(),
         response.service_tier,
         response.approval_policy.to_core(),
+        response.approvals_reviewer.to_core(),
         response.sandbox.to_core(),
         response.cwd.clone(),
         response.reasoning_effort,
@@ -1015,6 +1027,7 @@ fn session_configured_from_thread_response(
     model_provider_id: String,
     service_tier: Option<codex_protocol::config_types::ServiceTier>,
     approval_policy: AskForApproval,
+    approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
     sandbox_policy: codex_protocol::protocol::SandboxPolicy,
     cwd: PathBuf,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
@@ -1030,6 +1043,7 @@ fn session_configured_from_thread_response(
         model_provider_id,
         service_tier,
         approval_policy,
+        approvals_reviewer,
         sandbox_policy,
         cwd,
         reasoning_effort,
@@ -1596,11 +1610,13 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
 mod tests {
     use super::*;
     use codex_otel::set_parent_from_w3c_trace_context;
+    use codex_protocol::config_types::ApprovalsReviewer;
     use opentelemetry::trace::TraceContextExt;
     use opentelemetry::trace::TraceId;
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
     use tracing_opentelemetry::OpenTelemetrySpanExt;
 
     fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
@@ -1815,6 +1831,95 @@ mod tests {
                 content: None,
                 meta: None,
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_start_params_include_review_policy_when_review_policy_is_manual_only() {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("build default config");
+
+        let params = thread_start_params_from_config(&config);
+
+        assert_eq!(
+            params.approvals_reviewer,
+            Some(codex_app_server_protocol::ApprovalsReviewer::User)
+        );
+    }
+
+    #[tokio::test]
+    async fn thread_start_params_include_review_policy_when_auto_review_is_enabled() {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            "approvals_reviewer = \"guardian_subagent\"\n",
+        )
+        .expect("write auto-review config");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("build auto-review config");
+
+        let params = thread_start_params_from_config(&config);
+
+        assert_eq!(
+            params.approvals_reviewer,
+            Some(codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent)
+        );
+    }
+
+    #[test]
+    fn session_configured_from_thread_response_uses_review_policy_from_response() {
+        let response = ThreadStartResponse {
+            thread: codex_app_server_protocol::Thread {
+                id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+                preview: String::new(),
+                ephemeral: false,
+                model_provider: "openai".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: codex_app_server_protocol::ThreadStatus::Idle,
+                path: Some(PathBuf::from("/tmp/rollout.jsonl")),
+                cwd: PathBuf::from("/tmp"),
+                cli_version: "0.0.0".to_string(),
+                source: codex_app_server_protocol::SessionSource::Cli,
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("thread".to_string()),
+                turns: vec![],
+            },
+            model: "gpt-5.4".to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: None,
+            cwd: PathBuf::from("/tmp"),
+            approval_policy: codex_app_server_protocol::AskForApproval::OnRequest,
+            approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::GuardianSubagent,
+            sandbox: codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            },
+            reasoning_effort: None,
+        };
+
+        let event = session_configured_from_thread_start_response(&response)
+            .expect("build bootstrap session configured event");
+
+        assert_eq!(
+            event.approvals_reviewer,
+            ApprovalsReviewer::GuardianSubagent
         );
     }
 }

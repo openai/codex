@@ -13,6 +13,7 @@ use codex_protocol::approvals::NetworkApprovalContext as CoreNetworkApprovalCont
 use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment as CoreNetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction as CoreNetworkPolicyRuleAction;
+use codex_protocol::config_types::ApprovalsReviewer as CoreApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask as CoreCollaborationModeMask;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -51,6 +52,7 @@ use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
 use codex_protocol::protocol::GranularApprovalConfig as CoreGranularApprovalConfig;
+use codex_protocol::protocol::GuardianRiskLevel as CoreGuardianRiskLevel;
 use codex_protocol::protocol::HookEventName as CoreHookEventName;
 use codex_protocol::protocol::HookExecutionMode as CoreHookExecutionMode;
 use codex_protocol::protocol::HookHandlerType as CoreHookHandlerType;
@@ -78,6 +80,7 @@ use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
 use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -252,6 +255,37 @@ impl From<CoreAskForApproval> for AskForApproval {
                 mcp_elicitations: granular_config.mcp_elicitations,
             },
             CoreAskForApproval::Never => AskForApproval::Never,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+/// Configures who approval requests are routed to for review. Examples
+/// include sandbox escapes, blocked network access, MCP approval prompts, and
+/// ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully
+/// prompted subagent to gather relevant context and apply a risk-based
+/// decision framework before approving or denying the request.
+pub enum ApprovalsReviewer {
+    User,
+    GuardianSubagent,
+}
+
+impl ApprovalsReviewer {
+    pub fn to_core(self) -> CoreApprovalsReviewer {
+        match self {
+            ApprovalsReviewer::User => CoreApprovalsReviewer::User,
+            ApprovalsReviewer::GuardianSubagent => CoreApprovalsReviewer::GuardianSubagent,
+        }
+    }
+}
+
+impl From<CoreApprovalsReviewer> for ApprovalsReviewer {
+    fn from(value: CoreApprovalsReviewer) -> Self {
+        match value {
+            CoreApprovalsReviewer::User => ApprovalsReviewer::User,
+            CoreApprovalsReviewer::GuardianSubagent => ApprovalsReviewer::GuardianSubagent,
         }
     }
 }
@@ -502,13 +536,48 @@ pub struct ToolsV2 {
     pub view_image: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[derive(Serialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct DynamicToolSpec {
     pub name: String,
     pub description: String,
     pub input_schema: JsonValue,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub defer_loading: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DynamicToolSpecDe {
+    name: String,
+    description: String,
+    input_schema: JsonValue,
+    defer_loading: Option<bool>,
+    expose_to_context: Option<bool>,
+}
+
+impl<'de> Deserialize<'de> for DynamicToolSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let DynamicToolSpecDe {
+            name,
+            description,
+            input_schema,
+            defer_loading,
+            expose_to_context,
+        } = DynamicToolSpecDe::deserialize(deserializer)?;
+
+        Ok(Self {
+            name,
+            description,
+            input_schema,
+            defer_loading: defer_loading
+                .unwrap_or_else(|| expose_to_context.map(|visible| !visible).unwrap_or(false)),
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
@@ -519,6 +588,11 @@ pub struct ProfileV2 {
     pub model_provider: Option<String>,
     #[experimental(nested)]
     pub approval_policy: Option<AskForApproval>,
+    /// [UNSTABLE] Optional profile-level override for where approval requests
+    /// are routed for review. If omitted, the enclosing config default is
+    /// used.
+    #[experimental("config/read.approvalsReviewer")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub service_tier: Option<ServiceTier>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
@@ -618,6 +692,10 @@ pub struct Config {
     pub model_provider: Option<String>,
     #[experimental(nested)]
     pub approval_policy: Option<AskForApproval>,
+    /// [UNSTABLE] Optional default for where approval requests are routed for
+    /// review.
+    #[experimental("config/read.approvalsReviewer")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
     pub forced_chatgpt_workspace_id: Option<String>,
@@ -1039,6 +1117,33 @@ impl From<AdditionalNetworkPermissions> for CoreNetworkPermissions {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct RequestPermissionProfile {
+    pub network: Option<AdditionalNetworkPermissions>,
+    pub file_system: Option<AdditionalFileSystemPermissions>,
+}
+
+impl From<CoreRequestPermissionProfile> for RequestPermissionProfile {
+    fn from(value: CoreRequestPermissionProfile) -> Self {
+        Self {
+            network: value.network.map(AdditionalNetworkPermissions::from),
+            file_system: value.file_system.map(AdditionalFileSystemPermissions::from),
+        }
+    }
+}
+
+impl From<RequestPermissionProfile> for CoreRequestPermissionProfile {
+    fn from(value: RequestPermissionProfile) -> Self {
+        Self {
+            network: value.network.map(CoreNetworkPermissions::from),
+            file_system: value.file_system.map(CoreFileSystemPermissions::from),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AdditionalPermissionProfile {
     pub network: Option<AdditionalNetworkPermissions>,
@@ -1069,51 +1174,6 @@ impl From<AdditionalPermissionProfile> for CorePermissionProfile {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct GrantedMacOsPermissions {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub preferences: Option<CoreMacOsPreferencesPermission>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub automations: Option<CoreMacOsAutomationPermission>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub launch_services: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub accessibility: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub calendar: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub reminders: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub contacts: Option<CoreMacOsContactsPermission>,
-}
-
-impl From<GrantedMacOsPermissions> for CoreMacOsSeatbeltProfileExtensions {
-    fn from(value: GrantedMacOsPermissions) -> Self {
-        Self {
-            macos_preferences: value
-                .preferences
-                .unwrap_or(CoreMacOsPreferencesPermission::None),
-            macos_automation: value
-                .automations
-                .unwrap_or(CoreMacOsAutomationPermission::None),
-            macos_launch_services: value.launch_services.unwrap_or(false),
-            macos_accessibility: value.accessibility.unwrap_or(false),
-            macos_calendar: value.calendar.unwrap_or(false),
-            macos_reminders: value.reminders.unwrap_or(false),
-            macos_contacts: value.contacts.unwrap_or(CoreMacOsContactsPermission::None),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
 pub struct GrantedPermissionProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -1121,32 +1181,14 @@ pub struct GrantedPermissionProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub file_system: Option<AdditionalFileSystemPermissions>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub macos: Option<GrantedMacOsPermissions>,
 }
 
 impl From<GrantedPermissionProfile> for CorePermissionProfile {
     fn from(value: GrantedPermissionProfile) -> Self {
-        let macos = value.macos.and_then(|macos| {
-            if macos.preferences.is_none()
-                && macos.automations.is_none()
-                && macos.launch_services.is_none()
-                && macos.accessibility.is_none()
-                && macos.calendar.is_none()
-                && macos.reminders.is_none()
-                && macos.contacts.is_none()
-            {
-                None
-            } else {
-                Some(CoreMacOsSeatbeltProfileExtensions::from(macos))
-            }
-        });
-
         Self {
             network: value.network.map(CoreNetworkPermissions::from),
             file_system: value.file_system.map(CoreFileSystemPermissions::from),
-            macos,
+            macos: None,
         }
     }
 }
@@ -2068,6 +2110,157 @@ pub struct FeedbackUploadResponse {
     pub thread_id: String,
 }
 
+/// Read a file from the host filesystem.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadFileParams {
+    /// Absolute path to read.
+    pub path: AbsolutePathBuf,
+}
+
+/// Base64-encoded file contents returned by `fs/readFile`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadFileResponse {
+    /// File contents encoded as base64.
+    pub data_base64: String,
+}
+
+/// Write a file on the host filesystem.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsWriteFileParams {
+    /// Absolute path to write.
+    pub path: AbsolutePathBuf,
+    /// File contents encoded as base64.
+    pub data_base64: String,
+}
+
+/// Successful response for `fs/writeFile`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsWriteFileResponse {}
+
+/// Create a directory on the host filesystem.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsCreateDirectoryParams {
+    /// Absolute directory path to create.
+    pub path: AbsolutePathBuf,
+    /// Whether parent directories should also be created. Defaults to `true`.
+    #[ts(optional = nullable)]
+    pub recursive: Option<bool>,
+}
+
+/// Successful response for `fs/createDirectory`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsCreateDirectoryResponse {}
+
+/// Request metadata for an absolute path.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsGetMetadataParams {
+    /// Absolute path to inspect.
+    pub path: AbsolutePathBuf,
+}
+
+/// Metadata returned by `fs/getMetadata`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsGetMetadataResponse {
+    /// Whether the path currently resolves to a directory.
+    pub is_directory: bool,
+    /// Whether the path currently resolves to a regular file.
+    pub is_file: bool,
+    /// File creation time in Unix milliseconds when available, otherwise `0`.
+    #[ts(type = "number")]
+    pub created_at_ms: i64,
+    /// File modification time in Unix milliseconds when available, otherwise `0`.
+    #[ts(type = "number")]
+    pub modified_at_ms: i64,
+}
+
+/// List direct child names for a directory.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadDirectoryParams {
+    /// Absolute directory path to read.
+    pub path: AbsolutePathBuf,
+}
+
+/// A directory entry returned by `fs/readDirectory`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadDirectoryEntry {
+    /// Direct child entry name only, not an absolute or relative path.
+    pub file_name: String,
+    /// Whether this entry resolves to a directory.
+    pub is_directory: bool,
+    /// Whether this entry resolves to a regular file.
+    pub is_file: bool,
+}
+
+/// Directory entries returned by `fs/readDirectory`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadDirectoryResponse {
+    /// Direct child entries in the requested directory.
+    pub entries: Vec<FsReadDirectoryEntry>,
+}
+
+/// Remove a file or directory tree from the host filesystem.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsRemoveParams {
+    /// Absolute path to remove.
+    pub path: AbsolutePathBuf,
+    /// Whether directory removal should recurse. Defaults to `true`.
+    #[ts(optional = nullable)]
+    pub recursive: Option<bool>,
+    /// Whether missing paths should be ignored. Defaults to `true`.
+    #[ts(optional = nullable)]
+    pub force: Option<bool>,
+}
+
+/// Successful response for `fs/remove`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsRemoveResponse {}
+
+/// Copy a file or directory tree on the host filesystem.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsCopyParams {
+    /// Absolute source path.
+    pub source_path: AbsolutePathBuf,
+    /// Absolute destination path.
+    pub destination_path: AbsolutePathBuf,
+    /// Required for directory copies; ignored for file copies.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recursive: bool,
+}
+
+/// Successful response for `fs/copy`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsCopyResponse {}
+
 /// PTY size in character cells for `command/exec` PTY sessions.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -2271,6 +2464,10 @@ pub struct ThreadStartParams {
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
+    /// Override where approval requests are routed for review on this thread
+    /// and subsequent turns.
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
@@ -2333,6 +2530,8 @@ pub struct ThreadStartResponse {
     pub cwd: PathBuf,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
+    /// Reviewer currently used for approval requests on this thread.
+    pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
@@ -2385,6 +2584,10 @@ pub struct ThreadResumeParams {
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
+    /// Override where approval requests are routed for review on this thread
+    /// and subsequent turns.
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
@@ -2413,6 +2616,8 @@ pub struct ThreadResumeResponse {
     pub cwd: PathBuf,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
+    /// Reviewer currently used for approval requests on this thread.
+    pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
@@ -2456,6 +2661,10 @@ pub struct ThreadForkParams {
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
+    /// Override where approval requests are routed for review on this thread
+    /// and subsequent turns.
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
@@ -2484,6 +2693,8 @@ pub struct ThreadForkResponse {
     pub cwd: PathBuf,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
+    /// Reviewer currently used for approval requests on this thread.
+    pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
@@ -3144,7 +3355,9 @@ pub struct PluginInterface {
     pub website_url: Option<String>,
     pub privacy_policy_url: Option<String>,
     pub terms_of_service_url: Option<String>,
-    pub default_prompt: Option<String>,
+    /// Starter prompts for the plugin. Capped at 3 entries with a maximum of
+    /// 128 characters per entry.
+    pub default_prompt: Option<Vec<String>>,
     pub brand_color: Option<String>,
     pub composer_icon: Option<AbsolutePathBuf>,
     pub logo: Option<AbsolutePathBuf>,
@@ -3607,6 +3820,10 @@ pub struct TurnStartParams {
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
+    /// Override where approval requests are routed for review on this turn and
+    /// subsequent turns.
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     /// Override the sandbox policy for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
@@ -4043,6 +4260,53 @@ impl ThreadItem {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Lifecycle state for a guardian approval review.
+pub enum GuardianApprovalReviewStatus {
+    InProgress,
+    Approved,
+    Denied,
+    Aborted,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Risk level assigned by guardian approval review.
+pub enum GuardianRiskLevel {
+    Low,
+    Medium,
+    High,
+}
+
+impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
+    fn from(value: CoreGuardianRiskLevel) -> Self {
+        match value {
+            CoreGuardianRiskLevel::Low => Self::Low,
+            CoreGuardianRiskLevel::Medium => Self::Medium,
+            CoreGuardianRiskLevel::High => Self::High,
+        }
+    }
+}
+
+/// [UNSTABLE] Temporary guardian approval review payload used by
+/// `item/autoApprovalReview/*` notifications. This shape is expected to change
+/// soon.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GuardianApprovalReview {
+    pub status: GuardianApprovalReviewStatus,
+    #[serde(alias = "risk_score")]
+    #[ts(type = "number | null")]
+    pub risk_score: Option<u8>,
+    #[serde(alias = "risk_level")]
+    pub risk_level: Option<GuardianRiskLevel>,
+    pub rationale: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type", rename_all = "camelCase")]
@@ -4243,6 +4507,7 @@ pub enum CollabAgentToolCallStatus {
 pub enum CollabAgentStatus {
     PendingInit,
     Running,
+    Interrupted,
     Completed,
     Errored,
     Shutdown,
@@ -4266,6 +4531,10 @@ impl From<CoreAgentStatus> for CollabAgentState {
             },
             CoreAgentStatus::Running => Self {
                 status: CollabAgentStatus::Running,
+                message: None,
+            },
+            CoreAgentStatus::Interrupted => Self {
+                status: CollabAgentStatus::Interrupted,
                 message: None,
             },
             CoreAgentStatus::Completed(message) => Self {
@@ -4472,6 +4741,40 @@ pub struct ItemStartedNotification {
     pub item: ThreadItem,
     pub thread_id: String,
     pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Temporary notification payload for guardian automatic approval
+/// review. This shape is expected to change soon.
+///
+/// TODO(ccunningham): Attach guardian review state to the reviewed tool item's
+/// lifecycle instead of sending separate standalone review notifications so the
+/// app-server API can persist and replay review state via `thread/read`.
+pub struct ItemGuardianApprovalReviewStartedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub target_item_id: String,
+    pub review: GuardianApprovalReview,
+    pub action: Option<JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Temporary notification payload for guardian automatic approval
+/// review. This shape is expected to change soon.
+///
+/// TODO(ccunningham): Attach guardian review state to the reviewed tool item's
+/// lifecycle instead of sending separate standalone review notifications so the
+/// app-server API can persist and replay review state via `thread/read`.
+pub struct ItemGuardianApprovalReviewCompletedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub target_item_id: String,
+    pub review: GuardianApprovalReview,
+    pub action: Option<JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -5274,7 +5577,7 @@ pub struct PermissionsRequestApprovalParams {
     pub turn_id: String,
     pub item_id: String,
     pub reason: Option<String>,
-    pub permissions: AdditionalPermissionProfile,
+    pub permissions: RequestPermissionProfile,
 }
 
 v2_enum_from_core!(
@@ -5535,13 +5838,33 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
 
-    fn test_absolute_path() -> AbsolutePathBuf {
-        let path = if cfg!(windows) {
-            r"C:\readable"
+    fn absolute_path_string(path: &str) -> String {
+        let trimmed = path.trim_start_matches('/');
+        if cfg!(windows) {
+            format!(r"C:\{}", trimmed.replace('/', "\\"))
         } else {
-            "/readable"
-        };
-        AbsolutePathBuf::from_absolute_path(path).expect("path must be absolute")
+            format!("/{trimmed}")
+        }
+    }
+
+    fn absolute_path(path: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::from_absolute_path(absolute_path_string(path))
+            .expect("path must be absolute")
+    }
+
+    fn test_absolute_path() -> AbsolutePathBuf {
+        absolute_path("readable")
+    }
+
+    #[test]
+    fn collab_agent_state_maps_interrupted_status() {
+        assert_eq!(
+            CollabAgentState::from(CoreAgentStatus::Interrupted),
+            CollabAgentState {
+                status: CollabAgentStatus::Interrupted,
+                message: None,
+            }
+        );
     }
 
     #[test]
@@ -5692,192 +6015,164 @@ mod tests {
     }
 
     #[test]
-    fn permissions_request_approval_response_accepts_partial_macos_grants() {
-        let cases = vec![
-            (json!({}), Some(GrantedMacOsPermissions::default()), None),
-            (
-                json!({
-                    "preferences": "read_only",
-                }),
-                Some(GrantedMacOsPermissions {
-                    preferences: Some(CoreMacOsPreferencesPermission::ReadOnly),
-                    ..Default::default()
-                }),
-                Some(CoreMacOsSeatbeltProfileExtensions {
-                    macos_preferences: CoreMacOsPreferencesPermission::ReadOnly,
-                    macos_automation: CoreMacOsAutomationPermission::None,
-                    macos_launch_services: false,
-                    macos_accessibility: false,
-                    macos_calendar: false,
-                    macos_reminders: false,
-                    macos_contacts: CoreMacOsContactsPermission::None,
-                }),
-            ),
-            (
-                json!({
-                    "automations": {
-                        "bundle_ids": ["com.apple.Notes"],
-                    },
-                }),
-                Some(GrantedMacOsPermissions {
-                    automations: Some(CoreMacOsAutomationPermission::BundleIds(vec![
-                        "com.apple.Notes".to_string(),
-                    ])),
-                    ..Default::default()
-                }),
-                Some(CoreMacOsSeatbeltProfileExtensions {
-                    macos_preferences: CoreMacOsPreferencesPermission::None,
-                    macos_automation: CoreMacOsAutomationPermission::BundleIds(vec![
-                        "com.apple.Notes".to_string(),
-                    ]),
-                    macos_launch_services: false,
-                    macos_accessibility: false,
-                    macos_calendar: false,
-                    macos_reminders: false,
-                    macos_contacts: CoreMacOsContactsPermission::None,
-                }),
-            ),
-            (
-                json!({
-                    "launchServices": true,
-                }),
-                Some(GrantedMacOsPermissions {
-                    launch_services: Some(true),
-                    ..Default::default()
-                }),
-                Some(CoreMacOsSeatbeltProfileExtensions {
-                    macos_preferences: CoreMacOsPreferencesPermission::None,
-                    macos_automation: CoreMacOsAutomationPermission::None,
-                    macos_launch_services: true,
-                    macos_accessibility: false,
-                    macos_calendar: false,
-                    macos_reminders: false,
-                    macos_contacts: CoreMacOsContactsPermission::None,
-                }),
-            ),
-            (
-                json!({
-                    "accessibility": true,
-                }),
-                Some(GrantedMacOsPermissions {
-                    accessibility: Some(true),
-                    ..Default::default()
-                }),
-                Some(CoreMacOsSeatbeltProfileExtensions {
-                    macos_preferences: CoreMacOsPreferencesPermission::None,
-                    macos_automation: CoreMacOsAutomationPermission::None,
-                    macos_launch_services: false,
-                    macos_accessibility: true,
-                    macos_calendar: false,
-                    macos_reminders: false,
-                    macos_contacts: CoreMacOsContactsPermission::None,
-                }),
-            ),
-            (
-                json!({
-                    "calendar": true,
-                }),
-                Some(GrantedMacOsPermissions {
-                    calendar: Some(true),
-                    ..Default::default()
-                }),
-                Some(CoreMacOsSeatbeltProfileExtensions {
-                    macos_preferences: CoreMacOsPreferencesPermission::None,
-                    macos_automation: CoreMacOsAutomationPermission::None,
-                    macos_launch_services: false,
-                    macos_accessibility: false,
-                    macos_calendar: true,
-                    macos_reminders: false,
-                    macos_contacts: CoreMacOsContactsPermission::None,
-                }),
-            ),
-            (
-                json!({
-                    "reminders": true,
-                }),
-                Some(GrantedMacOsPermissions {
-                    reminders: Some(true),
-                    ..Default::default()
-                }),
-                Some(CoreMacOsSeatbeltProfileExtensions {
-                    macos_preferences: CoreMacOsPreferencesPermission::None,
-                    macos_automation: CoreMacOsAutomationPermission::None,
-                    macos_launch_services: false,
-                    macos_accessibility: false,
-                    macos_calendar: false,
-                    macos_reminders: true,
-                    macos_contacts: CoreMacOsContactsPermission::None,
-                }),
-            ),
-            (
-                json!({
-                    "contacts": "read_only",
-                }),
-                Some(GrantedMacOsPermissions {
-                    contacts: Some(CoreMacOsContactsPermission::ReadOnly),
-                    ..Default::default()
-                }),
-                Some(CoreMacOsSeatbeltProfileExtensions {
-                    macos_preferences: CoreMacOsPreferencesPermission::None,
-                    macos_automation: CoreMacOsAutomationPermission::None,
-                    macos_launch_services: false,
-                    macos_accessibility: false,
-                    macos_calendar: false,
-                    macos_reminders: false,
-                    macos_contacts: CoreMacOsContactsPermission::ReadOnly,
-                }),
-            ),
-        ];
-
-        for (macos_json, expected_granted_macos, expected_core_macos) in cases {
-            let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(json!({
-                "permissions": {
-                    "macos": macos_json,
+    fn permissions_request_approval_uses_request_permission_profile() {
+        let read_only_path = if cfg!(windows) {
+            r"C:\tmp\read-only"
+        } else {
+            "/tmp/read-only"
+        };
+        let read_write_path = if cfg!(windows) {
+            r"C:\tmp\read-write"
+        } else {
+            "/tmp/read-write"
+        };
+        let params = serde_json::from_value::<PermissionsRequestApprovalParams>(json!({
+            "threadId": "thr_123",
+            "turnId": "turn_123",
+            "itemId": "call_123",
+            "reason": "Select a workspace root",
+            "permissions": {
+                "network": {
+                    "enabled": true,
                 },
-            }))
-            .expect("partial macos permissions response should deserialize");
+                "fileSystem": {
+                    "read": [read_only_path],
+                    "write": [read_write_path],
+                },
+            },
+        }))
+        .expect("permissions request should deserialize");
 
-            assert_eq!(
-                response.permissions,
-                GrantedPermissionProfile {
-                    macos: expected_granted_macos,
-                    ..Default::default()
-                }
-            );
+        assert_eq!(
+            params.permissions,
+            RequestPermissionProfile {
+                network: Some(AdditionalNetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(AdditionalFileSystemPermissions {
+                    read: Some(vec![
+                        AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
+                            .expect("path must be absolute"),
+                    ]),
+                    write: Some(vec![
+                        AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
+                            .expect("path must be absolute"),
+                    ]),
+                }),
+            }
+        );
 
-            assert_eq!(
-                CorePermissionProfile::from(response.permissions),
-                CorePermissionProfile {
-                    macos: expected_core_macos,
-                    ..Default::default()
-                }
-            );
-        }
+        assert_eq!(
+            CoreRequestPermissionProfile::from(params.permissions),
+            CoreRequestPermissionProfile {
+                network: Some(CoreNetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(CoreFileSystemPermissions {
+                    read: Some(vec![
+                        AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
+                            .expect("path must be absolute"),
+                    ]),
+                    write: Some(vec![
+                        AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
+                            .expect("path must be absolute"),
+                    ]),
+                }),
+            }
+        );
     }
 
     #[test]
-    fn permissions_request_approval_response_omits_ungranted_macos_keys_when_serialized() {
-        let response = PermissionsRequestApprovalResponse {
-            permissions: GrantedPermissionProfile {
-                macos: Some(GrantedMacOsPermissions {
-                    accessibility: Some(true),
-                    ..Default::default()
-                }),
-                ..Default::default()
+    fn permissions_request_approval_rejects_macos_permissions() {
+        let err = serde_json::from_value::<PermissionsRequestApprovalParams>(json!({
+            "threadId": "thr_123",
+            "turnId": "turn_123",
+            "itemId": "call_123",
+            "reason": "Select a workspace root",
+            "permissions": {
+                "network": null,
+                "fileSystem": null,
+                "macos": {
+                    "preferences": "read_only",
+                    "automations": "none",
+                    "launchServices": false,
+                    "accessibility": false,
+                    "calendar": false,
+                    "reminders": false,
+                    "contacts": "none",
+                },
             },
-            scope: PermissionGrantScope::Turn,
+        }))
+        .expect_err("permissions request should reject macos permissions");
+
+        assert!(
+            err.to_string().contains("unknown field `macos`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn permissions_request_approval_response_uses_granted_permission_profile_without_macos() {
+        let read_only_path = if cfg!(windows) {
+            r"C:\tmp\read-only"
+        } else {
+            "/tmp/read-only"
         };
+        let read_write_path = if cfg!(windows) {
+            r"C:\tmp\read-write"
+        } else {
+            "/tmp/read-write"
+        };
+        let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(json!({
+            "permissions": {
+                "network": {
+                    "enabled": true,
+                },
+                "fileSystem": {
+                    "read": [read_only_path],
+                    "write": [read_write_path],
+                },
+            },
+        }))
+        .expect("permissions response should deserialize");
 
         assert_eq!(
-            serde_json::to_value(response).expect("response should serialize"),
-            json!({
-                "permissions": {
-                    "macos": {
-                        "accessibility": true,
-                    },
-                },
-                "scope": "turn",
-            })
+            response.permissions,
+            GrantedPermissionProfile {
+                network: Some(AdditionalNetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(AdditionalFileSystemPermissions {
+                    read: Some(vec![
+                        AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
+                            .expect("path must be absolute"),
+                    ]),
+                    write: Some(vec![
+                        AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
+                            .expect("path must be absolute"),
+                    ]),
+                }),
+            }
+        );
+
+        assert_eq!(
+            CorePermissionProfile::from(response.permissions),
+            CorePermissionProfile {
+                network: Some(CoreNetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(CoreFileSystemPermissions {
+                    read: Some(vec![
+                        AbsolutePathBuf::try_from(PathBuf::from(read_only_path))
+                            .expect("path must be absolute"),
+                    ]),
+                    write: Some(vec![
+                        AbsolutePathBuf::try_from(PathBuf::from(read_write_path))
+                            .expect("path must be absolute"),
+                    ]),
+                }),
+                macos: None,
+            }
         );
     }
 
@@ -5889,6 +6184,134 @@ mod tests {
         .expect("response should deserialize");
 
         assert_eq!(response.scope, PermissionGrantScope::Turn);
+    }
+
+    #[test]
+    fn fs_get_metadata_response_round_trips_minimal_fields() {
+        let response = FsGetMetadataResponse {
+            is_directory: false,
+            is_file: true,
+            created_at_ms: 123,
+            modified_at_ms: 456,
+        };
+
+        let value = serde_json::to_value(&response).expect("serialize fs/getMetadata response");
+        assert_eq!(
+            value,
+            json!({
+                "isDirectory": false,
+                "isFile": true,
+                "createdAtMs": 123,
+                "modifiedAtMs": 456,
+            })
+        );
+
+        let decoded = serde_json::from_value::<FsGetMetadataResponse>(value)
+            .expect("deserialize fs/getMetadata response");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn fs_read_file_response_round_trips_base64_data() {
+        let response = FsReadFileResponse {
+            data_base64: "aGVsbG8=".to_string(),
+        };
+
+        let value = serde_json::to_value(&response).expect("serialize fs/readFile response");
+        assert_eq!(
+            value,
+            json!({
+                "dataBase64": "aGVsbG8=",
+            })
+        );
+
+        let decoded = serde_json::from_value::<FsReadFileResponse>(value)
+            .expect("deserialize fs/readFile response");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn fs_read_file_params_round_trip() {
+        let params = FsReadFileParams {
+            path: absolute_path("tmp/example.txt"),
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize fs/readFile params");
+        assert_eq!(
+            value,
+            json!({
+                "path": absolute_path_string("tmp/example.txt"),
+            })
+        );
+
+        let decoded = serde_json::from_value::<FsReadFileParams>(value)
+            .expect("deserialize fs/readFile params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn fs_create_directory_params_round_trip_with_default_recursive() {
+        let params = FsCreateDirectoryParams {
+            path: absolute_path("tmp/example"),
+            recursive: None,
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize fs/createDirectory params");
+        assert_eq!(
+            value,
+            json!({
+                "path": absolute_path_string("tmp/example"),
+                "recursive": null,
+            })
+        );
+
+        let decoded = serde_json::from_value::<FsCreateDirectoryParams>(value)
+            .expect("deserialize fs/createDirectory params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn fs_write_file_params_round_trip_with_base64_data() {
+        let params = FsWriteFileParams {
+            path: absolute_path("tmp/example.bin"),
+            data_base64: "AAE=".to_string(),
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize fs/writeFile params");
+        assert_eq!(
+            value,
+            json!({
+                "path": absolute_path_string("tmp/example.bin"),
+                "dataBase64": "AAE=",
+            })
+        );
+
+        let decoded = serde_json::from_value::<FsWriteFileParams>(value)
+            .expect("deserialize fs/writeFile params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn fs_copy_params_round_trip_with_recursive_directory_copy() {
+        let params = FsCopyParams {
+            source_path: absolute_path("tmp/source"),
+            destination_path: absolute_path("tmp/destination"),
+            recursive: true,
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize fs/copy params");
+        assert_eq!(
+            value,
+            json!({
+                "sourcePath": absolute_path_string("tmp/source"),
+                "destinationPath": absolute_path_string("tmp/destination"),
+                "recursive": true,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<FsCopyParams>(value).expect("deserialize fs/copy params");
+        assert_eq!(decoded, params);
     }
 
     #[test]
@@ -6312,6 +6735,7 @@ mod tests {
                 request_permissions: true,
                 mcp_elicitations: false,
             }),
+            approvals_reviewer: None,
             service_tier: None,
             model_reasoning_effort: None,
             model_reasoning_summary: None,
@@ -6340,6 +6764,7 @@ mod tests {
                 request_permissions: false,
                 mcp_elicitations: true,
             }),
+            approvals_reviewer: None,
             sandbox_mode: None,
             sandbox_workspace_write: None,
             forced_chatgpt_workspace_id: None,
@@ -6364,6 +6789,39 @@ mod tests {
     }
 
     #[test]
+    fn config_approvals_reviewer_is_marked_experimental() {
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
+            model: None,
+            review_model: None,
+            model_context_window: None,
+            model_auto_compact_token_limit: None,
+            model_provider: None,
+            approval_policy: None,
+            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+            sandbox_mode: None,
+            sandbox_workspace_write: None,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
+            web_search: None,
+            tools: None,
+            profile: None,
+            profiles: HashMap::new(),
+            instructions: None,
+            developer_instructions: None,
+            compact_prompt: None,
+            model_reasoning_effort: None,
+            model_reasoning_summary: None,
+            model_verbosity: None,
+            service_tier: None,
+            analytics: None,
+            apps: None,
+            additional: HashMap::new(),
+        });
+
+        assert_eq!(reason, Some("config/read.approvalsReviewer"));
+    }
+
+    #[test]
     fn config_nested_profile_granular_approval_policy_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
             model: None,
@@ -6372,6 +6830,7 @@ mod tests {
             model_auto_compact_token_limit: None,
             model_provider: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_mode: None,
             sandbox_workspace_write: None,
             forced_chatgpt_workspace_id: None,
@@ -6391,6 +6850,7 @@ mod tests {
                         request_permissions: false,
                         mcp_elicitations: true,
                     }),
+                    approvals_reviewer: None,
                     service_tier: None,
                     model_reasoning_effort: None,
                     model_reasoning_summary: None,
@@ -6414,6 +6874,55 @@ mod tests {
         });
 
         assert_eq!(reason, Some("askForApproval.granular"));
+    }
+
+    #[test]
+    fn config_nested_profile_approvals_reviewer_is_marked_experimental() {
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
+            model: None,
+            review_model: None,
+            model_context_window: None,
+            model_auto_compact_token_limit: None,
+            model_provider: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox_mode: None,
+            sandbox_workspace_write: None,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
+            web_search: None,
+            tools: None,
+            profile: None,
+            profiles: HashMap::from([(
+                "default".to_string(),
+                ProfileV2 {
+                    model: None,
+                    model_provider: None,
+                    approval_policy: None,
+                    approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+                    service_tier: None,
+                    model_reasoning_effort: None,
+                    model_reasoning_summary: None,
+                    model_verbosity: None,
+                    web_search: None,
+                    tools: None,
+                    chatgpt_base_url: None,
+                    additional: HashMap::new(),
+                },
+            )]),
+            instructions: None,
+            developer_instructions: None,
+            compact_prompt: None,
+            model_reasoning_effort: None,
+            model_reasoning_summary: None,
+            model_verbosity: None,
+            service_tier: None,
+            analytics: None,
+            apps: None,
+            additional: HashMap::new(),
+        });
+
+        assert_eq!(reason, Some("config/read.approvalsReviewer"));
     }
 
     #[test]
@@ -6827,6 +7336,46 @@ mod tests {
     }
 
     #[test]
+    fn automatic_approval_review_deserializes_legacy_snake_case_risk_fields() {
+        let review: GuardianApprovalReview = serde_json::from_value(json!({
+            "status": "denied",
+            "risk_score": 91,
+            "risk_level": "high",
+            "rationale": "too risky"
+        }))
+        .expect("legacy snake_case automatic review should deserialize");
+        assert_eq!(
+            review,
+            GuardianApprovalReview {
+                status: GuardianApprovalReviewStatus::Denied,
+                risk_score: Some(91),
+                risk_level: Some(GuardianRiskLevel::High),
+                rationale: Some("too risky".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn automatic_approval_review_deserializes_aborted_status() {
+        let review: GuardianApprovalReview = serde_json::from_value(json!({
+            "status": "aborted",
+            "riskScore": null,
+            "riskLevel": null,
+            "rationale": null
+        }))
+        .expect("aborted automatic review should deserialize");
+        assert_eq!(
+            review,
+            GuardianApprovalReview {
+                status: GuardianApprovalReviewStatus::Aborted,
+                risk_score: None,
+                risk_level: None,
+                rationale: None,
+            }
+        );
+    }
+
+    #[test]
     fn core_turn_item_into_thread_item_converts_supported_variants() {
         let user_item = TurnItem::UserMessage(UserMessageItem {
             id: "user-1".to_string(),
@@ -7095,6 +7644,55 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_tool_spec_deserializes_defer_loading() {
+        let value = json!({
+            "name": "lookup_ticket",
+            "description": "Fetch a ticket",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" }
+                }
+            },
+            "deferLoading": true,
+        });
+
+        let actual: DynamicToolSpec = serde_json::from_value(value).expect("deserialize");
+
+        assert_eq!(
+            actual,
+            DynamicToolSpec {
+                name: "lookup_ticket".to_string(),
+                description: "Fetch a ticket".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string" }
+                    }
+                }),
+                defer_loading: true,
+            }
+        );
+    }
+
+    #[test]
+    fn dynamic_tool_spec_legacy_expose_to_context_inverts_to_defer_loading() {
+        let value = json!({
+            "name": "lookup_ticket",
+            "description": "Fetch a ticket",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            },
+            "exposeToContext": false,
+        });
+
+        let actual: DynamicToolSpec = serde_json::from_value(value).expect("deserialize");
+
+        assert!(actual.defer_loading);
+    }
+
+    #[test]
     fn thread_start_params_preserve_explicit_null_service_tier() {
         let params: ThreadStartParams = serde_json::from_value(json!({ "serviceTier": null }))
             .expect("params should deserialize");
@@ -7132,6 +7730,7 @@ mod tests {
             input: vec![],
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             model: None,
             service_tier: None,

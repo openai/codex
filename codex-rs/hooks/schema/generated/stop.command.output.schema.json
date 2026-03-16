@@ -24,6 +24,7 @@
     },
     "reason": {
       "default": null,
+      "description": "Claude requires `reason` when `decision` is `block`; we enforce that semantic rule during output parsing rather than in the JSON schema.",
       "type": "string"
     },
     "stopReason": {

@@ -2,6 +2,7 @@ use super::*;
 use crate::shell::default_user_shell;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
+use crate::tools::spec::ZshForkConfig;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -18,8 +19,13 @@ fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> 
 
     assert!(args.shell.is_none());
 
-    let command =
-        get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
+    let command = get_command(
+        &args,
+        Arc::new(default_user_shell()),
+        &UnifiedExecShellMode::Direct,
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
 
     assert_eq!(command.len(), 3);
     assert_eq!(command[2], "echo hello");
@@ -34,8 +40,13 @@ fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
 
     assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
 
-    let command =
-        get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
+    let command = get_command(
+        &args,
+        Arc::new(default_user_shell()),
+        &UnifiedExecShellMode::Direct,
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
 
     assert_eq!(command.last(), Some(&"echo hello".to_string()));
     if command
@@ -55,8 +66,13 @@ fn test_get_command_respects_explicit_powershell_shell() -> anyhow::Result<()> {
 
     assert_eq!(args.shell.as_deref(), Some("powershell"));
 
-    let command =
-        get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
+    let command = get_command(
+        &args,
+        Arc::new(default_user_shell()),
+        &UnifiedExecShellMode::Direct,
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
 
     assert_eq!(command[2], "echo hello");
     Ok(())
@@ -70,8 +86,13 @@ fn test_get_command_respects_explicit_cmd_shell() -> anyhow::Result<()> {
 
     assert_eq!(args.shell.as_deref(), Some("cmd"));
 
-    let command =
-        get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
+    let command = get_command(
+        &args,
+        Arc::new(default_user_shell()),
+        &UnifiedExecShellMode::Direct,
+        true,
+    )
+    .map_err(anyhow::Error::msg)?;
 
     assert_eq!(command[2], "echo hello");
     Ok(())
@@ -82,12 +103,49 @@ fn test_get_command_rejects_explicit_login_when_disallowed() -> anyhow::Result<(
     let json = r#"{"cmd": "echo hello", "login": true}"#;
 
     let args: ExecCommandArgs = parse_arguments(json)?;
-    let err = get_command(&args, Arc::new(default_user_shell()), false)
-        .expect_err("explicit login should be rejected");
+    let err = get_command(
+        &args,
+        Arc::new(default_user_shell()),
+        &UnifiedExecShellMode::Direct,
+        false,
+    )
+    .expect_err("explicit login should be rejected");
 
     assert!(
         err.contains("login shell is disabled by config"),
         "unexpected error: {err}"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_get_command_ignores_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<()> {
+    let json = r#"{"cmd": "echo hello", "shell": "/bin/bash"}"#;
+    let args: ExecCommandArgs = parse_arguments(json)?;
+    let shell_zsh_path = AbsolutePathBuf::from_absolute_path(if cfg!(windows) {
+        r"C:\opt\codex\zsh"
+    } else {
+        "/opt/codex/zsh"
+    })?;
+    let shell_mode = UnifiedExecShellMode::ZshFork(ZshForkConfig {
+        shell_zsh_path: shell_zsh_path.clone(),
+        main_execve_wrapper_exe: AbsolutePathBuf::from_absolute_path(if cfg!(windows) {
+            r"C:\opt\codex\codex-execve-wrapper"
+        } else {
+            "/opt/codex/codex-execve-wrapper"
+        })?,
+    });
+
+    let command = get_command(&args, Arc::new(default_user_shell()), &shell_mode, true)
+        .map_err(anyhow::Error::msg)?;
+
+    assert_eq!(
+        command,
+        vec![
+            shell_zsh_path.to_string_lossy().to_string(),
+            "-lc".to_string(),
+            "echo hello".to_string()
+        ]
     );
     Ok(())
 }

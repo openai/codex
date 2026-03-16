@@ -70,6 +70,7 @@ mod app;
 mod app_backtrack;
 mod app_event;
 mod app_event_sender;
+mod app_server_tui_dispatch;
 mod ascii_animation;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 mod audio_device;
@@ -229,6 +230,7 @@ pub mod test_backend;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
+pub use app_server_tui_dispatch::should_use_app_server_tui;
 pub use cli::Cli;
 use codex_arg0::Arg0DispatchPaths;
 pub use markdown_render::render_markdown_text;
@@ -1288,6 +1290,7 @@ mod tests {
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::TurnContextItem;
+    use pretty_assertions::assert_eq;
     use serial_test::serial;
     use tempfile::TempDir;
 

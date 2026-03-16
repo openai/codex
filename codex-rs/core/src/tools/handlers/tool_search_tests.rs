@@ -10,10 +10,10 @@ use std::sync::Arc;
 fn serialize_tool_search_output_tools_groups_results_by_namespace() {
     let entries = [
         (
-            "mcp__codex_apps__calendar-create-event".to_string(),
+            "mcp__codex_apps__calendar_create_event".to_string(),
             ToolInfo {
                 server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                tool_name: "-create-event".to_string(),
+                tool_name: "_create_event".to_string(),
                 tool_namespace: "mcp__codex_apps__calendar".to_string(),
                 tool: Tool {
                     name: "calendar-create-event".to_string().into(),
@@ -36,10 +36,10 @@ fn serialize_tool_search_output_tools_groups_results_by_namespace() {
             },
         ),
         (
-            "mcp__codex_apps__gmail-read-email".to_string(),
+            "mcp__codex_apps__gmail_read_email".to_string(),
             ToolInfo {
                 server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                tool_name: "-read-email".to_string(),
+                tool_name: "_read_email".to_string(),
                 tool_namespace: "mcp__codex_apps__gmail".to_string(),
                 tool: Tool {
                     name: "gmail-read-email".to_string().into(),
@@ -62,10 +62,10 @@ fn serialize_tool_search_output_tools_groups_results_by_namespace() {
             },
         ),
         (
-            "mcp__codex_apps__calendar-list-events".to_string(),
+            "mcp__codex_apps__calendar_list_events".to_string(),
             ToolInfo {
                 server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                tool_name: "-list-events".to_string(),
+                tool_name: "_list_events".to_string(),
                 tool_namespace: "mcp__codex_apps__calendar".to_string(),
                 tool: Tool {
                     name: "calendar-list-events".to_string().into(),
@@ -100,7 +100,7 @@ fn serialize_tool_search_output_tools_groups_results_by_namespace() {
                 description: "Plan events".to_string(),
                 tools: vec![
                     ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-                        name: "-create-event".to_string(),
+                        name: "_create_event".to_string(),
                         description: "Create a calendar event.".to_string(),
                         strict: false,
                         defer_loading: Some(true),
@@ -112,7 +112,7 @@ fn serialize_tool_search_output_tools_groups_results_by_namespace() {
                         output_schema: None,
                     }),
                     ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-                        name: "-list-events".to_string(),
+                        name: "_list_events".to_string(),
                         description: "List calendar events.".to_string(),
                         strict: false,
                         defer_loading: Some(true),
@@ -129,7 +129,7 @@ fn serialize_tool_search_output_tools_groups_results_by_namespace() {
                 name: "mcp__codex_apps__gmail".to_string(),
                 description: "Read mail".to_string(),
                 tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-                    name: "-read-email".to_string(),
+                    name: "_read_email".to_string(),
                     description: "Read an email.".to_string(),
                     strict: false,
                     defer_loading: Some(true),
@@ -148,10 +148,10 @@ fn serialize_tool_search_output_tools_groups_results_by_namespace() {
 #[test]
 fn serialize_tool_search_output_tools_falls_back_to_connector_name_description() {
     let entries = [(
-        "mcp__codex_apps__gmail-batch-read-email".to_string(),
+        "mcp__codex_apps__gmail_batch_read_email".to_string(),
         ToolInfo {
             server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            tool_name: "-batch-read-email".to_string(),
+            tool_name: "_batch_read_email".to_string(),
             tool_namespace: "mcp__codex_apps__gmail".to_string(),
             tool: Tool {
                 name: "gmail-batch-read-email".to_string().into(),
@@ -182,7 +182,7 @@ fn serialize_tool_search_output_tools_falls_back_to_connector_name_description()
             name: "mcp__codex_apps__gmail".to_string(),
             description: "Tools for working with Gmail.".to_string(),
             tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-                name: "-batch-read-email".to_string(),
+                name: "_batch_read_email".to_string(),
                 description: "Read multiple emails.".to_string(),
                 strict: false,
                 defer_loading: Some(true),

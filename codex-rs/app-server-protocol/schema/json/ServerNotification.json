@@ -535,6 +535,7 @@
       "enum": [
         "pendingInit",
         "running",
+        "interrupted",
         "completed",
         "errored",
         "shutdown",
@@ -1056,6 +1057,61 @@
       },
       "type": "object"
     },
+    "GuardianApprovalReview": {
+      "description": "[UNSTABLE] Temporary guardian approval review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
+      "properties": {
+        "rationale": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "riskLevel": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuardianRiskLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "riskScore": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/GuardianApprovalReviewStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "GuardianApprovalReviewStatus": {
+      "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
+      "enum": [
+        "inProgress",
+        "approved",
+        "denied",
+        "aborted"
+      ],
+      "type": "string"
+    },
+    "GuardianRiskLevel": {
+      "description": "[UNSTABLE] Risk level assigned by guardian approval review.",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
     "HookCompletedNotification": {
       "properties": {
         "run": {
@@ -1248,6 +1304,56 @@
       },
       "required": [
         "item",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
+    "ItemGuardianApprovalReviewCompletedNotification": {
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+      "properties": {
+        "action": true,
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "targetItemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "review",
+        "targetItemId",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
+    "ItemGuardianApprovalReviewStartedNotification": {
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+      "properties": {
+        "action": true,
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "targetItemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "review",
+        "targetItemId",
         "threadId",
         "turnId"
       ],
@@ -3704,6 +3810,46 @@
         "params"
       ],
       "title": "Item/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "item/autoApprovalReview/started"
+          ],
+          "title": "Item/autoApprovalReview/startedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ItemGuardianApprovalReviewStartedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Item/autoApprovalReview/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "item/autoApprovalReview/completed"
+          ],
+          "title": "Item/autoApprovalReview/completedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ItemGuardianApprovalReviewCompletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Item/autoApprovalReview/completedNotification",
       "type": "object"
     },
     {

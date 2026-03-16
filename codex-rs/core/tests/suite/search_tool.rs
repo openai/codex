@@ -13,6 +13,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_RESOURCE_URI;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -30,14 +31,15 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 
-const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 1] = [
-    "Tools of the apps (Calendar) are hidden until you search for them with this tool (`tool_search`).",
+const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
+    "You have access to all the tools of the following apps/connectors",
+    "- Calendar: Plan events and manage your calendar.",
 ];
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
-const CALENDAR_CREATE_TOOL: &str = "mcp__codex_apps__calendar-create-event";
-const CALENDAR_LIST_TOOL: &str = "mcp__codex_apps__calendar-list-events";
+const CALENDAR_CREATE_TOOL: &str = "mcp__codex_apps__calendar_create_event";
+const CALENDAR_LIST_TOOL: &str = "mcp__codex_apps__calendar_list_events";
 const SEARCH_CALENDAR_NAMESPACE: &str = "mcp__codex_apps__calendar";
-const SEARCH_CALENDAR_CREATE_TOOL: &str = "-create-event";
+const SEARCH_CALENDAR_CREATE_TOOL: &str = "_create_event";
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -89,10 +91,6 @@ fn configure_apps(config: &mut Config, apps_base_url: &str) {
         .features
         .enable(Feature::Apps)
         .expect("test config should allow feature update");
-    config
-        .features
-        .disable(Feature::AppsMcpGateway)
-        .expect("test config should allow feature update");
     config.chatgpt_base_url = apps_base_url.to_string();
     config.model = Some("gpt-5-codex".to_string());
 
@@ -118,7 +116,7 @@ async fn search_tool_flag_adds_tool_search() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount(&server).await?;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
     let mock = mount_sse_once(
         &server,
         sse(vec![
@@ -214,7 +212,7 @@ async fn search_tool_adds_discovery_instructions_to_tool_description() -> Result
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount(&server).await?;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
     let mock = mount_sse_once(
         &server,
         sse(vec![
@@ -256,7 +254,7 @@ async fn search_tool_hides_apps_tools_without_search() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount(&server).await?;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
     let mock = mount_sse_once(
         &server,
         sse(vec![
@@ -331,7 +329,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount(&server).await?;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
     let call_id = "tool-search-1";
     let mock = mount_sse_sequence(
         &server,
@@ -403,6 +401,19 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
                 "starts_at": "2026-03-10T12:00:00Z"
             })),
         }
+    );
+    assert_eq!(
+        end.result
+            .as_ref()
+            .expect("tool call should succeed")
+            .structured_content,
+        Some(json!({
+            "_codex_apps": {
+                "resource_uri": CALENDAR_CREATE_EVENT_RESOURCE_URI,
+                "contains_mcp_source": true,
+                "connector_id": "calendar",
+            },
+        }))
     );
 
     wait_for_event(&test.codex, |event| {

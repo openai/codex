@@ -196,6 +196,29 @@ impl ThreadStateManager {
         }
     }
 
+    pub(crate) async fn clear_all_listeners(&self) {
+        let thread_states = {
+            let state = self.state.lock().await;
+            state
+                .threads
+                .iter()
+                .map(|(thread_id, thread_entry)| (*thread_id, thread_entry.state.clone()))
+                .collect::<Vec<_>>()
+        };
+
+        for (thread_id, thread_state) in thread_states {
+            let mut thread_state = thread_state.lock().await;
+            tracing::debug!(
+                thread_id = %thread_id,
+                listener_generation = thread_state.listener_generation,
+                had_listener = thread_state.cancel_tx.is_some(),
+                had_active_turn = thread_state.active_turn_snapshot().is_some(),
+                "clearing thread listener during app-server shutdown"
+            );
+            thread_state.clear_listener();
+        }
+    }
+
     pub(crate) async fn unsubscribe_connection_from_thread(
         &self,
         thread_id: ThreadId,

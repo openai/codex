@@ -59,21 +59,28 @@ fn js_repl_is_experimental_and_user_toggleable() {
 }
 
 #[test]
+fn code_mode_only_requires_code_mode() {
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeModeOnly);
+    features.normalize_dependencies();
+
+    assert_eq!(features.enabled(Feature::CodeModeOnly), true);
+    assert_eq!(features.enabled(Feature::CodeMode), true);
+}
+
+#[test]
 fn guardian_approval_is_experimental_and_user_toggleable() {
     let spec = Feature::GuardianApproval.info();
     let stage = spec.stage;
 
     assert!(matches!(stage, Stage::Experimental { .. }));
+    assert_eq!(stage.experimental_menu_name(), Some("Guardian Approvals"));
     assert_eq!(
-        stage.experimental_menu_name(),
-        Some("Automatic approval review")
+        stage.experimental_menu_description().map(str::to_owned),
+        Some(
+            "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to a carefully-prompted security reviewer subagent rather than blocking the agent on your input. This can consume significantly more tokens because it runs a subagent on every approval request.".to_string()
+        )
     );
-    assert_eq!(
-            stage.experimental_menu_description().map(str::to_owned),
-            Some(
-                "Dispatch `on-request` approval prompts (for e.g. sandbox escapes or blocked network access) to a carefully-prompted security reviewer subagent rather than blocking the agent on your input.".to_string()
-            )
-        );
     assert_eq!(stage.experimental_announcement(), None);
     assert_eq!(Feature::GuardianApproval.default_enabled(), false);
 }
@@ -133,6 +140,12 @@ fn image_detail_original_feature_is_under_development() {
 fn collab_is_legacy_alias_for_multi_agent() {
     assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
     assert_eq!(feature_for_key("collab"), Some(Feature::Collab));
+}
+
+#[test]
+fn multi_agent_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::Collab.stage(), Stage::Stable);
+    assert_eq!(Feature::Collab.default_enabled(), true);
 }
 
 #[test]
