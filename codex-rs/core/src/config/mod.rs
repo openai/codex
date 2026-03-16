@@ -683,17 +683,22 @@ fn push_smart_approvals_alias_migration_edits(
     features: &FeaturesToml,
     approvals_reviewer_missing: bool,
 ) {
-    let Some(enabled) = features.entries.get("smart_approvals").copied() else {
+    let Some(alias_enabled) = features.entries.get("smart_approvals").copied() else {
         return;
     };
+    let canonical_enabled = features
+        .entries
+        .get("guardian_approval")
+        .copied()
+        .unwrap_or(alias_enabled);
 
     if !features.entries.contains_key("guardian_approval") {
         edits.push(ConfigEdit::SetPath {
             segments: feature_scope_segments(scope, "guardian_approval"),
-            value: value(enabled),
+            value: value(alias_enabled),
         });
     }
-    if enabled && approvals_reviewer_missing {
+    if canonical_enabled && approvals_reviewer_missing {
         edits.push(ConfigEdit::SetPath {
             segments: config_scope_segments(scope, "approvals_reviewer"),
             value: value(ApprovalsReviewer::GuardianSubagent.to_string()),
