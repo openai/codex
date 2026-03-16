@@ -37,6 +37,7 @@ use http::HeaderMap;
 use http::HeaderValue;
 use http::header::AUTHORIZATION;
 use serde_json::Value;
+use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -88,12 +89,6 @@ enum HandoffOutput {
 #[derive(Debug, PartialEq, Eq)]
 struct OutputAudioState {
     item_id: String,
-    audio_end_ms: u32,
-}
-
-struct OutputAudioTruncate {
-    item_id: String,
-    content_index: u32,
     audio_end_ms: u32,
 }
 
@@ -718,16 +713,19 @@ fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
                                 }
                                 RealtimeEvent::InputAudioSpeechStarted(event) => {
                                     if matches!(session_kind, RealtimeSessionKind::V2)
-                                        && let Some(truncate) = output_audio_truncate_params(
-                                            &mut output_audio_state,
-                                            event.item_id.as_deref(),
-                                        )
+                                        && let Some(output_audio_state) =
+                                            output_audio_state.take()
+                                        && event
+                                            .item_id
+                                            .as_deref()
+                                            .is_none_or(|item_id| item_id == output_audio_state.item_id)
                                         && let Err(err) = writer
-                                            .send_conversation_item_truncate(
-                                                truncate.item_id,
-                                                truncate.content_index,
-                                                truncate.audio_end_ms,
-                                            )
+                                            .send_json(&json!({
+                                                "type": "conversation.item.truncate",
+                                                "item_id": output_audio_state.item_id,
+                                                "content_index": 0,
+                                                "audio_end_ms": output_audio_state.audio_end_ms,
+                                            }))
                                             .await
                                     {
                                         let mapped_error = map_api_error(err);
@@ -865,24 +863,6 @@ fn decoded_samples_per_channel(frame: &RealtimeAudioFrame) -> Option<u32> {
     let channels = usize::from(frame.num_channels.max(1));
     let samples = bytes.len().checked_div(2)?.checked_div(channels)?;
     u32::try_from(samples).ok()
-}
-
-fn output_audio_truncate_params(
-    output_audio_state: &mut Option<OutputAudioState>,
-    item_id: Option<&str>,
-) -> Option<OutputAudioTruncate> {
-    let state = output_audio_state.take()?;
-    if let Some(item_id) = item_id
-        && item_id != state.item_id
-    {
-        return None;
-    }
-
-    Some(OutputAudioTruncate {
-        item_id: state.item_id,
-        content_index: 0,
-        audio_end_ms: state.audio_end_ms,
-    })
 }
 
 async fn send_conversation_error(

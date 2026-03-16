@@ -20,7 +20,9 @@ use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
 use http::HeaderValue;
+use serde::Serialize;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -235,17 +237,6 @@ impl RealtimeWebsocketConnection {
         self.writer.send_response_create().await
     }
 
-    pub async fn send_conversation_item_truncate(
-        &self,
-        item_id: String,
-        content_index: u32,
-        audio_end_ms: u32,
-    ) -> Result<(), ApiError> {
-        self.writer
-            .send_conversation_item_truncate(item_id, content_index, audio_end_ms)
-            .await
-    }
-
     pub async fn close(&self) -> Result<(), ApiError> {
         self.writer.close().await
     }
@@ -287,12 +278,12 @@ impl RealtimeWebsocketConnection {
 
 impl RealtimeWebsocketWriter {
     pub async fn send_audio_frame(&self, frame: RealtimeAudioFrame) -> Result<(), ApiError> {
-        self.send_json(RealtimeOutboundMessage::InputAudioBufferAppend { audio: frame.data })
+        self.send_json(&RealtimeOutboundMessage::InputAudioBufferAppend { audio: frame.data })
             .await
     }
 
     pub async fn send_conversation_item_create(&self, text: String) -> Result<(), ApiError> {
-        self.send_json(conversation_item_create_message(self.event_parser, text))
+        self.send_json(&conversation_item_create_message(self.event_parser, text))
             .await
     }
 
@@ -301,7 +292,7 @@ impl RealtimeWebsocketWriter {
         handoff_id: String,
         output_text: String,
     ) -> Result<(), ApiError> {
-        self.send_json(conversation_handoff_append_message(
+        self.send_json(&conversation_handoff_append_message(
             self.event_parser,
             handoff_id,
             output_text,
@@ -310,22 +301,8 @@ impl RealtimeWebsocketWriter {
     }
 
     pub async fn send_response_create(&self) -> Result<(), ApiError> {
-        self.send_json(RealtimeOutboundMessage::ResponseCreate)
+        self.send_json(&RealtimeOutboundMessage::ResponseCreate)
             .await
-    }
-
-    pub async fn send_conversation_item_truncate(
-        &self,
-        item_id: String,
-        content_index: u32,
-        audio_end_ms: u32,
-    ) -> Result<(), ApiError> {
-        self.send_json(RealtimeOutboundMessage::ConversationItemTruncate {
-            item_id,
-            content_index,
-            audio_end_ms,
-        })
-        .await
     }
 
     pub async fn send_session_update(
@@ -343,7 +320,7 @@ impl RealtimeWebsocketWriter {
             has_tools = session.tools.is_some(),
             "realtime websocket prepared session.update"
         );
-        self.send_json(RealtimeOutboundMessage::SessionUpdate { session })
+        self.send_json(&RealtimeOutboundMessage::SessionUpdate { session })
             .await
     }
 
@@ -361,7 +338,10 @@ impl RealtimeWebsocketWriter {
         Ok(())
     }
 
-    async fn send_json(&self, message: RealtimeOutboundMessage) -> Result<(), ApiError> {
+    pub async fn send_json<T>(&self, message: &T) -> Result<(), ApiError>
+    where
+        T: Serialize + Debug,
+    {
         let payload = serde_json::to_string(&message)
             .map_err(|err| ApiError::Stream(format!("failed to encode realtime request: {err}")))?;
         debug!(?message, "realtime websocket request");

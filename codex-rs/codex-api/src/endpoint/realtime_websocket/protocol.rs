@@ -41,12 +41,6 @@ pub(super) enum RealtimeOutboundMessage {
     },
     #[serde(rename = "response.create")]
     ResponseCreate,
-    #[serde(rename = "conversation.item.truncate")]
-    ConversationItemTruncate {
-        item_id: String,
-        content_index: u32,
-        audio_end_ms: u32,
-    },
     #[serde(rename = "session.update")]
     SessionUpdate { session: SessionUpdateSession },
     #[serde(rename = "conversation.item.create")]
