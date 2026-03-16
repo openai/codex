@@ -30,7 +30,7 @@ will download the matching GitHub release artifact, stage a temporary local
 `codex-cli-bin` package, install it into your active interpreter, and clean up
 the temporary files afterward.
 
-Current pinned runtime version: `0.115.0-alpha.11`
+Current pinned runtime version: `0.116.0-alpha.1`
 
 ## Run examples
 
@@ -70,7 +70,7 @@ python examples/01_quickstart_constructor/async.py
 - `07_image_and_text/`
   - remote image URL + text multimodal turn
 - `08_local_image_and_text/`
-  - local image + text multimodal turn using bundled sample image
+  - local image + text multimodal turn using a generated temporary sample image
 - `09_async_parity/`
   - parity-style sync flow (see async parity in other examples)
 - `10_error_handling_and_retry/`

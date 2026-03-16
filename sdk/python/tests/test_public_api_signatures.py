@@ -40,6 +40,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
     expected = {
         Codex.thread_start: [
             "approval_policy",
+            "approvals_reviewer",
             "base_instructions",
             "config",
             "cwd",
@@ -64,6 +65,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
         ],
         Codex.thread_resume: [
             "approval_policy",
+            "approvals_reviewer",
             "base_instructions",
             "config",
             "cwd",
@@ -76,6 +78,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
         ],
         Codex.thread_fork: [
             "approval_policy",
+            "approvals_reviewer",
             "base_instructions",
             "config",
             "cwd",
@@ -88,6 +91,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
         ],
         Thread.turn: [
             "approval_policy",
+            "approvals_reviewer",
             "cwd",
             "effort",
             "model",
@@ -99,6 +103,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
         ],
         AsyncCodex.thread_start: [
             "approval_policy",
+            "approvals_reviewer",
             "base_instructions",
             "config",
             "cwd",
@@ -123,6 +128,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
         ],
         AsyncCodex.thread_resume: [
             "approval_policy",
+            "approvals_reviewer",
             "base_instructions",
             "config",
             "cwd",
@@ -135,6 +141,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
         ],
         AsyncCodex.thread_fork: [
             "approval_policy",
+            "approvals_reviewer",
             "base_instructions",
             "config",
             "cwd",
@@ -147,6 +154,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
         ],
         AsyncThread.turn: [
             "approval_policy",
+            "approvals_reviewer",
             "cwd",
             "effort",
             "model",

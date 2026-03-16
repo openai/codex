@@ -339,6 +339,7 @@ class CodexErrorInfo(
 class CollabAgentStatus(Enum):
     pending_init = "pendingInit"
     running = "running"
+    interrupted = "interrupted"
     completed = "completed"
     errored = "errored"
     shutdown = "shutdown"
@@ -746,6 +747,7 @@ class DynamicToolSpec(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    defer_loading: Annotated[bool | None, Field(alias="deferLoading")] = None
     description: str
     input_schema: Annotated[Any, Field(alias="inputSchema")]
     name: str
@@ -1657,7 +1659,13 @@ class PluginInterface(BaseModel):
     capabilities: list[str]
     category: str | None = None
     composer_icon: Annotated[AbsolutePathBuf | None, Field(alias="composerIcon")] = None
-    default_prompt: Annotated[str | None, Field(alias="defaultPrompt")] = None
+    default_prompt: Annotated[
+        list[str] | None,
+        Field(
+            alias="defaultPrompt",
+            description="Starter prompts for the plugin. Capped at 3 entries with a maximum of 128 characters per entry.",
+        ),
+    ] = None
     developer_name: Annotated[str | None, Field(alias="developerName")] = None
     display_name: Annotated[str | None, Field(alias="displayName")] = None
     logo: AbsolutePathBuf | None = None

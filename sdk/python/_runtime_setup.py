@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path
 
 PACKAGE_NAME = "codex-cli-bin"
-PINNED_RUNTIME_VERSION = "0.115.0-alpha.11"
+PINNED_RUNTIME_VERSION = "0.116.0-alpha.1"
 REPO_SLUG = "openai/codex"
 
 
@@ -122,22 +122,53 @@ def _installed_runtime_version(python_executable: str | Path) -> str | None:
 
 def _release_metadata(version: str) -> dict[str, object]:
     url = f"https://api.github.com/repos/{REPO_SLUG}/releases/tags/rust-v{version}"
-    request = urllib.request.Request(
-        url,
-        headers=_github_api_headers("application/vnd.github+json"),
-    )
-    try:
-        with urllib.request.urlopen(request) as response:
-            return json.load(response)
-    except urllib.error.HTTPError as exc:
-        raise RuntimeSetupError(
-            f"Failed to resolve release metadata for rust-v{version} from {REPO_SLUG}: "
-            f"{exc.code} {exc.reason}"
-        ) from exc
+    token = _github_token()
+    attempts = [True, False] if token is not None else [False]
+    last_error: urllib.error.HTTPError | None = None
+
+    for include_auth in attempts:
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "codex-python-runtime-setup",
+        }
+        if include_auth and token is not None:
+            headers["Authorization"] = f"Bearer {token}"
+
+        request = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(request) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if include_auth and exc.code == 401:
+                continue
+            break
+
+    assert last_error is not None
+    raise RuntimeSetupError(
+        f"Failed to resolve release metadata for rust-v{version} from {REPO_SLUG}: "
+        f"{last_error.code} {last_error.reason}"
+    ) from last_error
 
 
 def _download_release_archive(version: str, temp_root: Path) -> Path:
     asset_name = platform_asset_name()
+    archive_path = temp_root / asset_name
+
+    browser_download_url = (
+        f"https://github.com/{REPO_SLUG}/releases/download/rust-v{version}/{asset_name}"
+    )
+    request = urllib.request.Request(
+        browser_download_url,
+        headers={"User-Agent": "codex-python-runtime-setup"},
+    )
+    try:
+        with urllib.request.urlopen(request) as response, archive_path.open("wb") as fh:
+            shutil.copyfileobj(response, fh)
+        return archive_path
+    except urllib.error.HTTPError:
+        pass
+
     metadata = _release_metadata(version)
     assets = metadata.get("assets")
     if not isinstance(assets, list):
@@ -155,13 +186,9 @@ def _download_release_archive(version: str, temp_root: Path) -> Path:
             f"Release rust-v{version} does not contain asset {asset_name} for this platform."
         )
 
-    archive_path = temp_root / asset_name
     api_url = asset.get("url")
-    browser_download_url = asset.get("browser_download_url")
     if not isinstance(api_url, str):
         api_url = None
-    if not isinstance(browser_download_url, str):
-        browser_download_url = None
 
     if api_url is not None:
         token = _github_token()
@@ -176,18 +203,6 @@ def _download_release_archive(version: str, temp_root: Path) -> Path:
                 return archive_path
             except urllib.error.HTTPError:
                 pass
-
-    if browser_download_url is not None:
-        request = urllib.request.Request(
-            browser_download_url,
-            headers={"User-Agent": "codex-python-runtime-setup"},
-        )
-        try:
-            with urllib.request.urlopen(request) as response, archive_path.open("wb") as fh:
-                shutil.copyfileobj(response, fh)
-            return archive_path
-        except urllib.error.HTTPError:
-            pass
 
     if shutil.which("gh") is None:
         raise RuntimeSetupError(

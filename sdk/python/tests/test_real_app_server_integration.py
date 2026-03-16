@@ -133,6 +133,24 @@ def _run_python(
     )
 
 
+def _runtime_compatibility_hint(
+    runtime_env: PreparedRuntimeEnv,
+    *,
+    stdout: str,
+    stderr: str,
+) -> str:
+    combined = f"{stdout}\n{stderr}"
+    if "ThreadStartResponse" in combined and "approvalsReviewer" in combined:
+        return (
+            "\nCompatibility hint:\n"
+            f"Pinned runtime {runtime_env.runtime_version} returned a thread/start payload "
+            "that is older than the current SDK schema and is missing "
+            "`approvalsReviewer`. Bump `sdk/python/_runtime_setup.py` to a matching "
+            "released runtime version.\n"
+        )
+    return ""
+
+
 def _run_json_python(
     runtime_env: PreparedRuntimeEnv,
     source: str,
@@ -142,7 +160,10 @@ def _run_json_python(
 ) -> dict[str, object]:
     result = _run_python(runtime_env, source, cwd=cwd, timeout_s=timeout_s)
     assert result.returncode == 0, (
-        f"Python snippet failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+        "Python snippet failed.\n"
+        f"STDOUT:\n{result.stdout}\n"
+        f"STDERR:\n{result.stderr}"
+        f"{_runtime_compatibility_hint(runtime_env, stdout=result.stdout, stderr=result.stderr)}"
     )
     return json.loads(result.stdout)
 
@@ -389,6 +410,7 @@ def test_real_examples_run_and_assert(
         f"Example failed: {folder}/{script}\n"
         f"STDOUT:\n{result.stdout}\n"
         f"STDERR:\n{result.stderr}"
+        f"{_runtime_compatibility_hint(runtime_env, stdout=result.stdout, stderr=result.stderr)}"
     )
 
     out = result.stdout
