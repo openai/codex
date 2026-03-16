@@ -9372,6 +9372,12 @@
       },
       "PluginMarketplaceEntry": {
         "properties": {
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "type": "string"
           },

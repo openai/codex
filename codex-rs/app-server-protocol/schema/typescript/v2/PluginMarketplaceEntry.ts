@@ -4,4 +4,4 @@
 import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 import type { PluginSummary } from "./PluginSummary";
 
-export type PluginMarketplaceEntry = { name: string, path: AbsolutePathBuf, plugins: Array<PluginSummary>, };
+export type PluginMarketplaceEntry = { name: string, path: AbsolutePathBuf, displayName: string | null, plugins: Array<PluginSummary>, };
