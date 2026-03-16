@@ -137,6 +137,15 @@ pub(crate) enum AppEvent {
         is_final: bool,
     },
 
+    RefreshSkillsList,
+
+    /// Result of an app-server-proxied `skills/list` request.
+    SkillsListLoaded {
+        requested_cwds: Vec<PathBuf>,
+        generation: u64,
+        result: Result<codex_app_server_protocol::SkillsListResponse, String>,
+    },
+
     /// Result of computing a `/diff` command.
     DiffResult(String),
 

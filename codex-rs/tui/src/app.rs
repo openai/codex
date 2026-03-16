@@ -40,7 +40,9 @@ use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::InProcessAppServerClient;
+use codex_app_server_client::InProcessAppServerRequester;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::SkillsListResponse;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
@@ -73,12 +75,10 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FinalOutput;
-use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
@@ -115,10 +115,15 @@ use toml::Value as TomlValue;
 mod agent_navigation;
 mod app_server_adapter;
 mod pending_interactive_replay;
+mod skills;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
+use self::skills::effective_skills_list_cwds;
+use self::skills::emit_skill_load_warnings;
+use self::skills::errors_for_cwd;
+use self::skills::request_skills_list;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
@@ -201,36 +206,6 @@ fn session_summary(
         usage_line,
         resume_command,
     })
-}
-
-fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
-    response
-        .skills
-        .iter()
-        .find(|entry| entry.cwd.as_path() == cwd)
-        .map(|entry| entry.errors.clone())
-        .unwrap_or_default()
-}
-
-fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorInfo]) {
-    if errors.is_empty() {
-        return;
-    }
-
-    let error_count = errors.len();
-    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-        crate::history_cell::new_warning_event(format!(
-            "Skipped loading {error_count} skill(s) due to invalid SKILL.md files."
-        )),
-    )));
-
-    for error in errors {
-        let path = error.path.display();
-        let message = error.message.as_str();
-        app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-            crate::history_cell::new_warning_event(format!("{path}: {message}")),
-        )));
-    }
 }
 
 fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) {
@@ -728,6 +703,9 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
+
+    next_skills_list_generation: u64,
+    latest_skills_list_generation_by_cwd: HashMap<PathBuf, u64>,
 }
 
 #[derive(Default)]
@@ -2172,6 +2150,8 @@ impl App {
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
+            next_skills_list_generation: 0,
+            latest_skills_list_generation_by_cwd: HashMap::new(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -2244,9 +2224,20 @@ impl App {
             loop {
                 let control = select! {
                     Some(event) = app_event_rx.recv() => {
-                        match app.handle_event(tui, event).await {
-                            Ok(control) => control,
-                            Err(err) => break Err(err),
+                        match event {
+                            AppEvent::CodexOp(Op::ListSkills { cwds, force_reload }) =>
+                            {
+                                app.trigger_skills_list_request(app_server.requester(), cwds, force_reload);
+                                AppRunControl::Continue
+                            }
+                            AppEvent::RefreshSkillsList => {
+                                app.trigger_skills_list_request(app_server.requester(), Vec::new(), true);
+                                AppRunControl::Continue
+                            }
+                            event => match app.handle_event(tui, event).await {
+                                Ok(control) => control,
+                                Err(err) => break Err(err),
+                            },
                         }
                     }
                     active = async {
@@ -2315,7 +2306,7 @@ impl App {
             }
         };
         if let Err(err) = app_server.shutdown().await {
-            tracing::warn!(error = %err, "failed to shut down embedded app server");
+            tracing::warn!(error = %err, "failed to shut down app server");
         }
         let clear_result = tui.terminal.clear();
         let exit_reason = match exit_reason_result {
@@ -2398,6 +2389,59 @@ impl App {
             }
         }
         Ok(AppRunControl::Continue)
+    }
+
+    fn handle_skills_list_loaded(
+        &mut self,
+        requested_cwds: Vec<PathBuf>,
+        generation: u64,
+        result: std::result::Result<SkillsListResponse, String>,
+    ) -> Result<()> {
+        let current_cwd = self.chat_widget.config_ref().cwd.clone();
+
+        if !requested_cwds.contains(&current_cwd) {
+            return Ok(());
+        }
+
+        let Some(latest_generation) = self.latest_skills_list_generation_by_cwd.get(&current_cwd)
+        else {
+            return Ok(());
+        };
+
+        if *latest_generation != generation {
+            return Ok(());
+        }
+
+        let event = result.map_err(|err| color_eyre::eyre::eyre!(err))?;
+        emit_skill_load_warnings(&self.app_event_tx, &errors_for_cwd(&current_cwd, &event));
+        self.chat_widget.set_skills_from_response(&event);
+        self.chat_widget.refresh_plugin_mentions();
+
+        Ok(())
+    }
+
+    fn trigger_skills_list_request(
+        &mut self,
+        requester: InProcessAppServerRequester,
+        cwds: Vec<PathBuf>,
+        force_reload: bool,
+    ) {
+        let cwds = effective_skills_list_cwds(cwds, &self.chat_widget.config_ref().cwd);
+        let generation = self.next_skills_list_generation;
+        self.next_skills_list_generation += 1;
+
+        for cwd in &cwds {
+            self.latest_skills_list_generation_by_cwd
+                .insert(cwd.clone(), generation);
+        }
+
+        request_skills_list(
+            self.app_event_tx.clone(),
+            requester,
+            cwds,
+            force_reload,
+            generation,
+        );
     }
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
@@ -2708,6 +2752,13 @@ impl App {
             }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
+            }
+            AppEvent::SkillsListLoaded {
+                requested_cwds,
+                generation,
+                result,
+            } => {
+                self.handle_skills_list_loaded(requested_cwds, generation, result)?;
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
@@ -3712,6 +3763,9 @@ impl App {
                     }
                 }
             }
+            AppEvent::RefreshSkillsList => {
+                unreachable!("RefreshSkillsList is handled in App::run before handle_event");
+            }
         }
         Ok(AppRunControl::Continue)
     }
@@ -3748,11 +3802,6 @@ impl App {
         if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
             self.suppress_shutdown_complete = false;
             return;
-        }
-        if let EventMsg::ListSkillsResponse(response) = &event.msg {
-            let cwd = self.chat_widget.config_ref().cwd.clone();
-            let errors = errors_for_cwd(&cwd, response);
-            emit_skill_load_warnings(&self.app_event_tx, &errors);
         }
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
@@ -4187,10 +4236,18 @@ mod tests {
     use crate::history_cell::new_session_info;
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
+    use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
+    use codex_app_server_client::InProcessClientStartArgs;
+    use codex_app_server_client::InProcessServerEvent;
+    use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::SkillsChangedNotification;
+    use codex_arg0::Arg0DispatchPaths;
     use codex_core::CodexAuth;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::types::ModelAvailabilityNuxConfig;
+    use codex_core::config_loader::CloudRequirementsLoader;
+    use codex_core::config_loader::LoaderOverrides;
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::CollaborationMode;
@@ -6373,6 +6430,8 @@ guardian_approval = true
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
+            next_skills_list_generation: 0,
+            latest_skills_list_generation_by_cwd: HashMap::new(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -6433,6 +6492,8 @@ guardian_approval = true
                 suppress_shutdown_complete: false,
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
+                next_skills_list_generation: 0,
+                latest_skills_list_generation_by_cwd: HashMap::new(),
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),
@@ -6445,6 +6506,27 @@ guardian_approval = true
             rx,
             op_rx,
         )
+    }
+
+    async fn start_test_app_server_client(config: Config) -> InProcessAppServerClient {
+        InProcessAppServerClient::start(InProcessClientStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(config),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: codex_feedback::CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            client_name: "codex-tui-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await
+        .expect("in-process app-server client should start")
     }
 
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
@@ -6485,6 +6567,70 @@ guardian_approval = true
             .and_then(TomlValue::as_table)
             .and_then(|app| app.get("enabled"))
             .and_then(TomlValue::as_bool)
+    }
+
+    fn test_skill_response(cwd: PathBuf, skill_name: &str) -> SkillsListResponse {
+        SkillsListResponse {
+            data: vec![codex_app_server_protocol::SkillsListEntry {
+                cwd: cwd.clone(),
+                skills: vec![codex_app_server_protocol::SkillMetadata {
+                    name: skill_name.to_string(),
+                    description: format!("{skill_name} description"),
+                    short_description: None,
+                    interface: None,
+                    dependencies: None,
+                    path: cwd.join(format!("{skill_name}/SKILL.md")),
+                    scope: codex_app_server_protocol::SkillScope::Repo,
+                    enabled: true,
+                }],
+                errors: Vec::new(),
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn app_server_skills_changed_notification_emits_refresh_skills_list() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let client = start_test_app_server_client(app.config.clone()).await;
+
+        app.handle_app_server_event(
+            &client,
+            InProcessServerEvent::ServerNotification(ServerNotification::SkillsChanged(
+                SkillsChangedNotification {},
+            )),
+        )
+        .await;
+
+        assert_matches!(app_event_rx.try_recv(), Ok(AppEvent::RefreshSkillsList));
+
+        client.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn trigger_skills_list_request_uses_current_cwd_and_emits_result() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let client = start_test_app_server_client(app.config.clone()).await;
+        let current_cwd = app.chat_widget.config_ref().cwd.clone();
+
+        app.trigger_skills_list_request(client.requester(), Vec::new(), true);
+
+        let event = time::timeout(Duration::from_secs(5), app_event_rx.recv())
+            .await
+            .expect("timed out waiting for skills list event")
+            .expect("skills list event should be emitted");
+
+        assert_matches!(
+            event,
+            AppEvent::SkillsListLoaded {
+                requested_cwds,
+                generation,
+                result,
+            } if requested_cwds == vec![current_cwd] && generation == 0 && result.is_ok()
+        );
+
+        client.shutdown().await?;
+        Ok(())
     }
 
     fn all_model_presets() -> Vec<ModelPreset> {
@@ -6901,6 +7047,192 @@ guardian_approval = true
         app.refresh_in_memory_config_from_disk().await?;
 
         assert_eq!(app.config.cwd, app.chat_widget.config_ref().cwd);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn effective_skills_list_cwds_uses_active_chat_widget_cwd_when_request_empty()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let launch_cwd = app.config.cwd.clone();
+        let active_cwd_tmp = tempdir()?;
+        let active_cwd = active_cwd_tmp.path().to_path_buf();
+
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: active_cwd.clone(),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        assert_eq!(app.config.cwd, launch_cwd);
+        assert_eq!(app.chat_widget.config_ref().cwd, active_cwd);
+        assert_eq!(
+            effective_skills_list_cwds(Vec::new(), &app.chat_widget.config_ref().cwd),
+            vec![active_cwd]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn effective_skills_list_cwds_preserves_explicit_cwds() {
+        let requested = vec![PathBuf::from("/tmp/one"), PathBuf::from("/tmp/two")];
+
+        assert_eq!(
+            effective_skills_list_cwds(requested.clone(), Path::new("/tmp/current")),
+            requested
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_skills_list_loaded_for_old_cwd_does_not_clear_current_skills() -> Result<()> {
+        let mut app = make_test_app().await;
+        let stale_cwd_tmp = tempdir()?;
+        let stale_cwd = stale_cwd_tmp.path().to_path_buf();
+        let current_cwd_tmp = tempdir()?;
+        let current_cwd = current_cwd_tmp.path().to_path_buf();
+
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: current_cwd.clone(),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        app.chat_widget
+            .set_skills_from_response(&test_skill_response(current_cwd, "current-skill"));
+        assert_eq!(app.chat_widget.loaded_skill_names(), vec!["current-skill"]);
+
+        app.handle_skills_list_loaded(
+            vec![stale_cwd.clone()],
+            0,
+            Ok(test_skill_response(stale_cwd, "stale-skill")),
+        )?;
+
+        assert_eq!(app.chat_widget.loaded_skill_names(), vec!["current-skill"]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stale_skills_list_loaded_for_same_cwd_does_not_overwrite_newer_skills() -> Result<()> {
+        let mut app = make_test_app().await;
+        let cwd_tmp = tempdir()?;
+        let cwd = cwd_tmp.path().to_path_buf();
+
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: cwd.clone(),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        app.latest_skills_list_generation_by_cwd
+            .insert(cwd.clone(), 2);
+
+        app.handle_skills_list_loaded(
+            vec![cwd.clone()],
+            2,
+            Ok(test_skill_response(cwd.clone(), "new-skill")),
+        )?;
+        assert_eq!(app.chat_widget.loaded_skill_names(), vec!["new-skill"]);
+
+        app.handle_skills_list_loaded(
+            vec![cwd.clone()],
+            1,
+            Ok(test_skill_response(cwd, "old-skill")),
+        )?;
+        assert_eq!(app.chat_widget.loaded_skill_names(), vec!["new-skill"]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stale_skills_list_loaded_error_for_same_cwd_is_ignored() -> Result<()> {
+        let mut app = make_test_app().await;
+        let cwd_tmp = tempdir()?;
+        let cwd = cwd_tmp.path().to_path_buf();
+
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: cwd.clone(),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        });
+
+        app.latest_skills_list_generation_by_cwd
+            .insert(cwd.clone(), 2);
+
+        app.handle_skills_list_loaded(
+            vec![cwd.clone()],
+            2,
+            Ok(test_skill_response(cwd.clone(), "new-skill")),
+        )?;
+        assert_eq!(app.chat_widget.loaded_skill_names(), vec!["new-skill"]);
+
+        app.handle_skills_list_loaded(vec![cwd], 1, Err("stale skills/list failure".to_string()))?;
+        assert_eq!(app.chat_widget.loaded_skill_names(), vec!["new-skill"]);
+
         Ok(())
     }
 
