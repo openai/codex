@@ -142,10 +142,6 @@ async fn build_apps_enabled_plugin_test_codex(
                 .features
                 .enable(Feature::Apps)
                 .expect("test config should allow feature update");
-            config
-                .features
-                .disable(Feature::AppsMcpGateway)
-                .expect("test config should allow feature update");
             config.chatgpt_base_url = chatgpt_base_url;
         });
     Ok(builder

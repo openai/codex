@@ -5,6 +5,7 @@ use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
 use crate::features::Feature;
 use crate::features::Features;
+use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::original_image_detail::can_request_original_image_detail;
@@ -1673,21 +1674,57 @@ fn create_tool_search_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSpec {
             },
         ),
     ]);
-    let mut app_names = app_tools
-        .values()
-        .filter_map(|tool| tool.connector_name.clone())
-        .collect::<Vec<_>>();
-    app_names.sort();
-    app_names.dedup();
-    let app_names = app_names.join(", ");
+    let mut app_descriptions = BTreeMap::new();
+    for tool in app_tools.values() {
+        if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+            continue;
+        }
 
-    let description = if app_names.is_empty() {
-        TOOL_SEARCH_DESCRIPTION_TEMPLATE
-            .replace("({{app_names}})", "(None currently enabled)")
-            .replace("{{app_names}}", "available apps")
+        let Some(connector_name) = tool
+            .connector_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|connector_name| !connector_name.is_empty())
+        else {
+            continue;
+        };
+
+        let connector_description = tool
+            .connector_description
+            .as_deref()
+            .map(str::trim)
+            .filter(|connector_description| !connector_description.is_empty())
+            .map(str::to_string);
+
+        app_descriptions
+            .entry(connector_name.to_string())
+            .and_modify(|existing: &mut Option<String>| {
+                if existing.is_none() {
+                    *existing = connector_description.clone();
+                }
+            })
+            .or_insert(connector_description);
+    }
+
+    let app_descriptions = if app_descriptions.is_empty() {
+        "None currently enabled.".to_string()
     } else {
-        TOOL_SEARCH_DESCRIPTION_TEMPLATE.replace("{{app_names}}", app_names.as_str())
+        app_descriptions
+            .into_iter()
+            .map(
+                |(connector_name, connector_description)| match connector_description {
+                    Some(connector_description) => {
+                        format!("- {connector_name}: {connector_description}")
+                    }
+                    None => format!("- {connector_name}"),
+                },
+            )
+            .collect::<Vec<_>>()
+            .join("\n")
     };
+
+    let description =
+        TOOL_SEARCH_DESCRIPTION_TEMPLATE.replace("{{app_descriptions}}", app_descriptions.as_str());
 
     ToolSpec::ToolSearch {
         execution: "client".to_string(),
