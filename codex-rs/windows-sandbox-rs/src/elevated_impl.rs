@@ -343,60 +343,99 @@ mod windows_impl {
             return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {}", err));
         }
 
-        connect_pipe(h_pipe_in)?;
-        connect_pipe(h_pipe_out)?;
-
-        let mut pipe_write = unsafe { File::from_raw_handle(h_pipe_in as _) };
-        let mut pipe_read = unsafe { File::from_raw_handle(h_pipe_out as _) };
-
-        let spawn_request = FramedMessage {
-            version: 1,
-            message: Message::SpawnRequest {
-                payload: Box::new(SpawnRequest {
-                    command: command.clone(),
-                    cwd: cwd.to_path_buf(),
-                    env: env_map.clone(),
-                    policy_json_or_preset: policy_json_or_preset.to_string(),
-                    sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
-                    codex_home: sandbox_base.clone(),
-                    real_codex_home: codex_home.to_path_buf(),
-                    cap_sids,
-                    timeout_ms,
-                    tty: false,
-                    stdin_open: false,
-                    use_private_desktop,
-                }),
-            },
-        };
-        write_frame(&mut pipe_write, &spawn_request)?;
-        read_spawn_ready(&mut pipe_read)?;
-        drop(pipe_write);
-
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let (exit_code, timed_out) = loop {
-            let msg = read_frame(&mut pipe_read)?
-                .ok_or_else(|| anyhow::anyhow!("runner pipe closed before exit"))?;
-            match msg.message {
-                Message::SpawnReady { .. } => {}
-                Message::Output { payload } => {
-                    let bytes = decode_bytes(&payload.data_b64)?;
-                    match payload.stream {
-                        OutputStream::Stdout => stdout.extend_from_slice(&bytes),
-                        OutputStream::Stderr => stderr.extend_from_slice(&bytes),
-                    }
+        if let Err(err) = connect_pipe(h_pipe_in) {
+            unsafe {
+                CloseHandle(h_pipe_in);
+                CloseHandle(h_pipe_out);
+                if pi.hThread != 0 {
+                    CloseHandle(pi.hThread);
                 }
-                Message::Exit { payload } => break (payload.exit_code, payload.timed_out),
-                Message::Error { payload } => {
-                    return Err(anyhow::anyhow!("runner error: {}", payload.message));
-                }
-                other => {
-                    return Err(anyhow::anyhow!(
-                        "unexpected runner message during capture: {other:?}"
-                    ));
+                if pi.hProcess != 0 {
+                    CloseHandle(pi.hProcess);
                 }
             }
-        };
+            return Err(err.into());
+        }
+        if let Err(err) = connect_pipe(h_pipe_out) {
+            unsafe {
+                CloseHandle(h_pipe_in);
+                CloseHandle(h_pipe_out);
+                if pi.hThread != 0 {
+                    CloseHandle(pi.hThread);
+                }
+                if pi.hProcess != 0 {
+                    CloseHandle(pi.hProcess);
+                }
+            }
+            return Err(err.into());
+        }
+
+        let result = (|| -> Result<CaptureResult> {
+            let mut pipe_write = unsafe { File::from_raw_handle(h_pipe_in as _) };
+            let mut pipe_read = unsafe { File::from_raw_handle(h_pipe_out as _) };
+
+            let spawn_request = FramedMessage {
+                version: 1,
+                message: Message::SpawnRequest {
+                    payload: Box::new(SpawnRequest {
+                        command: command.clone(),
+                        cwd: cwd.to_path_buf(),
+                        env: env_map.clone(),
+                        policy_json_or_preset: policy_json_or_preset.to_string(),
+                        sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
+                        codex_home: sandbox_base.clone(),
+                        real_codex_home: codex_home.to_path_buf(),
+                        cap_sids,
+                        timeout_ms,
+                        tty: false,
+                        stdin_open: false,
+                        use_private_desktop,
+                    }),
+                },
+            };
+            write_frame(&mut pipe_write, &spawn_request)?;
+            read_spawn_ready(&mut pipe_read)?;
+            drop(pipe_write);
+
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let (exit_code, timed_out) = loop {
+                let msg = read_frame(&mut pipe_read)?
+                    .ok_or_else(|| anyhow::anyhow!("runner pipe closed before exit"))?;
+                match msg.message {
+                    Message::SpawnReady { .. } => {}
+                    Message::Output { payload } => {
+                        let bytes = decode_bytes(&payload.data_b64)?;
+                        match payload.stream {
+                            OutputStream::Stdout => stdout.extend_from_slice(&bytes),
+                            OutputStream::Stderr => stderr.extend_from_slice(&bytes),
+                        }
+                    }
+                    Message::Exit { payload } => break (payload.exit_code, payload.timed_out),
+                    Message::Error { payload } => {
+                        return Err(anyhow::anyhow!("runner error: {}", payload.message));
+                    }
+                    other => {
+                        return Err(anyhow::anyhow!(
+                            "unexpected runner message during capture: {other:?}"
+                        ));
+                    }
+                }
+            };
+
+            if exit_code == 0 {
+                log_success(&command, logs_base_dir);
+            } else {
+                log_failure(&command, &format!("exit code {}", exit_code), logs_base_dir);
+            }
+
+            Ok(CaptureResult {
+                exit_code,
+                stdout,
+                stderr,
+                timed_out,
+            })
+        })();
 
         unsafe {
             if pi.hThread != 0 {
@@ -407,18 +446,7 @@ mod windows_impl {
             }
         }
 
-        if exit_code == 0 {
-            log_success(&command, logs_base_dir);
-        } else {
-            log_failure(&command, &format!("exit code {}", exit_code), logs_base_dir);
-        }
-
-        Ok(CaptureResult {
-            exit_code,
-            stdout,
-            stderr,
-            timed_out,
-        })
+        result
     }
 
     #[cfg(test)]
