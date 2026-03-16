@@ -150,7 +150,7 @@ mod reload {
         preserve_current_provider: bool,
     ) -> anyhow::Result<Config> {
         let active_profile_name = preserve_current_profile
-            .then(|| config.active_profile.as_deref())
+            .then_some(config.active_profile.as_deref())
             .flatten();
         let config_layer_stack =
             build_config_layer_stack(config, &role_layer_toml, active_profile_name)?;
