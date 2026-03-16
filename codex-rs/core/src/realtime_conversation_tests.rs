@@ -1,5 +1,6 @@
 use super::HandoffOutput;
 use super::RealtimeHandoffState;
+use super::RealtimeSessionKind;
 use super::realtime_text_from_handoff_request;
 use async_channel::bounded;
 use codex_protocol::protocol::RealtimeHandoffRequested;
@@ -57,7 +58,7 @@ fn ignores_empty_handoff_request_input_transcript() {
 #[tokio::test]
 async fn clears_active_handoff_explicitly() {
     let (tx, _rx) = bounded(1);
-    let state = RealtimeHandoffState::new(tx, false);
+    let state = RealtimeHandoffState::new(tx, RealtimeSessionKind::V1);
 
     *state.active_handoff.lock().await = Some("handoff_1".to_string());
     assert_eq!(
@@ -72,7 +73,7 @@ async fn clears_active_handoff_explicitly() {
 #[tokio::test]
 async fn sends_multiple_handoff_outputs_until_cleared() {
     let (tx, rx) = bounded(4);
-    let state = RealtimeHandoffState::new(tx, false);
+    let state = RealtimeHandoffState::new(tx, RealtimeSessionKind::V1);
 
     state
         .send_output("ignored".to_string())
