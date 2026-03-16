@@ -107,6 +107,7 @@ use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UndoCompletedEvent;
 use codex_protocol::protocol::UndoStartedEvent;
@@ -3053,6 +3054,7 @@ async fn replayed_thread_rollback_emits_ordered_app_event() {
 
     chat.replay_initial_messages(vec![EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
         num_turns: 2,
+        rolled_back_to_turn_context: None,
     })]);
 
     let mut saw = false;
@@ -3065,6 +3067,88 @@ async fn replayed_thread_rollback_emits_ordered_app_event() {
     }
 
     assert!(saw, "expected replay rollback app event");
+}
+
+#[tokio::test]
+async fn replayed_thread_rollback_turn_context_diff_emits_ordered_info_messages() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.set_feature_enabled(Feature::Personality, true);
+    chat.set_approval_policy(AskForApproval::OnRequest);
+    chat.set_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
+        .expect("workspace-write sandbox");
+    chat.set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
+    chat.set_service_tier(Some(ServiceTier::Fast));
+    chat.set_personality(Personality::Pragmatic);
+    chat.config.cwd = PathBuf::from("/tmp/current");
+    chat.set_collaboration_mask(CollaborationModeMask {
+        name: "Plan".to_string(),
+        mode: Some(ModeKind::Plan),
+        model: Some("gpt-5.4".to_string()),
+        reasoning_effort: Some(Some(ReasoningEffortConfig::High)),
+        developer_instructions: None,
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.replay_initial_messages(vec![EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+        num_turns: 1,
+        rolled_back_to_turn_context: Some(TurnContextItem {
+            turn_id: Some("turn-1".to_string()),
+            trace_id: None,
+            cwd: PathBuf::from("/tmp/historical"),
+            current_date: None,
+            timezone: None,
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            network: None,
+            model: "gpt-5.3-codex".to_string(),
+            service_tier: None,
+            personality: None,
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "gpt-5.3-codex".to_string(),
+                    reasoning_effort: Some(ReasoningEffortConfig::Medium),
+                    developer_instructions: None,
+                },
+            }),
+            realtime_active: Some(false),
+            effort: Some(ReasoningEffortConfig::Medium),
+            summary: codex_protocol::config_types::ReasoningSummary::Auto,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: None,
+        }),
+    })]);
+
+    let mut saw_rollback = false;
+    let mut rendered_cells = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::ApplyThreadRollback { num_turns } => {
+                assert!(!saw_rollback, "expected only one rollback app event");
+                saw_rollback = true;
+                assert_eq!(num_turns, 1);
+            }
+            AppEvent::InsertHistoryCell(cell) => {
+                assert!(
+                    saw_rollback,
+                    "rollback trim should be queued before info cells"
+                );
+                rendered_cells.push(lines_to_single_string(&cell.display_lines(80)));
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_rollback, "expected replay rollback app event");
+    let rendered = rendered_cells.join("\n");
+    assert_snapshot!(
+        "replayed_thread_rollback_turn_context_diff_info_messages",
+        rendered
+    );
 }
 
 #[tokio::test]
@@ -5918,7 +6002,10 @@ async fn slash_copy_state_clears_on_thread_rollback() {
     });
     chat.handle_codex_event(Event {
         id: "rollback-1".into(),
-        msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+        msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+            rolled_back_to_turn_context: None,
+        }),
     });
 
     assert_eq!(chat.last_copyable_output, None);
@@ -6002,7 +6089,10 @@ async fn slash_copy_does_not_return_stale_output_after_thread_rollback() {
 
     chat.handle_codex_event(Event {
         id: "rollback-1".into(),
-        msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+        msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+            rolled_back_to_turn_context: None,
+        }),
     });
     let _ = drain_insert_history(&mut rx);
 

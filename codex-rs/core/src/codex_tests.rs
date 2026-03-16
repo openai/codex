@@ -1033,7 +1033,7 @@ async fn record_initial_history_reconstructs_forked_transcript() {
 }
 
 #[tokio::test]
-async fn record_initial_history_forked_hydrates_previous_turn_settings() {
+async fn record_initial_history_forked_advances_previous_turn_settings_to_injected_baseline() {
     let (session, turn_context) = make_session_and_context().await;
     let previous_model = "forked-rollout-model";
     let previous_context_item = TurnContextItem {
@@ -1043,9 +1043,11 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
+        approvals_reviewer: turn_context.config.approvals_reviewer,
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
         network: None,
         model: previous_model.to_string(),
+        service_tier: turn_context.config.service_tier,
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         realtime_active: Some(turn_context.realtime_active),
@@ -1092,7 +1094,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
     assert_eq!(
         session.previous_turn_settings().await,
         Some(PreviousTurnSettings {
-            model: previous_model.to_string(),
+            model: turn_context.model_info.slug.clone(),
             realtime_active: Some(turn_context.realtime_active),
         })
     );
@@ -1284,6 +1286,12 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
     handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
     let rollback_event = wait_for_thread_rolled_back(&rx).await;
     assert_eq!(rollback_event.num_turns, 1);
+    assert_eq!(
+        serde_json::to_value(rollback_event.rolled_back_to_turn_context)
+            .expect("serialize rollback turn context"),
+        serde_json::to_value(Some(first_context_item.clone()))
+            .expect("serialize expected rollback turn context")
+    );
 
     assert_eq!(
         sess.clone_history().await.raw_items(),
@@ -1385,7 +1393,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
     .await;
     sess.replace_history(
         vec![assistant_message("stale history")],
-        Some(first_context_item),
+        Some(first_context_item.clone()),
     )
     .await;
 
@@ -1394,6 +1402,126 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
     assert_eq!(rollback_event.num_turns, 1);
 
     assert_eq!(sess.clone_history().await.raw_items(), compacted_history);
+    assert!(sess.reference_context_item().await.is_none());
+    assert_eq!(
+        serde_json::to_value(rollback_event.rolled_back_to_turn_context)
+            .expect("serialize rollback turn context"),
+        serde_json::to_value(Some(first_context_item))
+            .expect("serialize expected rollback turn context")
+    );
+}
+
+#[tokio::test]
+async fn thread_rollback_emits_surviving_turn_context_when_compaction_clears_reference_baseline() {
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
+    attach_rollout_recorder(&sess).await;
+
+    let first_context_item = tc.to_turn_context_item();
+    let first_turn_id = first_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+    let compact_turn_id = "compact-turn".to_string();
+    let rolled_back_turn_id = "rolled-back-turn".to_string();
+    let compacted_context_item = TurnContextItem {
+        turn_id: Some(compact_turn_id.clone()),
+        model: "compacted-model".to_string(),
+        ..first_context_item.clone()
+    };
+    let compacted_history = vec![
+        user_message("turn 1 user"),
+        assistant_message("turn 1 assistant"),
+        user_message("summary after compaction"),
+    ];
+
+    sess.persist_rollout_items(&[
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: first_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "turn 1 user".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        })),
+        RolloutItem::TurnContext(first_context_item.clone()),
+        RolloutItem::ResponseItem(user_message("turn 1 user")),
+        RolloutItem::ResponseItem(assistant_message("turn 1 assistant")),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: first_turn_id,
+            last_agent_message: None,
+        })),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: compact_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "turn 2 user".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        })),
+        RolloutItem::TurnContext(compacted_context_item.clone()),
+        RolloutItem::Compacted(CompactedItem {
+            message: "summary after compaction".to_string(),
+            replacement_history: Some(compacted_history.clone()),
+        }),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: compact_turn_id,
+            last_agent_message: None,
+        })),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: rolled_back_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "turn 3 user".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        })),
+        RolloutItem::TurnContext(TurnContextItem {
+            turn_id: Some(rolled_back_turn_id.clone()),
+            model: "rolled-back-model".to_string(),
+            ..first_context_item.clone()
+        }),
+        RolloutItem::ResponseItem(user_message("turn 3 user")),
+        RolloutItem::ResponseItem(assistant_message("turn 3 assistant")),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: rolled_back_turn_id,
+            last_agent_message: None,
+        })),
+    ])
+    .await;
+
+    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    let rollback_event = wait_for_thread_rolled_back(&rx).await;
+
+    assert_eq!(rollback_event.num_turns, 1);
+    assert_eq!(
+        serde_json::to_value(rollback_event.rolled_back_to_turn_context)
+            .expect("serialize rollback turn context"),
+        serde_json::to_value(Some(compacted_context_item))
+            .expect("serialize expected rollback turn context")
+    );
+    assert_eq!(sess.clone_history().await.raw_items(), compacted_history);
+    assert_eq!(
+        sess.previous_turn_settings().await,
+        Some(PreviousTurnSettings {
+            model: "compacted-model".to_string(),
+            realtime_active: Some(tc.realtime_active),
+        })
+    );
     assert!(sess.reference_context_item().await.is_none());
 }
 
@@ -3786,7 +3914,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
 }
 
 #[tokio::test]
-async fn record_context_updates_and_set_reference_context_item_persists_baseline_without_emitting_diffs()
+async fn record_context_updates_and_set_reference_context_item_emits_model_diff_from_stored_baseline()
  {
     let (session, previous_context) = make_session_and_context().await;
     let next_model = if previous_context.model_info.slug == "gpt-5.1" {
@@ -3827,7 +3955,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
     let update_items = session
         .build_settings_update_items(Some(&previous_context_item), &turn_context)
         .await;
-    assert_eq!(update_items, Vec::new());
+    assert!(!update_items.is_empty());
 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
@@ -3835,7 +3963,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
 
     assert_eq!(
         session.clone_history().await.raw_items().to_vec(),
-        Vec::new()
+        update_items
     );
     assert_eq!(
         serde_json::to_value(session.reference_context_item().await)

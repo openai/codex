@@ -2,6 +2,7 @@ use super::*;
 use crate::config::ConfigBuilder;
 use crate::features::Feature;
 use chrono::TimeZone;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AskForApproval;
@@ -480,9 +481,11 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
             current_date: None,
             timezone: None,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             network: None,
             model: "test-model".to_string(),
+            service_tier: None,
             personality: None,
             collaboration_mode: None,
             realtime_active: None,

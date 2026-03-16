@@ -36,30 +36,24 @@ pub(crate) struct ContextManager {
     reference_turn_context_state: ReferenceTurnContextState,
 }
 
-/// Session-owned bookkeeping for turn-context state that survives history replay,
-/// rollback, and compaction.
+/// Session-owned bookkeeping for the last stored turn-context snapshot that survives
+/// history replay, rollback, and compaction.
 ///
-/// This intentionally tracks both the latest real turn context we know about and the
-/// model-visible reference baseline, because those diverge when compaction hides the
-/// baseline without erasing the last real turn's settings.
+/// The stored `TurnContextItem` drives future settings diffs and rollback metadata.
+/// Compaction may shadow it for reference-baseline purposes without erasing the
+/// stored snapshot itself.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ReferenceTurnContextState {
-    /// The most recent real turn context we reconstructed or recorded, even if a later
-    /// compaction means the model can no longer rely on it as the active baseline.
+    /// The last stored turn-context snapshot we reconstructed or recorded.
     ///
-    /// This drives `previous_turn_settings()` and other rollback bookkeeping, which
-    /// intentionally survive compaction until a newer real turn replaces them.
-    latest_turn_context_item: Option<TurnContextItem>,
-    /// The last turn context item that established the model's reference baseline.
-    ///
-    /// Unlike `latest_turn_context_item`, this is only model-visible when
-    /// `compacted_since_model_saw_reference_turn_context` is false.
-    reference_turn_context_item: Option<TurnContextItem>,
+    /// This drives `previous_turn_settings()` and rollback bookkeeping even when
+    /// compaction has shadowed it for reference-baseline purposes.
+    turn_context_item: Option<TurnContextItem>,
     /// Whether compaction has crossed the current reference baseline without a later
-    /// reinjection or real turn context re-establishing it.
+    /// reinjection or newer stored turn context re-establishing it.
     ///
     /// When this is true, `reference_context_item()` must return `None` even if
-    /// `reference_turn_context_item` still retains the last stored baseline for replay or
+    /// `turn_context_item` still retains the last stored snapshot for replay or
     /// rollback bookkeeping.
     compacted_since_model_saw_reference_turn_context: bool,
 }
@@ -74,7 +68,7 @@ impl ReferenceTurnContextState {
     }
 
     pub(crate) fn note_compaction_during_reverse_replay(&mut self) {
-        if self.reference_turn_context_item.is_none() {
+        if self.turn_context_item.is_none() {
             self.compacted_since_model_saw_reference_turn_context = true;
         }
     }
@@ -83,39 +77,34 @@ impl ReferenceTurnContextState {
         &mut self,
         turn_context_item: &TurnContextItem,
     ) {
-        if self.latest_turn_context_item.is_none() {
-            self.latest_turn_context_item = Some(turn_context_item.clone());
-        }
-        if self.reference_turn_context_item.is_none() {
-            self.reference_turn_context_item = Some(turn_context_item.clone());
+        if self.turn_context_item.is_none() {
+            self.turn_context_item = Some(turn_context_item.clone());
         }
     }
 
-    pub(crate) fn set_latest_turn_context_item(&mut self, item: Option<TurnContextItem>) {
-        self.latest_turn_context_item = item;
+    pub(crate) fn set_turn_context_item_during_reverse_replay(
+        &mut self,
+        turn_context_item: TurnContextItem,
+    ) {
+        self.turn_context_item = Some(turn_context_item);
     }
 
     pub(crate) fn record_regular_turn_context(&mut self, turn_context_item: TurnContextItem) {
-        self.latest_turn_context_item = Some(turn_context_item.clone());
-        self.reference_turn_context_item = Some(turn_context_item);
+        self.turn_context_item = Some(turn_context_item);
         self.compacted_since_model_saw_reference_turn_context = false;
     }
 
     pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
         if let Some(item) = item {
-            self.reference_turn_context_item = Some(item);
+            self.turn_context_item = Some(item);
             self.compacted_since_model_saw_reference_turn_context = false;
         } else {
             self.note_compaction();
         }
     }
 
-    pub(crate) fn latest_turn_context_item(&self) -> Option<TurnContextItem> {
-        self.latest_turn_context_item.clone()
-    }
-
-    pub(crate) fn stored_reference_turn_context_item(&self) -> Option<TurnContextItem> {
-        self.reference_turn_context_item.clone()
+    pub(crate) fn turn_context_item(&self) -> Option<TurnContextItem> {
+        self.turn_context_item.clone()
     }
 
     pub(crate) fn compacted_since_model_saw_reference_turn_context(&self) -> bool {
@@ -123,7 +112,7 @@ impl ReferenceTurnContextState {
     }
 
     pub(crate) fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
-        self.latest_turn_context_item
+        self.turn_context_item
             .as_ref()
             .map(|turn_context_item| PreviousTurnSettings {
                 model: turn_context_item.model.clone(),
@@ -135,7 +124,7 @@ impl ReferenceTurnContextState {
         if self.compacted_since_model_saw_reference_turn_context {
             None
         } else {
-            self.reference_turn_context_item.clone()
+            self.turn_context_item.clone()
         }
     }
 }

@@ -138,6 +138,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::UndoCompletedEvent;
 use codex_protocol::protocol::UndoStartedEvent;
@@ -269,6 +270,7 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+use crate::turn_context::TurnContextSnapshot;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -5014,6 +5016,7 @@ impl ChatWidget {
         }
 
         let effective_mode = self.effective_collaboration_mode();
+        let turn_context = self.current_turn_context_snapshot();
         let collaboration_mode = if self.collaboration_modes_enabled() {
             self.active_collaboration_mask
                 .as_ref()
@@ -5096,6 +5099,7 @@ impl ChatWidget {
                 text_elements,
                 local_image_paths,
                 remote_image_urls,
+                Some(turn_context),
             ));
         } else if render_in_history && !remote_image_urls.is_empty() {
             self.last_rendered_user_message_event =
@@ -5110,6 +5114,7 @@ impl ChatWidget {
                 Vec::new(),
                 Vec::new(),
                 remote_image_urls,
+                Some(turn_context),
             ));
         }
 
@@ -5395,6 +5400,7 @@ impl ChatWidget {
                         num_turns: rollback.num_turns,
                     });
                 }
+                self.emit_thread_rollback_context_diff(&rollback);
             }
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
@@ -5543,6 +5549,7 @@ impl ChatWidget {
                 event.text_elements,
                 event.local_images,
                 remote_image_urls,
+                None,
             ));
         }
 
@@ -8080,6 +8087,147 @@ impl ChatWidget {
 
     pub(crate) fn current_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         self.effective_reasoning_effort()
+    }
+
+    fn permissions_label(
+        &self,
+        approval_policy: AskForApproval,
+        sandbox_policy: &SandboxPolicy,
+        approvals_reviewer: ApprovalsReviewer,
+    ) -> String {
+        builtin_approval_presets()
+            .into_iter()
+            .find(|preset| Self::preset_matches_current(approval_policy, sandbox_policy, preset))
+            .map(|preset| {
+                if preset.id == "auto" && approvals_reviewer == ApprovalsReviewer::GuardianSubagent
+                {
+                    "Smart Approvals".to_string()
+                } else if preset.id == "auto" {
+                    #[cfg(target_os = "windows")]
+                    {
+                        if matches!(
+                            WindowsSandboxLevel::from_config(&self.config),
+                            WindowsSandboxLevel::RestrictedToken
+                        ) {
+                            return "Default (non-admin sandbox)".to_string();
+                        }
+                    }
+                    "Default".to_string()
+                } else {
+                    preset.label.to_string()
+                }
+            })
+            .unwrap_or_else(|| {
+                let approval = approval_policy.to_string();
+                let sandbox = match sandbox_policy {
+                    SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
+                    SandboxPolicy::ReadOnly { .. } => "read-only".to_string(),
+                    SandboxPolicy::WorkspaceWrite {
+                        network_access: true,
+                        ..
+                    } => "workspace-write with network access".to_string(),
+                    SandboxPolicy::WorkspaceWrite { .. } => "workspace-write".to_string(),
+                    SandboxPolicy::ExternalSandbox { network_access } => {
+                        if network_access.is_enabled() {
+                            "external-sandbox (network access enabled)".to_string()
+                        } else {
+                            "external-sandbox".to_string()
+                        }
+                    }
+                };
+                format!("Custom ({sandbox}, {approval})")
+            })
+    }
+
+    fn model_context_label(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffortConfig>,
+        service_tier: Option<ServiceTier>,
+    ) -> String {
+        let label = Self::status_line_reasoning_effort_label(effort);
+        let fast_label = if self.should_show_fast_status(model, service_tier) {
+            " fast"
+        } else {
+            ""
+        };
+        format!("{model} {label}{fast_label}")
+    }
+
+    fn historical_turn_context_snapshot(
+        &self,
+        turn_context: &TurnContextItem,
+    ) -> TurnContextSnapshot {
+        TurnContextSnapshot {
+            permissions: Self::permissions_label(
+                self,
+                turn_context.approval_policy,
+                &turn_context.sandbox_policy,
+                turn_context.approvals_reviewer,
+            ),
+            mode: turn_context
+                .collaboration_mode
+                .as_ref()
+                .map(|mode| mode.mode.display_name())
+                .unwrap_or(ModeKind::Default.display_name())
+                .to_string(),
+            model: self.model_context_label(
+                &turn_context.model,
+                turn_context.effort,
+                turn_context.service_tier,
+            ),
+            personality: turn_context
+                .personality
+                .map(Self::personality_label)
+                .unwrap_or("Default")
+                .to_string(),
+            cwd: format_directory_display(&turn_context.cwd, None),
+        }
+    }
+
+    fn emit_thread_rollback_context_diff(
+        &self,
+        rollback: &codex_protocol::protocol::ThreadRolledBackEvent,
+    ) {
+        let Some(turn_context) = rollback.rolled_back_to_turn_context.as_ref() else {
+            return;
+        };
+        let historical_snapshot = self.historical_turn_context_snapshot(turn_context);
+        let current_snapshot = self.current_turn_context_snapshot();
+        for message in historical_snapshot.rollback_diff_messages(&current_snapshot) {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_info_event(message, None),
+            )));
+        }
+    }
+
+    pub(crate) fn current_turn_context_snapshot(&self) -> TurnContextSnapshot {
+        let permissions = self.permissions_label(
+            self.config.permissions.approval_policy.value(),
+            self.config.permissions.sandbox_policy.get(),
+            self.config.approvals_reviewer,
+        );
+        let model = self.model_context_label(
+            self.model_display_name(),
+            self.effective_reasoning_effort(),
+            self.config.service_tier,
+        );
+        let personality = self
+            .config
+            .personality
+            .filter(|_| self.config.features.enabled(Feature::Personality))
+            .filter(|_| self.current_model_supports_personality())
+            .map(Self::personality_label)
+            .unwrap_or("Default")
+            .to_string();
+
+        TurnContextSnapshot {
+            permissions,
+            mode: self.active_mode_kind().display_name().to_string(),
+            model,
+            personality,
+            cwd: format_directory_display(&self.config.cwd, None),
+        }
     }
 
     #[cfg(test)]

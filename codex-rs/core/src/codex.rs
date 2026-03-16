@@ -187,16 +187,23 @@ pub enum SteerInputError {
     EmptyInput,
 }
 
-/// Notes from the previous real user turn.
+/// Notes from the last stored turn-context snapshot that future prompt construction
+/// should diff against.
 ///
-/// Conceptually this is the same role that `previous_model` used to fill, but
-/// it can carry other prior-turn settings that matter when constructing
-/// sensible state-change diffs or full-context reinjection, such as model
-/// switches or detecting a prior `realtime_active -> false` transition.
+/// Conceptually this is the same role that `previous_model` used to fill, but it
+/// can carry other prior-turn settings that matter when constructing sensible
+/// state-change diffs or full-context reinjection, such as model switches or
+/// detecting a prior `realtime_active -> false` transition.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PreviousTurnSettings {
     pub(crate) model: String,
     pub(crate) realtime_active: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct AppliedRolloutReconstruction {
+    previous_turn_settings: Option<PreviousTurnSettings>,
+    surviving_turn_context_item: Option<TurnContextItem>,
 }
 
 use crate::exec_policy::ExecPolicyUpdateError;
@@ -941,9 +948,11 @@ impl TurnContext {
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             approval_policy: self.approval_policy.value(),
+            approvals_reviewer: self.config.approvals_reviewer,
             sandbox_policy: self.sandbox_policy.get().clone(),
             network: self.turn_context_network_item(),
             model: self.model_info.slug.clone(),
+            service_tier: self.config.service_tier,
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
             realtime_active: Some(self.realtime_active),
@@ -2076,9 +2085,10 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
-                self.apply_rollout_reconstruction(&turn_context, &rollout_items)
+                let reconstructed_rollout = self
+                    .apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
-                let previous_turn_settings = self.previous_turn_settings().await;
+                let previous_turn_settings = reconstructed_rollout.previous_turn_settings;
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr: &str = turn_context.model_info.slug.as_str();
@@ -2135,6 +2145,8 @@ impl Session {
                     .await;
                 {
                     let mut state = self.state.lock().await;
+                    // The injected initial context becomes the new baseline for future diffs,
+                    // so advance both the stored settings snapshot and the reference baseline.
                     state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
                 }
 
@@ -2153,15 +2165,25 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
-    ) {
+    ) -> AppliedRolloutReconstruction {
         let reconstructed_rollout = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
+        let previous_turn_settings = reconstructed_rollout
+            .reference_turn_context_state
+            .previous_turn_settings();
+        let surviving_turn_context_item = reconstructed_rollout
+            .reference_turn_context_state
+            .turn_context_item();
         let mut state = self.state.lock().await;
         state.replace_history_with_reference_turn_context_state(
             reconstructed_rollout.history,
             reconstructed_rollout.reference_turn_context_state,
         );
+        AppliedRolloutReconstruction {
+            previous_turn_settings,
+            surviving_turn_context_item,
+        }
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
@@ -5068,19 +5090,26 @@ mod handlers {
                 }
             };
 
-        let rollback_event = ThreadRolledBackEvent { num_turns };
-        let rollback_msg = EventMsg::ThreadRolledBack(rollback_event.clone());
+        let rollback_msg = EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns,
+            rolled_back_to_turn_context: None,
+        });
         let replay_items = initial_history
             .get_rollout_items()
             .into_iter()
             .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
             .collect::<Vec<_>>();
+        let reconstructed_rollout = sess
+            .apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
+            .await;
+        sess.recompute_token_usage(turn_context.as_ref()).await;
+        let rollback_msg = EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns,
+            rolled_back_to_turn_context: reconstructed_rollout.surviving_turn_context_item,
+        });
         sess.persist_rollout_items(&[RolloutItem::EventMsg(rollback_msg.clone())])
             .await;
         sess.flush_rollout().await;
-        sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
-            .await;
-        sess.recompute_token_usage(turn_context.as_ref()).await;
 
         sess.deliver_event_raw(Event {
             id: turn_context.sub_id.clone(),

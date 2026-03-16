@@ -1,0 +1,20 @@
+---
+source: tui/src/pager_overlay.rs
+expression: term.backend()
+---
+"/ T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / "
+"  Context changed since this turn:                                      "
+"  permissions: Default -> Smart Approvals                               "
+"  mode: Default -> Plan                                                 "
+"  model: gpt-5.4 high -> gpt-5.4 xhigh fast                             "
+"  personality: Default -> Pragmatic                                     "
+"  directory: ~/code/old -> ~/code/new                                   "
+"                                                                        "
+"                                                                        "
+"› Implement the highlighted task                                        "
+"                                                                        "
+"~                                                                       "
+"───────────────────────────────────────────────────────────────── 100% ─"
+" ↑/↓ to scroll   pgup/pgdn to page   home/end to jump                   "
+" q to quit   esc/← to edit prev   → to edit next   enter to edit message"
+"                                                                        "

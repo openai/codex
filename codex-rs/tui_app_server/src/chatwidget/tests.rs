@@ -3030,6 +3030,7 @@ async fn replayed_thread_rollback_emits_ordered_app_event() {
 
     chat.replay_initial_messages(vec![EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
         num_turns: 2,
+        rolled_back_to_turn_context: None,
     })]);
 
     let mut saw = false;
@@ -5865,7 +5866,10 @@ async fn slash_copy_state_clears_on_thread_rollback() {
     });
     chat.handle_codex_event(Event {
         id: "rollback-1".into(),
-        msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+        msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+            rolled_back_to_turn_context: None,
+        }),
     });
 
     assert_eq!(chat.last_copyable_output, None);
@@ -5949,7 +5953,10 @@ async fn slash_copy_does_not_return_stale_output_after_thread_rollback() {
 
     chat.handle_codex_event(Event {
         id: "rollback-1".into(),
-        msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
+        msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+            rolled_back_to_turn_context: None,
+        }),
     });
     let _ = drain_insert_history(&mut rx);
 

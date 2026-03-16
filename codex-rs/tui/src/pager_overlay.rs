@@ -24,6 +24,7 @@ use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::render::Insets;
+use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
@@ -429,6 +430,7 @@ pub(crate) struct TranscriptOverlay {
     /// Committed transcript cells (does not include the live tail).
     cells: Vec<Arc<dyn HistoryCell>>,
     highlight_cell: Option<usize>,
+    highlight_context_lines: Option<Vec<Line<'static>>>,
     /// Cache key for the render-only live tail appended after committed cells.
     live_tail_key: Option<LiveTailKey>,
     is_done: bool,
@@ -457,12 +459,13 @@ impl TranscriptOverlay {
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
         Self {
             view: PagerView::new(
-                Self::render_cells(&transcript_cells, None),
+                Self::render_cells(&transcript_cells, None, None),
                 "T R A N S C R I P T".to_string(),
                 usize::MAX,
             ),
             cells: transcript_cells,
             highlight_cell: None,
+            highlight_context_lines: None,
             live_tail_key: None,
             is_done: false,
         }
@@ -471,6 +474,7 @@ impl TranscriptOverlay {
     fn render_cells(
         cells: &[Arc<dyn HistoryCell>],
         highlight_cell: Option<usize>,
+        highlight_context_lines: Option<&[Line<'static>]>,
     ) -> Vec<Box<dyn Renderable>> {
         cells
             .iter()
@@ -492,6 +496,15 @@ impl TranscriptOverlay {
                         style: Style::default(),
                     })) as Box<dyn Renderable>
                 };
+                if highlight_cell == Some(i)
+                    && let Some(lines) = highlight_context_lines
+                    && !lines.is_empty()
+                {
+                    let summary = Box::new(CachedRenderable::new(
+                        Paragraph::new(Text::from(lines.to_vec())).wrap(Wrap { trim: false }),
+                    )) as Box<dyn Renderable>;
+                    cell_renderable = Box::new(ColumnRenderable::with([summary, cell_renderable]));
+                }
                 if !c.is_stream_continuation() && i > 0 {
                     cell_renderable = Box::new(InsetRenderable::new(
                         cell_renderable,
@@ -519,7 +532,11 @@ impl TranscriptOverlay {
         let had_prior_cells = !self.cells.is_empty();
         let tail_renderable = self.take_live_tail_renderable();
         self.cells.push(cell);
-        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
+        self.view.renderables = Self::render_cells(
+            &self.cells,
+            self.highlight_cell,
+            self.highlight_context_lines.as_deref(),
+        );
         if let Some(tail) = tail_renderable {
             let tail = if !had_prior_cells
                 && self
@@ -553,6 +570,7 @@ impl TranscriptOverlay {
             .is_some_and(|idx| idx >= self.cells.len())
         {
             self.highlight_cell = None;
+            self.highlight_context_lines = None;
         }
         self.rebuild_renderables();
         if follow_bottom {
@@ -608,8 +626,13 @@ impl TranscriptOverlay {
         }
     }
 
-    pub(crate) fn set_highlight_cell(&mut self, cell: Option<usize>) {
+    pub(crate) fn set_highlight_cell(
+        &mut self,
+        cell: Option<usize>,
+        context_lines: Option<Vec<Line<'static>>>,
+    ) {
         self.highlight_cell = cell;
+        self.highlight_context_lines = context_lines;
         self.rebuild_renderables();
         if let Some(idx) = self.highlight_cell {
             self.view.scroll_chunk_into_view(idx);
@@ -626,7 +649,11 @@ impl TranscriptOverlay {
 
     fn rebuild_renderables(&mut self) {
         let tail_renderable = self.take_live_tail_renderable();
-        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
+        self.view.renderables = Self::render_cells(
+            &self.cells,
+            self.highlight_cell,
+            self.highlight_context_lines.as_deref(),
+        );
         if let Some(tail) = tail_renderable {
             self.view.renderables.push(tail);
         }
@@ -809,7 +836,9 @@ mod tests {
     use crate::exec_cell::CommandOutput;
     use crate::history_cell;
     use crate::history_cell::HistoryCell;
+    use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_patch_event;
+    use crate::turn_context::TurnContextSnapshot;
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::FileChange;
     use ratatui::Terminal;
@@ -863,7 +892,7 @@ mod tests {
         let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
             lines: vec![Line::from("hello")],
         })]);
-        overlay.set_highlight_cell(Some(0));
+        overlay.set_highlight_cell(Some(0), None);
 
         // Render into a wide buffer so the footer hints aren't truncated.
         let area = Rect::new(0, 0, 120, 10);
@@ -892,6 +921,37 @@ mod tests {
             }),
         ]);
         let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
+        term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        assert_snapshot!(term.backend());
+    }
+
+    #[test]
+    fn transcript_overlay_highlighted_turn_context_snapshot() {
+        let selected = TurnContextSnapshot {
+            permissions: "Default".to_string(),
+            mode: "Default".to_string(),
+            model: "gpt-5.4 high".to_string(),
+            personality: "Default".to_string(),
+            cwd: "~/code/old".to_string(),
+        };
+        let current = TurnContextSnapshot {
+            permissions: "Smart Approvals".to_string(),
+            mode: "Plan".to_string(),
+            model: "gpt-5.4 xhigh fast".to_string(),
+            personality: "Pragmatic".to_string(),
+            cwd: "~/code/new".to_string(),
+        };
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(UserHistoryCell {
+            message: "Implement the highlighted task".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+            turn_context: Some(selected.clone()),
+        })]);
+        overlay.set_highlight_cell(Some(0), selected.diff_lines(&current));
+
+        let mut term = Terminal::new(TestBackend::new(72, 16)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());

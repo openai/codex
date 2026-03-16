@@ -123,6 +123,7 @@ mod text_formatting;
 mod theme_picker;
 mod tooltips;
 mod tui;
+mod turn_context;
 mod ui_consts;
 pub mod update_action;
 mod update_prompt;
@@ -1427,9 +1428,11 @@ mod tests {
             current_date: None,
             timezone: None,
             approval_policy: config.permissions.approval_policy.value(),
+            approvals_reviewer: config.approvals_reviewer,
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
             network: None,
             model,
+            service_tier: config.service_tier,
             personality: None,
             collaboration_mode: None,
             realtime_active: Some(false),

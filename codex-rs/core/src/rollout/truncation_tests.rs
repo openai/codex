@@ -102,6 +102,7 @@ fn truncates_rollout_from_start_applies_thread_rollback_markers() {
         RolloutItem::ResponseItem(assistant_msg("a2")),
         RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
             num_turns: 1,
+            rolled_back_to_turn_context: None,
         })),
         RolloutItem::ResponseItem(user_msg("u3")),
         RolloutItem::ResponseItem(assistant_msg("a3")),

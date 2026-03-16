@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests.rs
+assertion_line: 3146
+expression: rendered
+---
+• Permissions updated to Smart Approvals
+
+• Model changed to gpt-5.4 high for Plan mode.
+
+• Personality set to Pragmatic
+
+• Directory changed to /tmp/current

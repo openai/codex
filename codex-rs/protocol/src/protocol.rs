@@ -2457,10 +2457,15 @@ pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timezone: Option<String>,
     pub approval_policy: AskForApproval,
+    #[serde(default)]
+    pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox_policy: SandboxPolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<TurnContextNetworkItem>,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub service_tier: Option<ServiceTier>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2750,6 +2755,10 @@ pub struct UndoCompletedEvent {
 pub struct ThreadRolledBackEvent {
     /// Number of user turns that were removed from context.
     pub num_turns: u32,
+    /// Historical turn context for the turn that remains selected after rollback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub rolled_back_to_turn_context: Option<TurnContextItem>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -4253,6 +4262,8 @@ mod tests {
 
         assert_eq!(item.trace_id, None);
         assert_eq!(item.network, None);
+        assert_eq!(item.approvals_reviewer, ApprovalsReviewer::User);
+        assert_eq!(item.service_tier, None);
         Ok(())
     }
 
@@ -4265,12 +4276,14 @@ mod tests {
             current_date: None,
             timezone: None,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             network: Some(TurnContextNetworkItem {
                 allowed_domains: vec!["api.example.com".to_string()],
                 denied_domains: vec!["blocked.example.com".to_string()],
             }),
             model: "gpt-5".to_string(),
+            service_tier: None,
             personality: None,
             collaboration_mode: None,
             realtime_active: None,
@@ -4290,6 +4303,17 @@ mod tests {
                 "denied_domains": ["blocked.example.com"],
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn thread_rolled_back_event_deserializes_without_turn_context() -> Result<()> {
+        let event: ThreadRolledBackEvent = serde_json::from_value(json!({
+            "num_turns": 2,
+        }))?;
+
+        assert_eq!(event.num_turns, 2);
+        assert!(event.rolled_back_to_turn_context.is_none());
         Ok(())
     }
 

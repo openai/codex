@@ -64,38 +64,25 @@ fn merge_surviving_segment_turn_context_state(
     segment_turn_context_state: ReferenceTurnContextState,
     counts_as_user_turn: bool,
 ) {
-    // Only real user turns should backfill "previous turn settings". Standalone task turns may
-    // carry lifecycle events, but they must not become the latest real turn context.
+    let segment_is_newest_stored_turn_context =
+        reference_turn_context_state.turn_context_item().is_none();
+
+    // Only real user turns may establish the surviving stored turn-context snapshot.
+    // Standalone task turns can carry lifecycle events, but they must not become the source of
+    // future settings diffs or rollback metadata.
     if counts_as_user_turn
-        && reference_turn_context_state
-            .latest_turn_context_item()
-            .is_none()
-        && let Some(turn_context_item) = segment_turn_context_state.latest_turn_context_item()
+        && segment_is_newest_stored_turn_context
+        && let Some(turn_context_item) = segment_turn_context_state.turn_context_item()
     {
-        reference_turn_context_state.set_latest_turn_context_item(Some(turn_context_item));
+        reference_turn_context_state.set_turn_context_item_during_reverse_replay(turn_context_item);
     }
 
-    // A compaction seen in this segment hides older reference baselines, but it must not erase a
-    // newer stored reference baseline we already captured from a later surviving user turn.
-    if segment_turn_context_state.compacted_since_model_saw_reference_turn_context()
-        && reference_turn_context_state
-            .stored_reference_turn_context_item()
-            .is_none()
+    // A compaction seen in this segment shadows any older baseline, but it must not hide a newer
+    // stored turn context we already captured from a later surviving user turn.
+    if segment_is_newest_stored_turn_context
+        && segment_turn_context_state.compacted_since_model_saw_reference_turn_context()
     {
         reference_turn_context_state.note_compaction();
-    }
-
-    // The model-visible reference baseline comes from the newest surviving user turn that both
-    // carries a stored baseline and has not been hidden by a later surviving compaction.
-    if counts_as_user_turn
-        && !reference_turn_context_state.compacted_since_model_saw_reference_turn_context()
-        && reference_turn_context_state
-            .stored_reference_turn_context_item()
-            .is_none()
-        && let Some(turn_context_item) =
-            segment_turn_context_state.stored_reference_turn_context_item()
-    {
-        reference_turn_context_state.set_reference_context_item(Some(turn_context_item));
     }
 }
 
@@ -212,9 +199,7 @@ impl Session {
 
             if base_replacement_history.is_some()
                 && pending_rollback_turns == 0
-                && reference_turn_context_state
-                    .latest_turn_context_item()
-                    .is_some()
+                && reference_turn_context_state.turn_context_item().is_some()
             {
                 // At this point the replay-derived metadata and replacement-history base for the
                 // surviving tail are both fixed, so older rollout items cannot affect this result.
