@@ -55,6 +55,17 @@ function codeModeWorkerMain() {
     return JSON.parse(JSON.stringify(value));
   }
 
+  class CodeModeExitSignal extends Error {
+    constructor() {
+      super('code mode exit');
+      this.name = 'CodeModeExitSignal';
+    }
+  }
+
+  function isCodeModeExitSignal(error) {
+    return error instanceof CodeModeExitSignal;
+  }
+
   function createToolCaller() {
     let nextId = 0;
     const pending = new Map();
@@ -268,8 +279,12 @@ function codeModeWorkerMain() {
       });
       return text;
     };
+    const exit = () => {
+      throw new CodeModeExitSignal();
+    };
 
     return Object.freeze({
+      exit,
       image,
       load,
       notify,
@@ -283,8 +298,19 @@ function codeModeWorkerMain() {
 
   function createCodeModeModule(context, helpers) {
     return new SyntheticModule(
-      ['image', 'load', 'notify', 'output_text', 'output_image', 'store', 'text', 'yield_control'],
+      [
+        'exit',
+        'image',
+        'load',
+        'notify',
+        'output_text',
+        'output_image',
+        'store',
+        'text',
+        'yield_control',
+      ],
       function initCodeModeModule() {
+        this.setExport('exit', helpers.exit);
         this.setExport('image', helpers.image);
         this.setExport('load', helpers.load);
         this.setExport('notify', helpers.notify);
@@ -301,6 +327,7 @@ function codeModeWorkerMain() {
   function createBridgeRuntime(callTool, enabledTools, helpers) {
     return Object.freeze({
       ALL_TOOLS: createAllToolsMetadata(enabledTools),
+      exit: helpers.exit,
       image: helpers.image,
       load: helpers.load,
       notify: helpers.notify,
@@ -460,6 +487,13 @@ function codeModeWorkerMain() {
         stored_values: state.storedValues,
       });
     } catch (error) {
+      if (isCodeModeExitSignal(error)) {
+        parentPort.postMessage({
+          type: 'result',
+          stored_values: state.storedValues,
+        });
+        return;
+      }
       parentPort.postMessage({
         type: 'result',
         stored_values: state.storedValues,
