@@ -156,8 +156,8 @@ impl AppLinkView {
             target.server_name.clone(),
             target.request_id.clone(),
             decision,
-            None,
-            None,
+            /*content*/ None,
+            /*meta*/ None,
         );
     }
 
@@ -505,7 +505,7 @@ impl crate::render::renderable::Renderable for AppLinkView {
         ])
         .areas(area);
 
-        let inner = content_area.inset(Insets::vh(1, 2));
+        let inner = content_area.inset(Insets::vh(/*v*/ 1, /*h*/ 2));
         let content_width = inner.width.max(1);
         let lines = self.content_lines(content_width);
         Paragraph::new(lines)

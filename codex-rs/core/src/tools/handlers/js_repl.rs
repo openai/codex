@@ -63,9 +63,9 @@ async fn emit_js_repl_exec_begin(
         vec!["js_repl".to_string()],
         turn.cwd.clone(),
         ExecCommandSource::Agent,
-        false,
+        /*freeform*/ false,
     );
-    let ctx = ToolEventCtx::new(session, turn, call_id, None);
+    let ctx = ToolEventCtx::new(session, turn, call_id, /*turn_diff_tracker*/ None);
     emitter.emit(ctx, ToolEventStage::Begin).await;
 }
 
@@ -82,9 +82,9 @@ async fn emit_js_repl_exec_end(
         vec!["js_repl".to_string()],
         turn.cwd.clone(),
         ExecCommandSource::Agent,
-        false,
+        /*freeform*/ false,
     );
-    let ctx = ToolEventCtx::new(session, turn, call_id, None);
+    let ctx = ToolEventCtx::new(session, turn, call_id, /*turn_diff_tracker*/ None);
     let stage = if error.is_some() {
         ToolEventStage::Failure(ToolEventFailure::Output(exec_output))
     } else {
@@ -169,7 +169,7 @@ impl ToolHandler for JsReplHandler {
             turn.as_ref(),
             &call_id,
             &content,
-            None,
+            /*error*/ None,
             started_at.elapsed(),
         )
         .await;

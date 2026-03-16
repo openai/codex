@@ -60,7 +60,7 @@ impl ExternalAgentConfigService {
     ) -> io::Result<Vec<ExternalAgentConfigMigrationItem>> {
         let mut items = Vec::new();
         if params.include_home {
-            self.detect_migrations(None, &mut items)?;
+            self.detect_migrations(/*repo_root*/ None, &mut items)?;
         }
 
         for cwd in params.cwds.as_deref().unwrap_or(&[]) {
@@ -81,7 +81,7 @@ impl ExternalAgentConfigService {
                     emit_migration_metric(
                         EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
                         ExternalAgentConfigMigrationItemType::Config,
-                        None,
+                        /*skills_count*/ None,
                     );
                 }
                 ExternalAgentConfigMigrationItemType::Skills => {
@@ -97,7 +97,7 @@ impl ExternalAgentConfigService {
                     emit_migration_metric(
                         EXTERNAL_AGENT_CONFIG_IMPORT_METRIC,
                         ExternalAgentConfigMigrationItemType::AgentsMd,
-                        None,
+                        /*skills_count*/ None,
                     );
                 }
                 ExternalAgentConfigMigrationItemType::McpServerConfig => {}
@@ -153,7 +153,7 @@ impl ExternalAgentConfigService {
                     emit_migration_metric(
                         EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
                         ExternalAgentConfigMigrationItemType::Config,
-                        None,
+                        /*skills_count*/ None,
                     );
                 }
             }
@@ -210,7 +210,7 @@ impl ExternalAgentConfigService {
             emit_migration_metric(
                 EXTERNAL_AGENT_CONFIG_DETECT_METRIC,
                 ExternalAgentConfigMigrationItemType::AgentsMd,
-                None,
+                /*skills_count*/ None,
             );
         }
 
@@ -684,7 +684,7 @@ fn emit_migration_metric(
         .iter()
         .map(|(key, value)| (*key, value.as_str()))
         .collect::<Vec<_>>();
-    let _ = metrics.counter(metric_name, 1, &tag_refs);
+    let _ = metrics.counter(metric_name, /*inc*/ 1, &tag_refs);
 }
 
 #[cfg(test)]

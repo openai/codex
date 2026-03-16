@@ -106,7 +106,10 @@ impl AgentNavigationState {
         if let Some(entry) = self.threads.get_mut(&thread_id) {
             entry.is_closed = true;
         } else {
-            self.upsert(thread_id, None, None, true);
+            self.upsert(
+                thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+                /*is_closed*/ true,
+            );
         }
     }
 
@@ -202,7 +205,11 @@ impl AgentNavigationState {
                         is_primary,
                     )
                 })
-                .unwrap_or_else(|| format_agent_picker_item_name(None, None, is_primary)),
+                .unwrap_or_else(|| {
+                    format_agent_picker_item_name(
+                        /*agent_nickname*/ None, /*agent_role*/ None, is_primary,
+                    )
+                }),
         )
     }
 

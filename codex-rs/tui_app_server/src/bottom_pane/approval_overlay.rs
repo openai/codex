@@ -342,8 +342,8 @@ impl ApprovalOverlay {
             server_name.to_string(),
             request_id.clone(),
             decision,
-            None,
-            None,
+            /*content*/ None,
+            /*meta*/ None,
         );
     }
 

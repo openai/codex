@@ -186,7 +186,8 @@ impl SkillsToggleView {
         }
         self.complete = true;
         self.app_event_tx.send(AppEvent::ManageSkillsClosed);
-        self.app_event_tx.list_skills(Vec::new(), true);
+        self.app_event_tx
+            .list_skills(Vec::new(), /*force_reload*/ true);
     }
 
     fn rows_width(total_width: u16) -> u16 {
@@ -310,7 +311,7 @@ impl Renderable for SkillsToggleView {
             Constraint::Length(2),
             Constraint::Length(rows_height),
         ])
-        .areas(content_area.inset(Insets::vh(1, 2)));
+        .areas(content_area.inset(Insets::vh(/*v*/ 1, /*h*/ 2)));
 
         self.header.render(header_area, buf);
 

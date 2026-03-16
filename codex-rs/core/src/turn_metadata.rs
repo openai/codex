@@ -104,7 +104,7 @@ pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Op
     }
 
     build_turn_metadata_bag(
-        None,
+        /*turn_id*/ None,
         sandbox.map(ToString::to_string),
         repo_root,
         Some(WorkspaceGitMetadata {
@@ -135,7 +135,12 @@ impl TurnMetadataState {
     ) -> Self {
         let repo_root = get_git_repo_root(&cwd).map(|root| root.to_string_lossy().into_owned());
         let sandbox = Some(sandbox_tag(sandbox_policy, windows_sandbox_level).to_string());
-        let base_metadata = build_turn_metadata_bag(Some(turn_id), sandbox, None, None);
+        let base_metadata = build_turn_metadata_bag(
+            Some(turn_id),
+            sandbox,
+            /*repo_root*/ None,
+            /*workspace_git_metadata*/ None,
+        );
         let base_header = base_metadata
             .to_header_value()
             .unwrap_or_else(|| "{}".to_string());

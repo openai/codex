@@ -103,7 +103,7 @@ impl ToolHandler for Handler {
             return Err(err);
         }
         turn.session_telemetry
-            .counter("codex.multi_agent.resume", 1, &[]);
+            .counter("codex.multi_agent.resume", /*inc*/ 1, &[]);
 
         Ok(ResumeAgentResult { status })
     }
@@ -150,7 +150,11 @@ async fn try_resume_closed_agent(
         .resume_agent_from_rollout(
             config,
             receiver_thread_id,
-            thread_spawn_source(session.conversation_id, child_depth, None),
+            thread_spawn_source(
+                session.conversation_id,
+                child_depth,
+                /*agent_role*/ None,
+            ),
         )
         .await
         .map_err(|err| collab_agent_error(receiver_thread_id, err))?;

@@ -399,7 +399,7 @@ fn compute_replacements(
                 original_lines,
                 std::slice::from_ref(ctx_line),
                 line_index,
-                false,
+                /*eof*/ false,
             ) {
                 line_index = idx + 1;
             } else {
@@ -512,7 +512,7 @@ pub fn unified_diff_from_chunks(
     path: &Path,
     chunks: &[UpdateFileChunk],
 ) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
-    unified_diff_from_chunks_with_context(path, chunks, 1)
+    unified_diff_from_chunks_with_context(path, chunks, /*context*/ 1)
 }
 
 pub fn unified_diff_from_chunks_with_context(

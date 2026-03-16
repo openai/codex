@@ -92,7 +92,7 @@ rustc incremental compilation ICE locally. To override that behavior for an ad
 hoc run:
 
 ```bash
-DYLINT_RUSTFLAGS="-A uncommented_anonymous_literal_argument" \
+DYLINT_RUSTFLAGS="-A uncommented-anonymous-literal-argument" \
 CARGO_INCREMENTAL=1 \
   ./tools/argument-comment-lint/run.sh -p codex-core
 ```

@@ -101,7 +101,7 @@ impl TextArea {
     /// as submit or slash-command dispatch clear the draft through this method and still want
     /// `Ctrl+Y` to recover the user's most recent kill.
     pub fn set_text_clearing_elements(&mut self, text: &str) {
-        self.set_text_inner(text, None);
+        self.set_text_inner(text, /*elements*/ None);
     }
 
     /// Replace the visible textarea text and rebuild the provided text elements.
@@ -160,7 +160,7 @@ impl TextArea {
         if pos <= self.cursor_pos {
             self.cursor_pos += text.len();
         }
-        self.shift_elements(pos, 0, text.len());
+        self.shift_elements(pos, /*removed*/ 0, text.len());
         self.preferred_col = None;
     }
 
@@ -355,7 +355,7 @@ impl TextArea {
                 code: KeyCode::Char('h'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
-            } => self.delete_backward(1),
+            } => self.delete_backward(/*n*/ 1),
             KeyEvent {
                 code: KeyCode::Delete,
                 modifiers: KeyModifiers::ALT,
@@ -374,7 +374,7 @@ impl TextArea {
                 code: KeyCode::Char('d'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
-            } => self.delete_forward(1),
+            } => self.delete_forward(/*n*/ 1),
 
             KeyEvent {
                 code: KeyCode::Char('w'),
@@ -507,27 +507,27 @@ impl TextArea {
                 code: KeyCode::Home,
                 ..
             } => {
-                self.move_cursor_to_beginning_of_line(false);
+                self.move_cursor_to_beginning_of_line(/*move_up_at_bol*/ false);
             }
             KeyEvent {
                 code: KeyCode::Char('a'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.move_cursor_to_beginning_of_line(true);
+                self.move_cursor_to_beginning_of_line(/*move_up_at_bol*/ true);
             }
 
             KeyEvent {
                 code: KeyCode::End, ..
             } => {
-                self.move_cursor_to_end_of_line(false);
+                self.move_cursor_to_end_of_line(/*move_down_at_eol*/ false);
             }
             KeyEvent {
                 code: KeyCode::Char('e'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.move_cursor_to_end_of_line(true);
+                self.move_cursor_to_end_of_line(/*move_down_at_eol*/ true);
             }
             _o => {
                 #[cfg(feature = "debug-logs")]
@@ -999,7 +999,7 @@ impl TextArea {
     }
 
     fn add_element(&mut self, range: Range<usize>) -> u64 {
-        self.add_element_with_id(range, None)
+        self.add_element_with_id(range, /*name*/ None)
     }
 
     /// Mark an existing text range as an atomic element without changing the text.
@@ -1228,7 +1228,7 @@ impl TextArea {
             }
             start = idx;
         }
-        self.adjust_pos_out_of_elements(start, true)
+        self.adjust_pos_out_of_elements(start, /*prefer_start*/ true)
     }
 
     pub(crate) fn end_of_next_word(&self) -> usize {
@@ -1249,7 +1249,7 @@ impl TextArea {
                 break;
             }
         }
-        self.adjust_pos_out_of_elements(end, false)
+        self.adjust_pos_out_of_elements(end, /*prefer_start*/ false)
     }
 
     fn adjust_pos_out_of_elements(&self, pos: usize, prefer_start: bool) -> usize {

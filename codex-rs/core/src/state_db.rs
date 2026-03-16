@@ -350,7 +350,7 @@ pub async fn reconcile_rollout(
             items,
             "reconcile_rollout",
             new_thread_memory_mode,
-            None,
+            /*updated_at_override*/ None,
         )
         .await;
         return;
@@ -472,10 +472,10 @@ pub async fn read_repair_rollout_path(
         Some(ctx),
         rollout_path,
         default_provider.as_str(),
-        None,
+        /*builder*/ None,
         &[],
         archived_only,
-        None,
+        /*new_thread_memory_mode*/ None,
     )
     .await;
 }
