@@ -61,6 +61,7 @@ fn summary_with_prefix(summary: &str) -> String {
 
 fn context_snapshot_options() -> ContextSnapshotOptions {
     ContextSnapshotOptions::default()
+        .strip_capability_instructions()
         .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 })
 }
 
@@ -2009,6 +2010,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
                 .submit(Op::OverrideTurnContext {
                     cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
                     approval_policy: None,
+                    approvals_reviewer: None,
                     sandbox_policy: None,
                     windows_sandbox_level: None,
                     model: None,
@@ -2119,6 +2121,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_strips_incoming_model
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: Some(next_model.to_string()),

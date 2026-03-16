@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/compact_remote.rs
-assertion_line: 1843
 expression: "format_labeled_requests_snapshot(\"Remote mid-turn continuation compaction after realtime was closed before the turn: the initial second-turn request emits realtime-end instructions, but the continuation request does not restate them after compaction because the current turn already established the inactive baseline.\",\n&[(\"Second Turn Initial Request\", second_turn_request),\n(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", post_compact_request),])"
 ---
 Scenario: Remote mid-turn continuation compaction after realtime was closed before the turn: the initial second-turn request emits realtime-end instructions, but the continuation request does not restate them after compaction because the current turn already established the inactive baseline.
@@ -9,9 +8,7 @@ Scenario: Remote mid-turn continuation compaction after realtime was closed befo
 00:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <realtime_conversation>\nRealtime conversation started.\n\nYou a...
-01:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:SETUP_USER
 03:message/assistant:REMOTE_SETUP_REPLY
 04:message/developer:<realtime_conversation>\nRealtime conversation ended.\n\nSubsequ...
@@ -21,9 +18,7 @@ Scenario: Remote mid-turn continuation compaction after realtime was closed befo
 00:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <realtime_conversation>\nRealtime conversation started.\n\nYou a...
-01:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:SETUP_USER
 03:message/assistant:REMOTE_SETUP_REPLY
 04:message/developer:<realtime_conversation>\nRealtime conversation ended.\n\nSubsequ...
@@ -33,7 +28,5 @@ Scenario: Remote mid-turn continuation compaction after realtime was closed befo
 
 ## Remote Post-Compaction History Layout
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:compaction:encrypted=true

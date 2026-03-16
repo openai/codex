@@ -1,11 +1,12 @@
 use super::*;
+use crate::compact::InitialContextInjection;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
 use crate::exec::ExecParams;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
-use crate::guardian::GUARDIAN_SUBAGENT_NAME;
+use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::protocol::AskForApproval;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::FunctionToolOutput;
@@ -14,8 +15,10 @@ use codex_app_server_protocol::ConfigLayerSource;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::RuleMatch;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -232,6 +235,66 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
 }
 
 #[tokio::test]
+async fn process_compacted_history_preserves_separate_guardian_developer_message() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let guardian_policy = crate::guardian::guardian_policy_prompt();
+    let guardian_source =
+        SessionSource::SubAgent(SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()));
+
+    {
+        let mut state = session.state.lock().await;
+        state.session_configuration.session_source = guardian_source.clone();
+    }
+    turn_context.session_source = guardian_source;
+    turn_context.developer_instructions = Some(guardian_policy.clone());
+
+    let refreshed = crate::compact_remote::process_compacted_history(
+        &session,
+        &turn_context,
+        vec![
+            ResponseItem::Message {
+                id: None,
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "stale developer message".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "summary".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+        ],
+        InitialContextInjection::BeforeLastUserMessage,
+    )
+    .await;
+
+    let developer_messages = refreshed
+        .iter()
+        .filter_map(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "developer" => {
+                crate::content_items_to_text(content)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        !developer_messages
+            .iter()
+            .any(|message| message.contains("stale developer message"))
+    );
+    assert!(developer_messages.len() >= 2);
+    assert_eq!(developer_messages.last(), Some(&guardian_policy));
+}
+
+#[tokio::test]
 #[cfg(unix)]
 async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_permissions_feature() {
     let (mut session, turn_context_raw) = make_session_and_context().await;
@@ -382,7 +445,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         file_watcher,
         conversation_history: InitialHistory::New,
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
-            GUARDIAN_SUBAGENT_NAME.to_string(),
+            GUARDIAN_REVIEWER_NAME.to_string(),
         )),
         agent_control: AgentControl::default(),
         dynamic_tools: Vec::new(),

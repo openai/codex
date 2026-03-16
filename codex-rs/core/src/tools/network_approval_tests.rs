@@ -67,7 +67,7 @@ async fn session_approved_hosts_preserve_protocol_and_port_scope() {
     }
 
     let seeded = NetworkApprovalService::default();
-    source.copy_session_approved_hosts_to(&seeded).await;
+    source.sync_session_approved_hosts_to(&seeded).await;
 
     let mut copied = seeded
         .session_approved_hosts
@@ -97,6 +97,48 @@ async fn session_approved_hosts_preserve_protocol_and_port_scope() {
                 port: 8443,
             },
         ]
+    );
+}
+
+#[tokio::test]
+async fn sync_session_approved_hosts_to_replaces_existing_target_hosts() {
+    let source = NetworkApprovalService::default();
+    {
+        let mut approved_hosts = source.session_approved_hosts.lock().await;
+        approved_hosts.insert(HostApprovalKey {
+            host: "source.example.com".to_string(),
+            protocol: "https",
+            port: 443,
+        });
+    }
+
+    let target = NetworkApprovalService::default();
+    {
+        let mut approved_hosts = target.session_approved_hosts.lock().await;
+        approved_hosts.insert(HostApprovalKey {
+            host: "stale.example.com".to_string(),
+            protocol: "https",
+            port: 8443,
+        });
+    }
+
+    source.sync_session_approved_hosts_to(&target).await;
+
+    let copied = target
+        .session_approved_hosts
+        .lock()
+        .await
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        copied,
+        vec![HostApprovalKey {
+            host: "source.example.com".to_string(),
+            protocol: "https",
+            port: 443,
+        }]
     );
 }
 
@@ -154,7 +196,9 @@ fn denied_blocked_request(host: &str) -> BlockedRequest {
 #[tokio::test]
 async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
     let service = NetworkApprovalService::default();
-    service.register_call("registration-1".to_string()).await;
+    service
+        .register_call("registration-1".to_string(), "turn-1".to_string())
+        .await;
 
     service
         .record_blocked_request(denied_blocked_request("example.com"))
@@ -171,7 +215,9 @@ async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
 #[tokio::test]
 async fn blocked_request_policy_does_not_override_user_denial_outcome() {
     let service = NetworkApprovalService::default();
-    service.register_call("registration-1".to_string()).await;
+    service
+        .register_call("registration-1".to_string(), "turn-1".to_string())
+        .await;
 
     service
         .record_call_outcome("registration-1", NetworkApprovalOutcome::DeniedByUser)
@@ -189,8 +235,12 @@ async fn blocked_request_policy_does_not_override_user_denial_outcome() {
 #[tokio::test]
 async fn record_blocked_request_ignores_ambiguous_unattributed_blocked_requests() {
     let service = NetworkApprovalService::default();
-    service.register_call("registration-1".to_string()).await;
-    service.register_call("registration-2".to_string()).await;
+    service
+        .register_call("registration-1".to_string(), "turn-1".to_string())
+        .await;
+    service
+        .register_call("registration-2".to_string(), "turn-1".to_string())
+        .await;
 
     service
         .record_blocked_request(denied_blocked_request("example.com"))

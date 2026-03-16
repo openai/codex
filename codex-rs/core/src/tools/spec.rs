@@ -5,9 +5,12 @@ use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
 use crate::features::Feature;
 use crate::features::Features;
+use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::original_image_detail::can_request_original_image_detail;
+use crate::shell::Shell;
+use crate::shell::ShellType;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::code_mode::WAIT_TOOL_NAME;
 use crate::tools::code_mode::is_code_mode_nested_tool;
@@ -46,12 +49,14 @@ use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 const TOOL_SEARCH_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
@@ -203,10 +208,46 @@ pub enum ShellCommandBackendConfig {
     ZshFork,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum UnifiedExecBackendConfig {
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum UnifiedExecShellMode {
     Direct,
-    ZshFork,
+    ZshFork(ZshForkConfig),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ZshForkConfig {
+    pub(crate) shell_zsh_path: AbsolutePathBuf,
+    pub(crate) main_execve_wrapper_exe: AbsolutePathBuf,
+}
+
+impl UnifiedExecShellMode {
+    pub fn for_session(
+        shell_command_backend: ShellCommandBackendConfig,
+        user_shell: &Shell,
+        shell_zsh_path: Option<&PathBuf>,
+        main_execve_wrapper_exe: Option<&PathBuf>,
+    ) -> Self {
+        if cfg!(unix)
+            && shell_command_backend == ShellCommandBackendConfig::ZshFork
+            && matches!(user_shell.shell_type, ShellType::Zsh)
+            && let (Some(shell_zsh_path), Some(main_execve_wrapper_exe)) =
+                (shell_zsh_path, main_execve_wrapper_exe)
+            && let (Ok(shell_zsh_path), Ok(main_execve_wrapper_exe)) = (
+                AbsolutePathBuf::try_from(shell_zsh_path.as_path())
+                    .inspect_err(|e| tracing::warn!("Failed to convert shell_zsh_path `{shell_zsh_path:?}`: {e:?}")),
+                AbsolutePathBuf::try_from(main_execve_wrapper_exe.as_path()).inspect_err(|e| {
+                    tracing::warn!("Failed to convert main_execve_wrapper_exe `{main_execve_wrapper_exe:?}`: {e:?}")
+                }),
+            )
+        {
+            Self::ZshFork(ZshForkConfig {
+                shell_zsh_path,
+                main_execve_wrapper_exe,
+            })
+        } else {
+            Self::Direct
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -214,7 +255,7 @@ pub(crate) struct ToolsConfig {
     pub available_models: Vec<ModelPreset>,
     pub shell_type: ConfigShellToolType,
     shell_command_backend: ShellCommandBackendConfig,
-    pub unified_exec_backend: UnifiedExecBackendConfig,
+    pub unified_exec_shell_mode: UnifiedExecShellMode,
     pub allow_login_shell: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
@@ -300,13 +341,6 @@ impl ToolsConfig {
             } else {
                 ShellCommandBackendConfig::Classic
             };
-        let unified_exec_backend =
-            if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
-                UnifiedExecBackendConfig::ZshFork
-            } else {
-                UnifiedExecBackendConfig::Direct
-            };
-
         let unified_exec_allowed = unified_exec_allowed_in_environment(
             cfg!(target_os = "windows"),
             sandbox_policy,
@@ -353,7 +387,7 @@ impl ToolsConfig {
             available_models: available_models_ref.to_vec(),
             shell_type,
             shell_command_backend,
-            unified_exec_backend,
+            unified_exec_shell_mode: UnifiedExecShellMode::Direct,
             allow_login_shell: true,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
@@ -387,6 +421,29 @@ impl ToolsConfig {
 
     pub fn with_allow_login_shell(mut self, allow_login_shell: bool) -> Self {
         self.allow_login_shell = allow_login_shell;
+        self
+    }
+
+    pub fn with_unified_exec_shell_mode(
+        mut self,
+        unified_exec_shell_mode: UnifiedExecShellMode,
+    ) -> Self {
+        self.unified_exec_shell_mode = unified_exec_shell_mode;
+        self
+    }
+
+    pub fn with_unified_exec_shell_mode_for_session(
+        mut self,
+        user_shell: &Shell,
+        shell_zsh_path: Option<&PathBuf>,
+        main_execve_wrapper_exe: Option<&PathBuf>,
+    ) -> Self {
+        self.unified_exec_shell_mode = UnifiedExecShellMode::for_session(
+            self.shell_command_backend,
+            user_shell,
+            shell_zsh_path,
+            main_execve_wrapper_exe,
+        );
         self
     }
 
@@ -1053,7 +1110,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
 - For code-edit subtasks, decompose work so each delegated task has a disjoint write set.
 
 ### After you delegate
-- Call wait very sparingly. Only call wait when you need the result immediately for the next critical-path step and you are blocked until it returns.
+- Call wait_agent very sparingly. Only call wait_agent when you need the result immediately for the next critical-path step and you are blocked until it returns.
 - Do not redo delegated subagent tasks yourself; focus on integrating results or tackling non-overlapping work.
 - While the subagent is running in the background, do meaningful non-overlapping work immediately.
 - Do not repeatedly wait by reflex.
@@ -1290,7 +1347,7 @@ fn create_resume_agent_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "resume_agent".to_string(),
         description:
-            "Resume a previously closed agent by id so it can receive send_input and wait calls."
+            "Resume a previously closed agent by id so it can receive send_input and wait_agent calls."
                 .to_string(),
         strict: false,
         defer_loading: None,
@@ -1303,7 +1360,7 @@ fn create_resume_agent_tool() -> ToolSpec {
     })
 }
 
-fn create_wait_tool() -> ToolSpec {
+fn create_wait_agent_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
         "ids".to_string(),
@@ -1325,7 +1382,7 @@ fn create_wait_tool() -> ToolSpec {
     );
 
     ToolSpec::Function(ResponsesApiTool {
-        name: "wait".to_string(),
+        name: "wait_agent".to_string(),
         description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches a final status, a notification message will be received containing the same completed status."
             .to_string(),
         strict: false,
@@ -1617,21 +1674,57 @@ fn create_tool_search_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSpec {
             },
         ),
     ]);
-    let mut app_names = app_tools
-        .values()
-        .filter_map(|tool| tool.connector_name.clone())
-        .collect::<Vec<_>>();
-    app_names.sort();
-    app_names.dedup();
-    let app_names = app_names.join(", ");
+    let mut app_descriptions = BTreeMap::new();
+    for tool in app_tools.values() {
+        if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+            continue;
+        }
 
-    let description = if app_names.is_empty() {
-        TOOL_SEARCH_DESCRIPTION_TEMPLATE
-            .replace("({{app_names}})", "(None currently enabled)")
-            .replace("{{app_names}}", "available apps")
+        let Some(connector_name) = tool
+            .connector_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|connector_name| !connector_name.is_empty())
+        else {
+            continue;
+        };
+
+        let connector_description = tool
+            .connector_description
+            .as_deref()
+            .map(str::trim)
+            .filter(|connector_description| !connector_description.is_empty())
+            .map(str::to_string);
+
+        app_descriptions
+            .entry(connector_name.to_string())
+            .and_modify(|existing: &mut Option<String>| {
+                if existing.is_none() {
+                    *existing = connector_description.clone();
+                }
+            })
+            .or_insert(connector_description);
+    }
+
+    let app_descriptions = if app_descriptions.is_empty() {
+        "None currently enabled.".to_string()
     } else {
-        TOOL_SEARCH_DESCRIPTION_TEMPLATE.replace("{{app_names}}", app_names.as_str())
+        app_descriptions
+            .into_iter()
+            .map(
+                |(connector_name, connector_description)| match connector_description {
+                    Some(connector_description) => {
+                        format!("- {connector_name}: {connector_description}")
+                    }
+                    None => format!("- {connector_name}"),
+                },
+            )
+            .collect::<Vec<_>>()
+            .join("\n")
     };
+
+    let description =
+        TOOL_SEARCH_DESCRIPTION_TEMPLATE.replace("{{app_descriptions}}", app_descriptions.as_str());
 
     ToolSpec::ToolSearch {
         execution: "client".to_string(),
@@ -2441,7 +2534,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents::ResumeAgentHandler;
     use crate::tools::handlers::multi_agents::SendInputHandler;
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
-    use crate::tools::handlers::multi_agents::WaitHandler;
+    use crate::tools::handlers::multi_agents::WaitAgentHandler;
     use std::sync::Arc;
 
     let mut builder = ToolRegistryBuilder::new();
@@ -2835,7 +2928,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
         push_tool_spec(
             &mut builder,
-            create_wait_tool(),
+            create_wait_agent_tool(),
             false,
             config.code_mode_enabled,
         );
@@ -2848,7 +2941,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
         builder.register_handler("send_input", Arc::new(SendInputHandler));
         builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
-        builder.register_handler("wait", Arc::new(WaitHandler));
+        builder.register_handler("wait_agent", Arc::new(WaitAgentHandler));
         builder.register_handler("close_agent", Arc::new(CloseAgentHandler));
     }
 

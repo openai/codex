@@ -1,6 +1,7 @@
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
+use crate::config::types::ApprovalsReviewer;
 use crate::config::types::BundledSkillsConfig;
 use crate::config::types::FeedbackConfigToml;
 use crate::config::types::HistoryPersistence;
@@ -2800,6 +2801,123 @@ model = "gpt-5.1-codex"
     Ok(())
 }
 
+#[tokio::test]
+async fn set_feature_enabled_updates_profile() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    ConfigEditsBuilder::new(codex_home.path())
+        .with_profile(Some("dev"))
+        .set_feature_enabled("guardian_approval", true)
+        .apply()
+        .await?;
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    let parsed: ConfigToml = toml::from_str(&serialized)?;
+    let profile = parsed
+        .profiles
+        .get("dev")
+        .expect("profile should be created");
+
+    assert_eq!(
+        profile
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("guardian_approval")),
+        Some(&true),
+    );
+    assert_eq!(
+        parsed
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("guardian_approval")),
+        None,
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn set_feature_enabled_persists_default_false_feature_disable_in_profile()
+-> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    ConfigEditsBuilder::new(codex_home.path())
+        .with_profile(Some("dev"))
+        .set_feature_enabled("guardian_approval", true)
+        .apply()
+        .await?;
+
+    ConfigEditsBuilder::new(codex_home.path())
+        .with_profile(Some("dev"))
+        .set_feature_enabled("guardian_approval", false)
+        .apply()
+        .await?;
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    let parsed: ConfigToml = toml::from_str(&serialized)?;
+    let profile = parsed
+        .profiles
+        .get("dev")
+        .expect("profile should be created");
+
+    assert_eq!(
+        profile
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("guardian_approval")),
+        Some(&false),
+    );
+    assert_eq!(
+        parsed
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("guardian_approval")),
+        None,
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn set_feature_enabled_profile_disable_overrides_root_enable() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    ConfigEditsBuilder::new(codex_home.path())
+        .set_feature_enabled("guardian_approval", true)
+        .apply()
+        .await?;
+
+    ConfigEditsBuilder::new(codex_home.path())
+        .with_profile(Some("dev"))
+        .set_feature_enabled("guardian_approval", false)
+        .apply()
+        .await?;
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    let parsed: ConfigToml = toml::from_str(&serialized)?;
+    let profile = parsed
+        .profiles
+        .get("dev")
+        .expect("profile should be created");
+
+    assert_eq!(
+        parsed
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("guardian_approval")),
+        Some(&true),
+    );
+    assert_eq!(
+        profile
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("guardian_approval")),
+        Some(&false),
+    );
+
+    Ok(())
+}
+
 struct PrecedenceTestFixture {
     cwd: TempDir,
     codex_home: TempDir,
@@ -4016,7 +4134,7 @@ model_verbosity = "high"
         supports_websockets: false,
     };
     let model_provider_map = {
-        let mut model_provider_map = built_in_model_providers();
+        let mut model_provider_map = built_in_model_providers(/* openai_base_url */ None);
         model_provider_map.insert("openai-custom".to_string(), openai_custom_provider.clone());
         model_provider_map
     };
@@ -4085,6 +4203,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
                 windows_sandbox_private_desktop: true,
                 macos_seatbelt_profile_extensions: None,
             },
+            approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(None),
             user_instructions: None,
             notify: None,
@@ -4223,6 +4342,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
             windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
+        approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
         notify: None,
@@ -4359,6 +4479,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
             windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
+        approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
         notify: None,
@@ -4481,6 +4602,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
             windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
+        approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
         notify: None,
@@ -5370,6 +5492,248 @@ shell_tool = true
         "{:?}",
         config.startup_warnings
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn approvals_reviewer_defaults_to_manual_only_without_guardian_feature() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
+    Ok(())
+}
+
+#[tokio::test]
+async fn approvals_reviewer_stays_manual_only_when_guardian_feature_is_enabled()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+guardian_approval = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
+    Ok(())
+}
+
+#[tokio::test]
+async fn approvals_reviewer_can_be_set_in_config_without_guardian_approval() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"approvals_reviewer = "user"
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
+    Ok(())
+}
+
+#[tokio::test]
+async fn approvals_reviewer_can_be_set_in_profile_without_guardian_approval() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"profile = "guardian"
+
+[profiles.guardian]
+approvals_reviewer = "guardian_subagent"
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.approvals_reviewer,
+        ApprovalsReviewer::GuardianSubagent
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn smart_approvals_alias_is_migrated_to_guardian_approval() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+smart_approvals = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(config.features.enabled(Feature::GuardianApproval));
+    assert_eq!(config.features.legacy_feature_usages().count(), 0);
+    assert_eq!(
+        config.approvals_reviewer,
+        ApprovalsReviewer::GuardianSubagent
+    );
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    assert!(serialized.contains("guardian_approval = true"));
+    assert!(serialized.contains("approvals_reviewer = \"guardian_subagent\""));
+    assert!(!serialized.contains("smart_approvals"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn smart_approvals_alias_is_migrated_in_profiles() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"profile = "guardian"
+
+[profiles.guardian.features]
+smart_approvals = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(config.features.enabled(Feature::GuardianApproval));
+    assert_eq!(config.features.legacy_feature_usages().count(), 0);
+    assert_eq!(
+        config.approvals_reviewer,
+        ApprovalsReviewer::GuardianSubagent
+    );
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    assert!(serialized.contains("[profiles.guardian.features]"));
+    assert!(serialized.contains("guardian_approval = true"));
+    assert!(serialized.contains("approvals_reviewer = \"guardian_subagent\""));
+    assert!(!serialized.contains("smart_approvals"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn smart_approvals_alias_migration_preserves_disabled_profile_override() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+guardian_approval = true
+
+[profiles.guardian.features]
+smart_approvals = false
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .harness_overrides(ConfigOverrides {
+            config_profile: Some("guardian".to_string()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert!(!config.features.enabled(Feature::GuardianApproval));
+    assert_eq!(config.features.legacy_feature_usages().count(), 0);
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    assert!(serialized.contains("[profiles.guardian.features]"));
+    assert!(serialized.contains("guardian_approval = false"));
+    assert!(!serialized.contains("smart_approvals"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn smart_approvals_alias_migration_preserves_existing_approvals_reviewer()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"approvals_reviewer = "user"
+
+[features]
+smart_approvals = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(config.features.enabled(Feature::GuardianApproval));
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    assert!(serialized.contains("guardian_approval = true"));
+    assert!(serialized.contains("approvals_reviewer = \"user\""));
+    assert!(!serialized.contains("smart_approvals"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn smart_approvals_alias_migration_does_not_override_canonical_disabled_flag()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+guardian_approval = false
+smart_approvals = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(!config.features.enabled(Feature::GuardianApproval));
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    assert!(serialized.contains("guardian_approval = false"));
+    assert!(!serialized.contains("approvals_reviewer = \"guardian_subagent\""));
+    assert!(!serialized.contains("smart_approvals"));
 
     Ok(())
 }

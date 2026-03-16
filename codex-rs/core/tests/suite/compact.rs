@@ -93,7 +93,7 @@ fn json_fragment(text: &str) -> String {
 }
 
 fn non_openai_model_provider(server: &MockServer) -> ModelProviderInfo {
-    let mut provider = built_in_model_providers()["openai"].clone();
+    let mut provider = built_in_model_providers(/* openai_base_url */ None)["openai"].clone();
     provider.name = "OpenAI (test)".into();
     provider.base_url = Some(format!("{}/v1", server.uri()));
     provider
@@ -181,6 +181,7 @@ async fn assert_compaction_uses_turn_lifecycle_id(codex: &std::sync::Arc<codex_c
 }
 fn context_snapshot_options() -> ContextSnapshotOptions {
     ContextSnapshotOptions::default()
+        .strip_capability_instructions()
         .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 })
 }
 
@@ -3012,6 +3013,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
         .submit(Op::OverrideTurnContext {
             cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,

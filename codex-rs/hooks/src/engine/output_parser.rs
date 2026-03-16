@@ -17,6 +17,7 @@ pub(crate) struct StopOutput {
     pub universal: UniversalOutput,
     pub should_block: bool,
     pub reason: Option<String>,
+    pub invalid_block_reason: Option<String>,
 }
 
 use crate::schema::HookUniversalOutputWire;
@@ -37,10 +38,21 @@ pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
 
 pub(crate) fn parse_stop(stdout: &str) -> Option<StopOutput> {
     let wire: StopCommandOutputWire = parse_json(stdout)?;
+    let should_block = matches!(wire.decision, Some(StopDecisionWire::Block));
+    let invalid_block_reason = if should_block
+        && match wire.reason.as_deref() {
+            Some(reason) => reason.trim().is_empty(),
+            None => true,
+        } {
+        Some(invalid_block_message())
+    } else {
+        None
+    };
     Some(StopOutput {
         universal: UniversalOutput::from(wire.universal),
-        should_block: matches!(wire.decision, Some(StopDecisionWire::Block)),
+        should_block: should_block && invalid_block_reason.is_none(),
         reason: wire.reason,
+        invalid_block_reason,
     })
 }
 
@@ -68,4 +80,8 @@ where
         return None;
     }
     serde_json::from_value(value).ok()
+}
+
+fn invalid_block_message() -> String {
+    "Stop hook returned decision:block without a non-empty reason".to_string()
 }

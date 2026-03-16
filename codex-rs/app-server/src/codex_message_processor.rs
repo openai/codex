@@ -899,6 +899,15 @@ impl CodexMessageProcessor {
             | ClientRequest::ConfigBatchWrite { .. } => {
                 warn!("Config request reached CodexMessageProcessor unexpectedly");
             }
+            ClientRequest::FsReadFile { .. }
+            | ClientRequest::FsWriteFile { .. }
+            | ClientRequest::FsCreateDirectory { .. }
+            | ClientRequest::FsGetMetadata { .. }
+            | ClientRequest::FsReadDirectory { .. }
+            | ClientRequest::FsRemove { .. }
+            | ClientRequest::FsCopy { .. } => {
+                warn!("Filesystem request reached CodexMessageProcessor unexpectedly");
+            }
             ClientRequest::ConfigRequirementsRead { .. } => {
                 warn!("ConfigRequirementsRead request reached CodexMessageProcessor unexpectedly");
             }
@@ -1845,6 +1854,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
+            approvals_reviewer,
             sandbox,
             config,
             service_name,
@@ -1863,6 +1873,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
+            approvals_reviewer,
             sandbox,
             base_instructions,
             developer_instructions,
@@ -1908,6 +1919,10 @@ impl CodexMessageProcessor {
         {
             warn!("timed out waiting for background tasks to shut down; proceeding");
         }
+    }
+
+    pub(crate) async fn clear_all_thread_listeners(&self) {
+        self.thread_state_manager.clear_all_listeners().await;
     }
 
     pub(crate) async fn shutdown_threads(&self) {
@@ -1996,6 +2011,7 @@ impl CodexMessageProcessor {
                     name: tool.name,
                     description: tool.description,
                     input_schema: tool.input_schema,
+                    defer_loading: tool.defer_loading,
                 })
                 .collect()
         };
@@ -2086,6 +2102,7 @@ impl CodexMessageProcessor {
                     service_tier: config_snapshot.service_tier,
                     cwd: config_snapshot.cwd,
                     approval_policy: config_snapshot.approval_policy.into(),
+                    approvals_reviewer: config_snapshot.approvals_reviewer.into(),
                     sandbox: config_snapshot.sandbox_policy.into(),
                     reasoning_effort: config_snapshot.reasoning_effort,
                 };
@@ -2131,6 +2148,7 @@ impl CodexMessageProcessor {
         service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
         cwd: Option<String>,
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
+        approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
@@ -2143,6 +2161,8 @@ impl CodexMessageProcessor {
             cwd: cwd.map(PathBuf::from),
             approval_policy: approval_policy
                 .map(codex_app_server_protocol::AskForApproval::to_core),
+            approvals_reviewer: approvals_reviewer
+                .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
             sandbox_mode: sandbox.map(SandboxMode::to_core),
             codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
@@ -3350,6 +3370,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
+            approvals_reviewer,
             sandbox,
             config: request_overrides,
             base_instructions,
@@ -3383,6 +3404,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
+            approvals_reviewer,
             sandbox,
             base_instructions,
             developer_instructions,
@@ -3482,6 +3504,7 @@ impl CodexMessageProcessor {
                     service_tier: session_configured.service_tier,
                     cwd: session_configured.cwd,
                     approval_policy: session_configured.approval_policy.into(),
+                    approvals_reviewer: session_configured.approvals_reviewer.into(),
                     sandbox: session_configured.sandbox_policy.into(),
                     reasoning_effort: session_configured.reasoning_effort,
                 };
@@ -3821,6 +3844,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
+            approvals_reviewer,
             sandbox,
             config: cli_overrides,
             base_instructions,
@@ -3902,6 +3926,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
+            approvals_reviewer,
             sandbox,
             base_instructions,
             developer_instructions,
@@ -4070,6 +4095,7 @@ impl CodexMessageProcessor {
             service_tier: session_configured.service_tier,
             cwd: session_configured.cwd,
             approval_policy: session_configured.approval_policy.into(),
+            approvals_reviewer: session_configured.approvals_reviewer.into(),
             sandbox: session_configured.sandbox_policy.into(),
             reasoning_effort: session_configured.reasoning_effort,
         };
@@ -5859,6 +5885,7 @@ impl CodexMessageProcessor {
 
         let has_any_overrides = params.cwd.is_some()
             || params.approval_policy.is_some()
+            || params.approvals_reviewer.is_some()
             || params.sandbox_policy.is_some()
             || params.model.is_some()
             || params.service_tier.is_some()
@@ -5876,6 +5903,9 @@ impl CodexMessageProcessor {
                     Op::OverrideTurnContext {
                         cwd: params.cwd,
                         approval_policy: params.approval_policy.map(AskForApproval::to_core),
+                        approvals_reviewer: params
+                            .approvals_reviewer
+                            .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
                         sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
                         windows_sandbox_level: None,
                         model: params.model,
@@ -7182,6 +7212,7 @@ async fn handle_pending_thread_resume_request(
         model_provider_id,
         service_tier,
         approval_policy,
+        approvals_reviewer,
         sandbox_policy,
         cwd,
         reasoning_effort,
@@ -7194,6 +7225,7 @@ async fn handle_pending_thread_resume_request(
         service_tier,
         cwd,
         approval_policy: approval_policy.into(),
+        approvals_reviewer: approvals_reviewer.into(),
         sandbox: sandbox_policy.into(),
         reasoning_effort,
     };
@@ -7329,6 +7361,15 @@ fn collect_resume_override_mismatches(
         if requested_approval != &active_approval {
             mismatch_details.push(format!(
                 "approval_policy requested={requested_approval:?} active={active_approval:?}"
+            ));
+        }
+    }
+    if let Some(requested_review_policy) = request.approvals_reviewer.as_ref() {
+        let active_review_policy: codex_app_server_protocol::ApprovalsReviewer =
+            config_snapshot.approvals_reviewer.into();
+        if requested_review_policy != &active_review_policy {
+            mismatch_details.push(format!(
+                "approvals_reviewer requested={requested_review_policy:?} active={active_review_policy:?}"
             ));
         }
     }
@@ -8149,6 +8190,7 @@ mod tests {
             name: "my_tool".to_string(),
             description: "test".to_string(),
             input_schema: json!({"type": "null"}),
+            defer_loading: false,
         }];
         let err = validate_dynamic_tools(&tools).expect_err("invalid schema");
         assert!(err.contains("my_tool"), "unexpected error: {err}");
@@ -8161,6 +8203,7 @@ mod tests {
             description: "test".to_string(),
             // Missing `type` is common; core sanitizes these to a supported schema.
             input_schema: json!({"properties": {}}),
+            defer_loading: false,
         }];
         validate_dynamic_tools(&tools).expect("valid schema");
     }
@@ -8237,6 +8280,7 @@ mod tests {
             service_tier: Some(Some(codex_protocol::config_types::ServiceTier::Fast)),
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox: None,
             config: None,
             base_instructions: None,
@@ -8249,6 +8293,7 @@ mod tests {
             model_provider_id: "openai".to_string(),
             service_tier: Some(codex_protocol::config_types::ServiceTier::Flex),
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
             cwd: PathBuf::from("/tmp"),
             ephemeral: false,

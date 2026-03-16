@@ -52,7 +52,7 @@ pub(crate) use close_agent::Handler as CloseAgentHandler;
 pub(crate) use resume_agent::Handler as ResumeAgentHandler;
 pub(crate) use send_input::Handler as SendInputHandler;
 pub(crate) use spawn::Handler as SpawnAgentHandler;
-pub(crate) use wait::Handler as WaitHandler;
+pub(crate) use wait::Handler as WaitAgentHandler;
 
 /// Minimum wait timeout to prevent tight polling loops from burning CPU.
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
@@ -307,6 +307,8 @@ fn apply_spawn_agent_runtime_overrides(
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!("sandbox_policy is invalid: {err}"))
         })?;
+    config.permissions.file_system_sandbox_policy = turn.file_system_sandbox_policy.clone();
+    config.permissions.network_sandbox_policy = turn.network_sandbox_policy;
     Ok(())
 }
 

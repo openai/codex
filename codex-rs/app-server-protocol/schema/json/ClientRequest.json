@@ -5,6 +5,14 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "ApprovalsReviewer": {
+      "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
+      "enum": [
+        "user",
+        "guardian_subagent"
+      ],
+      "type": "string"
+    },
     "AppsListParams": {
       "description": "EXPERIMENTAL - list available apps/connectors.",
       "properties": {
@@ -498,6 +506,9 @@
     },
     "DynamicToolSpec": {
       "properties": {
+        "deferLoading": {
+          "type": "boolean"
+        },
         "description": {
           "type": "string"
         },
@@ -631,6 +642,164 @@
       "required": [
         "classification",
         "includeLogs"
+      ],
+      "type": "object"
+    },
+    "FsCopyParams": {
+      "description": "Copy a file or directory tree on the host filesystem.",
+      "properties": {
+        "destinationPath": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute destination path."
+        },
+        "recursive": {
+          "description": "Required for directory copies; ignored for file copies.",
+          "type": "boolean"
+        },
+        "sourcePath": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute source path."
+        }
+      },
+      "required": [
+        "destinationPath",
+        "sourcePath"
+      ],
+      "type": "object"
+    },
+    "FsCreateDirectoryParams": {
+      "description": "Create a directory on the host filesystem.",
+      "properties": {
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute directory path to create."
+        },
+        "recursive": {
+          "description": "Whether parent directories should also be created. Defaults to `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FsGetMetadataParams": {
+      "description": "Request metadata for an absolute path.",
+      "properties": {
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute path to inspect."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FsReadDirectoryParams": {
+      "description": "List direct child names for a directory.",
+      "properties": {
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute directory path to read."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FsReadFileParams": {
+      "description": "Read a file from the host filesystem.",
+      "properties": {
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute path to read."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FsRemoveParams": {
+      "description": "Remove a file or directory tree from the host filesystem.",
+      "properties": {
+        "force": {
+          "description": "Whether missing paths should be ignored. Defaults to `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute path to remove."
+        },
+        "recursive": {
+          "description": "Whether directory removal should recurse. Defaults to `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FsWriteFileParams": {
+      "description": "Write a file on the host filesystem.",
+      "properties": {
+        "dataBase64": {
+          "description": "File contents encoded as base64.",
+          "type": "string"
+        },
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute path to write."
+        }
+      },
+      "required": [
+        "dataBase64",
+        "path"
       ],
       "type": "object"
     },
@@ -2350,6 +2519,17 @@
             }
           ]
         },
+        "approvalsReviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override where approval requests are routed for review on this thread and subsequent turns."
+        },
         "baseInstructions": {
           "type": [
             "string",
@@ -2630,6 +2810,17 @@
             }
           ]
         },
+        "approvalsReviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override where approval requests are routed for review on this thread and subsequent turns."
+        },
         "baseInstructions": {
           "type": [
             "string",
@@ -2781,6 +2972,17 @@
             }
           ]
         },
+        "approvalsReviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override where approval requests are routed for review on this thread and subsequent turns."
+        },
         "baseInstructions": {
           "type": [
             "string",
@@ -2919,6 +3121,17 @@
             }
           ],
           "description": "Override the approval policy for this turn and subsequent turns."
+        },
+        "approvalsReviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Override where approval requests are routed for review on this turn and subsequent turns."
         },
         "cwd": {
           "description": "Override the working directory for this turn and subsequent turns.",
@@ -3668,6 +3881,174 @@
         "params"
       ],
       "title": "App/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "fs/readFile"
+          ],
+          "title": "Fs/readFileRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FsReadFileParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Fs/readFileRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "fs/writeFile"
+          ],
+          "title": "Fs/writeFileRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FsWriteFileParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Fs/writeFileRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "fs/createDirectory"
+          ],
+          "title": "Fs/createDirectoryRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FsCreateDirectoryParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Fs/createDirectoryRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "fs/getMetadata"
+          ],
+          "title": "Fs/getMetadataRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FsGetMetadataParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Fs/getMetadataRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "fs/readDirectory"
+          ],
+          "title": "Fs/readDirectoryRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FsReadDirectoryParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Fs/readDirectoryRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "fs/remove"
+          ],
+          "title": "Fs/removeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FsRemoveParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Fs/removeRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "fs/copy"
+          ],
+          "title": "Fs/copyRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FsCopyParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Fs/copyRequest",
       "type": "object"
     },
     {

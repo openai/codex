@@ -110,7 +110,7 @@ const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str = "codex.mcp.tools.cache_write
 fn sanitize_responses_api_tool_name(name: &str) -> String {
     let mut sanitized = String::with_capacity(name.len());
     for c in name.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+        if c.is_ascii_alphanumeric() || c == '_' {
             sanitized.push(c);
         } else {
             sanitized.push('_');
@@ -1014,6 +1014,7 @@ impl McpConnectionManager {
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
+        meta: Option<serde_json::Value>,
     ) -> Result<CallToolResult> {
         let client = self.client_by_name(server).await?;
         if !client.tool_filter.allows(tool) {
@@ -1024,7 +1025,7 @@ impl McpConnectionManager {
 
         let result: rmcp::model::CallToolResult = client
             .client
-            .call_tool(tool.to_string(), arguments, client.tool_timeout)
+            .call_tool(tool.to_string(), arguments, meta, client.tool_timeout)
             .await
             .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
 

@@ -119,6 +119,11 @@ class AppToolsConfig(BaseModel):
     )
 
 
+class ApprovalsReviewer(Enum):
+    user = "user"
+    guardian_subagent = "guardian_subagent"
+
+
 class AppsDefaultConfig(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -837,6 +842,197 @@ class ForcedLoginMethod(Enum):
     api = "api"
 
 
+class FsCopyParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    destination_path: Annotated[
+        AbsolutePathBuf,
+        Field(alias="destinationPath", description="Absolute destination path."),
+    ]
+    recursive: Annotated[
+        bool | None,
+        Field(description="Required for directory copies; ignored for file copies."),
+    ] = None
+    source_path: Annotated[
+        AbsolutePathBuf, Field(alias="sourcePath", description="Absolute source path.")
+    ]
+
+
+class FsCopyResponse(BaseModel):
+    pass
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+
+
+class FsCreateDirectoryParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    path: Annotated[
+        AbsolutePathBuf, Field(description="Absolute directory path to create.")
+    ]
+    recursive: Annotated[
+        bool | None,
+        Field(
+            description="Whether parent directories should also be created. Defaults to `true`."
+        ),
+    ] = None
+
+
+class FsCreateDirectoryResponse(BaseModel):
+    pass
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+
+
+class FsGetMetadataParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    path: Annotated[AbsolutePathBuf, Field(description="Absolute path to inspect.")]
+
+
+class FsGetMetadataResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    created_at_ms: Annotated[
+        int,
+        Field(
+            alias="createdAtMs",
+            description="File creation time in Unix milliseconds when available, otherwise `0`.",
+        ),
+    ]
+    is_directory: Annotated[
+        bool,
+        Field(
+            alias="isDirectory",
+            description="Whether the path currently resolves to a directory.",
+        ),
+    ]
+    is_file: Annotated[
+        bool,
+        Field(
+            alias="isFile",
+            description="Whether the path currently resolves to a regular file.",
+        ),
+    ]
+    modified_at_ms: Annotated[
+        int,
+        Field(
+            alias="modifiedAtMs",
+            description="File modification time in Unix milliseconds when available, otherwise `0`.",
+        ),
+    ]
+
+
+class FsReadDirectoryEntry(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    file_name: Annotated[
+        str,
+        Field(
+            alias="fileName",
+            description="Direct child entry name only, not an absolute or relative path.",
+        ),
+    ]
+    is_directory: Annotated[
+        bool,
+        Field(
+            alias="isDirectory",
+            description="Whether this entry resolves to a directory.",
+        ),
+    ]
+    is_file: Annotated[
+        bool,
+        Field(
+            alias="isFile", description="Whether this entry resolves to a regular file."
+        ),
+    ]
+
+
+class FsReadDirectoryParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    path: Annotated[
+        AbsolutePathBuf, Field(description="Absolute directory path to read.")
+    ]
+
+
+class FsReadDirectoryResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    entries: Annotated[
+        list[FsReadDirectoryEntry],
+        Field(description="Direct child entries in the requested directory."),
+    ]
+
+
+class FsReadFileParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    path: Annotated[AbsolutePathBuf, Field(description="Absolute path to read.")]
+
+
+class FsReadFileResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    data_base64: Annotated[
+        str, Field(alias="dataBase64", description="File contents encoded as base64.")
+    ]
+
+
+class FsRemoveParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    force: Annotated[
+        bool | None,
+        Field(
+            description="Whether missing paths should be ignored. Defaults to `true`."
+        ),
+    ] = None
+    path: Annotated[AbsolutePathBuf, Field(description="Absolute path to remove.")]
+    recursive: Annotated[
+        bool | None,
+        Field(
+            description="Whether directory removal should recurse. Defaults to `true`."
+        ),
+    ] = None
+
+
+class FsRemoveResponse(BaseModel):
+    pass
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+
+
+class FsWriteFileParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    data_base64: Annotated[
+        str, Field(alias="dataBase64", description="File contents encoded as base64.")
+    ]
+    path: Annotated[AbsolutePathBuf, Field(description="Absolute path to write.")]
+
+
+class FsWriteFileResponse(BaseModel):
+    pass
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+
+
 class InputTextFunctionCallOutputContentItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -920,6 +1116,19 @@ class GitInfo(BaseModel):
     branch: str | None = None
     origin_url: Annotated[str | None, Field(alias="originUrl")] = None
     sha: str | None = None
+
+
+class GuardianApprovalReviewStatus(Enum):
+    in_progress = "inProgress"
+    approved = "approved"
+    denied = "denied"
+    aborted = "aborted"
+
+
+class GuardianRiskLevel(Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
 
 
 class HazelnutScope(Enum):
@@ -2534,6 +2743,13 @@ class ThreadForkParams(BaseModel):
     approval_policy: Annotated[AskForApproval | None, Field(alias="approvalPolicy")] = (
         None
     )
+    approvals_reviewer: Annotated[
+        ApprovalsReviewer | None,
+        Field(
+            alias="approvalsReviewer",
+            description="Override where approval requests are routed for review on this thread and subsequent turns.",
+        ),
+    ] = None
     base_instructions: Annotated[str | None, Field(alias="baseInstructions")] = None
     config: dict[str, Any] | None = None
     cwd: str | None = None
@@ -2880,6 +3096,13 @@ class ThreadResumeParams(BaseModel):
     approval_policy: Annotated[AskForApproval | None, Field(alias="approvalPolicy")] = (
         None
     )
+    approvals_reviewer: Annotated[
+        ApprovalsReviewer | None,
+        Field(
+            alias="approvalsReviewer",
+            description="Override where approval requests are routed for review on this thread and subsequent turns.",
+        ),
+    ] = None
     base_instructions: Annotated[str | None, Field(alias="baseInstructions")] = None
     config: dict[str, Any] | None = None
     cwd: str | None = None
@@ -2952,6 +3175,13 @@ class ThreadStartParams(BaseModel):
     approval_policy: Annotated[AskForApproval | None, Field(alias="approvalPolicy")] = (
         None
     )
+    approvals_reviewer: Annotated[
+        ApprovalsReviewer | None,
+        Field(
+            alias="approvalsReviewer",
+            description="Override where approval requests are routed for review on this thread and subsequent turns.",
+        ),
+    ] = None
     base_instructions: Annotated[str | None, Field(alias="baseInstructions")] = None
     config: dict[str, Any] | None = None
     cwd: str | None = None
@@ -3592,6 +3822,75 @@ class AppListRequest(BaseModel):
     params: AppsListParams
 
 
+class FsReadFileRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["fs/readFile"], Field(title="Fs/readFileRequestMethod")]
+    params: FsReadFileParams
+
+
+class FsWriteFileRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["fs/writeFile"], Field(title="Fs/writeFileRequestMethod")]
+    params: FsWriteFileParams
+
+
+class FsCreateDirectoryRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["fs/createDirectory"], Field(title="Fs/createDirectoryRequestMethod")
+    ]
+    params: FsCreateDirectoryParams
+
+
+class FsGetMetadataRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["fs/getMetadata"], Field(title="Fs/getMetadataRequestMethod")
+    ]
+    params: FsGetMetadataParams
+
+
+class FsReadDirectoryRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["fs/readDirectory"], Field(title="Fs/readDirectoryRequestMethod")
+    ]
+    params: FsReadDirectoryParams
+
+
+class FsRemoveRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["fs/remove"], Field(title="Fs/removeRequestMethod")]
+    params: FsRemoveParams
+
+
+class FsCopyRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["fs/copy"], Field(title="Fs/copyRequestMethod")]
+    params: FsCopyParams
+
+
 class SkillsConfigWriteRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -4222,6 +4521,16 @@ class GetAccountResponse(BaseModel):
     requires_openai_auth: Annotated[bool, Field(alias="requiresOpenaiAuth")]
 
 
+class GuardianApprovalReview(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    rationale: str | None = None
+    risk_level: Annotated[GuardianRiskLevel | None, Field(alias="riskLevel")] = None
+    risk_score: Annotated[int | None, Field(alias="riskScore", ge=0)] = None
+    status: GuardianApprovalReviewStatus
+
+
 class HookOutputEntry(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -4256,6 +4565,28 @@ class HookStartedNotification(BaseModel):
     run: HookRunSummary
     thread_id: Annotated[str, Field(alias="threadId")]
     turn_id: Annotated[str | None, Field(alias="turnId")] = None
+
+
+class ItemGuardianApprovalReviewCompletedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    action: Any | None = None
+    review: GuardianApprovalReview
+    target_item_id: Annotated[str, Field(alias="targetItemId")]
+    thread_id: Annotated[str, Field(alias="threadId")]
+    turn_id: Annotated[str, Field(alias="turnId")]
+
+
+class ItemGuardianApprovalReviewStartedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    action: Any | None = None
+    review: GuardianApprovalReview
+    target_item_id: Annotated[str, Field(alias="targetItemId")]
+    thread_id: Annotated[str, Field(alias="threadId")]
+    turn_id: Annotated[str, Field(alias="turnId")]
 
 
 class McpServerStatus(BaseModel):
@@ -4478,6 +4809,28 @@ class TurnDiffUpdatedServerNotification(BaseModel):
         Literal["turn/diff/updated"], Field(title="Turn/diff/updatedNotificationMethod")
     ]
     params: TurnDiffUpdatedNotification
+
+
+class ItemAutoApprovalReviewStartedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Annotated[
+        Literal["item/autoApprovalReview/started"],
+        Field(title="Item/autoApprovalReview/startedNotificationMethod"),
+    ]
+    params: ItemGuardianApprovalReviewStartedNotification
+
+
+class ItemAutoApprovalReviewCompletedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    method: Annotated[
+        Literal["item/autoApprovalReview/completed"],
+        Field(title="Item/autoApprovalReview/completedNotificationMethod"),
+    ]
+    params: ItemGuardianApprovalReviewCompletedNotification
 
 
 class CommandExecOutputDeltaServerNotification(BaseModel):
@@ -4942,6 +5295,13 @@ class TurnStartParams(BaseModel):
             description="Override the approval policy for this turn and subsequent turns.",
         ),
     ] = None
+    approvals_reviewer: Annotated[
+        ApprovalsReviewer | None,
+        Field(
+            alias="approvalsReviewer",
+            description="Override where approval requests are routed for review on this turn and subsequent turns.",
+        ),
+    ] = None
     cwd: Annotated[
         str | None,
         Field(
@@ -5304,6 +5664,12 @@ class ProfileV2(BaseModel):
         populate_by_name=True,
     )
     approval_policy: AskForApproval | None = None
+    approvals_reviewer: Annotated[
+        ApprovalsReviewer | None,
+        Field(
+            description="[UNSTABLE] Optional profile-level override for where approval requests are routed for review. If omitted, the enclosing config default is used."
+        ),
+    ] = None
     chatgpt_base_url: str | None = None
     model: str | None = None
     model_provider: str | None = None
@@ -5605,6 +5971,13 @@ class ThreadForkResponse(BaseModel):
         populate_by_name=True,
     )
     approval_policy: Annotated[AskForApproval, Field(alias="approvalPolicy")]
+    approvals_reviewer: Annotated[
+        ApprovalsReviewer,
+        Field(
+            alias="approvalsReviewer",
+            description="Reviewer currently used for approval requests on this thread.",
+        ),
+    ]
     cwd: str
     model: str
     model_provider: Annotated[str, Field(alias="modelProvider")]
@@ -5649,6 +6022,13 @@ class ThreadResumeResponse(BaseModel):
         populate_by_name=True,
     )
     approval_policy: Annotated[AskForApproval, Field(alias="approvalPolicy")]
+    approvals_reviewer: Annotated[
+        ApprovalsReviewer,
+        Field(
+            alias="approvalsReviewer",
+            description="Reviewer currently used for approval requests on this thread.",
+        ),
+    ]
     cwd: str
     model: str
     model_provider: Annotated[str, Field(alias="modelProvider")]
@@ -5677,6 +6057,13 @@ class ThreadStartResponse(BaseModel):
         populate_by_name=True,
     )
     approval_policy: Annotated[AskForApproval, Field(alias="approvalPolicy")]
+    approvals_reviewer: Annotated[
+        ApprovalsReviewer,
+        Field(
+            alias="approvalsReviewer",
+            description="Reviewer currently used for approval requests on this thread.",
+        ),
+    ]
     cwd: str
     model: str
     model_provider: Annotated[str, Field(alias="modelProvider")]
@@ -5747,6 +6134,13 @@ class ClientRequest(
         | SkillsRemoteListRequest
         | SkillsRemoteExportRequest
         | AppListRequest
+        | FsReadFileRequest
+        | FsWriteFileRequest
+        | FsCreateDirectoryRequest
+        | FsGetMetadataRequest
+        | FsReadDirectoryRequest
+        | FsRemoveRequest
+        | FsCopyRequest
         | SkillsConfigWriteRequest
         | PluginInstallRequest
         | PluginUninstallRequest
@@ -5803,6 +6197,13 @@ class ClientRequest(
         | SkillsRemoteListRequest
         | SkillsRemoteExportRequest
         | AppListRequest
+        | FsReadFileRequest
+        | FsWriteFileRequest
+        | FsCreateDirectoryRequest
+        | FsGetMetadataRequest
+        | FsReadDirectoryRequest
+        | FsRemoveRequest
+        | FsCopyRequest
         | SkillsConfigWriteRequest
         | PluginInstallRequest
         | PluginUninstallRequest
@@ -5846,6 +6247,12 @@ class Config(BaseModel):
     )
     analytics: AnalyticsConfig | None = None
     approval_policy: AskForApproval | None = None
+    approvals_reviewer: Annotated[
+        ApprovalsReviewer | None,
+        Field(
+            description="[UNSTABLE] Optional default for where approval requests are routed for review."
+        ),
+    ] = None
     compact_prompt: str | None = None
     developer_instructions: str | None = None
     forced_chatgpt_workspace_id: str | None = None
@@ -5914,6 +6321,8 @@ class ServerNotification(
         | TurnDiffUpdatedServerNotification
         | TurnPlanUpdatedServerNotification
         | ItemStartedServerNotification
+        | ItemAutoApprovalReviewStartedServerNotification
+        | ItemAutoApprovalReviewCompletedServerNotification
         | ItemCompletedServerNotification
         | ItemAgentMessageDeltaServerNotification
         | ItemPlanDeltaServerNotification
@@ -5966,6 +6375,8 @@ class ServerNotification(
         | TurnDiffUpdatedServerNotification
         | TurnPlanUpdatedServerNotification
         | ItemStartedServerNotification
+        | ItemAutoApprovalReviewStartedServerNotification
+        | ItemAutoApprovalReviewCompletedServerNotification
         | ItemCompletedServerNotification
         | ItemAgentMessageDeltaServerNotification
         | ItemPlanDeltaServerNotification
