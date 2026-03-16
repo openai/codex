@@ -413,7 +413,7 @@ fn run_bwrap_with_proc_fallback(
     if mount_proc
         && !preflight_proc_mount_support(
             sandbox_policy_cwd,
-            command_cwd.as_path(),
+            command_cwd,
             file_system_sandbox_policy,
             network_mode,
         )
@@ -431,7 +431,7 @@ fn run_bwrap_with_proc_fallback(
         inner,
         file_system_sandbox_policy,
         sandbox_policy_cwd,
-        command_cwd.as_path(),
+        command_cwd,
         options,
     );
     exec_vendored_bwrap(bwrap_args.args, bwrap_args.preserved_files);
