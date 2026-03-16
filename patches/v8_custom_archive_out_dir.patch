@@ -6,7 +6,7 @@
 --- a/build.rs
 +++ b/build.rs
 @@ -550,8 +550,83 @@
-  }
+   }
  }
 
 -fn static_lib_url() -> String {
@@ -122,7 +122,7 @@
      || env::var("GN_ARGS").is_ok_and(|gn_args| {
        gn_args
          .split_whitespace()
-@@ -808,7 +901,6 @@
+@@ -808,7 +899,6 @@
          println!("cargo:rustc-link-lib=dylib={stdlib}");
        }
      } else {
