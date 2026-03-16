@@ -70,6 +70,8 @@ fn apply_turn_context(metadata: &mut ThreadMetadata, turn_ctx: &TurnContextItem)
     if metadata.cwd.as_os_str().is_empty() {
         metadata.cwd = turn_ctx.cwd.clone();
     }
+    metadata.model = Some(turn_ctx.model.clone());
+    metadata.reasoning_effort = turn_ctx.effort;
     metadata.sandbox_policy = enum_to_string(&turn_ctx.sandbox_policy);
     metadata.approval_mode = enum_to_string(&turn_ctx.approval_policy);
 }
@@ -141,6 +143,7 @@ mod tests {
     use codex_protocol::config_types::ReasoningSummary;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::RolloutItem;
@@ -285,6 +288,8 @@ mod tests {
         );
 
         assert_eq!(metadata.cwd, PathBuf::from("/child/worktree"));
+        assert_eq!(metadata.model.as_deref(), Some("gpt-5"));
+        assert_eq!(metadata.reasoning_effort, None);
         assert_eq!(
             metadata.sandbox_policy,
             super::enum_to_string(&SandboxPolicy::DangerFullAccess)
@@ -293,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_context_sets_cwd_when_session_cwd_missing() {
+    fn turn_context_sets_cwd_model_and_reasoning_effort_when_session_cwd_missing() {
         let mut metadata = metadata_for_test();
         metadata.cwd = PathBuf::new();
 
@@ -312,7 +317,7 @@ mod tests {
                 personality: None,
                 collaboration_mode: None,
                 realtime_active: None,
-                effort: None,
+                effort: Some(ReasoningEffort::High),
                 summary: ReasoningSummary::Auto,
                 user_instructions: None,
                 developer_instructions: None,
@@ -323,6 +328,8 @@ mod tests {
         );
 
         assert_eq!(metadata.cwd, PathBuf::from("/fallback/workspace"));
+        assert_eq!(metadata.model.as_deref(), Some("gpt-5"));
+        assert_eq!(metadata.reasoning_effort, Some(ReasoningEffort::High));
     }
 
     fn metadata_for_test() -> ThreadMetadata {
@@ -337,6 +344,8 @@ mod tests {
             agent_nickname: None,
             agent_role: None,
             model_provider: "openai".to_string(),
+            model: None,
+            reasoning_effort: None,
             cwd: PathBuf::from("/tmp"),
             cli_version: "0.0.0".to_string(),
             title: String::new(),

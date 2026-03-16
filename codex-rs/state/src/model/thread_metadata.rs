@@ -3,6 +3,7 @@ use chrono::DateTime;
 use chrono::Timelike;
 use chrono::Utc;
 use codex_protocol::ThreadId;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
@@ -70,6 +71,10 @@ pub struct ThreadMetadata {
     pub agent_role: Option<String>,
     /// The model provider identifier.
     pub model_provider: String,
+    /// The latest observed model for the thread.
+    pub model: Option<String>,
+    /// The latest observed reasoning effort for the thread.
+    pub reasoning_effort: Option<ReasoningEffort>,
     /// The working directory for the thread.
     pub cwd: PathBuf,
     /// Version of the CLI that created the thread.
@@ -181,6 +186,8 @@ impl ThreadMetadataBuilder {
                 .model_provider
                 .clone()
                 .unwrap_or_else(|| default_provider.to_string()),
+            model: None,
+            reasoning_effort: None,
             cwd: self.cwd.clone(),
             cli_version: self.cli_version.clone().unwrap_or_default(),
             title: String::new(),
@@ -237,6 +244,12 @@ impl ThreadMetadata {
         if self.model_provider != other.model_provider {
             diffs.push("model_provider");
         }
+        if self.model != other.model {
+            diffs.push("model");
+        }
+        if self.reasoning_effort != other.reasoning_effort {
+            diffs.push("reasoning_effort");
+        }
         if self.cwd != other.cwd {
             diffs.push("cwd");
         }
@@ -288,6 +301,8 @@ pub(crate) struct ThreadRow {
     agent_nickname: Option<String>,
     agent_role: Option<String>,
     model_provider: String,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
     cwd: String,
     cli_version: String,
     title: String,
@@ -312,6 +327,8 @@ impl ThreadRow {
             agent_nickname: row.try_get("agent_nickname")?,
             agent_role: row.try_get("agent_role")?,
             model_provider: row.try_get("model_provider")?,
+            model: row.try_get("model")?,
+            reasoning_effort: row.try_get("reasoning_effort")?,
             cwd: row.try_get("cwd")?,
             cli_version: row.try_get("cli_version")?,
             title: row.try_get("title")?,
@@ -340,6 +357,8 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             agent_nickname,
             agent_role,
             model_provider,
+            model,
+            reasoning_effort,
             cwd,
             cli_version,
             title,
@@ -361,6 +380,10 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             agent_nickname,
             agent_role,
             model_provider,
+            model,
+            reasoning_effort: reasoning_effort
+                .map(|value| serde_json::from_value(serde_json::Value::String(value)))
+                .transpose()?,
             cwd: PathBuf::from(cwd),
             cli_version,
             title,
