@@ -136,6 +136,11 @@ use self::skills::request_skills_list;
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 
+/// Wraps the three app-server RPC responses that can bootstrap a primary
+/// thread, so `session_configured_from_app_server_primary_thread_response` can
+/// extract a `SessionConfiguredEvent` from any of them through a single
+/// codepath. Each variant carries the full typed response returned by the
+/// corresponding `thread/{start,resume,fork}` RPC.
 enum AppServerPrimaryThreadResponse {
     Start(ThreadStartResponse),
     Resume(ThreadResumeResponse),
@@ -1820,6 +1825,8 @@ impl App {
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
+        // A stale suppression flag from the previous thread would swallow the
+        // new primary thread's ShutdownComplete event, breaking exit.
         self.suppress_shutdown_complete = false;
         self.pending_primary_events.clear();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
@@ -1874,6 +1881,13 @@ impl App {
         Ok((widget, thread_id, session_configured))
     }
 
+    /// Resume an existing thread via the app-server `thread/resume` RPC and
+    /// return a fully-bootstrapped `ChatWidget` with its conversation history
+    /// replayed from the rollout file.
+    ///
+    /// Mirrors `build_fresh_app_server_session` but issues `thread/resume`
+    /// instead of `thread/start`, and populates `initial_messages` from the
+    /// rollout so the TUI displays the prior conversation transcript.
     async fn build_resumed_app_server_session(
         requester: InProcessAppServerRequester,
         server: Arc<ThreadManager>,
@@ -1941,6 +1955,13 @@ impl App {
         Ok((widget, thread_id, session_configured))
     }
 
+    /// Fork an existing thread via the app-server `thread/fork` RPC and return
+    /// a fully-bootstrapped `ChatWidget` with the parent thread's conversation
+    /// history replayed from the rollout file.
+    ///
+    /// Structurally identical to `build_resumed_app_server_session` except it
+    /// issues `thread/fork`, passes `ephemeral` instead of `personality`, and
+    /// the resulting thread is a new branch of the parent.
     async fn build_forked_app_server_session(
         requester: InProcessAppServerRequester,
         server: Arc<ThreadManager>,
@@ -2053,6 +2074,16 @@ impl App {
         }
     }
 
+    /// Read a rollout JSONL file and extract the `EventMsg` sequence that
+    /// represents the prior conversation, for use as `initial_messages` when
+    /// bootstrapping a resumed or forked session.
+    ///
+    /// Tries `preferred_rollout_path` first (the path the app-server thread
+    /// reports after creation, which may differ from the original if a new
+    /// rollout file was allocated). Falls back to `fallback_rollout_path`
+    /// (typically `SessionTarget::path`, the original file selected by the
+    /// user). Returns `None` if both are `None` or if the rollout cannot be
+    /// parsed — in the latter case a warning is logged.
     async fn replay_messages_from_rollout_path(
         preferred_rollout_path: Option<&Path>,
         fallback_rollout_path: Option<&Path>,

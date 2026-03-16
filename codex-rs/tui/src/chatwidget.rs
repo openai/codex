@@ -1066,6 +1066,10 @@ enum ReplayKind {
 }
 
 impl ChatWidget {
+    /// Build a widget for a thread that already exists (started, resumed, or
+    /// forked via the app-server). Session state is applied synchronously — the
+    /// widget is fully configured before it is returned, so no deferred
+    /// `SessionConfigured` event is expected from the event stream.
     pub(crate) fn new_from_existing(
         common: ChatWidgetInit,
         thread: Arc<codex_core::CodexThread>,
