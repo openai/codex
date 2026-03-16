@@ -2355,8 +2355,7 @@ impl Session {
         let skills_outcome = Arc::new(
             self.services
                 .skills_manager
-                .skills_for_cwd(&session_configuration.cwd, false)
-                .await,
+                .skills_for_config(&per_turn_config),
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
