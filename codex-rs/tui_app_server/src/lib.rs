@@ -284,7 +284,10 @@ async fn start_embedded_app_server(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AppServerTarget {
     Embedded,
-    Remote(String),
+    Remote {
+        websocket_url: String,
+        auth_token: Option<String>,
+    },
 }
 
 fn remote_addr_has_explicit_port(addr: &str, parsed: &Url) -> bool {
@@ -316,6 +319,16 @@ fn remote_addr_has_explicit_port(addr: &str, parsed: &Url) -> bool {
     host_and_port == format!("{expected_host}:{explicit_default_port}")
 }
 
+fn websocket_url_supports_auth_token(parsed: &Url) -> bool {
+    match (parsed.scheme(), parsed.host()) {
+        ("wss", Some(_)) => true,
+        ("ws", Some(url::Host::Domain(domain))) => domain.eq_ignore_ascii_case("localhost"),
+        ("ws", Some(url::Host::Ipv4(addr))) => addr.is_loopback(),
+        ("ws", Some(url::Host::Ipv6(addr))) => addr.is_loopback(),
+        _ => false,
+    }
+}
+
 pub fn normalize_remote_addr(addr: &str) -> color_eyre::Result<String> {
     let parsed = match Url::parse(addr) {
         Ok(parsed) => parsed,
@@ -340,9 +353,24 @@ pub fn normalize_remote_addr(addr: &str) -> color_eyre::Result<String> {
     );
 }
 
-async fn connect_remote_app_server(websocket_url: String) -> color_eyre::Result<AppServerClient> {
+fn validate_remote_auth_token_transport(websocket_url: &str) -> color_eyre::Result<()> {
+    let parsed = Url::parse(websocket_url).map_err(color_eyre::Report::new)?;
+    if websocket_url_supports_auth_token(&parsed) {
+        return Ok(());
+    }
+
+    color_eyre::eyre::bail!(
+        "remote auth tokens require `wss://` or loopback `ws://` URLs; got `{websocket_url}`"
+    )
+}
+
+async fn connect_remote_app_server(
+    websocket_url: String,
+    auth_token: Option<String>,
+) -> color_eyre::Result<AppServerClient> {
     let app_server = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
         websocket_url,
+        auth_token,
         client_name: "codex-tui".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         experimental_api: true,
@@ -374,9 +402,10 @@ async fn start_app_server(
         )
         .await
         .map(AppServerClient::InProcess),
-        AppServerTarget::Remote(websocket_url) => {
-            connect_remote_app_server(websocket_url.clone()).await
-        }
+        AppServerTarget::Remote {
+            websocket_url,
+            auth_token,
+        } => connect_remote_app_server(websocket_url.clone(), auth_token.clone()).await,
     }
 }
 
@@ -590,11 +619,18 @@ pub async fn run_main(
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
     remote: Option<String>,
+    remote_auth_token: Option<String>,
 ) -> std::io::Result<AppExitInfo> {
     let remote_url = remote;
+    if let (Some(websocket_url), Some(_)) = (remote_url.as_deref(), remote_auth_token.as_ref()) {
+        validate_remote_auth_token_transport(websocket_url).map_err(std::io::Error::other)?;
+    }
     let app_server_target = remote_url
         .clone()
-        .map(AppServerTarget::Remote)
+        .map(|websocket_url| AppServerTarget::Remote {
+            websocket_url,
+            auth_token: remote_auth_token.clone(),
+        })
         .unwrap_or(AppServerTarget::Embedded);
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
@@ -1721,6 +1757,32 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("expected `ws://host:port` or `wss://host:port`")
+        );
+    }
+
+    #[test]
+    fn remote_auth_token_transport_accepts_loopback_ws() {
+        validate_remote_auth_token_transport("ws://127.0.0.1:4500/")
+            .expect("loopback ws should be allowed for auth tokens");
+        validate_remote_auth_token_transport("ws://localhost:4500/")
+            .expect("localhost ws should be allowed for auth tokens");
+        validate_remote_auth_token_transport("ws://[::1]:4500/")
+            .expect("ipv6 loopback ws should be allowed for auth tokens");
+    }
+
+    #[test]
+    fn remote_auth_token_transport_accepts_secure_wss() {
+        validate_remote_auth_token_transport("wss://example.com:443/")
+            .expect("wss should be allowed for auth tokens");
+    }
+
+    #[test]
+    fn remote_auth_token_transport_rejects_non_loopback_ws() {
+        let err = validate_remote_auth_token_transport("ws://example.com:4500/")
+            .expect_err("non-loopback ws should be rejected for auth tokens");
+        assert!(
+            err.to_string()
+                .contains("remote auth tokens require `wss://` or loopback `ws://` URLs")
         );
     }
 
