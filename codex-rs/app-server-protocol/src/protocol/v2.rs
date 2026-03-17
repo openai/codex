@@ -3641,14 +3641,14 @@ pub struct Turn {
 #[ts(export_to = "v2/")]
 pub struct MemoryCitation {
     pub entries: Vec<MemoryCitationEntry>,
-    pub rollout_ids: Vec<String>,
+    pub thread_ids: Vec<String>,
 }
 
 impl From<CoreMemoryCitation> for MemoryCitation {
     fn from(value: CoreMemoryCitation) -> Self {
         Self {
             entries: value.entries.into_iter().map(Into::into).collect(),
-            rollout_ids: value.rollout_ids,
+            thread_ids: value.rollout_ids,
         }
     }
 }
@@ -7544,7 +7544,7 @@ mod tests {
                         line_end: 2,
                         note: "summary".to_string(),
                     }],
-                    rollout_ids: vec!["rollout-1".to_string()],
+                    thread_ids: vec!["rollout-1".to_string()],
                 }),
             }
         );

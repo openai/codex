@@ -450,7 +450,7 @@ fn thread_item_to_core(item: ThreadItem) -> Option<TurnItem> {
                             },
                         )
                         .collect(),
-                    rollout_ids: citation.rollout_ids,
+                    rollout_ids: citation.thread_ids,
                 }
             }),
         })),

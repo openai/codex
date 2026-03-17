@@ -1059,7 +1059,7 @@ fn app_server_thread_item_to_core(item: codex_app_server_protocol::ThreadItem) -
                             },
                         )
                         .collect(),
-                    rollout_ids: citation.rollout_ids,
+                    rollout_ids: citation.thread_ids,
                 }
             }),
         })),
