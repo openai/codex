@@ -326,7 +326,7 @@ fn server_notification_thread_events(
                 msg: EventMsg::ItemStarted(ItemStartedEvent {
                     thread_id: ThreadId::from_string(&notification.thread_id).ok()?,
                     turn_id: notification.turn_id,
-                    item: thread_item_to_core(notification.item)?,
+                    item: thread_item_to_core(&notification.item)?,
                 }),
             }],
         )),
@@ -337,7 +337,7 @@ fn server_notification_thread_events(
                 msg: EventMsg::ItemCompleted(ItemCompletedEvent {
                     thread_id: ThreadId::from_string(&notification.thread_id).ok()?,
                     turn_id: notification.turn_id,
-                    item: thread_item_to_core(notification.item)?,
+                    item: thread_item_to_core(&notification.item)?,
                 }),
             }],
         )),
@@ -458,7 +458,7 @@ fn turn_snapshot_events(thread_id: ThreadId, turn: &Turn) -> Vec<Event> {
     }];
 
     events.extend(turn.items.iter().filter_map(|item| {
-        let item = thread_item_to_core(item.clone())?;
+        let item = thread_item_to_core(item)?;
         Some(Event {
             id: String::new(),
             msg: EventMsg::ItemCompleted(ItemCompletedEvent {
@@ -527,36 +527,40 @@ fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn) {
     }
 }
 
-fn thread_item_to_core(item: ThreadItem) -> Option<TurnItem> {
+fn thread_item_to_core(item: &ThreadItem) -> Option<TurnItem> {
     match item {
         ThreadItem::UserMessage { id, content } => Some(TurnItem::UserMessage(UserMessageItem {
-            id,
+            id: id.clone(),
             content: content
-                .into_iter()
+                .iter()
+                .cloned()
                 .map(codex_app_server_protocol::UserInput::into_core)
                 .collect(),
         })),
         ThreadItem::AgentMessage { id, text, phase } => {
             Some(TurnItem::AgentMessage(AgentMessageItem {
-                id,
-                content: vec![AgentMessageContent::Text { text }],
-                phase,
+                id: id.clone(),
+                content: vec![AgentMessageContent::Text { text: text.clone() }],
+                phase: phase.clone(),
             }))
         }
-        ThreadItem::Plan { id, text } => Some(TurnItem::Plan(PlanItem { id, text })),
+        ThreadItem::Plan { id, text } => Some(TurnItem::Plan(PlanItem {
+            id: id.clone(),
+            text: text.clone(),
+        })),
         ThreadItem::Reasoning {
             id,
             summary,
             content,
         } => Some(TurnItem::Reasoning(ReasoningItem {
-            id,
-            summary_text: summary,
-            raw_content: content,
+            id: id.clone(),
+            summary_text: summary.clone(),
+            raw_content: content.clone(),
         })),
         ThreadItem::WebSearch { id, query, action } => Some(TurnItem::WebSearch(WebSearchItem {
-            id,
-            query,
-            action: app_server_web_search_action_to_core(action?)?,
+            id: id.clone(),
+            query: query.clone(),
+            action: app_server_web_search_action_to_core(action.clone()?)?,
         })),
         ThreadItem::ImageGeneration {
             id,
@@ -564,14 +568,16 @@ fn thread_item_to_core(item: ThreadItem) -> Option<TurnItem> {
             revised_prompt,
             result,
         } => Some(TurnItem::ImageGeneration(ImageGenerationItem {
-            id,
-            status,
-            revised_prompt,
-            result,
+            id: id.clone(),
+            status: status.clone(),
+            revised_prompt: revised_prompt.clone(),
+            result: result.clone(),
             saved_path: None,
         })),
         ThreadItem::ContextCompaction { id } => {
-            Some(TurnItem::ContextCompaction(ContextCompactionItem { id }))
+            Some(TurnItem::ContextCompaction(ContextCompactionItem {
+                id: id.clone(),
+            }))
         }
         ThreadItem::CommandExecution { .. }
         | ThreadItem::FileChange { .. }

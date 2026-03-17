@@ -276,7 +276,7 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/start failed during TUI bootstrap")?;
-        started_thread_from_start_response(&response)
+        started_thread_from_start_response(response)
     }
 
     pub(crate) async fn resume_thread(
@@ -298,7 +298,7 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/resume failed during TUI bootstrap")?;
-        started_thread_from_resume_response(&response, show_raw_agent_reasoning)
+        started_thread_from_resume_response(response, show_raw_agent_reasoning)
     }
 
     pub(crate) async fn fork_thread(
@@ -320,7 +320,7 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/fork failed during TUI bootstrap")?;
-        started_thread_from_fork_response(&response, show_raw_agent_reasoning)
+        started_thread_from_fork_response(response, show_raw_agent_reasoning)
     }
 
     fn thread_params_mode(&self) -> ThreadParamsMode {
@@ -845,49 +845,53 @@ fn thread_cwd_from_config(config: &Config, thread_params_mode: ThreadParamsMode)
 }
 
 fn started_thread_from_start_response(
-    response: &ThreadStartResponse,
+    response: ThreadStartResponse,
 ) -> Result<AppServerStartedThread> {
-    let session_configured = session_configured_from_thread_start_response(response)
+    let session_configured = session_configured_from_thread_start_response(&response)
         .map_err(color_eyre::eyre::Report::msg)?;
     Ok(AppServerStartedThread {
-        thread: response.thread.clone(),
+        thread: response.thread,
         session_configured,
     })
 }
 
 fn started_thread_from_resume_response(
-    response: &ThreadResumeResponse,
+    response: ThreadResumeResponse,
     show_raw_agent_reasoning: bool,
 ) -> Result<AppServerStartedThread> {
-    let session_configured = session_configured_from_thread_resume_response(response)
+    let session_configured = session_configured_from_thread_resume_response(&response)
         .map_err(color_eyre::eyre::Report::msg)?;
+    let thread = response.thread;
+    let initial_messages = thread_initial_messages(
+        &session_configured.session_id,
+        &thread.turns,
+        show_raw_agent_reasoning,
+    );
     Ok(AppServerStartedThread {
-        thread: response.thread.clone(),
+        thread,
         session_configured: SessionConfiguredEvent {
-            initial_messages: thread_initial_messages(
-                &session_configured.session_id,
-                &response.thread.turns,
-                show_raw_agent_reasoning,
-            ),
+            initial_messages,
             ..session_configured
         },
     })
 }
 
 fn started_thread_from_fork_response(
-    response: &ThreadForkResponse,
+    response: ThreadForkResponse,
     show_raw_agent_reasoning: bool,
 ) -> Result<AppServerStartedThread> {
-    let session_configured = session_configured_from_thread_fork_response(response)
+    let session_configured = session_configured_from_thread_fork_response(&response)
         .map_err(color_eyre::eyre::Report::msg)?;
+    let thread = response.thread;
+    let initial_messages = thread_initial_messages(
+        &session_configured.session_id,
+        &thread.turns,
+        show_raw_agent_reasoning,
+    );
     Ok(AppServerStartedThread {
-        thread: response.thread.clone(),
+        thread,
         session_configured: SessionConfiguredEvent {
-            initial_messages: thread_initial_messages(
-                &session_configured.session_id,
-                &response.thread.turns,
-                show_raw_agent_reasoning,
-            ),
+            initial_messages,
             ..session_configured
         },
     })
@@ -1268,7 +1272,7 @@ mod tests {
         };
 
         let started =
-            started_thread_from_resume_response(&response, /*show_raw_agent_reasoning*/ false)
+            started_thread_from_resume_response(response, /*show_raw_agent_reasoning*/ false)
                 .expect("resume response should map");
         let initial_messages = started
             .session_configured
