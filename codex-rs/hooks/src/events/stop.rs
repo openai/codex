@@ -54,7 +54,7 @@ pub(crate) fn preview(
     dispatcher::select_handlers(
         handlers,
         HookEventName::Stop,
-        /*session_start_source*/ None,
+        /*matcher_input*/ None,
     )
     .into_iter()
     .map(|handler| dispatcher::running_summary(&handler))
@@ -69,7 +69,7 @@ pub(crate) async fn run(
     let matched = dispatcher::select_handlers(
         handlers,
         HookEventName::Stop,
-        /*session_start_source*/ None,
+        /*matcher_input*/ None,
     );
     if matched.is_empty() {
         return StopOutcome {

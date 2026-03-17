@@ -46,10 +46,14 @@ pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
     _request: &UserPromptSubmitRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(handlers, HookEventName::UserPromptSubmit, None)
-        .into_iter()
-        .map(|handler| dispatcher::running_summary(&handler))
-        .collect()
+    dispatcher::select_handlers(
+        handlers,
+        HookEventName::UserPromptSubmit,
+        /*matcher_input*/ None,
+    )
+    .into_iter()
+    .map(|handler| dispatcher::running_summary(&handler))
+    .collect()
 }
 
 pub(crate) async fn run(
@@ -57,7 +61,11 @@ pub(crate) async fn run(
     shell: &CommandShell,
     request: UserPromptSubmitRequest,
 ) -> UserPromptSubmitOutcome {
-    let matched = dispatcher::select_handlers(handlers, HookEventName::UserPromptSubmit, None);
+    let matched = dispatcher::select_handlers(
+        handlers,
+        HookEventName::UserPromptSubmit,
+        /*matcher_input*/ None,
+    );
     if matched.is_empty() {
         return UserPromptSubmitOutcome {
             hook_events: Vec::new(),
