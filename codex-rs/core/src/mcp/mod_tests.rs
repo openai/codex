@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
+use crate::features::Feature;
 use crate::plugins::AppConnectorId;
 use crate::plugins::PluginCapabilitySummary;
 use pretty_assertions::assert_eq;
@@ -123,67 +124,27 @@ fn tool_plugin_provenance_collects_app_and_mcp_sources() {
 }
 
 #[test]
-fn codex_apps_mcp_url_for_default_gateway_keeps_existing_paths() {
+fn codex_apps_mcp_url_for_base_url_keeps_existing_paths() {
     assert_eq!(
-        codex_apps_mcp_url_for_gateway(
-            "https://chatgpt.com/backend-api",
-            CodexAppsMcpGateway::LegacyMCPGateway
-        ),
+        codex_apps_mcp_url_for_base_url("https://chatgpt.com/backend-api"),
         "https://chatgpt.com/backend-api/wham/apps"
     );
     assert_eq!(
-        codex_apps_mcp_url_for_gateway(
-            "https://chat.openai.com",
-            CodexAppsMcpGateway::LegacyMCPGateway
-        ),
+        codex_apps_mcp_url_for_base_url("https://chat.openai.com"),
         "https://chat.openai.com/backend-api/wham/apps"
     );
     assert_eq!(
-        codex_apps_mcp_url_for_gateway(
-            "http://localhost:8080/api/codex",
-            CodexAppsMcpGateway::LegacyMCPGateway
-        ),
+        codex_apps_mcp_url_for_base_url("http://localhost:8080/api/codex"),
         "http://localhost:8080/api/codex/apps"
     );
     assert_eq!(
-        codex_apps_mcp_url_for_gateway(
-            "http://localhost:8080",
-            CodexAppsMcpGateway::LegacyMCPGateway
-        ),
+        codex_apps_mcp_url_for_base_url("http://localhost:8080"),
         "http://localhost:8080/api/codex/apps"
     );
 }
 
 #[test]
-fn codex_apps_mcp_url_for_gateway_uses_openai_connectors_gateway() {
-    let expected_url = format!("{OPENAI_CONNECTORS_MCP_BASE_URL}{OPENAI_CONNECTORS_MCP_PATH}");
-
-    assert_eq!(
-        codex_apps_mcp_url_for_gateway(
-            "https://chatgpt.com/backend-api",
-            CodexAppsMcpGateway::MCPGateway
-        ),
-        expected_url.as_str()
-    );
-    assert_eq!(
-        codex_apps_mcp_url_for_gateway("https://chat.openai.com", CodexAppsMcpGateway::MCPGateway),
-        expected_url.as_str()
-    );
-    assert_eq!(
-        codex_apps_mcp_url_for_gateway(
-            "http://localhost:8080/api/codex",
-            CodexAppsMcpGateway::MCPGateway
-        ),
-        expected_url.as_str()
-    );
-    assert_eq!(
-        codex_apps_mcp_url_for_gateway("http://localhost:8080", CodexAppsMcpGateway::MCPGateway),
-        expected_url.as_str()
-    );
-}
-
-#[test]
-fn codex_apps_mcp_url_uses_default_gateway_when_feature_is_disabled() {
+fn codex_apps_mcp_url_uses_legacy_codex_apps_path() {
     let mut config = crate::config::test_config();
     config.chatgpt_base_url = "https://chatgpt.com".to_string();
 
@@ -194,22 +155,7 @@ fn codex_apps_mcp_url_uses_default_gateway_when_feature_is_disabled() {
 }
 
 #[test]
-fn codex_apps_mcp_url_uses_openai_connectors_gateway_when_feature_is_enabled() {
-    let mut config = crate::config::test_config();
-    config.chatgpt_base_url = "https://chatgpt.com".to_string();
-    config
-        .features
-        .enable(Feature::AppsMcpGateway)
-        .expect("test config should allow apps gateway");
-
-    assert_eq!(
-        codex_apps_mcp_url(&config),
-        format!("{OPENAI_CONNECTORS_MCP_BASE_URL}{OPENAI_CONNECTORS_MCP_PATH}")
-    );
-}
-
-#[test]
-fn codex_apps_server_config_switches_gateway_with_flags() {
+fn codex_apps_server_config_uses_legacy_codex_apps_path() {
     let mut config = crate::config::test_config();
     config.chatgpt_base_url = "https://chatgpt.com".to_string();
 
@@ -231,22 +177,6 @@ fn codex_apps_server_config_switches_gateway_with_flags() {
     };
 
     assert_eq!(url, "https://chatgpt.com/backend-api/wham/apps");
-
-    config
-        .features
-        .enable(Feature::AppsMcpGateway)
-        .expect("test config should allow apps gateway");
-    servers = with_codex_apps_mcp(servers, true, None, &config);
-    let server = servers
-        .get(CODEX_APPS_MCP_SERVER_NAME)
-        .expect("codex apps should remain present when apps stays enabled");
-    let url = match &server.transport {
-        McpServerTransportConfig::StreamableHttp { url, .. } => url,
-        _ => panic!("expected streamable http transport for codex apps"),
-    };
-
-    let expected_url = format!("{OPENAI_CONNECTORS_MCP_BASE_URL}{OPENAI_CONNECTORS_MCP_PATH}");
-    assert_eq!(url, &expected_url);
 }
 
 #[tokio::test]

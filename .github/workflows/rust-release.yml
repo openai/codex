@@ -490,9 +490,10 @@ jobs:
       - name: Stage npm packages
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release_name.outputs.name }}
         run: |
           ./scripts/stage_npm_packages.py \
-            --release-version "${{ steps.release_name.outputs.name }}" \
+            --release-version "$RELEASE_VERSION" \
             --package codex \
             --package codex-responses-api-proxy \
             --package codex-sdk
@@ -561,10 +562,12 @@ jobs:
       - name: Download npm tarballs from release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
         run: |
           set -euo pipefail
-          version="${{ needs.release.outputs.version }}"
-          tag="${{ needs.release.outputs.tag }}"
+          version="$RELEASE_VERSION"
+          tag="$RELEASE_TAG"
           mkdir -p dist/npm
           patterns=(
             "codex-npm-${version}.tgz"

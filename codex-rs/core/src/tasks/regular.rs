@@ -81,7 +81,7 @@ impl SessionTask for RegularTask {
     ) -> Option<String> {
         let sess = session.clone_session();
         let run_turn_span = trace_span!("run_turn");
-        sess.set_server_reasoning_included(false).await;
+        sess.set_server_reasoning_included(/*included*/ false).await;
         let prewarmed_client_session = self.take_prewarmed_session().await;
         run_turn(
             sess,

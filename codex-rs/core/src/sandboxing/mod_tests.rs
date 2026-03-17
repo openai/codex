@@ -35,7 +35,14 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::path::Path;
 use tempfile::TempDir;
+
+#[cfg(unix)]
+fn symlink_dir(original: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(original, link)
+}
 
 #[test]
 fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
@@ -213,6 +220,41 @@ fn normalize_additional_permissions_preserves_network() {
         Some(FileSystemPermissions {
             read: Some(vec![path.clone()]),
             write: Some(vec![path]),
+        })
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn normalize_additional_permissions_canonicalizes_symlinked_write_paths() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let real_root = temp_dir.path().join("real");
+    let link_root = temp_dir.path().join("link");
+    let write_dir = real_root.join("write");
+    std::fs::create_dir_all(&write_dir).expect("create write dir");
+    symlink_dir(&real_root, &link_root).expect("create symlinked root");
+
+    let link_write_dir =
+        AbsolutePathBuf::from_absolute_path(link_root.join("write")).expect("link write dir");
+    let expected_write_dir = AbsolutePathBuf::from_absolute_path(
+        write_dir.canonicalize().expect("canonicalize write dir"),
+    )
+    .expect("absolute canonical write dir");
+
+    let permissions = normalize_additional_permissions(PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![link_write_dir]),
+        }),
+        ..Default::default()
+    })
+    .expect("permissions");
+
+    assert_eq!(
+        permissions.file_system,
+        Some(FileSystemPermissions {
+            read: Some(vec![]),
+            write: Some(vec![expected_write_dir]),
         })
     );
 }

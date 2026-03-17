@@ -56,7 +56,7 @@ pub(crate) use user_shell::UserShellCommandTask;
 pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
-const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes were terminated. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
+const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
 
 fn emit_turn_network_proxy_metric(
     session_telemetry: &SessionTelemetry,
@@ -68,7 +68,11 @@ fn emit_turn_network_proxy_metric(
     } else {
         "false"
     };
-    session_telemetry.counter(TURN_NETWORK_PROXY_METRIC, 1, &[("active", active), tmp_mem]);
+    session_telemetry.counter(
+        TURN_NETWORK_PROXY_METRIC,
+        /*inc*/ 1,
+        &[("active", active), tmp_mem],
+    );
 }
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
@@ -394,8 +398,6 @@ impl Session {
     }
 
     pub(crate) async fn cleanup_after_interrupt(&self, turn_context: &Arc<TurnContext>) {
-        self.close_unified_exec_processes().await;
-
         if let Some(manager) = turn_context.js_repl.manager_if_initialized()
             && let Err(err) = manager.interrupt_turn_exec(&turn_context.sub_id).await
         {

@@ -78,7 +78,7 @@ pub(crate) fn typed_request_span(
             .or(session.client_version.as_deref()),
     );
 
-    attach_parent_context(&span, &method, request.id(), None);
+    attach_parent_context(&span, &method, request.id(), /*parent_trace*/ None);
     span
 }
 

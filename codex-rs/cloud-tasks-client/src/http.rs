@@ -94,7 +94,9 @@ impl CloudBackend for HttpClient {
     }
 
     async fn apply_task(&self, id: TaskId, diff_override: Option<String>) -> Result<ApplyOutcome> {
-        self.apply_api().run(id, diff_override, false).await
+        self.apply_api()
+            .run(id, diff_override, /*preflight*/ false)
+            .await
     }
 
     async fn apply_task_preflight(
@@ -102,7 +104,9 @@ impl CloudBackend for HttpClient {
         id: TaskId,
         diff_override: Option<String>,
     ) -> Result<ApplyOutcome> {
-        self.apply_api().run(id, diff_override, true).await
+        self.apply_api()
+            .run(id, diff_override, /*preflight*/ true)
+            .await
     }
 
     async fn create_task(
@@ -533,8 +537,8 @@ mod api {
                 let _ = writeln!(
                     &mut log,
                     "stdout_tail=\n{}\nstderr_tail=\n{}",
-                    tail(&r.stdout, 2000),
-                    tail(&r.stderr, 2000)
+                    tail(&r.stdout, /*max*/ 2000),
+                    tail(&r.stderr, /*max*/ 2000)
                 );
                 let _ = writeln!(&mut log, "{summary}");
                 let _ = writeln!(

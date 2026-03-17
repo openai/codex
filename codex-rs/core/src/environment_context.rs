@@ -82,7 +82,14 @@ impl EnvironmentContext {
         } else {
             before_network
         };
-        EnvironmentContext::new(cwd, shell.clone(), current_date, timezone, network, None)
+        EnvironmentContext::new(
+            cwd,
+            shell.clone(),
+            current_date,
+            timezone,
+            network,
+            /*subagents*/ None,
+        )
     }
 
     pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
@@ -92,7 +99,7 @@ impl EnvironmentContext {
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
             Self::network_from_turn_context(turn_context),
-            None,
+            /*subagents*/ None,
         )
     }
 
@@ -103,7 +110,7 @@ impl EnvironmentContext {
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),
-            None,
+            /*subagents*/ None,
         )
     }
 

@@ -201,7 +201,7 @@ impl ThreadHistoryBuilder {
         let mut turn = self
             .current_turn
             .take()
-            .unwrap_or_else(|| self.new_turn(None));
+            .unwrap_or_else(|| self.new_turn(/*id*/ None));
         let id = self.next_item_id();
         let content = self.build_user_inputs(payload);
         turn.items.push(ThreadItem::UserMessage { id, content });
@@ -937,7 +937,7 @@ impl ThreadHistoryBuilder {
 
     fn ensure_turn(&mut self) -> &mut PendingTurn {
         if self.current_turn.is_none() {
-            let turn = self.new_turn(None);
+            let turn = self.new_turn(/*id*/ None);
             return self.current_turn.insert(turn);
         }
 
@@ -2408,6 +2408,74 @@ mod tests {
                     "00000000-0000-0000-0000-000000000002".into(),
                     CollabAgentState {
                         status: crate::protocol::v2::CollabAgentStatus::Running,
+                        message: None,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }
+        );
+    }
+
+    #[test]
+    fn reconstructs_interrupted_send_input_as_completed_collab_call() {
+        // `send_input(interrupt=true)` first stops the child's active turn, then redirects it with
+        // new input. The transient interrupted status should remain visible in agent state, but the
+        // collab tool call itself is still a successful redirect rather than a failed operation.
+        let sender = ThreadId::try_from("00000000-0000-0000-0000-000000000001")
+            .expect("valid sender thread id");
+        let receiver = ThreadId::try_from("00000000-0000-0000-0000-000000000002")
+            .expect("valid receiver thread id");
+        let events = vec![
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "redirect".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::CollabAgentInteractionBegin(
+                codex_protocol::protocol::CollabAgentInteractionBeginEvent {
+                    call_id: "send-1".into(),
+                    sender_thread_id: sender,
+                    receiver_thread_id: receiver,
+                    prompt: "new task".into(),
+                },
+            ),
+            EventMsg::CollabAgentInteractionEnd(
+                codex_protocol::protocol::CollabAgentInteractionEndEvent {
+                    call_id: "send-1".into(),
+                    sender_thread_id: sender,
+                    receiver_thread_id: receiver,
+                    receiver_agent_nickname: None,
+                    receiver_agent_role: None,
+                    prompt: "new task".into(),
+                    status: AgentStatus::Interrupted,
+                },
+            ),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].items.len(), 2);
+        assert_eq!(
+            turns[0].items[1],
+            ThreadItem::CollabAgentToolCall {
+                id: "send-1".into(),
+                tool: CollabAgentTool::SendInput,
+                status: CollabAgentToolCallStatus::Completed,
+                sender_thread_id: sender.to_string(),
+                receiver_thread_ids: vec![receiver.to_string()],
+                prompt: Some("new task".into()),
+                model: None,
+                reasoning_effort: None,
+                agents_states: [(
+                    receiver.to_string(),
+                    CollabAgentState {
+                        status: crate::protocol::v2::CollabAgentStatus::Interrupted,
                         message: None,
                     },
                 )]

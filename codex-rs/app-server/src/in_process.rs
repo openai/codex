@@ -390,8 +390,8 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 Arc::clone(&outbound_initialized),
                 Arc::clone(&outbound_experimental_api_enabled),
                 Arc::clone(&outbound_opted_out_notification_methods),
-                true,
-                None,
+                /*allow_legacy_notifications*/ true,
+                /*disconnect_sender*/ None,
             ),
         );
         let mut outbound_handle = tokio::spawn(async move {
@@ -484,9 +484,10 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
             }
 
             processor.clear_runtime_references();
+            processor.connection_closed(IN_PROCESS_CONNECTION_ID).await;
+            processor.clear_all_thread_listeners().await;
             processor.drain_background_tasks().await;
             processor.shutdown_threads().await;
-            processor.connection_closed(IN_PROCESS_CONNECTION_ID).await;
         });
         let mut pending_request_responses =
             HashMap::<RequestId, oneshot::Sender<PendingClientRequestResponse>>::new();

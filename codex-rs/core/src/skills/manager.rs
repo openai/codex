@@ -31,6 +31,7 @@ pub struct SkillsManager {
     codex_home: PathBuf,
     plugins_manager: Arc<PluginsManager>,
     cache_by_cwd: RwLock<HashMap<PathBuf, SkillLoadOutcome>>,
+    cache_by_config: RwLock<HashMap<ConfigSkillsCacheKey, SkillLoadOutcome>>,
 }
 
 impl SkillsManager {
@@ -43,6 +44,7 @@ impl SkillsManager {
             codex_home,
             plugins_manager,
             cache_by_cwd: RwLock::new(HashMap::new()),
+            cache_by_config: RwLock::new(HashMap::new()),
         };
         if !bundled_skills_enabled {
             // The loader caches bundled skills under `skills/.system`. Clearing that directory is
@@ -55,21 +57,25 @@ impl SkillsManager {
     }
 
     /// Load skills for an already-constructed [`Config`], avoiding any additional config-layer
-    /// loading. This also seeds the per-cwd cache for subsequent lookups.
+    /// loading.
+    ///
+    /// This path uses a cache keyed by the effective skill-relevant config state rather than just
+    /// cwd so role-local and session-local skill overrides cannot bleed across sessions that happen
+    /// to share a directory.
     pub fn skills_for_config(&self, config: &Config) -> SkillLoadOutcome {
-        let cwd = &config.cwd;
-        if let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
+        let roots = self.skill_roots_for_config(config);
+        let cache_key = config_skills_cache_key(&roots, &config.config_layer_stack);
+        if let Some(outcome) = self.cached_outcome_for_config(&cache_key) {
             return outcome;
         }
 
-        let roots = self.skill_roots_for_config(config);
         let outcome =
             finalize_skill_outcome(load_skills_from_roots(roots), &config.config_layer_stack);
-        let mut cache = match self.cache_by_cwd.write() {
-            Ok(cache) => cache,
-            Err(err) => err.into_inner(),
-        };
-        cache.insert(cwd.to_path_buf(), outcome.clone());
+        let mut cache = self
+            .cache_by_config
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.insert(cache_key, outcome.clone());
         outcome
     }
 
@@ -163,21 +169,34 @@ impl SkillsManager {
         );
         let outcome = load_skills_from_roots(roots);
         let outcome = finalize_skill_outcome(outcome, &config_layer_stack);
-        let mut cache = match self.cache_by_cwd.write() {
-            Ok(cache) => cache,
-            Err(err) => err.into_inner(),
-        };
+        let mut cache = self
+            .cache_by_cwd
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.insert(cwd.to_path_buf(), outcome.clone());
         outcome
     }
 
     pub fn clear_cache(&self) {
-        let mut cache = match self.cache_by_cwd.write() {
-            Ok(cache) => cache,
-            Err(err) => err.into_inner(),
+        let cleared_cwd = {
+            let mut cache = self
+                .cache_by_cwd
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let cleared = cache.len();
+            cache.clear();
+            cleared
         };
-        let cleared = cache.len();
-        cache.clear();
+        let cleared_config = {
+            let mut cache = self
+                .cache_by_config
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let cleared = cache.len();
+            cache.clear();
+            cleared
+        };
+        let cleared = cleared_cwd + cleared_config;
         info!("skills cache cleared ({cleared} entries)");
     }
 
@@ -187,6 +206,22 @@ impl SkillsManager {
             Err(err) => err.into_inner().get(cwd).cloned(),
         }
     }
+
+    fn cached_outcome_for_config(
+        &self,
+        cache_key: &ConfigSkillsCacheKey,
+    ) -> Option<SkillLoadOutcome> {
+        match self.cache_by_config.read() {
+            Ok(cache) => cache.get(cache_key).cloned(),
+            Err(err) => err.into_inner().get(cache_key).cloned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ConfigSkillsCacheKey {
+    roots: Vec<(PathBuf, u8)>,
+    disabled_paths: Vec<PathBuf>,
 }
 
 pub(crate) fn bundled_skills_enabled_from_stack(
@@ -214,11 +249,11 @@ pub(crate) fn bundled_skills_enabled_from_stack(
 fn disabled_paths_from_stack(
     config_layer_stack: &crate::config_loader::ConfigLayerStack,
 ) -> HashSet<PathBuf> {
-    let mut disabled = HashSet::new();
     let mut configs = HashMap::new();
-    for layer in
-        config_layer_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
-    {
+    for layer in config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ true,
+    ) {
         if !matches!(
             layer.name,
             ConfigLayerSource::User { .. } | ConfigLayerSource::SessionFlags
@@ -243,13 +278,36 @@ fn disabled_paths_from_stack(
         }
     }
 
-    for (path, enabled) in configs {
-        if !enabled {
-            disabled.insert(path);
-        }
-    }
+    configs
+        .into_iter()
+        .filter_map(|(path, enabled)| (!enabled).then_some(path))
+        .collect()
+}
 
-    disabled
+fn config_skills_cache_key(
+    roots: &[SkillRoot],
+    config_layer_stack: &crate::config_loader::ConfigLayerStack,
+) -> ConfigSkillsCacheKey {
+    let mut disabled_paths: Vec<PathBuf> = disabled_paths_from_stack(config_layer_stack)
+        .into_iter()
+        .collect();
+    disabled_paths.sort_unstable();
+
+    ConfigSkillsCacheKey {
+        roots: roots
+            .iter()
+            .map(|root| {
+                let scope_rank = match root.scope {
+                    SkillScope::Repo => 0,
+                    SkillScope::User => 1,
+                    SkillScope::System => 2,
+                    SkillScope::Admin => 3,
+                };
+                (root.path.clone(), scope_rank)
+            })
+            .collect(),
+        disabled_paths,
+    }
 }
 
 fn finalize_skill_outcome(

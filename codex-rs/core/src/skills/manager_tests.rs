@@ -36,7 +36,7 @@ fn new_with_disabled_bundled_skills_removes_stale_cached_system_skills() {
 }
 
 #[tokio::test]
-async fn skills_for_config_seeds_cache_by_cwd() {
+async fn skills_for_config_reuses_cache_for_same_effective_config() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
 
@@ -60,8 +60,8 @@ async fn skills_for_config_seeds_cache_by_cwd() {
         "expected skill-a to be discovered"
     );
 
-    // Write a new skill after the first call; the second call should hit the cache and not
-    // reflect the new file.
+    // Write a new skill after the first call; the second call should reuse the config-aware cache
+    // entry because the effective skill config is unchanged.
     write_user_skill(&codex_home, "b", "skill-b", "from b");
     let outcome2 = skills_manager.skills_for_config(&cfg);
     assert_eq!(outcome2.errors, outcome1.errors);
@@ -353,4 +353,83 @@ enabled = false
         disabled_paths_from_stack(&stack),
         HashSet::from([skill_path])
     );
+}
+
+#[cfg_attr(windows, ignore)]
+#[tokio::test]
+async fn skills_for_config_ignores_cwd_cache_when_session_flags_reenable_skill() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let skill_dir = codex_home.path().join("skills").join("demo");
+    fs::create_dir_all(&skill_dir).expect("create skill dir");
+    let skill_path = skill_dir.join("SKILL.md");
+    fs::write(
+        &skill_path,
+        "---\nname: demo-skill\ndescription: demo description\n---\n\n# Body\n",
+    )
+    .expect("write skill");
+    fs::write(
+        codex_home.path().join(crate::config::CONFIG_TOML_FILE),
+        format!(
+            r#"[[skills.config]]
+path = "{}"
+enabled = false
+"#,
+            skill_path.display()
+        ),
+    )
+    .expect("write config");
+
+    let parent_config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await
+        .expect("load parent config");
+    let role_path = codex_home.path().join("enable-role.toml");
+    fs::write(
+        &role_path,
+        format!(
+            r#"[[skills.config]]
+path = "{}"
+enabled = true
+"#,
+            skill_path.display()
+        ),
+    )
+    .expect("write role config");
+    let mut child_config = parent_config.clone();
+    child_config.agent_roles.insert(
+        "custom".to_string(),
+        crate::config::AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+    crate::agent::role::apply_role_to_config(&mut child_config, Some("custom"))
+        .await
+        .expect("custom role should apply");
+
+    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
+    let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, true);
+
+    let parent_outcome = skills_manager.skills_for_cwd(cwd.path(), true).await;
+    let parent_skill = parent_outcome
+        .skills
+        .iter()
+        .find(|skill| skill.name == "demo-skill")
+        .expect("demo skill should be discovered");
+    assert_eq!(parent_outcome.is_skill_enabled(parent_skill), false);
+
+    let child_outcome = skills_manager.skills_for_config(&child_config);
+    let child_skill = child_outcome
+        .skills
+        .iter()
+        .find(|skill| skill.name == "demo-skill")
+        .expect("demo skill should be discovered");
+    assert_eq!(child_outcome.is_skill_enabled(child_skill), true);
 }

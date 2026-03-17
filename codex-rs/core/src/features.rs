@@ -154,8 +154,6 @@ pub enum Feature {
     Plugins,
     /// Allow the model to invoke the built-in image generation tool.
     ImageGeneration,
-    /// Route apps MCP calls through the configured gateway.
-    AppsMcpGateway,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
     /// Prompt for missing skill env var dependencies.
@@ -182,6 +180,8 @@ pub enum Feature {
     VoiceTranscription,
     /// Enable experimental realtime voice conversation mode in the TUI.
     RealtimeConversation,
+    /// Route interactive startup to the app-server-backed TUI implementation.
+    TuiAppServer,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
     /// Use the Responses API WebSocket transport for OpenAI by default.
@@ -341,7 +341,7 @@ impl Features {
             if self.enabled(feature.id) != feature.default_enabled {
                 otel.counter(
                     "codex.feature.state",
-                    1,
+                    /*inc*/ 1,
                     &[
                         ("feature", feature.key),
                         ("value", &self.enabled(feature.id).to_string()),
@@ -754,12 +754,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::AppsMcpGateway,
-        key: "apps_mcp_gateway",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::SkillMcpDependencyInstall,
         key: "skill_mcp_dependency_install",
         stage: Stage::Stable,
@@ -785,9 +779,9 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
     FeatureSpec {
         id: Feature::GuardianApproval,
-        key: "smart_approvals",
+        key: "guardian_approval",
         stage: Stage::Experimental {
-            name: "Smart Approvals",
+            name: "Guardian Approvals",
             menu_description: "When Codex needs approval for higher-risk actions (e.g. sandbox escapes or blocked network access), route eligible approval requests to a carefully-prompted security reviewer subagent rather than blocking the agent on your input. This can consume significantly more tokens because it runs a subagent on every approval request.",
             announcement: "",
         },
@@ -833,6 +827,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::RealtimeConversation,
         key: "realtime_conversation",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::TuiAppServer,
+        key: "tui_app_server",
+        stage: Stage::Experimental {
+            name: "App-server TUI",
+            menu_description: "Use the app-server-backed TUI implementation.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {

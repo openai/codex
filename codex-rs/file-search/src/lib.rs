@@ -261,7 +261,7 @@ pub async fn run_main<T: Reporter>(
             compute_indices,
             respect_gitignore: true,
         },
-        None,
+        /*cancel_flag*/ None,
     )?;
     let match_count = matches.len();
     let matches_truncated = total_match_count > match_count;

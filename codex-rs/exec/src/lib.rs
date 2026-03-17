@@ -288,7 +288,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
     let cloud_auth_manager = AuthManager::shared(
         codex_home.clone(),
-        false,
+        /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
     );
     let chatgpt_base_url = config_toml
@@ -390,7 +390,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         codex_core::otel_init::build_provider(
             &config,
             env!("CARGO_PKG_VERSION"),
-            None,
+            /*service_name_override*/ None,
             DEFAULT_ANALYTICS_ENABLED,
         )
     })) {
@@ -1357,7 +1357,7 @@ fn local_external_chatgpt_tokens(
 ) -> Result<ChatgptAuthTokensRefreshResponse, String> {
     let auth_manager = AuthManager::shared(
         config.codex_home.clone(),
-        false,
+        /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
     );
     auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
@@ -1408,8 +1408,8 @@ async fn resolve_resume_path(
         };
         match codex_core::RolloutRecorder::find_latest_thread_path(
             config,
-            1,
-            None,
+            /*page_size*/ 1,
+            /*cursor*/ None,
             codex_core::ThreadSortKey::UpdatedAt,
             &[],
             Some(default_provider_filter.as_slice()),

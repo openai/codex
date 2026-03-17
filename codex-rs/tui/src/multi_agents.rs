@@ -224,7 +224,7 @@ pub(crate) fn interaction_end(ev: CollabAgentInteractionEndEvent) -> PlainHistor
             nickname: receiver_agent_nickname.as_deref(),
             role: receiver_agent_role.as_deref(),
         },
-        None,
+        /*spawn_request*/ None,
     );
 
     let mut details = Vec::new();
@@ -244,7 +244,11 @@ pub(crate) fn waiting_begin(ev: CollabWaitingBeginEvent) -> PlainHistoryCell {
     let receiver_agents = merge_wait_receivers(&receiver_thread_ids, receiver_agents);
 
     let title = match receiver_agents.as_slice() {
-        [receiver] => title_with_agent("Waiting for", agent_label_from_ref(receiver), None),
+        [receiver] => title_with_agent(
+            "Waiting for",
+            agent_label_from_ref(receiver),
+            /*spawn_request*/ None,
+        ),
         [] => title_text("Waiting for agents"),
         _ => title_text(format!("Waiting for {} agents", receiver_agents.len())),
     };
@@ -290,7 +294,7 @@ pub(crate) fn close_end(ev: CollabCloseEndEvent) -> PlainHistoryCell {
                 nickname: receiver_agent_nickname.as_deref(),
                 role: receiver_agent_role.as_deref(),
             },
-            None,
+            /*spawn_request*/ None,
         ),
         Vec::new(),
     )
@@ -313,7 +317,7 @@ pub(crate) fn resume_begin(ev: CollabResumeBeginEvent) -> PlainHistoryCell {
                 nickname: receiver_agent_nickname.as_deref(),
                 role: receiver_agent_role.as_deref(),
             },
-            None,
+            /*spawn_request*/ None,
         ),
         Vec::new(),
     )
@@ -337,7 +341,7 @@ pub(crate) fn resume_end(ev: CollabResumeEndEvent) -> PlainHistoryCell {
                 nickname: receiver_agent_nickname.as_deref(),
                 role: receiver_agent_role.as_deref(),
             },
-            None,
+            /*spawn_request*/ None,
         ),
         vec![status_summary_line(&status)],
     )
@@ -537,10 +541,13 @@ fn status_summary_line(status: &AgentStatus) -> Line<'static> {
     status_summary_spans(status).into()
 }
 
+// Allow `.yellow()`
+#[allow(clippy::disallowed_methods)]
 fn status_summary_spans(status: &AgentStatus) -> Vec<Span<'static>> {
     match status {
         AgentStatus::PendingInit => vec![Span::from("Pending init").cyan()],
         AgentStatus::Running => vec![Span::from("Running").cyan().bold()],
+        AgentStatus::Interrupted => vec![Span::from("Interrupted").yellow()],
         AgentStatus::Completed(message) => {
             let mut spans = vec![Span::from("Completed").green()];
             if let Some(message) = message.as_ref() {
@@ -760,6 +767,25 @@ mod tests {
         assert!(!title.spans[4].style.add_modifier.contains(Modifier::DIM));
         assert_eq!(title.spans[6].content.as_ref(), "(gpt-5 high)");
         assert_eq!(title.spans[6].style.fg, Some(Color::Magenta));
+    }
+
+    #[test]
+    fn collab_resume_interrupted_snapshot() {
+        let sender_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000001")
+            .expect("valid sender thread id");
+        let robie_id = ThreadId::from_string("00000000-0000-0000-0000-000000000002")
+            .expect("valid robie thread id");
+
+        let cell = resume_end(CollabResumeEndEvent {
+            call_id: "call-resume".to_string(),
+            sender_thread_id,
+            receiver_thread_id: robie_id,
+            receiver_agent_nickname: Some("Robie".to_string()),
+            receiver_agent_role: Some("explorer".to_string()),
+            status: AgentStatus::Interrupted,
+        });
+
+        assert_snapshot!("collab_resume_interrupted", cell_to_text(&cell));
     }
 
     fn cell_to_text(cell: &PlainHistoryCell) -> String {

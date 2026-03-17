@@ -230,7 +230,7 @@ async fn build_enabled_tools(exec: &ExecContext) -> Vec<protocol::EnabledTool> {
     let mut out = router
         .specs()
         .into_iter()
-        .map(|spec| augment_tool_spec_for_code_mode(spec, true))
+        .map(|spec| augment_tool_spec_for_code_mode(spec, /*code_mode_enabled*/ true))
         .filter_map(enabled_tool_from_spec)
         .collect::<Vec<_>>();
     out.sort_by(|left, right| left.tool_name.cmp(&right.tool_name));

@@ -5,6 +5,8 @@ use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use codex_protocol::protocol::RealtimeEvent;
+#[cfg(not(target_os = "linux"))]
+use std::sync::atomic::AtomicUsize;
 
 const REALTIME_CONVERSATION_PROMPT: &str = "You are in a realtime voice conversation in the Codex TUI. Respond conversationally and concisely.";
 
@@ -30,6 +32,10 @@ pub(super) struct RealtimeConversationUiState {
     capture: Option<crate::voice::VoiceCapture>,
     #[cfg(not(target_os = "linux"))]
     audio_player: Option<crate::voice::RealtimeAudioPlayer>,
+    #[cfg(not(target_os = "linux"))]
+    // Shared queue depth lets capture suppress echoed speaker audio without
+    // taking the playback queue lock from the input callback.
+    playback_queued_samples: Arc<AtomicUsize>,
 }
 
 impl RealtimeConversationUiState {
@@ -183,7 +189,7 @@ impl ChatWidget {
             self.realtime_conversation.warned_audio_only_submission = true;
             self.add_info_message(
                 "Realtime voice mode is audio-only. Use /realtime to stop.".to_string(),
-                None,
+                /*hint*/ None,
             );
         } else {
             self.request_redraw();
@@ -192,16 +198,15 @@ impl ChatWidget {
         None
     }
 
-    fn realtime_footer_hint_items() -> Vec<(String, String)> {
-        vec![("/realtime".to_string(), "stop live voice".to_string())]
-    }
-
     pub(super) fn start_realtime_conversation(&mut self) {
         self.realtime_conversation.phase = RealtimeConversationPhase::Starting;
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
         self.realtime_conversation.warned_audio_only_submission = false;
-        self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
+        self.set_footer_hint_override(Some(vec![(
+            "/realtime".to_string(),
+            "stop live voice".to_string(),
+        )]));
         self.submit_op(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: REALTIME_CONVERSATION_PROMPT.to_string(),
             session_id: None,
@@ -212,7 +217,7 @@ impl ChatWidget {
     pub(super) fn request_realtime_conversation_close(&mut self, info_message: Option<String>) {
         if !self.realtime_conversation.is_live() {
             if let Some(message) = info_message {
-                self.add_info_message(message, None);
+                self.add_info_message(message, /*hint*/ None);
             }
             return;
         }
@@ -221,10 +226,10 @@ impl ChatWidget {
         self.realtime_conversation.phase = RealtimeConversationPhase::Stopping;
         self.submit_op(Op::RealtimeConversationClose);
         self.stop_realtime_local_audio();
-        self.set_footer_hint_override(None);
+        self.set_footer_hint_override(/*items*/ None);
 
         if let Some(message) = info_message {
-            self.add_info_message(message, None);
+            self.add_info_message(message, /*hint*/ None);
         } else {
             self.request_redraw();
         }
@@ -232,7 +237,7 @@ impl ChatWidget {
 
     pub(super) fn reset_realtime_conversation_state(&mut self) {
         self.stop_realtime_local_audio();
-        self.set_footer_hint_override(None);
+        self.set_footer_hint_override(/*items*/ None);
         self.realtime_conversation.phase = RealtimeConversationPhase::Inactive;
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
@@ -251,7 +256,10 @@ impl ChatWidget {
         self.realtime_conversation.phase = RealtimeConversationPhase::Active;
         self.realtime_conversation.session_id = ev.session_id;
         self.realtime_conversation.warned_audio_only_submission = false;
-        self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
+        self.set_footer_hint_override(Some(vec![(
+            "/realtime".to_string(),
+            "stop live voice".to_string(),
+        )]));
         self.start_realtime_local_audio();
         self.request_redraw();
     }
@@ -263,6 +271,14 @@ impl ChatWidget {
         match ev.payload {
             RealtimeEvent::SessionUpdated { session_id, .. } => {
                 self.realtime_conversation.session_id = Some(session_id);
+            }
+            RealtimeEvent::InputAudioSpeechStarted(_) | RealtimeEvent::ResponseCancelled(_) => {
+                #[cfg(not(target_os = "linux"))]
+                if let Some(player) = &self.realtime_conversation.audio_player {
+                    // Once the server detects user speech or the current response is cancelled,
+                    // any buffered assistant audio is stale and should stop gating mic input.
+                    player.clear();
+                }
             }
             RealtimeEvent::InputTranscriptDelta(_) => {}
             RealtimeEvent::OutputTranscriptDelta(_) => {}
@@ -282,7 +298,10 @@ impl ChatWidget {
         let reason = ev.reason;
         self.reset_realtime_conversation_state();
         if !requested && let Some(reason) = reason {
-            self.add_info_message(format!("Realtime voice mode closed: {reason}"), None);
+            self.add_info_message(
+                format!("Realtime voice mode closed: {reason}"),
+                /*hint*/ None,
+            );
         }
         self.request_redraw();
     }
@@ -291,8 +310,11 @@ impl ChatWidget {
         #[cfg(not(target_os = "linux"))]
         {
             if self.realtime_conversation.audio_player.is_none() {
-                self.realtime_conversation.audio_player =
-                    crate::voice::RealtimeAudioPlayer::start(&self.config).ok();
+                self.realtime_conversation.audio_player = crate::voice::RealtimeAudioPlayer::start(
+                    &self.config,
+                    Arc::clone(&self.realtime_conversation.playback_queued_samples),
+                )
+                .ok();
             }
             if let Some(player) = &self.realtime_conversation.audio_player
                 && let Err(err) = player.enqueue_frame(frame)
@@ -319,6 +341,7 @@ impl ChatWidget {
         let capture = match crate::voice::VoiceCapture::start_realtime(
             &self.config,
             self.app_event_tx.clone(),
+            Arc::clone(&self.realtime_conversation.playback_queued_samples),
         ) {
             Ok(capture) => capture,
             Err(err) => {
@@ -337,8 +360,11 @@ impl ChatWidget {
         self.realtime_conversation.capture_stop_flag = Some(stop_flag.clone());
         self.realtime_conversation.capture = Some(capture);
         if self.realtime_conversation.audio_player.is_none() {
-            self.realtime_conversation.audio_player =
-                crate::voice::RealtimeAudioPlayer::start(&self.config).ok();
+            self.realtime_conversation.audio_player = crate::voice::RealtimeAudioPlayer::start(
+                &self.config,
+                Arc::clone(&self.realtime_conversation.playback_queued_samples),
+            )
+            .ok();
         }
 
         std::thread::spawn(move || {
@@ -376,7 +402,10 @@ impl ChatWidget {
             }
             RealtimeAudioDeviceKind::Speaker => {
                 self.stop_realtime_speaker();
-                match crate::voice::RealtimeAudioPlayer::start(&self.config) {
+                match crate::voice::RealtimeAudioPlayer::start(
+                    &self.config,
+                    Arc::clone(&self.realtime_conversation.playback_queued_samples),
+                ) {
                     Ok(player) => {
                         self.realtime_conversation.audio_player = Some(player);
                     }

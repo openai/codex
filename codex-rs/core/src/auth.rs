@@ -194,7 +194,11 @@ impl CodexAuth {
         codex_home: &Path,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> std::io::Result<Option<Self>> {
-        load_auth(codex_home, false, auth_credentials_store_mode)
+        load_auth(
+            codex_home,
+            /*enable_codex_api_key_env*/ false,
+            auth_credentials_store_mode,
+        )
     }
 
     pub fn auth_mode(&self) -> AuthMode {
@@ -457,7 +461,7 @@ pub fn load_auth_dot_json(
 pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
     let Some(auth) = load_auth(
         &config.codex_home,
-        true,
+        /*enable_codex_api_key_env*/ true,
         config.cli_auth_credentials_store_mode,
     )?
     else {
@@ -874,6 +878,17 @@ pub struct UnauthorizedRecovery {
     mode: UnauthorizedRecoveryMode,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnauthorizedRecoveryStepResult {
+    auth_state_changed: Option<bool>,
+}
+
+impl UnauthorizedRecoveryStepResult {
+    pub fn auth_state_changed(&self) -> Option<bool> {
+        self.auth_state_changed
+    }
+}
+
 impl UnauthorizedRecovery {
     fn new(manager: Arc<AuthManager>) -> Self {
         let cached_auth = manager.auth_cached();
@@ -917,7 +932,46 @@ impl UnauthorizedRecovery {
         !matches!(self.step, UnauthorizedRecoveryStep::Done)
     }
 
-    pub async fn next(&mut self) -> Result<(), RefreshTokenError> {
+    pub fn unavailable_reason(&self) -> &'static str {
+        if !self
+            .manager
+            .auth_cached()
+            .as_ref()
+            .is_some_and(CodexAuth::is_chatgpt_auth)
+        {
+            return "not_chatgpt_auth";
+        }
+
+        if self.mode == UnauthorizedRecoveryMode::External
+            && !self.manager.has_external_auth_refresher()
+        {
+            return "no_external_refresher";
+        }
+
+        if matches!(self.step, UnauthorizedRecoveryStep::Done) {
+            return "recovery_exhausted";
+        }
+
+        "ready"
+    }
+
+    pub fn mode_name(&self) -> &'static str {
+        match self.mode {
+            UnauthorizedRecoveryMode::Managed => "managed",
+            UnauthorizedRecoveryMode::External => "external",
+        }
+    }
+
+    pub fn step_name(&self) -> &'static str {
+        match self.step {
+            UnauthorizedRecoveryStep::Reload => "reload",
+            UnauthorizedRecoveryStep::RefreshToken => "refresh_token",
+            UnauthorizedRecoveryStep::ExternalRefresh => "external_refresh",
+            UnauthorizedRecoveryStep::Done => "done",
+        }
+    }
+
+    pub async fn next(&mut self) -> Result<UnauthorizedRecoveryStepResult, RefreshTokenError> {
         if !self.has_next() {
             return Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                 RefreshTokenFailedReason::Other,
@@ -931,8 +985,17 @@ impl UnauthorizedRecovery {
                     .manager
                     .reload_if_account_id_matches(self.expected_account_id.as_deref())
                 {
-                    ReloadOutcome::ReloadedChanged | ReloadOutcome::ReloadedNoChange => {
+                    ReloadOutcome::ReloadedChanged => {
                         self.step = UnauthorizedRecoveryStep::RefreshToken;
+                        return Ok(UnauthorizedRecoveryStepResult {
+                            auth_state_changed: Some(true),
+                        });
+                    }
+                    ReloadOutcome::ReloadedNoChange => {
+                        self.step = UnauthorizedRecoveryStep::RefreshToken;
+                        return Ok(UnauthorizedRecoveryStepResult {
+                            auth_state_changed: Some(false),
+                        });
                     }
                     ReloadOutcome::Skipped => {
                         self.step = UnauthorizedRecoveryStep::Done;
@@ -946,16 +1009,24 @@ impl UnauthorizedRecovery {
             UnauthorizedRecoveryStep::RefreshToken => {
                 self.manager.refresh_token_from_authority().await?;
                 self.step = UnauthorizedRecoveryStep::Done;
+                return Ok(UnauthorizedRecoveryStepResult {
+                    auth_state_changed: Some(true),
+                });
             }
             UnauthorizedRecoveryStep::ExternalRefresh => {
                 self.manager
                     .refresh_external_auth(ExternalAuthRefreshReason::Unauthorized)
                     .await?;
                 self.step = UnauthorizedRecoveryStep::Done;
+                return Ok(UnauthorizedRecoveryStepResult {
+                    auth_state_changed: Some(true),
+                });
             }
             UnauthorizedRecoveryStep::Done => {}
         }
-        Ok(())
+        Ok(UnauthorizedRecoveryStepResult {
+            auth_state_changed: None,
+        })
     }
 }
 

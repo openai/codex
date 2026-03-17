@@ -778,7 +778,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self,
                     "{} {}",
                     "collab".style(self.magenta),
-                    format_collab_invocation("wait", &call_id, None).style(self.bold)
+                    format_collab_invocation("wait", &call_id, /*prompt*/ None).style(self.bold)
                 );
                 eprintln!(
                     "  receivers: {}",
@@ -795,7 +795,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_msg!(
                         self,
                         "{} {}:",
-                        format_collab_invocation("wait", &call_id, None),
+                        format_collab_invocation("wait", &call_id, /*prompt*/ None),
                         "timed out".style(self.yellow)
                     );
                     return CodexStatus::Running;
@@ -804,7 +804,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 let title_style = if success { self.green } else { self.red };
                 let title = format!(
                     "{} {} agents complete:",
-                    format_collab_invocation("wait", &call_id, None),
+                    format_collab_invocation("wait", &call_id, /*prompt*/ None),
                     statuses.len()
                 );
                 ts_msg!(self, "{}", title.style(title_style));
@@ -830,7 +830,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self,
                     "{} {}",
                     "collab".style(self.magenta),
-                    format_collab_invocation("close_agent", &call_id, None).style(self.bold)
+                    format_collab_invocation("close_agent", &call_id, /*prompt*/ None)
+                        .style(self.bold)
                 );
                 eprintln!(
                     "  receiver: {}",
@@ -848,7 +849,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 let title_style = if success { self.green } else { self.red };
                 let title = format!(
                     "{} {}:",
-                    format_collab_invocation("close_agent", &call_id, None),
+                    format_collab_invocation("close_agent", &call_id, /*prompt*/ None),
                     format_collab_status(&status)
                 );
                 ts_msg!(self, "{}", title.style(title_style));
@@ -1249,7 +1250,7 @@ fn format_collab_invocation(tool: &str, call_id: &str, prompt: Option<&str>) -> 
     let prompt = prompt
         .map(str::trim)
         .filter(|prompt| !prompt.is_empty())
-        .map(|prompt| truncate_preview(prompt, 120));
+        .map(|prompt| truncate_preview(prompt, /*max_chars*/ 120));
     match prompt {
         Some(prompt) => format!("{tool}({call_id}, prompt=\"{prompt}\")"),
         None => format!("{tool}({call_id})"),
@@ -1260,8 +1261,9 @@ fn format_collab_status(status: &AgentStatus) -> String {
     match status {
         AgentStatus::PendingInit => "pending init".to_string(),
         AgentStatus::Running => "running".to_string(),
+        AgentStatus::Interrupted => "interrupted".to_string(),
         AgentStatus::Completed(Some(message)) => {
-            let preview = truncate_preview(message.trim(), 120);
+            let preview = truncate_preview(message.trim(), /*max_chars*/ 120);
             if preview.is_empty() {
                 "completed".to_string()
             } else {
@@ -1270,7 +1272,7 @@ fn format_collab_status(status: &AgentStatus) -> String {
         }
         AgentStatus::Completed(None) => "completed".to_string(),
         AgentStatus::Errored(message) => {
-            let preview = truncate_preview(message.trim(), 120);
+            let preview = truncate_preview(message.trim(), /*max_chars*/ 120);
             if preview.is_empty() {
                 "errored".to_string()
             } else {
@@ -1289,6 +1291,7 @@ fn style_for_agent_status(
     match status {
         AgentStatus::PendingInit | AgentStatus::Shutdown => processor.dimmed,
         AgentStatus::Running => processor.cyan,
+        AgentStatus::Interrupted => processor.yellow,
         AgentStatus::Completed(_) => processor.green,
         AgentStatus::Errored(_) | AgentStatus::NotFound => processor.red,
     }

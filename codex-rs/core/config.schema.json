@@ -338,9 +338,6 @@
             "apps": {
               "type": "boolean"
             },
-            "apps_mcp_gateway": {
-              "type": "boolean"
-            },
             "artifact": {
               "type": "boolean"
             },
@@ -396,6 +393,9 @@
               "type": "boolean"
             },
             "fast_mode": {
+              "type": "boolean"
+            },
+            "guardian_approval": {
               "type": "boolean"
             },
             "image_detail_original": {
@@ -476,9 +476,6 @@
             "skill_mcp_dependency_install": {
               "type": "boolean"
             },
-            "smart_approvals": {
-              "type": "boolean"
-            },
             "sqlite": {
               "type": "boolean"
             },
@@ -489,6 +486,9 @@
               "type": "boolean"
             },
             "tool_suggest": {
+              "type": "boolean"
+            },
+            "tui_app_server": {
               "type": "boolean"
             },
             "undo": {
@@ -1890,9 +1890,6 @@
         "apps": {
           "type": "boolean"
         },
-        "apps_mcp_gateway": {
-          "type": "boolean"
-        },
         "artifact": {
           "type": "boolean"
         },
@@ -1948,6 +1945,9 @@
           "type": "boolean"
         },
         "fast_mode": {
+          "type": "boolean"
+        },
+        "guardian_approval": {
           "type": "boolean"
         },
         "image_detail_original": {
@@ -2028,9 +2028,6 @@
         "skill_mcp_dependency_install": {
           "type": "boolean"
         },
-        "smart_approvals": {
-          "type": "boolean"
-        },
         "sqlite": {
           "type": "boolean"
         },
@@ -2041,6 +2038,9 @@
           "type": "boolean"
         },
         "tool_suggest": {
+          "type": "boolean"
+        },
+        "tui_app_server": {
           "type": "boolean"
         },
         "undo": {

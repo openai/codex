@@ -2064,6 +2064,82 @@ async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_o
     );
 }
 
+#[cfg_attr(windows, ignore)]
+#[tokio::test]
+async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let parent_config = session.get_config().await;
+    let codex_home = parent_config.codex_home.clone();
+    let skill_dir = codex_home.join("skills").join("demo");
+    std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+    let skill_path = skill_dir.join("SKILL.md");
+    std::fs::write(
+        &skill_path,
+        "---\nname: demo-skill\ndescription: demo description\n---\n\n# Body\n",
+    )
+    .expect("write skill");
+
+    let parent_outcome = session
+        .services
+        .skills_manager
+        .skills_for_cwd(&parent_config.cwd, true)
+        .await;
+    let parent_skill = parent_outcome
+        .skills
+        .iter()
+        .find(|skill| skill.name == "demo-skill")
+        .expect("demo skill should be discovered");
+    assert_eq!(parent_outcome.is_skill_enabled(parent_skill), true);
+
+    let role_path = codex_home.join("skills-role.toml");
+    std::fs::write(
+        &role_path,
+        format!(
+            r#"developer_instructions = "Stay focused"
+
+[[skills.config]]
+path = "{}"
+enabled = false
+"#,
+            skill_path.display()
+        ),
+    )
+    .expect("write role config");
+
+    let mut child_config = (*parent_config).clone();
+    child_config.agent_roles.insert(
+        "custom".to_string(),
+        crate::config::AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+    crate::agent::role::apply_role_to_config(&mut child_config, Some("custom"))
+        .await
+        .expect("custom role should apply");
+
+    {
+        let mut state = session.state.lock().await;
+        state.session_configuration.original_config_do_not_use = Arc::new(child_config);
+    }
+
+    let child_turn = session
+        .new_default_turn_with_sub_id("role-skill-turn".to_string())
+        .await;
+    let child_skill = child_turn
+        .turn_skills
+        .outcome
+        .skills
+        .iter()
+        .find(|skill| skill.name == "demo-skill")
+        .expect("demo skill should be discovered");
+    assert_eq!(
+        child_turn.turn_skills.outcome.is_skill_enabled(child_skill),
+        false
+    );
+}
+
 #[tokio::test]
 async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_update() {
     let mut session_configuration = make_session_configuration_for_tests().await;
@@ -2370,6 +2446,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),
@@ -2658,6 +2735,7 @@ fn submission_dispatch_span_uses_debug_for_realtime_audio() {
                 sample_rate: 16_000,
                 num_channels: 1,
                 samples_per_channel: Some(160),
+                item_id: None,
             },
         }),
         trace: None,
@@ -2873,6 +2951,120 @@ async fn shutdown_and_wait_waits_when_shutdown_is_already_in_progress() {
         .expect("shutdown waiter");
 }
 
+#[tokio::test]
+async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
+    let (parent_session, parent_turn_context) = make_session_and_context().await;
+    let parent_session = Arc::new(parent_session);
+    let parent_config = Arc::clone(&parent_turn_context.config);
+    let (parent_tx_sub, parent_rx_sub) = async_channel::bounded(4);
+    let (_parent_tx_event, parent_rx_event) = async_channel::unbounded();
+    let (_parent_status_tx, parent_agent_status) = watch::channel(AgentStatus::PendingInit);
+    let parent_session_for_loop = Arc::clone(&parent_session);
+    let parent_session_loop_handle = tokio::spawn(async move {
+        submission_loop(parent_session_for_loop, parent_config, parent_rx_sub).await;
+    });
+    let parent_codex = Codex {
+        tx_sub: parent_tx_sub,
+        rx_event: parent_rx_event,
+        agent_status: parent_agent_status,
+        session: Arc::clone(&parent_session),
+        session_loop_termination: session_loop_termination_from_handle(parent_session_loop_handle),
+    };
+
+    let (child_session, _child_turn_context) = make_session_and_context().await;
+    let (child_tx_sub, child_rx_sub) = async_channel::bounded(4);
+    let (_child_tx_event, child_rx_event) = async_channel::unbounded();
+    let (_child_status_tx, child_agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (child_shutdown_tx, child_shutdown_rx) = tokio::sync::oneshot::channel();
+    let child_session_loop_handle = tokio::spawn(async move {
+        let shutdown: Submission = child_rx_sub
+            .recv()
+            .await
+            .expect("child shutdown submission");
+        assert_eq!(shutdown.op, Op::Shutdown);
+        child_shutdown_tx
+            .send(())
+            .expect("child shutdown signal should be delivered");
+    });
+    let child_codex = Codex {
+        tx_sub: child_tx_sub,
+        rx_event: child_rx_event,
+        agent_status: child_agent_status,
+        session: Arc::new(child_session),
+        session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
+    };
+    parent_session
+        .guardian_review_session
+        .cache_for_test(child_codex)
+        .await;
+
+    parent_codex
+        .shutdown_and_wait()
+        .await
+        .expect("parent shutdown should succeed");
+
+    child_shutdown_rx
+        .await
+        .expect("guardian subagent should receive a shutdown op");
+}
+
+#[tokio::test]
+async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
+    let (parent_session, parent_turn_context) = make_session_and_context().await;
+    let parent_session = Arc::new(parent_session);
+    let parent_config = Arc::clone(&parent_turn_context.config);
+    let (parent_tx_sub, parent_rx_sub) = async_channel::bounded(4);
+    let (_parent_tx_event, parent_rx_event) = async_channel::unbounded();
+    let (_parent_status_tx, parent_agent_status) = watch::channel(AgentStatus::PendingInit);
+    let parent_session_for_loop = Arc::clone(&parent_session);
+    let parent_session_loop_handle = tokio::spawn(async move {
+        submission_loop(parent_session_for_loop, parent_config, parent_rx_sub).await;
+    });
+    let parent_codex = Codex {
+        tx_sub: parent_tx_sub,
+        rx_event: parent_rx_event,
+        agent_status: parent_agent_status,
+        session: Arc::clone(&parent_session),
+        session_loop_termination: session_loop_termination_from_handle(parent_session_loop_handle),
+    };
+
+    let (child_session, _child_turn_context) = make_session_and_context().await;
+    let (child_tx_sub, child_rx_sub) = async_channel::bounded(4);
+    let (_child_tx_event, child_rx_event) = async_channel::unbounded();
+    let (_child_status_tx, child_agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (child_shutdown_tx, child_shutdown_rx) = tokio::sync::oneshot::channel();
+    let child_session_loop_handle = tokio::spawn(async move {
+        let shutdown: Submission = child_rx_sub
+            .recv()
+            .await
+            .expect("child shutdown submission");
+        assert_eq!(shutdown.op, Op::Shutdown);
+        child_shutdown_tx
+            .send(())
+            .expect("child shutdown signal should be delivered");
+    });
+    let child_codex = Codex {
+        tx_sub: child_tx_sub,
+        rx_event: child_rx_event,
+        agent_status: child_agent_status,
+        session: Arc::new(child_session),
+        session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
+    };
+    parent_session
+        .guardian_review_session
+        .register_ephemeral_for_test(child_codex)
+        .await;
+
+    parent_codex
+        .shutdown_and_wait()
+        .await
+        .expect("parent shutdown should succeed");
+
+    child_shutdown_rx
+        .await
+        .expect("ephemeral guardian review should receive a shutdown op");
+}
+
 pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     dynamic_tools: Vec<DynamicToolSpec>,
 ) -> (
@@ -3045,6 +3237,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
         next_internal_sub_id: AtomicU64::new(0),

@@ -55,6 +55,17 @@ function codeModeWorkerMain() {
     return JSON.parse(JSON.stringify(value));
   }
 
+  class CodeModeExitSignal extends Error {
+    constructor() {
+      super('code mode exit');
+      this.name = 'CodeModeExitSignal';
+    }
+  }
+
+  function isCodeModeExitSignal(error) {
+    return error instanceof CodeModeExitSignal;
+  }
+
   function createToolCaller() {
     let nextId = 0;
     const pending = new Map();
@@ -257,8 +268,12 @@ function codeModeWorkerMain() {
     const yieldControl = () => {
       parentPort.postMessage({ type: 'yield' });
     };
+    const exit = () => {
+      throw new CodeModeExitSignal();
+    };
 
     return Object.freeze({
+      exit,
       image,
       load,
       output_image: image,
@@ -271,8 +286,18 @@ function codeModeWorkerMain() {
 
   function createCodeModeModule(context, helpers) {
     return new SyntheticModule(
-      ['image', 'load', 'output_text', 'output_image', 'store', 'text', 'yield_control'],
+      [
+        'exit',
+        'image',
+        'load',
+        'output_text',
+        'output_image',
+        'store',
+        'text',
+        'yield_control',
+      ],
       function initCodeModeModule() {
+        this.setExport('exit', helpers.exit);
         this.setExport('image', helpers.image);
         this.setExport('load', helpers.load);
         this.setExport('output_text', helpers.output_text);
@@ -288,6 +313,7 @@ function codeModeWorkerMain() {
   function createBridgeRuntime(callTool, enabledTools, helpers) {
     return Object.freeze({
       ALL_TOOLS: createAllToolsMetadata(enabledTools),
+      exit: helpers.exit,
       image: helpers.image,
       load: helpers.load,
       store: helpers.store,
@@ -446,6 +472,13 @@ function codeModeWorkerMain() {
         stored_values: state.storedValues,
       });
     } catch (error) {
+      if (isCodeModeExitSignal(error)) {
+        parentPort.postMessage({
+          type: 'result',
+          stored_values: state.storedValues,
+        });
+        return;
+      }
       parentPort.postMessage({
         type: 'result',
         stored_values: state.storedValues,

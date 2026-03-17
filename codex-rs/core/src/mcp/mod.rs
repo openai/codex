@@ -21,7 +21,6 @@ use crate::CodexAuth;
 use crate::config::Config;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
-use crate::features::Feature;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::SandboxState;
@@ -33,8 +32,6 @@ const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 pub(crate) const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
-const OPENAI_CONNECTORS_MCP_BASE_URL: &str = "https://api.openai.com";
-const OPENAI_CONNECTORS_MCP_PATH: &str = "/v1/connectors/gateways/flat/mcp";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolPluginProvenance {
@@ -94,13 +91,6 @@ impl ToolPluginProvenance {
     }
 }
 
-// Legacy vs new MCP gateway
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CodexAppsMcpGateway {
-    LegacyMCPGateway,
-    MCPGateway,
-}
-
 fn codex_apps_mcp_bearer_token_env_var() -> Option<String> {
     match env::var(CODEX_CONNECTORS_TOKEN_ENV_VAR) {
         Ok(value) if !value.trim().is_empty() => Some(CODEX_CONNECTORS_TOKEN_ENV_VAR.to_string()),
@@ -135,14 +125,6 @@ fn codex_apps_mcp_http_headers(auth: Option<&CodexAuth>) -> Option<HashMap<Strin
     }
 }
 
-fn selected_config_codex_apps_mcp_gateway(config: &Config) -> CodexAppsMcpGateway {
-    if config.features.enabled(Feature::AppsMcpGateway) {
-        CodexAppsMcpGateway::MCPGateway
-    } else {
-        CodexAppsMcpGateway::LegacyMCPGateway
-    }
-}
-
 fn normalize_codex_apps_base_url(base_url: &str) -> String {
     let mut base_url = base_url.trim_end_matches('/').to_string();
     if (base_url.starts_with("https://chatgpt.com")
@@ -154,11 +136,7 @@ fn normalize_codex_apps_base_url(base_url: &str) -> String {
     base_url
 }
 
-fn codex_apps_mcp_url_for_gateway(base_url: &str, gateway: CodexAppsMcpGateway) -> String {
-    if gateway == CodexAppsMcpGateway::MCPGateway {
-        return format!("{OPENAI_CONNECTORS_MCP_BASE_URL}{OPENAI_CONNECTORS_MCP_PATH}");
-    }
-
+fn codex_apps_mcp_url_for_base_url(base_url: &str) -> String {
     let base_url = normalize_codex_apps_base_url(base_url);
     if base_url.contains("/backend-api") {
         format!("{base_url}/wham/apps")
@@ -170,10 +148,7 @@ fn codex_apps_mcp_url_for_gateway(base_url: &str, gateway: CodexAppsMcpGateway) 
 }
 
 pub(crate) fn codex_apps_mcp_url(config: &Config) -> String {
-    codex_apps_mcp_url_for_gateway(
-        &config.chatgpt_base_url,
-        selected_config_codex_apps_mcp_gateway(config),
-    )
+    codex_apps_mcp_url_for_base_url(&config.chatgpt_base_url)
 }
 
 fn codex_apps_mcp_server_config(config: &Config, auth: Option<&CodexAuth>) -> McpServerConfig {
@@ -277,7 +252,7 @@ fn effective_mcp_servers(
 pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent {
     let auth_manager = AuthManager::shared(
         config.codex_home.clone(),
-        false,
+        /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
     );
     let auth = auth_manager.auth().await;
