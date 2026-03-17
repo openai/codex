@@ -99,12 +99,12 @@ pub(crate) struct ExecCommandRequest {
     pub prefix_rule: Option<Vec<String>>,
 }
 
-#[derive(Debug)]
 pub(crate) struct WriteStdinRequest<'a> {
     pub process_id: i32,
     pub input: &'a str,
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
+    pub context: Option<&'a UnifiedExecContext>,
 }
 
 #[derive(Default)]
@@ -146,6 +146,7 @@ struct ProcessEntry {
     call_id: String,
     process_id: i32,
     command: Vec<String>,
+    cwd: PathBuf,
     tty: bool,
     network_approval_id: Option<String>,
     session: Weak<Session>,

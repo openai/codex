@@ -3,6 +3,7 @@ use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
+use crate::config::ToolExecutionMode;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -260,6 +261,7 @@ pub(crate) struct ToolsConfig {
     shell_command_backend: ShellCommandBackendConfig,
     pub unified_exec_shell_mode: UnifiedExecShellMode,
     pub allow_login_shell: bool,
+    pub execution_mode: ToolExecutionMode,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
     pub web_search_config: Option<WebSearchConfig>,
@@ -392,6 +394,7 @@ impl ToolsConfig {
             shell_command_backend,
             unified_exec_shell_mode: UnifiedExecShellMode::Direct,
             allow_login_shell: true,
+            execution_mode: ToolExecutionMode::Auto,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
             web_search_config: None,
@@ -424,6 +427,11 @@ impl ToolsConfig {
 
     pub fn with_allow_login_shell(mut self, allow_login_shell: bool) -> Self {
         self.allow_login_shell = allow_login_shell;
+        self
+    }
+
+    pub fn with_execution_mode(mut self, execution_mode: ToolExecutionMode) -> Self {
+        self.execution_mode = execution_mode;
         self
     }
 
@@ -460,6 +468,10 @@ impl ToolsConfig {
         nested.code_mode_enabled = false;
         nested.code_mode_only_enabled = false;
         nested
+    }
+
+    pub fn requires_manual_tool_approval(&self) -> bool {
+        matches!(self.execution_mode, ToolExecutionMode::Manual)
     }
 }
 

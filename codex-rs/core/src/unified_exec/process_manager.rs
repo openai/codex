@@ -17,6 +17,7 @@ use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecRequest;
+use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -26,6 +27,7 @@ use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
+use crate::tools::runtimes::unified_exec::request_unified_exec_approval;
 use crate::tools::sandboxing::ToolCtx;
 use crate::truncate::approx_token_count;
 use crate::unified_exec::ExecCommandRequest;
@@ -98,6 +100,7 @@ struct PreparedProcessHandles {
     cancellation_token: CancellationToken,
     pause_state: Option<watch::Receiver<bool>>,
     command: Vec<String>,
+    cwd: PathBuf,
     process_id: i32,
     tty: bool,
 }
@@ -320,6 +323,7 @@ impl UnifiedExecProcessManager {
             cancellation_token,
             pause_state,
             command: session_command,
+            cwd,
             process_id,
             tty,
             ..
@@ -328,6 +332,42 @@ impl UnifiedExecProcessManager {
         if !request.input.is_empty() {
             if !tty {
                 return Err(UnifiedExecError::StdinClosed);
+            }
+            if let Some(context) = request.context
+                && context.turn.tools_config.requires_manual_tool_approval()
+            {
+                let input = request.input.escape_default().to_string();
+                let reason = if input.len() > 200 {
+                    Some(format!("interactive terminal input: {}...", &input[..200]))
+                } else {
+                    Some(format!("interactive terminal input: {input}"))
+                };
+                let decision = request_unified_exec_approval(
+                    &context.session,
+                    &context.turn,
+                    context.call_id.clone(),
+                    session_command.clone(),
+                    cwd.clone(),
+                    SandboxPermissions::UseDefault,
+                    /*additional_permissions*/ None,
+                    reason,
+                    tty,
+                    /*retry_reason*/ None,
+                    /*network_approval_context*/ None,
+                    /*proposed_execpolicy_amendment*/ None,
+                    /*approval_keys*/ None,
+                )
+                .await;
+                if !matches!(
+                    decision,
+                    codex_protocol::protocol::ReviewDecision::Approved
+                        | codex_protocol::protocol::ReviewDecision::ApprovedExecpolicyAmendment { .. }
+                        | codex_protocol::protocol::ReviewDecision::ApprovedForSession
+                ) {
+                    return Err(UnifiedExecError::create_process(
+                        "rejected by user".to_string(),
+                    ));
+                }
             }
             Self::send_input(&writer_tx, request.input.as_bytes()).await?;
             // Give the remote process a brief window to react so that we are
@@ -463,6 +503,7 @@ impl UnifiedExecProcessManager {
             cancellation_token,
             pause_state,
             command: entry.command.clone(),
+            cwd: entry.cwd.clone(),
             process_id: entry.process_id,
             tty: entry.tty,
         })
@@ -496,6 +537,7 @@ impl UnifiedExecProcessManager {
             call_id: context.call_id.clone(),
             process_id,
             command: command.to_vec(),
+            cwd: cwd.clone(),
             tty,
             network_approval_id,
             session: Arc::downgrade(&context.session),
@@ -609,6 +651,12 @@ impl UnifiedExecProcessManager {
                 prefix_rule: request.prefix_rule.clone(),
             })
             .await;
+        let exec_approval_requirement = if context.turn.tools_config.requires_manual_tool_approval()
+        {
+            exec_approval_requirement.force_manual_approval()
+        } else {
+            exec_approval_requirement
+        };
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
             cwd,

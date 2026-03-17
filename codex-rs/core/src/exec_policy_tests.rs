@@ -518,6 +518,7 @@ async fn omits_auto_amendment_for_heredoc_fallback_prompts() {
     assert_eq!(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: None,
         }
@@ -547,6 +548,7 @@ async fn drops_requested_amendment_for_heredoc_fallback_prompts_when_it_wont_mat
     assert_eq!(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: None,
         }
@@ -617,6 +619,7 @@ async fn exec_approval_requirement_prefers_execpolicy_match() {
     assert_eq!(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: Some("`rm` requires approval by policy".to_string()),
             proposed_execpolicy_amendment: None,
         }
@@ -726,6 +729,7 @@ async fn requested_prefix_rule_can_approve_absolute_path_commands() {
     assert_eq!(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 "cargo".to_string(),
@@ -931,6 +935,7 @@ async fn exec_approval_requirement_falls_back_to_heuristics() {
     assert_eq!(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command))
         }
@@ -956,6 +961,7 @@ async fn empty_bash_lc_script_falls_back_to_original_command() {
     assert_eq!(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         }
@@ -985,6 +991,7 @@ async fn whitespace_bash_lc_script_falls_back_to_original_command() {
     assert_eq!(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         }
@@ -1014,6 +1021,7 @@ async fn request_rule_uses_prefix_rule() {
     assert_eq!(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 "cargo".to_string(),
@@ -1046,6 +1054,7 @@ async fn request_rule_falls_back_when_prefix_rule_does_not_approve_all_commands(
     assert_eq!(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 "rm".to_string(),
@@ -1082,6 +1091,7 @@ async fn heuristics_apply_when_other_commands_match_policy() {
             })
             .await,
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 "orange".to_string()
@@ -1160,6 +1170,7 @@ async fn proposed_execpolicy_amendment_is_present_for_single_command_without_pol
     assert_eq!(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command))
         }
@@ -1191,6 +1202,7 @@ async fn proposed_execpolicy_amendment_is_omitted_when_policy_prompts() {
     assert_eq!(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: Some("`rm` requires approval by policy".to_string()),
             proposed_execpolicy_amendment: None,
         }
@@ -1219,6 +1231,7 @@ async fn proposed_execpolicy_amendment_is_present_for_multi_command_scripts() {
     assert_eq!(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 "cargo".to_string(),
@@ -1255,6 +1268,7 @@ async fn proposed_execpolicy_amendment_uses_first_no_match_in_multi_command_scri
             })
             .await,
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 "apple".to_string()
@@ -1481,6 +1495,7 @@ async fn dangerous_rm_rf_requires_approval_in_danger_full_access() {
     assert_eq!(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command)),
         }
@@ -1519,6 +1534,7 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
                 that no sandbox is present, so anything that is not "provably
                 safe" should require approval."#,
             ExecApprovalRequirement::NeedsApproval {
+                bypass_sandbox: false,
                 reason: None,
                 proposed_execpolicy_amendment: expected_amendment.clone(),
             },
@@ -1551,6 +1567,7 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
     let dangerous_command = vec_str(&["rm", "-rf", "/important/data"]);
     assert_eq!(
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec_str(&[
                 "rm",

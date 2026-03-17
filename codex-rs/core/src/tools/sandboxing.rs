@@ -134,6 +134,8 @@ pub(crate) enum ExecApprovalRequirement {
     },
     /// Approval required for this tool call.
     NeedsApproval {
+        /// The first attempt should skip sandboxing after approval.
+        bypass_sandbox: bool,
         reason: Option<String>,
         /// Proposed execpolicy amendment to skip future approvals for similar commands
         /// See core/src/exec_policy.rs for more details on how proposed_execpolicy_amendment is determined.
@@ -155,6 +157,21 @@ impl ExecApprovalRequirement {
                 ..
             } => Some(prefix),
             _ => None,
+        }
+    }
+
+    pub fn force_manual_approval(self) -> Self {
+        match self {
+            Self::Skip {
+                bypass_sandbox,
+                proposed_execpolicy_amendment,
+                ..
+            } => Self::NeedsApproval {
+                bypass_sandbox,
+                reason: None,
+                proposed_execpolicy_amendment,
+            },
+            other => other,
         }
     }
 }
@@ -191,6 +208,7 @@ pub(crate) fn default_exec_approval_requirement(
         }
     } else if needs_approval {
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: None,
         }
@@ -217,7 +235,10 @@ pub(crate) fn sandbox_override_for_first_attempt(
     if sandbox_permissions.requires_escalated_permissions()
         || matches!(
             exec_approval_requirement,
-            ExecApprovalRequirement::Skip {
+            ExecApprovalRequirement::NeedsApproval {
+                bypass_sandbox: true,
+                ..
+            } | ExecApprovalRequirement::Skip {
                 bypass_sandbox: true,
                 ..
             }

@@ -45,6 +45,7 @@ fn guardian_review_request_includes_patch_context() {
             },
         )]),
         exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: None,
         },

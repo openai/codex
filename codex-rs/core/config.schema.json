@@ -1549,9 +1549,25 @@
       },
       "type": "object"
     },
+    "ToolExecutionMode": {
+      "enum": [
+        "auto",
+        "manual"
+      ],
+      "type": "string"
+    },
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
+        "execution_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolExecutionMode"
+            }
+          ],
+          "default": null,
+          "description": "Execution policy for approval-capable tools."
+        },
         "view_image": {
           "default": null,
           "description": "Enable the `view_image` tool that lets the agent attach local images.",

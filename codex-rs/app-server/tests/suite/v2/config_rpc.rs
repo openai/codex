@@ -19,6 +19,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::ToolExecutionMode;
 use codex_app_server_protocol::ToolsV2;
 use codex_app_server_protocol::WriteStatus;
 use codex_core::config::set_project_trust_level;
@@ -102,6 +103,7 @@ allowed_domains = ["example.com"]
 
 [tools]
 view_image = false
+execution_mode = "manual"
 "#,
     )?;
     let codex_home_path = codex_home.path().canonicalize()?;
@@ -137,6 +139,7 @@ view_image = false
                 location: None,
             }),
             view_image: Some(false),
+            execution_mode: Some(ToolExecutionMode::Manual),
         }
     );
     assert_eq!(
@@ -159,6 +162,12 @@ view_image = false
     );
     assert_eq!(
         origins.get("tools.view_image").expect("origin").name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+    assert_eq!(
+        origins.get("tools.execution_mode").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
         }

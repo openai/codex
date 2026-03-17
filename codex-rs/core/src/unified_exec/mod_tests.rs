@@ -3,11 +3,16 @@ use super::*;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::make_session_and_context;
+use crate::codex::make_session_and_context_with_rx;
+use crate::config::ToolExecutionMode;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::state::ActiveTurn;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::WriteStdinRequest;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ReviewDecision;
 use core_test_support::skip_if_sandbox;
 use std::sync::Arc;
 use tokio::time::Duration;
@@ -78,6 +83,7 @@ async fn write_stdin(
             input,
             yield_time_ms,
             max_output_tokens: None,
+            context: None,
         })
         .await
 }
@@ -142,6 +148,76 @@ async fn unified_exec_persists_across_requests() -> anyhow::Result<()> {
     assert!(
         out_2.truncated_output().contains("codex"),
         "expected environment variable output"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_write_stdin_requires_manual_approval() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let (session, turn, rx) = make_session_and_context_with_rx().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+
+    let mut turn = Arc::try_unwrap(turn).expect("single turn context ref");
+    turn.sandbox_policy
+        .set(SandboxPolicy::DangerFullAccess)
+        .expect("test setup should allow updating sandbox policy");
+    turn.file_system_sandbox_policy =
+        codex_protocol::permissions::FileSystemSandboxPolicy::from(turn.sandbox_policy.get());
+    turn.network_sandbox_policy =
+        codex_protocol::permissions::NetworkSandboxPolicy::from(turn.sandbox_policy.get());
+    turn.tools_config.execution_mode = ToolExecutionMode::Manual;
+    let turn = Arc::new(turn);
+
+    let approval_task = tokio::spawn({
+        let session = Arc::clone(&session);
+        async move {
+            let mut approvals = Vec::new();
+            while approvals.len() < 2 {
+                let event = rx.recv().await.expect("approval event");
+                if let EventMsg::ExecApprovalRequest(request) = event.msg {
+                    approvals.push(request.clone());
+                    let approval_id = request
+                        .approval_id
+                        .as_deref()
+                        .unwrap_or(request.call_id.as_str());
+                    session
+                        .notify_approval(approval_id, ReviewDecision::Approved)
+                        .await;
+                }
+            }
+            approvals
+        }
+    });
+
+    let open_shell = exec_command(&session, &turn, "bash -i", 2_500).await?;
+    let process_id = open_shell.process_id.expect("expected process_id");
+    let context = UnifiedExecContext::new(Arc::clone(&session), Arc::clone(&turn), "call".into());
+
+    let output = session
+        .services
+        .unified_exec_manager
+        .write_stdin(WriteStdinRequest {
+            process_id,
+            input: "printf codex-manual-approval\n",
+            yield_time_ms: 2_500,
+            max_output_tokens: None,
+            context: Some(&context),
+        })
+        .await?;
+
+    assert!(
+        output.truncated_output().contains("codex-manual-approval"),
+        "interactive input should run after approval"
+    );
+
+    let approvals = approval_task.await?;
+    assert_eq!(approvals.len(), 2);
+    assert_eq!(
+        approvals[1].reason.as_deref(),
+        Some("interactive terminal input: printf codex-manual-approval\\n")
     );
 
     Ok(())

@@ -11435,8 +11435,25 @@
       ],
       "type": "object"
     },
+    "ToolExecutionMode": {
+      "enum": [
+        "auto",
+        "manual"
+      ],
+      "type": "string"
+    },
     "ToolsV2": {
       "properties": {
+        "execution_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolExecutionMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "view_image": {
           "type": [
             "boolean",

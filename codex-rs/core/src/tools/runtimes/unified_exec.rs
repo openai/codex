@@ -38,11 +38,14 @@ use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::NetworkProxy;
+use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct UnifiedExecRequest {
@@ -83,6 +86,68 @@ impl<'a> UnifiedExecRuntime<'a> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn request_unified_exec_approval(
+    session: &Arc<crate::codex::Session>,
+    turn: &Arc<crate::codex::TurnContext>,
+    call_id: String,
+    command: Vec<String>,
+    cwd: PathBuf,
+    sandbox_permissions: SandboxPermissions,
+    additional_permissions: Option<PermissionProfile>,
+    justification: Option<String>,
+    tty: bool,
+    retry_reason: Option<String>,
+    network_approval_context: Option<NetworkApprovalContext>,
+    proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+    approval_keys: Option<Vec<UnifiedExecApprovalKey>>,
+) -> ReviewDecision {
+    let reason = retry_reason.clone().or_else(|| justification.clone());
+
+    if routes_approval_to_guardian(turn) {
+        return review_approval_request(
+            session,
+            turn,
+            GuardianApprovalRequest::ExecCommand {
+                id: call_id,
+                command,
+                cwd,
+                sandbox_permissions,
+                additional_permissions,
+                justification,
+                tty,
+            },
+            retry_reason,
+        )
+        .await;
+    }
+
+    let request_approval = || async {
+        let available_decisions = None;
+        session
+            .request_command_approval(
+                turn,
+                call_id,
+                /*approval_id*/ None,
+                command,
+                cwd,
+                reason,
+                network_approval_context,
+                proposed_execpolicy_amendment,
+                additional_permissions,
+                /*skill_metadata*/ None,
+                available_decisions,
+            )
+            .await
+    };
+
+    if let Some(keys) = approval_keys {
+        with_cached_approval(&session.services, "unified_exec", keys, request_approval).await
+    } else {
+        request_approval().await
+    }
+}
+
 impl Sandboxable for UnifiedExecRuntime<'_> {
     fn sandbox_preference(&self) -> SandboxablePreference {
         SandboxablePreference::Auto
@@ -118,45 +183,24 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let command = req.command.clone();
         let cwd = req.cwd.clone();
         let retry_reason = ctx.retry_reason.clone();
-        let reason = retry_reason.clone().or_else(|| req.justification.clone());
         Box::pin(async move {
-            if routes_approval_to_guardian(turn) {
-                return review_approval_request(
-                    session,
-                    turn,
-                    GuardianApprovalRequest::ExecCommand {
-                        id: call_id,
-                        command,
-                        cwd,
-                        sandbox_permissions: req.sandbox_permissions,
-                        additional_permissions: req.additional_permissions.clone(),
-                        justification: req.justification.clone(),
-                        tty: req.tty,
-                    },
-                    retry_reason,
-                )
-                .await;
-            }
-            with_cached_approval(&session.services, "unified_exec", keys, || async move {
-                let available_decisions = None;
-                session
-                    .request_command_approval(
-                        turn,
-                        call_id,
-                        /*approval_id*/ None,
-                        command,
-                        cwd,
-                        reason,
-                        ctx.network_approval_context.clone(),
-                        req.exec_approval_requirement
-                            .proposed_execpolicy_amendment()
-                            .cloned(),
-                        req.additional_permissions.clone(),
-                        /*skill_metadata*/ None,
-                        available_decisions,
-                    )
-                    .await
-            })
+            request_unified_exec_approval(
+                session,
+                turn,
+                call_id,
+                command,
+                cwd,
+                req.sandbox_permissions,
+                req.additional_permissions.clone(),
+                req.justification.clone(),
+                req.tty,
+                retry_reason,
+                ctx.network_approval_context.clone(),
+                req.exec_approval_requirement
+                    .proposed_execpolicy_amendment()
+                    .cloned(),
+                Some(keys),
+            )
             .await
         })
     }

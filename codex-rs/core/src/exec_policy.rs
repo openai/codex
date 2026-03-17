@@ -260,6 +260,7 @@ impl ExecPolicyManager {
                         reason: reason.to_string(),
                     },
                     None => ExecApprovalRequirement::NeedsApproval {
+                        bypass_sandbox: false,
                         reason: derive_prompt_reason(command, &evaluation),
                         proposed_execpolicy_amendment: requested_amendment.or_else(|| {
                             if auto_amendment_allowed {

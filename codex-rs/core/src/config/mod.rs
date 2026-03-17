@@ -512,6 +512,9 @@ pub struct Config {
     /// Additional parameters for the web search tool when it is enabled.
     pub web_search_config: Option<WebSearchConfig>,
 
+    /// Execution policy for approval-capable tools.
+    pub tool_execution_mode: ToolExecutionMode,
+
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
@@ -1578,6 +1581,17 @@ pub struct ToolsToml {
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
+
+    /// Execution policy for approval-capable tools.
+    #[serde(default)]
+    pub execution_mode: Option<ToolExecutionMode>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolExecutionMode {
+    Auto,
+    Manual,
 }
 
 #[derive(Deserialize)]
@@ -2008,6 +2022,23 @@ fn resolve_web_search_config(
     }
 }
 
+fn resolve_tool_execution_mode(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+) -> ToolExecutionMode {
+    config_profile
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.execution_mode)
+        .or_else(|| {
+            config_toml
+                .tools
+                .as_ref()
+                .and_then(|tools| tools.execution_mode)
+        })
+        .unwrap_or(ToolExecutionMode::Auto)
+}
+
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
     sandbox_policy: &SandboxPolicy,
@@ -2302,6 +2333,7 @@ impl Config {
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
+        let tool_execution_mode = resolve_tool_execution_mode(&cfg, &config_profile);
 
         let agent_roles =
             agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
@@ -2717,6 +2749,7 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
+            tool_execution_mode,
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,

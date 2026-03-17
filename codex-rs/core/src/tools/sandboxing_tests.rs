@@ -30,6 +30,7 @@ fn restricted_sandbox_requires_exec_approval_on_request() {
             &FileSystemSandboxPolicy::from(&sandbox_policy)
         ),
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: None,
         }
@@ -75,6 +76,7 @@ fn default_exec_approval_requirement_keeps_prompt_when_granular_allows_sandbox_a
     assert_eq!(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
             reason: None,
             proposed_execpolicy_amendment: None,
         }
@@ -106,5 +108,68 @@ fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
             },
         ),
         SandboxOverride::BypassSandboxFirstAttempt
+    );
+}
+
+#[test]
+fn force_manual_approval_converts_skip_to_needs_approval() {
+    let requirement = ExecApprovalRequirement::Skip {
+        bypass_sandbox: false,
+        proposed_execpolicy_amendment: None,
+    };
+
+    assert_eq!(
+        requirement.force_manual_approval(),
+        ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: false,
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
+#[test]
+fn force_manual_approval_preserves_bypass_sandbox() {
+    let requirement = ExecApprovalRequirement::Skip {
+        bypass_sandbox: true,
+        proposed_execpolicy_amendment: None,
+    };
+
+    assert_eq!(
+        requirement.force_manual_approval(),
+        ExecApprovalRequirement::NeedsApproval {
+            bypass_sandbox: true,
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
+#[test]
+fn needs_approval_can_bypass_sandbox_on_first_attempt() {
+    assert_eq!(
+        sandbox_override_for_first_attempt(
+            SandboxPermissions::UseDefault,
+            &ExecApprovalRequirement::NeedsApproval {
+                bypass_sandbox: true,
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            },
+        ),
+        SandboxOverride::BypassSandboxFirstAttempt
+    );
+}
+
+#[test]
+fn force_manual_approval_preserves_forbidden() {
+    let requirement = ExecApprovalRequirement::Forbidden {
+        reason: "denied".to_string(),
+    };
+
+    assert_eq!(
+        requirement.force_manual_approval(),
+        ExecApprovalRequirement::Forbidden {
+            reason: "denied".to_string(),
+        }
     );
 }
