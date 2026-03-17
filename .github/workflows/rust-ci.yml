@@ -121,6 +121,7 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             profile: dev
+            remote_env: "true"
             runs_on:
               group: codex-runners
               labels: codex-linux-x64
@@ -512,6 +513,72 @@ jobs:
             sudo apt-get update -y
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
           fi
+
+      - name: Set up remote test env (SSH in Docker)
+        if: ${{ runner.os == 'Linux' && matrix.remote_env == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "docker is required for remote env tests" >&2
+            exit 1
+          fi
+
+          remote_env_dir="${RUNNER_TEMP}/codex-remote-env"
+          mkdir -p "${remote_env_dir}"
+          ssh_key="${remote_env_dir}/id_ed25519"
+          ssh_key_pub="${ssh_key}.pub"
+          ssh-keygen -q -t ed25519 -N "" -f "${ssh_key}"
+          chmod 600 "${ssh_key}"
+          ssh_pub_key="$(cat "${ssh_key_pub}")"
+
+          docker rm -f codex-remote-test-env >/dev/null 2>&1 || true
+          docker run -d --name codex-remote-test-env -p 127.0.0.1:2222:22 ubuntu:24.04 bash -lc "
+            set -euo pipefail
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update
+            apt-get install -y --no-install-recommends openssh-server
+            mkdir -p /run/sshd
+            useradd -m -s /bin/bash codex
+            install -d -m 700 -o codex -g codex /home/codex/.ssh
+            cat >/home/codex/.ssh/authorized_keys <<'EOF'
+${ssh_pub_key}
+EOF
+            chown codex:codex /home/codex/.ssh/authorized_keys
+            chmod 600 /home/codex/.ssh/authorized_keys
+            exec /usr/sbin/sshd -D -e
+          "
+
+          for attempt in {1..30}; do
+            if ssh \
+              -i "${ssh_key}" \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=2 \
+              -p 2222 \
+              codex@127.0.0.1 \
+              true
+            then
+              break
+            fi
+
+            if [[ "${attempt}" -eq 30 ]]; then
+              echo "remote test env did not become reachable over ssh" >&2
+              docker logs codex-remote-test-env || true
+              exit 1
+            fi
+            sleep 1
+          done
+
+          {
+            echo "CODEX_TEST_REMOTE_ENV_AVAILABLE=1"
+            echo "CODEX_TEST_REMOTE_ENV_HOST=127.0.0.1"
+            echo "CODEX_TEST_REMOTE_ENV_PORT=2222"
+            echo "CODEX_TEST_REMOTE_ENV_USER=codex"
+            echo "CODEX_TEST_REMOTE_ENV_KEY_PATH=${ssh_key}"
+          } >> "$GITHUB_ENV"
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
       - name: Install DotSlash
@@ -647,6 +714,16 @@ jobs:
             sccache --show-stats || true;
             echo '```';
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Tear down remote test env
+        if: ${{ always() && runner.os == 'Linux' && matrix.remote_env == 'true' }}
+        shell: bash
+        run: |
+          set +e
+          if [[ "${{ steps.test.outcome }}" != "success" ]]; then
+            docker logs codex-remote-test-env || true
+          fi
+          docker rm -f codex-remote-test-env >/dev/null 2>&1 || true
 
       - name: verify tests passed
         if: steps.test.outcome == 'failure'

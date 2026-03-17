@@ -263,6 +263,56 @@ pub fn sandbox_network_env_var() -> &'static str {
     codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
 }
 
+const REMOTE_ENV_AVAILABLE_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV_AVAILABLE";
+const REMOTE_ENV_HOST_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV_HOST";
+const REMOTE_ENV_PORT_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV_PORT";
+const REMOTE_ENV_USER_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV_USER";
+const REMOTE_ENV_KEY_PATH_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV_KEY_PATH";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoteEnvConfig {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub key_path: PathBuf,
+}
+
+pub fn requires_remote_env() -> Option<RemoteEnvConfig> {
+    if std::env::var_os(REMOTE_ENV_AVAILABLE_ENV_VAR).is_none() {
+        eprintln!("Skipping test because {REMOTE_ENV_AVAILABLE_ENV_VAR} is not set.");
+        return None;
+    }
+
+    let host = std::env::var(REMOTE_ENV_HOST_ENV_VAR).unwrap_or_else(|_| {
+        panic!("{REMOTE_ENV_HOST_ENV_VAR} must be set when {REMOTE_ENV_AVAILABLE_ENV_VAR}=1")
+    });
+    let port_raw = std::env::var(REMOTE_ENV_PORT_ENV_VAR).unwrap_or_else(|_| {
+        panic!("{REMOTE_ENV_PORT_ENV_VAR} must be set when {REMOTE_ENV_AVAILABLE_ENV_VAR}=1")
+    });
+    let port = port_raw.parse::<u16>().unwrap_or_else(|err| {
+        panic!("{REMOTE_ENV_PORT_ENV_VAR} has invalid value {port_raw:?}: {err}")
+    });
+    let user = std::env::var(REMOTE_ENV_USER_ENV_VAR).unwrap_or_else(|_| {
+        panic!("{REMOTE_ENV_USER_ENV_VAR} must be set when {REMOTE_ENV_AVAILABLE_ENV_VAR}=1")
+    });
+    let key_path = std::env::var(REMOTE_ENV_KEY_PATH_ENV_VAR).unwrap_or_else(|_| {
+        panic!("{REMOTE_ENV_KEY_PATH_ENV_VAR} must be set when {REMOTE_ENV_AVAILABLE_ENV_VAR}=1")
+    });
+    let key_path = PathBuf::from(key_path);
+    assert!(
+        key_path.is_file(),
+        "{REMOTE_ENV_KEY_PATH_ENV_VAR} path does not exist: {}",
+        key_path.display()
+    );
+
+    Some(RemoteEnvConfig {
+        host,
+        port,
+        user,
+        key_path,
+    })
+}
+
 pub fn format_with_current_shell(command: &str) -> Vec<String> {
     codex_core::shell::default_user_shell().derive_exec_args(command, true)
 }
