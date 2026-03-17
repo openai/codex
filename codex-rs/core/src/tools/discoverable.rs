@@ -1,4 +1,5 @@
 use crate::plugins::PluginCapabilitySummary;
+use crate::plugins::PluginDetailSummary;
 use codex_app_server_protocol::AppInfo;
 use serde::Deserialize;
 use serde::Serialize;
@@ -69,6 +70,13 @@ impl DiscoverableTool {
             Self::Plugin(plugin) => plugin.description.as_deref(),
         }
     }
+
+    pub(crate) fn install_url(&self) -> Option<&str> {
+        match self {
+            Self::Connector(connector) => connector.install_url.as_deref(),
+            Self::Plugin(_) => None,
+        }
+    }
 }
 
 impl From<AppInfo> for DiscoverableTool {
@@ -103,6 +111,23 @@ impl From<PluginCapabilitySummary> for DiscoverablePluginInfo {
             mcp_server_names: value.mcp_server_names,
             app_connector_ids: value
                 .app_connector_ids
+                .into_iter()
+                .map(|connector_id| connector_id.0)
+                .collect(),
+        }
+    }
+}
+
+impl From<PluginDetailSummary> for DiscoverablePluginInfo {
+    fn from(value: PluginDetailSummary) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+            description: value.description,
+            has_skills: !value.skills.is_empty(),
+            mcp_server_names: value.mcp_server_names,
+            app_connector_ids: value
+                .apps
                 .into_iter()
                 .map(|connector_id| connector_id.0)
                 .collect(),

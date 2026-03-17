@@ -1824,7 +1824,7 @@ fn format_discoverable_tools(discoverable_tools: &[DiscoverableTool]) -> String 
                 });
             let default_action = match tool.tool_type() {
                 DiscoverableToolType::Connector => DiscoverableToolAction::Install,
-                DiscoverableToolType::Plugin => DiscoverableToolAction::Enable,
+                DiscoverableToolType::Plugin => DiscoverableToolAction::Install,
             };
             format!(
                 "- {} (id: `{}`, type: {}, action: {}): {}",

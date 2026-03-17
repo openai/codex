@@ -2097,7 +2097,8 @@ fn tool_suggest_description_lists_discoverable_tools() {
     assert!(description.contains("Sample Plugin"));
     assert!(description.contains("Plan events and schedules."));
     assert!(description.contains("Find and summarize email threads."));
-    assert!(description.contains("id: `sample@test`, type: plugin, action: enable"));
+    assert!(description.contains("id: `sample@test`, type: plugin, action: install"));
+    assert!(description.contains("`action_type`: `install` or `enable`"));
     assert!(
         description.contains("skills; MCP servers: sample-docs; app connectors: connector_sample")
     );

@@ -42,24 +42,14 @@ use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::plugins::AppConnectorId;
 use crate::plugins::PluginsManager;
+use crate::plugins::list_tool_suggest_discoverable_plugins;
 use crate::token_data::TokenData;
+use crate::tools::discoverable::DiscoverablePluginInfo;
+use crate::tools::discoverable::DiscoverableTool;
 
 pub use codex_connectors::CONNECTORS_CACHE_TTL;
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
 const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
-const TOOL_SUGGEST_DISCOVERABLE_CONNECTOR_IDS: &[&str] = &[
-    "connector_2128aebfecb84f64a069897515042a44",
-    "connector_68df038e0ba48191908c8434991bbac2",
-    "asdk_app_69a1d78e929881919bba0dbda1f6436d",
-    "connector_4964e3b22e3e427e9b4ae1acf2c1fa34",
-    "connector_9d7cfa34e6654a5f98d3387af34b2e1c",
-    "connector_6f1ec045b8fa4ced8738e32c7f74514b",
-    "connector_947e0d954944416db111db556030eea6",
-    "connector_5f3c8c41a1e54ad7a76272c89e2554fa",
-    "connector_686fad9b54914a35b75be6d06a0f6f31",
-    "connector_76869538009648d5b282a4bb21c3d157",
-    "connector_37316be7febe4224b3d31465bae4dbd7",
-];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AppToolPolicy {
@@ -116,13 +106,24 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     config: &Config,
     auth: Option<&CodexAuth>,
     accessible_connectors: &[AppInfo],
-) -> anyhow::Result<Vec<AppInfo>> {
+) -> anyhow::Result<Vec<DiscoverableTool>> {
     let directory_connectors =
         list_directory_connectors_for_tool_suggest_with_auth(config, auth).await?;
-    Ok(filter_tool_suggest_discoverable_tools(
+    let connector_ids = tool_suggest_connector_ids(config);
+    let discoverable_connectors = filter_tool_suggest_discoverable_connectors(
         directory_connectors,
         accessible_connectors,
-    ))
+        &connector_ids,
+    )
+    .into_iter()
+    .map(DiscoverableTool::from);
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(config)?
+        .into_iter()
+        .map(DiscoverablePluginInfo::from)
+        .map(DiscoverableTool::from);
+    Ok(discoverable_connectors
+        .chain(discoverable_plugins)
+        .collect())
 }
 
 pub async fn list_cached_accessible_connectors_from_mcp_tools(
@@ -350,24 +351,21 @@ fn write_cached_accessible_connectors(
     });
 }
 
-fn filter_tool_suggest_discoverable_tools(
+fn filter_tool_suggest_discoverable_connectors(
     directory_connectors: Vec<AppInfo>,
     accessible_connectors: &[AppInfo],
+    discoverable_connector_ids: &HashSet<String>,
 ) -> Vec<AppInfo> {
     let accessible_connector_ids: HashSet<&str> = accessible_connectors
         .iter()
-        .filter(|connector| connector.is_accessible && connector.is_enabled)
+        .filter(|connector| connector.is_accessible)
         .map(|connector| connector.id.as_str())
-        .collect();
-    let allowed_connector_ids: HashSet<&str> = TOOL_SUGGEST_DISCOVERABLE_CONNECTOR_IDS
-        .iter()
-        .copied()
         .collect();
 
     let mut connectors = filter_disallowed_connectors(directory_connectors)
         .into_iter()
         .filter(|connector| !accessible_connector_ids.contains(connector.id.as_str()))
-        .filter(|connector| allowed_connector_ids.contains(connector.id.as_str()))
+        .filter(|connector| discoverable_connector_ids.contains(connector.id.as_str()))
         .collect::<Vec<_>>();
     connectors.sort_by(|left, right| {
         left.name
@@ -375,6 +373,16 @@ fn filter_tool_suggest_discoverable_tools(
             .then_with(|| left.id.cmp(&right.id))
     });
     connectors
+}
+
+fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
+    PluginsManager::new(config.codex_home.clone())
+        .plugins_for_config(config)
+        .capability_summaries()
+        .iter()
+        .flat_map(|plugin| plugin.app_connector_ids.iter())
+        .map(|connector_id| connector_id.0.clone())
+        .collect()
 }
 
 async fn list_directory_connectors_for_tool_suggest_with_auth(

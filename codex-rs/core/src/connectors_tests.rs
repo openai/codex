@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
 use crate::config::types::AppConfig;
 use crate::config::types::AppToolConfig;
@@ -13,13 +14,13 @@ use crate::config_loader::ConfigRequirementsToml;
 use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
-use codex_config::CONFIG_TOML_FILE;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
 use rmcp::model::Tool;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -979,8 +980,8 @@ fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
 }
 
 #[test]
-fn filter_tool_suggest_discoverable_tools_keeps_only_allowlisted_uninstalled_apps() {
-    let filtered = filter_tool_suggest_discoverable_tools(
+fn filter_tool_suggest_discoverable_connectors_keeps_only_plugin_backed_uninstalled_apps() {
+    let filtered = filter_tool_suggest_discoverable_connectors(
         vec![
             named_app(
                 "connector_2128aebfecb84f64a069897515042a44",
@@ -996,6 +997,10 @@ fn filter_tool_suggest_discoverable_tools_keeps_only_allowlisted_uninstalled_app
                 "Google Calendar",
             )
         }],
+        &HashSet::from([
+            "connector_2128aebfecb84f64a069897515042a44".to_string(),
+            "connector_68df038e0ba48191908c8434991bbac2".to_string(),
+        ]),
     );
 
     assert_eq!(
@@ -1008,8 +1013,8 @@ fn filter_tool_suggest_discoverable_tools_keeps_only_allowlisted_uninstalled_app
 }
 
 #[test]
-fn filter_tool_suggest_discoverable_tools_keeps_disabled_accessible_apps() {
-    let filtered = filter_tool_suggest_discoverable_tools(
+fn filter_tool_suggest_discoverable_connectors_excludes_accessible_apps_even_when_disabled() {
+    let filtered = filter_tool_suggest_discoverable_connectors(
         vec![
             named_app(
                 "connector_2128aebfecb84f64a069897515042a44",
@@ -1031,13 +1036,11 @@ fn filter_tool_suggest_discoverable_tools_keeps_disabled_accessible_apps() {
                 ..named_app("connector_68df038e0ba48191908c8434991bbac2", "Gmail")
             },
         ],
+        &HashSet::from([
+            "connector_2128aebfecb84f64a069897515042a44".to_string(),
+            "connector_68df038e0ba48191908c8434991bbac2".to_string(),
+        ]),
     );
 
-    assert_eq!(
-        filtered,
-        vec![named_app(
-            "connector_68df038e0ba48191908c8434991bbac2",
-            "Gmail"
-        )]
-    );
+    assert_eq!(filtered, Vec::<AppInfo>::new());
 }
